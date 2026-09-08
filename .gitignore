@@ -1,0 +1,29 @@
+# Run this in your project folder
+@"
+# Flutter/Dart
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+*.g.dart
+*.freezed.dart
+
+# Android
+android/.gradle/
+android/local.properties
+android/key.properties
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Env
+.env
+*.env
+"@ | Out-File -FilePath .gitignore -Encoding utf8

@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="160dp"
+    android:height="160dp"
+    android:viewportWidth="160"
+    android:viewportHeight="160">
+
+    <!-- Orange rounded tile -->
+    <path
+        android:fillColor="#FFFF8C00"
+        android:pathData="M32,0 H128 A32,32 0 0 1 160,32 V128 A32,32 0 0 1 128,160 H32 A32,32 0 0 1 0,128 V32 A32,32 0 0 1 32,0 Z" />
+
+    <!-- Hand icon, scaled and centered -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M80,26 a6.67,6.67 0 0 1 6.67,6.67 v41.33 l7,-4.2 a6.67,6.67 0 0 1 9.13,2.47 l5.47,9.4 a6.67,6.67 0 0 1 -2.47,9.13 l-13.8,8.27 V113.3 a33.3,33.3 0 0 1 -66.67,0 V93.3 a6.67,6.67 0 0 1 13.3,0 v20 a20,20 0 0 0 40,0 V32.67 A6.67,6.67 0 0 1 80,26 Z m25.8,24.53 a6.67,6.67 0 0 1 9.13,-2.47 l16.67,9.6 a6.67,6.67 0 0 1 2.47,9.13 l-5.47,9.47 a6.67,6.67 0 0 1 -9.13,2.47 l-16.67,-9.6 a6.67,6.67 0 0 1 -2.47,-9.13 z M54.2,50.53 l5.47,9.47 a6.67,6.67 0 0 1 -2.47,9.13 l-16.67,9.6 a6.67,6.67 0 0 1 -9.13,-2.47 l-5.47,-9.47 a6.67,6.67 0 0 1 2.47,-9.13 l16.67,-9.6 a6.67,6.67 0 0 1 9.13,2.47 z" />
+</vector>

@@ -1,0 +1,165 @@
+Table employees {
+  employee_id int [pk, increment]
+  first_name varchar
+  last_name varchar
+  email varchar [unique]
+  phone varchar
+  department_id int [ref: > departments.department_id]
+  position varchar
+  employment_status varchar
+  is_active boolean
+  created_at datetime
+  updated_at datetime
+}
+
+Table departments {
+  department_id int [pk, increment]
+  department_name varchar
+  description varchar
+  head_employee_id int [ref: > employees.employee_id]
+  created_at datetime
+}
+
+Table admins {
+  admin_id int [pk, increment]
+  employee_id int [ref: > employees.employee_id]
+  username varchar [unique]
+  password_hash varchar
+  role varchar
+  last_login datetime
+  created_at datetime
+}
+
+Table attendance_logs {
+  log_id int [pk, increment]
+  employee_id int [ref: > employees.employee_id]
+  attendance_date date
+  time_in datetime
+  time_out datetime
+  status varchar
+  work_hours float
+  clock_method varchar
+  sync_status varchar
+  created_at datetime
+}
+
+Table attendance_exports {
+  export_id int [pk, increment]
+  exported_by int [ref: > admins.admin_id]
+  export_format varchar
+  file_name varchar
+  file_path varchar
+  file_size_kb int
+  date_from date
+  date_to date
+  department_id int [ref: > departments.department_id]
+  total_records int
+  exported_at datetime
+}
+
+Table employee_search_logs {
+  search_id int [pk, increment]
+  searched_by int [ref: > admins.admin_id]
+  search_query varchar
+  results_count int
+  searched_at datetime
+}
+
+Table activity_logs {
+  activity_id int [pk, increment]
+  employee_id int [ref: > employees.employee_id]
+  admin_id int [ref: > admins.admin_id]
+  action varchar
+  module varchar
+  description varchar
+  ip_address varchar
+  device_info varchar
+  performed_at datetime
+}
+
+Table session_logs {
+  session_id int [pk, increment]
+  employee_id int [ref: > employees.employee_id]
+  admin_id int [ref: > admins.admin_id]
+  session_token varchar [unique]
+  login_method varchar
+  login_at datetime
+  logout_at datetime
+  duration_minutes int
+  ip_address varchar
+  device_info varchar
+  status varchar
+}
+
+Table live_locations {
+  location_id int [pk, increment]
+  employee_id int [ref: > employees.employee_id]
+  latitude float
+  longitude float
+  accuracy float
+  altitude float
+  speed float
+  heading float
+  location_address varchar
+  is_within_zone boolean
+  zone_id int [ref: > geofence_zones.zone_id]
+  recorded_at datetime
+}
+
+Table geofence_zones {
+  zone_id int [pk, increment]
+  zone_name varchar
+  latitude float
+  longitude float
+  radius_km float
+  office_address varchar
+  is_active boolean
+  created_at datetime
+}
+
+Table location_tracking_sessions {
+  tracking_id int [pk, increment]
+  employee_id int [ref: > employees.employee_id]
+  tracking_start datetime
+  tracking_end datetime
+  total_locations_recorded int
+  status varchar
+}
+
+Table mobile_exports {
+  mobile_export_id int [pk, increment]
+  employee_id int [ref: > employees.employee_id]
+  exported_by int [ref: > admins.admin_id]
+  export_type varchar
+  export_format varchar
+  file_name varchar
+  file_path varchar
+  file_size_kb int
+  total_records int
+  date_from date
+  date_to date
+  exported_at datetime
+  sync_status varchar
+}
+
+Table mobile_export_logs {
+  log_id int [pk, increment]
+  mobile_export_id int [ref: > mobile_exports.mobile_export_id]
+  employee_id int [ref: > employees.employee_id]
+  action varchar
+  status varchar
+  error_message varchar
+  performed_at datetime
+}
+
+Table admin_audit_logs {
+  audit_id int [pk, increment]
+  admin_id int [ref: > admins.admin_id]
+  action_type varchar
+  target_table varchar
+  target_id int
+  old_value text
+  new_value text
+  performed_at datetime
+  ip_address varchar
+}

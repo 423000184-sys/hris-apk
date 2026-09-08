@@ -1,0 +1,59 @@
+graph TD
+    classDef startEnd fill:#1a1a2e,stroke:#e94560,color:#fff,stroke-width:3px;
+    classDef screen fill:#0f3460,stroke:#e94560,color:#fff,stroke-width:2px;
+    classDef service fill:#533483,stroke:#e94560,color:#fff,stroke-width:2px;
+    classDef logic fill:#e94560,stroke:#fff,color:#fff,stroke-width:2px;
+    classDef submenu fill:#16213e,stroke:#0f3460,color:#fff,stroke-width:1px;
+    classDef export fill:#1b4332,stroke:#40916c,color:#fff,stroke-width:2px;
+
+    Start((START)):::startEnd --> Landing[Landing Screen]:::screen
+    Landing --> Login[Login Screen]:::screen
+    Login --> KeyfobScan[Scan Keyfob / NFC]:::service
+    KeyfobScan --> IsRegistered{Keyfob Registered?}:::logic
+    IsRegistered -- No --> Login
+    IsRegistered -- Yes --> Dashboard
+
+    subgraph Dashboard [Dashboard]
+        direction TB
+        DB[Dashboard Home]:::screen
+        DB --> Clock[Clock]:::screen
+        DB --> Leave[Leave]:::screen
+        DB --> Report[Report]:::screen
+        DB --> Schedule[Schedule]:::screen
+        DB --> VerifySpot[Verify Spot]:::screen
+        DB --> History[View Attendance History]:::screen
+        DB --> Profile[Profile]:::screen
+    end
+
+    subgraph ClockSub [Clock - Method Selection]
+        direction TB
+        Clock --> NFC[NFC Tag]:::submenu
+        Clock --> FaceID[Face ID]:::submenu
+        Clock --> FingerPrint[Fingerprint]:::submenu
+        Clock --> PIN[PIN]:::submenu
+    end
+
+    subgraph HistorySub [Attendance History]
+        direction TB
+        History --> HistoryList[View Records]:::submenu
+    end
+
+    subgraph ReportSub [Reports]
+        direction TB
+        Report --> AttendanceReport[Attendance Report]:::submenu
+        Report --> DeptReport[Department Report]:::submenu
+        Report --> ExportReport[Export]:::submenu
+        ExportReport --> PDF[PDF Report]:::export
+        ExportReport --> Excel[Excel Report]:::export
+        ExportReport --> CSV[CSV Report]:::export
+    end
+
+    subgraph ProfileSub [Profile]
+        direction TB
+        Profile --> FaceSetup[Face ID Setup]:::submenu
+        Profile --> FingerSetup[Fingerprint Setup]:::submenu
+        Profile --> ProfileHistory[Attendance History]:::submenu
+        Profile --> Logout[Logout]:::submenu
+    end
+
+    Logout --> Login

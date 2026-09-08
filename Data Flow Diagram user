@@ -1,0 +1,108 @@
+graph TD
+    classDef external fill:#1a1a2e,stroke:#e94560,color:#fff,stroke-width:3px;
+    classDef process fill:#0f3460,stroke:#4cc9f0,color:#fff,stroke-width:2px;
+    classDef datastore fill:#1b4332,stroke:#40916c,color:#fff,stroke-width:2px;
+    classDef decision fill:#e94560,stroke:#fff,color:#fff,stroke-width:2px;
+    classDef io fill:#533483,stroke:#c77dff,color:#fff,stroke-width:2px;
+    classDef export fill:#3d2b1f,stroke:#f4a261,color:#fff,stroke-width:2px;
+    classDef hardware fill:#2d2d2d,stroke:#ffd60a,color:#fff,stroke-width:2px;
+
+    %% EXTERNAL ENTITIES
+    User([USER]):::external
+    AdminPortal([ADMIN PORTAL]):::external
+
+    %% ── LEVEL 0: APP ENTRY ──
+    User --> P0[1.0\nLanding Screen]:::process
+    P0 --> P1[2.0\nLogin Screen]:::process
+
+    %% ── LEVEL 1: AUTHENTICATION ──
+    subgraph AuthDFD [2.0 Authentication Process]
+        direction TB
+        P1 --> P1a[2.1\nRead Keyfob / NFC]:::hardware
+        P1a --> P1b[2.2\nValidate Keyfob]:::process
+        P1b --> DS1[(D1: employees\ntable)]:::datastore
+        DS1 --> P1b
+        P1b --> D1{Registered?}:::decision
+        D1 -- No --> P1
+        D1 -- Yes --> P1c[2.3\nCreate Session\nToken]:::process
+        P1c --> DS2[(D2: session_logs\ntable)]:::datastore
+    end
+
+    P1c --> P2[3.0\nDashboard]:::process
+
+    %% ── LEVEL 2: DASHBOARD NAVIGATION ──
+    subgraph DashDFD [3.0 Dashboard Navigation]
+        direction LR
+        P2 --> P3[3.1 Clock]:::process
+        P2 --> P4[3.2 Leave]:::process
+        P2 --> P5[3.3 Report]:::process
+        P2 --> P6[3.4 Schedule]:::process
+        P2 --> P7[3.5 Verify Spot]:::process
+        P2 --> P8[3.6 Attendance\nHistory]:::process
+        P2 --> P9[3.7 Profile]:::process
+    end
+
+    %% ── LEVEL 3: CLOCK MODULE ──
+    subgraph ClockDFD [3.1 Clock Process]
+        direction TB
+        P3 --> P3a{Select\nMethod}:::decision
+        P3a --> P3b[3.1.1\nNFC Tag]:::hardware
+        P3a --> P3c[3.1.2\nFace ID]:::hardware
+        P3a --> P3d[3.1.3\nFingerprint]:::hardware
+        P3a --> P3e[3.1.4\nPIN Entry]:::io
+        P3b & P3c & P3d & P3e --> P3f[3.1.5\nVerify Identity]:::process
+        P3f --> DS3[(D3: biometric_data\ntable)]:::datastore
+        DS3 --> P3f
+        P3f --> P3g[3.1.6\nRecord Clock\nIn / Out]:::process
+        P3g --> DS4[(D4: attendance_logs\ntable)]:::datastore
+        DS4 --> P3h[3.1.7\nSync to\nRemote DB]:::process
+        P3h --> DS5[(D5: remote MySQL\nWeb Portal)]:::datastore
+    end
+
+    %% ── LEVEL 3: HISTORY MODULE ──
+    subgraph HistoryDFD [3.6 Attendance History Process]
+        direction TB
+        P8 --> P8a[3.6.1\nFetch Records]:::process
+        P8a --> DS4
+        DS4 --> P8b[3.6.2\nDisplay\nAttendance List]:::io
+    end
+
+    %% ── LEVEL 3: REPORT MODULE ──
+    subgraph ReportDFD [3.3 Report Process]
+        direction TB
+        P5 --> P5a[3.3.1\nAttendance\nReport]:::process
+        P5 --> P5b[3.3.2\nDepartment\nReport]:::process
+        P5a & P5b --> DS4
+        DS4 --> P5c[3.3.3\nGenerate\nReport Data]:::process
+        P5c --> P5d[3.3.4\nExport]:::process
+        P5d --> P5e[3.3.4a\nPDF Report]:::export
+        P5d --> P5f[3.3.4b\nExcel Report]:::export
+        P5d --> P5g[3.3.4c\nCSV Report]:::export
+    end
+
+    %% ── LEVEL 3: PROFILE MODULE ──
+    subgraph ProfileDFD [3.7 Profile Process]
+        direction TB
+        P9 --> P9a[3.7.1\nFace ID Setup]:::process
+        P9 --> P9b[3.7.2\nFingerprint Setup]:::process
+        P9 --> P9c[3.7.3\nAttendance\nHistory]:::process
+        P9 --> P9d[3.7.4\nLogout]:::process
+        P9a & P9b --> DS3
+        P9c --> DS4
+        P9d --> P9e[3.7.5\nClear Session\nToken]:::process
+        P9e --> DS2
+    end
+
+    P9d --> P1
+
+    %% ── ADMIN PORTAL DATA FLOW ──
+    DS5 --> AdminPortal
+    AdminPortal --> DS5
+
+    %% ── LEAVE & SCHEDULE ──
+    P4 --> DS6[(D6: leave_requests\ntable)]:::datastore
+    P6 --> DS7[(D7: schedules\ntable)]:::datastore
+
+    %% ── VERIFY SPOT ──
+    P7 --> P7a[3.5.1\nGeofence Check]:::process
+    P7a --> DS8[(D8: geofence_zones\ntable)]:::datastore

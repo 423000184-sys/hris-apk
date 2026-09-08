@@ -1,0 +1,67 @@
+{
+  "project_info": {
+    "project_number": "1095102475957",
+    "project_id": "week-9-activity-53484",
+    "storage_bucket": "week-9-activity-53484.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1095102475957:android:3e52c792297a62ede4d8fc",
+        "android_client_info": {
+          "package_name": "com.example.hris_biometrics"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAy5mhLaY90GDyJl60R2j2oDnKisqj_cMg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1095102475957:android:40a14c0cde018e47e4d8fc",
+        "android_client_info": {
+          "package_name": "com.example.week_9"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAy5mhLaY90GDyJl60R2j2oDnKisqj_cMg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1095102475957:android:638add7dee08b2a5e4d8fc",
+        "android_client_info": {
+          "package_name": "com.example.week_9_de_guia"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAy5mhLaY90GDyJl60R2j2oDnKisqj_cMg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

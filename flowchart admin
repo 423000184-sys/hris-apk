@@ -1,0 +1,45 @@
+graph TD
+    classDef startEnd fill:#1a1a2e,stroke:#e94560,color:#fff,stroke-width:3px;
+    classDef screen fill:#0f3460,stroke:#e94560,color:#fff,stroke-width:2px;
+    classDef service fill:#533483,stroke:#e94560,color:#fff,stroke-width:2px;
+    classDef logic fill:#e94560,stroke:#fff,color:#fff,stroke-width:2px;
+    classDef submenu fill:#16213e,stroke:#0f3460,color:#fff,stroke-width:1px;
+    classDef export fill:#1b4332,stroke:#40916c,color:#fff,stroke-width:2px;
+    classDef table fill:#1a3a4a,stroke:#0099cc,color:#fff,stroke-width:2px;
+
+    Start((ADMIN START)):::startEnd --> AdminDash[Admin Dashboard]:::screen
+
+    subgraph AttendanceSub [Attendance]
+        direction TB
+        AdminDash --> Attendance[Attendance]:::screen
+        Attendance --> EmpList[Employee Name List]:::submenu
+        Attendance --> ExportCSV[Export as CSV]:::export
+    end
+
+    subgraph ManageEmp [Manage Employees]
+        direction TB
+        AdminDash --> ManageEmployees[Manage Employees]:::screen
+        ManageEmployees --> AddEmployee[Add Employee]:::submenu
+        ManageEmployees --> SearchEmployee[Search Employee]:::submenu
+        ManageEmployees --> EmployeeList[Employee List]:::table
+    end
+
+    subgraph ActivitySub [Activity Logs]
+        direction TB
+        AdminDash --> ActivityLogs[Activity Logs]:::screen
+        ActivityLogs --> ActivityLog[Activity Logs]:::submenu
+        ActivityLogs --> SessionLog[Session Logs]:::submenu
+    end
+
+    subgraph LiveSub [Live Location]
+        direction TB
+        AdminDash --> LiveLocation[Live Location]:::screen
+        LiveLocation --> RealTimeTracking[Real Time User Tracking]:::service
+    end
+
+    subgraph MobileExportSub [Mobile Export]
+        direction TB
+        AdminDash --> MobileExport[Mobile Export]:::screen
+        MobileExport --> ExportMobileCSV[Export as CSV]:::export
+        MobileExport --> MobileExportTable[Mobile Exports Table]:::table
+    end

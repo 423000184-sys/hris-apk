@@ -1,0 +1,175 @@
+    Table employees {
+      employee_id int [pk, increment]
+      first_name varchar
+      last_name varchar
+      email varchar [unique]
+      phone varchar
+      department_id int [ref: > departments.department_id]
+      position varchar
+      employment_status varchar
+      created_at datetime
+      updated_at datetime
+    }
+
+    Table departments {
+      department_id int [pk, increment]
+      department_name varchar
+      description varchar
+      head_employee_id int [ref: > employees.employee_id]
+      created_at datetime
+    }
+
+    Table keyfobs {
+      keyfob_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      nfc_tag_uid varchar [unique]
+      status varchar
+      registered_at datetime
+      last_used datetime
+    }
+
+    Table sessions {
+      session_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      session_token varchar
+      login_method varchar
+      login_at datetime
+      logout_at datetime
+      status varchar
+    }
+
+    Table biometric_data {
+      biometric_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      biometric_type varchar
+      face_id_template blob
+      fingerprint_template blob
+      pin_hash varchar
+      enrolled_at datetime
+      updated_at datetime
+    }
+
+    Table clock_methods {
+      method_id int [pk, increment]
+      method_name varchar
+      description varchar
+      is_active boolean
+    }
+
+    Table attendance_logs {
+      log_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      clock_method_id int [ref: > clock_methods.method_id]
+      attendance_date date
+      time_in datetime
+      time_out datetime
+      status varchar
+      work_hours float
+      sync_status varchar
+      created_at datetime
+    }
+
+    Table leave_types {
+      leave_type_id int [pk, increment]
+      leave_type_name varchar
+      max_days_per_year int
+      description varchar
+    }
+
+    Table leave_requests {
+      leave_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      leave_type_id int [ref: > leave_types.leave_type_id]
+      start_date date
+      end_date date
+      total_days int
+      reason varchar
+      status varchar
+      approved_by int [ref: > employees.employee_id]
+      applied_at datetime
+      updated_at datetime
+    }
+
+    Table schedules {
+      schedule_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      shift_name varchar
+      shift_start time
+      shift_end time
+      work_days varchar
+      effective_date date
+      end_date date
+      status varchar
+    }
+
+    Table geofence_zones {
+      zone_id int [pk, increment]
+      zone_name varchar
+      latitude float
+      longitude float
+      radius_km float
+      office_address varchar
+      is_active boolean
+      created_at datetime
+    }
+
+    Table verify_spot_logs {
+      verify_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      zone_id int [ref: > geofence_zones.zone_id]
+      user_latitude float
+      user_longitude float
+      is_within_zone boolean
+      verified_at datetime
+    }
+
+    Table reports {
+      report_id int [pk, increment]
+      generated_by int [ref: > employees.employee_id]
+      report_type varchar
+      report_category varchar
+      date_from date
+      date_to date
+      department_id int [ref: > departments.department_id]
+      generated_at datetime
+    }
+
+    Table report_exports {
+      export_id int [pk, increment]
+      report_id int [ref: > reports.report_id]
+      export_format varchar
+      file_name varchar
+      file_path varchar
+      file_size_kb int
+      exported_at datetime
+      exported_by int [ref: > employees.employee_id]
+    }
+
+    Table activity_logs {
+      activity_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      action varchar
+      module varchar
+      description varchar
+      ip_address varchar
+      performed_at datetime
+    }
+
+    Table sync_logs {
+      sync_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      log_id int [ref: > attendance_logs.log_id]
+      sync_status varchar
+      sync_direction varchar
+      synced_at datetime
+      error_message varchar
+    }
+
+    Table profile_setup_logs {
+      setup_id int [pk, increment]
+      employee_id int [ref: > employees.employee_id]
+      setup_type varchar
+      status varchar
+      setup_at datetime
+      updated_at datetime
+    }

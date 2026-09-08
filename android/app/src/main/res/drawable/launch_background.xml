@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+<<<<<<< HEAD
+    <!-- Gradient background: white -> peach -> orange -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:startColor="#FFFFFFFF"
+                android:centerColor="#FFFFE4CC"
+                android:endColor="#FFFFCCA3" />
+        </shape>
+    </item>
+
+    <!-- White outer logo tile -->
+    <item
+        android:width="90dp"
+        android:height="90dp"
+        android:gravity="center">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFFFF" />
+            <corners android:radius="24dp" />
+        </shape>
+    </item>
+
+    <!-- Orange gradient inner tile -->
+    <item
+        android:width="64dp"
+        android:height="64dp"
+        android:gravity="center">
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="315"
+                android:startColor="#FFFF8C00"
+                android:endColor="#FFFF5500" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+
+    <!-- Hand icon -->
+    <item
+        android:width="38dp"
+        android:height="38dp"
+        android:gravity="center"
+        android:drawable="@drawable/ic_hand_splash" />
+=======
+
+    <!-- Dark background -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#0A0A0A" />
+        </shape>
+    </item>
+
+    <!-- Centered logo icon -->
+    <item
+        android:gravity="center"
+        android:bottom="120dp">
+        <bitmap
+            android:src="@mipmap/ic_launcher"
+            android:gravity="center" />
+    </item>
+
+>>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+</layer-list>
