@@ -1,30 +1,24 @@
 import 'package:flutter/material.dart';
-<<<<<<< HEAD
 import 'package:flutter/services.dart';
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'screens/landing_screen.dart';
 import 'screens/admin_dashboard.dart';
-<<<<<<< HEAD
 import 'screens/splash_screen.dart';
 import 'firebase_options.dart';
 import 'services/database_service.dart';
 import 'theme/theme_notifier.dart';
 import 'theme/app_theme.dart';
-=======
 import 'firebase_options.dart';
 import 'services/database_service.dart';
 import 'theme/theme_notifier.dart';
 import 'theme/app_theme.dart'; // ← add this
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-<<<<<<< HEAD
+
   // Solid status bar matching the app's orange header. This also helps the
   // status bar blend with any camera-cutout "pill" some Android OEMs draw
   // around a punch-hole front camera — a plain-orange background is far
@@ -37,8 +31,7 @@ void main() async {
     ),
   );
 
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
@@ -58,7 +51,7 @@ void main() async {
     }
   }
 
-<<<<<<< HEAD
+
   const String startPage =
   String.fromEnvironment('page', defaultValue: 'landing');
 
@@ -68,18 +61,18 @@ void main() async {
       child: const MyApp(startPage: startPage),
     ),
   );
-=======
+
   final themeNotifier = ThemeNotifier();
 
   const String startPage =
   String.fromEnvironment('page', defaultValue: 'landing');
   runApp(MyApp(startPage: startPage, themeNotifier: themeNotifier));
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+
 }
 
 class MyApp extends StatelessWidget {
   final String startPage;
-<<<<<<< HEAD
+
   const MyApp({super.key, required this.startPage});
 
   @override
@@ -97,7 +90,6 @@ class MyApp extends StatelessWidget {
           home: SplashScreen(startPage: startPage),
         );
       },
-=======
   final ThemeNotifier themeNotifier;
   const MyApp({super.key, required this.startPage, required this.themeNotifier});
 
@@ -119,7 +111,5 @@ class MyApp extends StatelessWidget {
           );
         },
       ),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-    );
   }
 }
