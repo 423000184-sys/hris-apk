@@ -9,13 +9,6 @@ class AdminDatabase {
   static CollectionReference get activityLogs => fs.collection('activity logs');
   static CollectionReference get locations => fs.collection('user locations');
 
-<<<<<<< HEAD
-  // NOTE: These match the collection names actually seen in your Firestore
-  // console (underscores), which differ from the space-named collections
-  // above ('activity logs' / 'user locations'). If those space-named getters
-  // are meant to point at the same underscore collections, let me know and
-  // I'll fix them too — for now this list is kept separate so the new
-  // delete/wipe logic reaches your real data.
   static const List<String> employeeLinkedCollections = [
     'activity_logs',
     'attendance_logs',
@@ -73,10 +66,6 @@ class AdminDatabase {
 
   // --- FUTURES & QUERIES ---
 
-=======
-  static String _msg(Object e) => e is FirebaseException ? (e.message ?? e.toString()) : e.toString();
-
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   static Future<List<Map<String, dynamic>>> getEmployees() async {
     try {
       final s = await employees.orderBy('createdAt', descending: true).get();
@@ -190,7 +179,6 @@ class AdminDatabase {
     }
   }
 
-<<<<<<< HEAD
   /// Deletes an employee AND cascades delete to every record in
   /// [employeeLinkedCollections] that references their employeeId.
   static Future<String?> deleteEmployee(String docId) async {
@@ -198,10 +186,6 @@ class AdminDatabase {
       for (final collection in employeeLinkedCollections) {
         await _deleteWhere(collection, 'employeeId', docId);
       }
-=======
-  static Future<String?> deleteEmployee(String docId) async {
-    try {
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
       await employees.doc(docId).delete();
       return null;
     } catch (e) {
@@ -218,10 +202,7 @@ class AdminDatabase {
     }
   }
 
-<<<<<<< HEAD
   /// Wipes every document out of the given collections entirely.
-  /// Defaults to all employee-linked log collections. IRREVERSIBLE —
-  /// only call this after the UI has confirmed with the admin.
   static Future<String?> wipeAllLogs({
     List<String> collections = employeeLinkedCollections,
   }) async {
@@ -236,7 +217,6 @@ class AdminDatabase {
   }
 
   /// Wipes every employee AND every log collection — a full reset.
-  /// IRREVERSIBLE — only call after the UI confirms with the admin[cite: 2].
   static Future<String?> wipeEverything() async {
     try {
       for (final collection in employeeLinkedCollections) {
@@ -275,8 +255,6 @@ class AdminDatabase {
     }
   }
 
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   static Future<String?> backfillPasswords(Map<String, String> emailToPassword) async {
     try {
       final snap = await employees.get();

@@ -1,32 +1,21 @@
-<<<<<<< HEAD
 //lib/screens/admin_activity_page.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-=======
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'admin_theme.dart';
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 
 class AdminActivityPage extends StatelessWidget {
   final List<Map<String, dynamic>> employees;
   final Map<String, List<Map<String, dynamic>>> userLogs;
   final String searchQuery;
-<<<<<<< HEAD
   final List<Map<String, dynamic>> loginLogs;
-
   final VoidCallback? onCreateLeaveRequest;
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 
   const AdminActivityPage({
     super.key,
     required this.employees,
     required this.userLogs,
     required this.searchQuery,
-<<<<<<< HEAD
     this.loginLogs = const [],
     this.onCreateLeaveRequest,
   });
@@ -570,66 +559,5 @@ class AdminActivityPage extends StatelessWidget {
         Text('No tracking parameters match.', style: TextStyle(color: Color(0xFF6B7280), fontSize: 13)),
       ],
     ),
-=======
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final filteredEmps = employees.where((e) {
-      final name = '${e['firstName']} ${e['lastName']} ${e['name']}';
-      return name.toLowerCase().contains(searchQuery.toLowerCase());
-    }).toList();
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AdminTheme.s4),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('User Activity Auditing', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AdminTheme.text, letterSpacing: -0.3)),
-        const SizedBox(height: AdminTheme.s4),
-        if (filteredEmps.isEmpty) _emptyState() else ...filteredEmps.map((emp) {
-          final id = (emp['id'] ?? '').toString();
-          final logs = userLogs[id] ?? [];
-          return _activityCard(emp, logs);
-        }),
-      ]),
-    );
-  }
-
-  Widget _activityCard(Map<String, dynamic> emp, List<Map<String, dynamic>> logs) {
-    final name = emp['name'] ?? '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}'.trim();
-    return Container(
-      margin: const EdgeInsets.only(bottom: AdminTheme.s3),
-      decoration: AdminTheme.card(),
-      padding: const EdgeInsets.all(AdminTheme.s4),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(name, style: const TextStyle(color: AdminTheme.text, fontWeight: FontWeight.bold, fontSize: 14)),
-        const SizedBox(height: AdminTheme.s2),
-        if (logs.isEmpty) const Text('No recent interaction records logged.', style: TextStyle(color: AdminTheme.muted, fontSize: 11)) else ...logs.take(4).map((l) {
-          final ts = l['timestamp'];
-          final time = ts is Timestamp ? DateFormat('MMM d, h:mm a').format(ts.toDate()) : '—';
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Row(children: [
-              const Icon(Icons.radio_button_checked_rounded, size: 10, color: AdminTheme.orange),
-              const SizedBox(width: 8),
-              Text((l['type'] ?? 'interaction').toString().toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-              const Spacer(),
-              Text(time, style: const TextStyle(color: AdminTheme.muted, fontSize: 11)),
-            ]),
-          );
-        }),
-      ]),
-    );
-  }
-
-  Widget _emptyState() => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(AdminTheme.s6),
-    decoration: AdminTheme.card(),
-    child: const Column(children: [
-      Icon(Icons.data_usage_rounded, size: 32, color: AdminTheme.muted),
-      SizedBox(height: 8),
-      Text('No tracking parameters match.', style: TextStyle(color: AdminTheme.muted, fontSize: AdminTheme.textBase)),
-    ]),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   );
 }

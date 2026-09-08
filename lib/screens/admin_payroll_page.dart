@@ -1,23 +1,16 @@
 import 'package:flutter/material.dart';
 import 'admin_theme.dart';
 
-<<<<<<< HEAD
 class AdminPayrollPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
   final Map<String, List<Map<String, dynamic>>> userLogs;
-  final Function(Map<String, dynamic>) onSelectEmployee; // Idinagdag para maiwasan ang error
-=======
-class AdminPayrollPage extends StatelessWidget {
-  final List<Map<String, dynamic>> employees;
-  final Map<String, List<Map<String, dynamic>>> userLogs;
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+  final Function(Map<String, dynamic>) onSelectEmployee;
 
   const AdminPayrollPage({
     super.key,
     required this.employees,
     required this.userLogs,
-<<<<<<< HEAD
-    required this.onSelectEmployee, // Required parameter na ngayon
+    required this.onSelectEmployee,
   });
 
   @override
@@ -27,7 +20,7 @@ class AdminPayrollPage extends StatelessWidget {
 class _AdminPayrollPageState extends State<AdminPayrollPage> {
   String _selectedPayPeriod = 'Oct 01 - Oct 15, 2023';
   String _selectedDepartment = 'All Departments';
-  String _searchQuery = '';
+  final String _searchQuery = '';
 
   @override
   Widget build(BuildContext context) {
@@ -74,9 +67,9 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Column(
+              const Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
+                children: [
                   Text(
                     'Payroll Management',
                     style: TextStyle(
@@ -146,8 +139,8 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                           const SizedBox(height: 8),
                           Text('₱${_formatCurrency(totalNetDisbursement)}', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Color(0xFF11142D))),
                           const SizedBox(height: 8),
-                          Row(
-                            children: const [
+                          const Row(
+                            children: [
                               Icon(Icons.arrow_upward, size: 14, color: Color(0xFF10B981)),
                               SizedBox(width: 4),
                               Text('4.2% from last period', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF10B981))),
@@ -346,7 +339,6 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                               IconButton(
                                 icon: const Icon(Icons.remove_red_eye_outlined, size: 16, color: Color(0xFF6C727F)),
                                 onPressed: () {
-                                  // Pinalitan para gamitin ang onSelectEmployee callback patungo sa dashboard state
                                   widget.onSelectEmployee(emp);
                                 },
                               ),
@@ -416,43 +408,6 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     return amount.toStringAsFixed(2).replaceAllMapped(
       RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
           (Match m) => '${m[1]},',
-=======
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AdminTheme.s4),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Automated Shift Payroll Ledgers', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AdminTheme.text, letterSpacing: -0.3)),
-        const SizedBox(height: AdminTheme.s4),
-        ...employees.map((emp) {
-          final id = (emp['id'] ?? '').toString();
-          final totalScans = (userLogs[id] ?? []).length;
-          final name = emp['name'] ?? '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}';
-
-          return Container(
-            margin: const EdgeInsets.only(bottom: AdminTheme.s2),
-            decoration: AdminTheme.card(),
-            padding: const EdgeInsets.all(AdminTheme.s4),
-            child: Row(children: [
-              const Icon(Icons.monetization_on_rounded, color: AdminTheme.green, size: 24),
-              const SizedBox(width: AdminTheme.s3),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(name, style: const TextStyle(color: AdminTheme.text, fontWeight: FontWeight.bold)),
-                  Text('${emp['department']} · ${emp['role']}', style: const TextStyle(color: AdminTheme.muted, fontSize: 11)),
-                ]),
-              ),
-              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Text('$totalScans Swipes', style: const TextStyle(fontWeight: FontWeight.w600)),
-                const Text('Generated', style: TextStyle(color: AdminTheme.muted, fontSize: 10)),
-              ]),
-            ]),
-          );
-        }),
-      ]),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
     );
   }
 }

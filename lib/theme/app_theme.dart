@@ -11,7 +11,6 @@ class AppColors {
   static const Color bg            = Color(0xFF111111); // alias for primaryDeep
 
   // ── Surface layers ───────────────────────────────────────────────────────────
-<<<<<<< HEAD
   static const Color surface       = Color(0xFF27272A);
   static const Color surface2      = Color(0xFF232323);
   static const Color surfaceLight  = Color(0xFF27272A); // alias for surface
@@ -24,47 +23,22 @@ class AppColors {
   static const Color orangeHot     = Color(0xFFFA6A00);
   static const Color orangeGlow    = Color(0xFFFA6A00);
   static const Color orangeDark    = Color(0xFFF54900);
-=======
-  static const Color surface       = Color(0xFF1C1C1C);
-  static const Color surface2      = Color(0xFF232323);
-  static const Color surfaceLight  = Color(0xFF1C1C1C); // alias for surface
-  static const Color card          = Color(0xFF1C1C1C);
-  static const Color cardBorder    = Color(0xFF2A2A2A);
-
-  // ── Brand / Orange ───────────────────────────────────────────────────────────
-  static const Color orange        = Color(0xFFFF8C00);
-  static const Color orangeHot     = Color(0xFFFF6600);
-  static const Color orangeGlow    = Color(0xFFFF3D00);
-  static const Color orangeDark    = Color(0xFFCC4400);
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 
   // ── Status ───────────────────────────────────────────────────────────────────
   static const Color success       = Color(0xFF39D98A); // green
   static const Color warning       = Color(0xFFFFAA00); // amber/yellow
-<<<<<<< HEAD
   static const Color error         = Color(0xFFFF0000); // red/danger
-=======
-  static const Color error         = Color(0xFFFF4D6D); // red/danger
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   static const Color info          = Color(0xFF4DA3FF); // blue
 
   // ── Extra semantic aliases ───────────────────────────────────────────────────
   static const Color green         = Color(0xFF39D98A); // = success
-<<<<<<< HEAD
   static const Color red           = Color(0xFFFF0000); // = error
-=======
-  static const Color red           = Color(0xFFFF4D6D); // = error
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   static const Color blue          = Color(0xFF4DA3FF); // = info
   static const Color amber         = Color(0xFFFFAA00); // = warning
 
   // ── Text ─────────────────────────────────────────────────────────────────────
   static const Color textPrimary   = Color(0xFFFFFFFF);
-<<<<<<< HEAD
   static const Color textSecondary = Color(0xFF71717A);
-=======
-  static const Color textSecondary = Color(0xFF999999);
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   static const Color textMuted     = Color(0xFF555555);
 
   // ── White opacities (for inline use) ─────────────────────────────────────────
@@ -74,7 +48,6 @@ class AppColors {
   static const Color white15       = Color(0x26FFFFFF);
 
   // ── Gradients ─────────────────────────────────────────────────────────────────
-<<<<<<< HEAD
   // Custom 3-stop gradient: 0% FF8A00 → 50% FA6A00 → 100% F54900
   static const LinearGradient gradientOrange = LinearGradient(
     begin: Alignment.centerLeft,
@@ -85,22 +58,12 @@ class AppColors {
       Color(0xFFF54900), // 100%
     ],
     stops: [0.0, 0.5, 1.0],
-=======
-  static const LinearGradient gradientOrange = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [orange, orangeHot],
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   );
 
   static const LinearGradient gradientOrangeHot = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-<<<<<<< HEAD
     colors: [orangeHot, orangeDark],
-=======
-    colors: [orangeHot, orangeGlow],
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   );
 
   static const LinearGradient gradientDark = LinearGradient(
@@ -471,7 +434,7 @@ class AppTheme {
         ),
       ),
 
-// ── List tile ────────────────────────────────────────────────────────────
+      // ── List tile ────────────────────────────────────────────────────────────
       listTileTheme: ListTileThemeData(
         tileColor: Colors.transparent,
         selectedTileColor: AppColors.surface,

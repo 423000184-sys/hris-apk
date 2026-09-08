@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -6,14 +5,6 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 class AdminTrackingPage extends StatefulWidget {
-=======
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-import 'admin_theme.dart';
-
-class AdminTrackingPage extends StatelessWidget {
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   final List<Map<String, dynamic>> locations;
   final double officeLat;
   final double officeLng;
@@ -30,7 +21,6 @@ class AdminTrackingPage extends StatelessWidget {
   });
 
   @override
-<<<<<<< HEAD
   State<AdminTrackingPage> createState() => _AdminTrackingPageState();
 }
 
@@ -232,7 +222,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     );
   }
 
-  // --- 100% FREE OPENSTREETMAP WIDGET (NO API KEY REQUIRED) ---
+  // --- OPENSTREETMAP WIDGET ---
   Widget _buildOpenStreetMapCard() {
     final LatLng centerPoint = LatLng(_currentLat, _currentLng);
 
@@ -247,7 +237,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         borderRadius: BorderRadius.circular(16),
         child: Stack(
           children: [
-            // OpenStreetMap Interactive Layer
             FlutterMap(
               mapController: _mapController,
               options: MapOptions(
@@ -260,7 +249,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                   userAgentPackageName: 'com.hris.biometrics',
                 ),
-                // Geofence Radius Circle Layer
                 CircleLayer(
                   circles: [
                     CircleMarker(
@@ -273,7 +261,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                     ),
                   ],
                 ),
-                // Active Location Pin Marker Layer
                 MarkerLayer(
                   markers: [
                     Marker(
@@ -290,8 +277,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 ),
               ],
             ),
-
-            // Top Status Badge Overlay
             Positioned(
               top: 16,
               left: 0,
@@ -335,8 +320,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 ),
               ),
             ),
-
-            // Map Zoom & Recenter Controls
             Positioned(
               top: 16,
               left: 16,
@@ -399,8 +382,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 ],
               ),
             ),
-
-            // Bottom Left Coordinates Pill
             Positioned(
               bottom: 16,
               left: 16,
@@ -506,8 +487,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
             ],
           ),
           const SizedBox(height: 16),
-
-          // Cards List Rendering
           ListView.separated(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -641,8 +620,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
             },
           ),
           const SizedBox(height: 20),
-
-          // RADIUS SLIDER
           Container(
             padding: const EdgeInsets.only(top: 16),
             decoration: const BoxDecoration(
@@ -721,8 +698,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: const [
+          const Row(
+            children: [
               Icon(Icons.notifications_none_rounded,
                   color: Color(0xFFFF8A00), size: 20),
               SizedBox(width: 8),
@@ -837,56 +814,4 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       ),
     );
   }
-=======
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AdminTheme.s4),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Geo-Fence Proximity Tracking', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AdminTheme.text, letterSpacing: -0.3)),
-        const SizedBox(height: AdminTheme.s4),
-        if (locations.isEmpty) _emptyState() else ...locations.map((loc) {
-          final lat = (loc['latitude'] as num?)?.toDouble();
-          final lng = (loc['longitude'] as num?)?.toDouble();
-          double? dist;
-          bool inside = false;
-          if (lat != null && lng != null) {
-            dist = distanceCalculator(lat, lng, officeLat, officeLng);
-            inside = dist <= radiusLimit;
-          }
-
-          final ts = loc['timestamp'];
-          final time = ts is Timestamp ? DateFormat('MMM d, y h:mm a').format(ts.toDate()) : '—';
-
-          return Container(
-            margin: const EdgeInsets.only(bottom: AdminTheme.s2),
-            decoration: AdminTheme.card(),
-            padding: const EdgeInsets.all(AdminTheme.s3),
-            child: Row(children: [
-              CircleAvatar(backgroundColor: inside ? AdminTheme.greenLight : AdminTheme.redLight, child: Icon(Icons.location_on_rounded, color: inside ? AdminTheme.green : AdminTheme.red)),
-              const SizedBox(width: AdminTheme.s3),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text((loc['name'] ?? loc['employeeId'] ?? 'Unknown Beacon').toString(), style: const TextStyle(color: AdminTheme.text, fontWeight: FontWeight.bold)),
-                  Text(dist != null ? '${dist.toStringAsFixed(1)} m from hub infrastructure' : 'Invalid coordinate string', style: const TextStyle(color: AdminTheme.muted, fontSize: 11)),
-                ]),
-              ),
-              Text(inside ? 'IN BOUNDS' : 'OUTSIDE', style: TextStyle(color: inside ? AdminTheme.green : AdminTheme.red, fontWeight: FontWeight.bold, fontSize: 11)),
-            ]),
-          );
-        }),
-      ]),
-    );
-  }
-
-  Widget _emptyState() => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(AdminTheme.s6),
-    decoration: AdminTheme.card(),
-    child: const Column(children: [
-      Icon(Icons.data_usage_rounded, size: 32, color: AdminTheme.muted),
-      SizedBox(height: 8),
-      Text('No satellite telemetry received.', style: TextStyle(color: AdminTheme.muted, fontSize: AdminTheme.textBase)),
-    ]),
-  );
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 }

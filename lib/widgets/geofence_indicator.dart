@@ -409,7 +409,6 @@ class GeofenceBlockedDialog extends StatelessWidget {
                 style: const TextStyle(color: AppColors.textMuted, fontSize: 12, height: 1.5)),
             const SizedBox(height: 24),
 
-            // ✅ FIX: async/await on openAppSettings & openLocationSettings
             if (isPermission)
               _ActionButton(
                 label: 'Open Settings', icon: Icons.settings_rounded, color: accentColor,

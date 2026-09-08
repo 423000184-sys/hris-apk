@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'admin_database.dart';
 import 'admin_theme.dart';
 
-<<<<<<< HEAD
 // Modular View Imports with Aliases
 import 'admin_overview_page.dart';
 import 'admin_employees_page.dart' as emp_page;
@@ -15,16 +14,6 @@ import 'admin_activity_page.dart';
 import 'admin_tracking_page.dart';
 import 'admin_payroll_page.dart';
 import 'admin_payroll_management_page.dart';
-=======
-// Modular View Imports
-import 'admin_overview_page.dart';
-import 'admin_employees_page.dart';
-import 'admin_add_employee_page.dart';
-import 'admin_attendance_page.dart';
-import 'admin_activity_page.dart';
-import 'admin_tracking_page.dart';
-import 'admin_payroll_page.dart';
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 
 class _AdminNavItem {
   final int index;
@@ -45,12 +34,6 @@ class AdminDashboardState extends State<AdminDashboard> {
   String _search = '';
   final _searchCtrl = TextEditingController();
 
-<<<<<<< HEAD
-=======
-  final _bf1E = TextEditingController();
-  final _bf1P = TextEditingController();
-
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   List<Map<String, dynamic>> _regLogs = [];
   List<Map<String, dynamic>> _loginLogs = [];
   List<Map<String, dynamic>> _logoutLogs = [];
@@ -62,7 +45,6 @@ class AdminDashboardState extends State<AdminDashboard> {
   String? _error;
   Timer? _poll;
 
-<<<<<<< HEAD
   String? _verifyLogId;
   Map<String, dynamic>? _verifyLogData;
 
@@ -95,13 +77,10 @@ class AdminDashboardState extends State<AdminDashboard> {
     });
   }
 
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   static const double officeLat = 14.6114;
   static const double officeLng = 120.9936;
   static const double radiusLimit = 1500.0;
 
-<<<<<<< HEAD
   static const Color _bg = Color(0xFFF7F4F1);
   static const Color _sidebarBg = Color(0xFFFFFFFF);
   static const Color _orange = Color(0xFFF3A24B);
@@ -110,8 +89,6 @@ class AdminDashboardState extends State<AdminDashboard> {
   static const Color _cardBorder = Color(0xFFECE8E3);
   static const Color _mutedText = Color(0xFF9CA3AF);
 
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   static const List<_AdminNavItem> _navItems = [
     _AdminNavItem(0, 'Overview', Icons.dashboard_rounded),
     _AdminNavItem(1, 'Employees', Icons.people_rounded),
@@ -133,11 +110,6 @@ class AdminDashboardState extends State<AdminDashboard> {
   void dispose() {
     _poll?.cancel();
     _searchCtrl.dispose();
-<<<<<<< HEAD
-=======
-    _bf1E.dispose();
-    _bf1P.dispose();
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
     super.dispose();
   }
 
@@ -189,7 +161,6 @@ class AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
-<<<<<<< HEAD
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -204,22 +175,10 @@ class AdminDashboardState extends State<AdminDashboard> {
         body: Center(child: Text('Error: $_error', style: const TextStyle(color: AdminTheme.red))),
       );
     }
-=======
-  void _snack(String msg, {bool error = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: error ? AdminTheme.red : AdminTheme.green));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator(color: AdminTheme.orange)));
-    if (_error != null) return Scaffold(body: Center(child: Text('Error: $_error', style: const TextStyle(color: AdminTheme.red))));
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 
     return LayoutBuilder(builder: (_, c) {
       final wide = c.maxWidth >= 768;
       return Scaffold(
-<<<<<<< HEAD
         backgroundColor: _bg,
         appBar: buildTopBar(wide),
         drawer: wide ? null : buildDrawer(),
@@ -235,19 +194,12 @@ class AdminDashboardState extends State<AdminDashboard> {
           )
               : buildPage(),
         ),
-=======
-        backgroundColor: AdminTheme.body,
-        appBar: buildTopBar(wide),
-        drawer: wide ? null : buildDrawer(),
-        body: wide ? Row(children: [buildSidebar(), Expanded(child: buildPage())]) : buildPage(),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
         bottomNavigationBar: wide ? null : buildBottomNav(),
       );
     });
   }
 
   PreferredSizeWidget buildTopBar(bool wide) => AppBar(
-<<<<<<< HEAD
     backgroundColor: Colors.white,
     foregroundColor: AdminTheme.text,
     elevation: 0,
@@ -276,50 +228,11 @@ class AdminDashboardState extends State<AdminDashboard> {
         child: Row(children: [
           const SizedBox(width: 12),
           const Icon(Icons.search, color: _mutedText, size: 17),
-=======
-    backgroundColor: AdminTheme.white,
-    foregroundColor: AdminTheme.text,
-    elevation: 0,
-    surfaceTintColor: Colors.transparent,
-    bottom: PreferredSize(
-      preferredSize: const Size.fromHeight(0.5),
-      child: Container(height: 0.5, color: AdminTheme.border),
-    ),
-    leading: wide
-        ? Padding(
-      padding: const EdgeInsets.all(10),
-      child: Container(
-        decoration: BoxDecoration(color: AdminTheme.orange, borderRadius: BorderRadius.circular(AdminTheme.radiusSm)),
-        child: const Icon(Icons.fingerprint, color: AdminTheme.white, size: 22),
-      ),
-    )
-        : null,
-    title: wide
-        ? RichText(
-      text: const TextSpan(
-        style: TextStyle(fontSize: AdminTheme.textLg, fontWeight: FontWeight.w600, fontFamily: 'sans-serif'),
-        children: [
-          TextSpan(text: 'R.A.C.O.M.A. ', style: TextStyle(color: AdminTheme.text)),
-          TextSpan(text: 'Admin', style: TextStyle(color: AdminTheme.muted, fontWeight: FontWeight.w400)),
-        ],
-      ),
-    )
-        : const Text('R.A.C.O.M.A.', style: TextStyle(fontSize: AdminTheme.textLg, fontWeight: FontWeight.w700)),
-    actions: [
-      Container(
-        width: 190, height: 36,
-        margin: const EdgeInsets.symmetric(vertical: 9),
-        decoration: BoxDecoration(color: AdminTheme.body, borderRadius: BorderRadius.circular(AdminTheme.radius), border: Border.all(color: AdminTheme.border, width: 0.5)),
-        child: Row(children: [
-          const SizedBox(width: 10),
-          const Icon(Icons.search, color: AdminTheme.muted, size: 16),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
           const SizedBox(width: 6),
           Expanded(
             child: TextField(
               controller: _searchCtrl,
               onChanged: (v) => setState(() => _search = v),
-<<<<<<< HEAD
               cursorColor: Colors.black,
               style: const TextStyle(color: Colors.black, fontSize: AdminTheme.textBase),
               decoration: const InputDecoration(
@@ -330,15 +243,10 @@ class AdminDashboardState extends State<AdminDashboard> {
                 filled: true,
                 fillColor: Colors.white,
               ),
-=======
-              style: const TextStyle(color: AdminTheme.text, fontSize: AdminTheme.textBase),
-              decoration: const InputDecoration(hintText: 'Search context...', border: InputBorder.none, isDense: true),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
             ),
           ),
         ]),
       ),
-<<<<<<< HEAD
       const SizedBox(width: 10),
       IconButton(icon: const Icon(Icons.notifications_none_rounded, size: 21, color: _navText), onPressed: () {}, tooltip: 'Notifications'),
       IconButton(icon: const Icon(Icons.help_outline_rounded, size: 21, color: _navText), onPressed: () {}, tooltip: 'Help'),
@@ -347,23 +255,10 @@ class AdminDashboardState extends State<AdminDashboard> {
         padding: const EdgeInsets.only(right: 16, left: 4),
         child: CircleAvatar(radius: 15, backgroundColor: AdminTheme.text, child: const Icon(Icons.person, size: 16, color: Colors.white)),
       ),
-=======
-      IconButton(icon: const Icon(Icons.build_circle_outlined, size: 20, color: AdminTheme.grayText), onPressed: _openBackfillDialog, tooltip: 'Backfill Passwords'),
-      IconButton(
-        icon: const Icon(Icons.refresh_rounded, size: 20, color: AdminTheme.grayText),
-        onPressed: () {
-          setState(() => _loading = true);
-          _fetchAll();
-        },
-        tooltip: 'Refresh Data',
-      ),
-      const SizedBox(width: 8),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
     ],
   );
 
   Widget buildSidebar() => Container(
-<<<<<<< HEAD
     width: 220,
     color: _sidebarBg,
     child: SafeArea(
@@ -410,19 +305,11 @@ class AdminDashboardState extends State<AdminDashboard> {
         ),
       ]),
     ),
-=======
-    width: 200, color: AdminTheme.navBg,
-    child: Column(children: [
-      const SizedBox(height: AdminTheme.s4),
-      Expanded(child: ListView(padding: const EdgeInsets.symmetric(horizontal: AdminTheme.s2), children: _navItems.map((item) => _navTile(item)).toList())),
-    ]),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   );
 
   Widget _navTile(_AdminNavItem item) {
     final sel = _tab == item.index;
     return GestureDetector(
-<<<<<<< HEAD
       onTap: () => setState(() {
         _tab = item.index;
         _selectedPayrollEmployee = null;
@@ -438,24 +325,12 @@ class AdminDashboardState extends State<AdminDashboard> {
           Icon(item.icon, color: sel ? Colors.white : _navText, size: 18),
           const SizedBox(width: 12),
           Text(item.label, style: TextStyle(color: sel ? Colors.white : _navText, fontSize: AdminTheme.textBase, fontWeight: sel ? FontWeight.w600 : FontWeight.w400)),
-=======
-      onTap: () => setState(() => _tab = item.index),
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 1),
-        padding: const EdgeInsets.symmetric(horizontal: AdminTheme.s3, vertical: AdminTheme.s3),
-        decoration: BoxDecoration(color: sel ? AdminTheme.orange : Colors.transparent, borderRadius: BorderRadius.circular(AdminTheme.radius)),
-        child: Row(children: [
-          Icon(item.icon, color: sel ? AdminTheme.white : AdminTheme.navText, size: 18),
-          const SizedBox(width: 12),
-          Text(item.label, style: TextStyle(color: sel ? AdminTheme.white : AdminTheme.navText, fontSize: AdminTheme.textBase, fontWeight: sel ? FontWeight.w600 : FontWeight.w400)),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
         ]),
       ),
     );
   }
 
   Widget buildDrawer() => Drawer(
-<<<<<<< HEAD
     backgroundColor: _sidebarBg,
     child: SafeArea(
       child: Column(children: [
@@ -468,11 +343,11 @@ class AdminDashboardState extends State<AdminDashboard> {
               child: const Icon(Icons.front_hand_rounded, color: Colors.white, size: 18),
             ),
             const SizedBox(width: 10),
-            Column(
+            const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('R.A.C.O.M.A.', style: TextStyle(color: _orangeDeep, fontWeight: FontWeight.w800)),
-                const Text('HRIS', style: TextStyle(color: _mutedText, fontSize: 11)),
+                Text('HRIS', style: TextStyle(color: _mutedText, fontSize: 11)),
               ],
             ),
           ]),
@@ -493,33 +368,17 @@ class AdminDashboardState extends State<AdminDashboard> {
           ),
         ),
       ]),
-=======
-    backgroundColor: AdminTheme.navBg,
-    child: SafeArea(
-      child: ListView(
-        children: _navItems.map((item) => ListTile(
-          leading: Icon(item.icon, color: _tab == item.index ? AdminTheme.orange : AdminTheme.navText),
-          title: Text(item.label, style: TextStyle(color: _tab == item.index ? AdminTheme.white : AdminTheme.navText)),
-          onTap: () { Navigator.pop(context); setState(() => _tab = item.index); },
-        )).toList(),
-      ),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
     ),
   );
 
   Widget buildBottomNav() => BottomNavigationBar(
     currentIndex: _tab >= 4 ? 0 : _tab,
-<<<<<<< HEAD
     onTap: (i) => setState(() {
       _tab = i;
       _selectedPayrollEmployee = null;
     }),
     backgroundColor: Colors.white,
     selectedItemColor: _orange, unselectedItemColor: _mutedText,
-=======
-    onTap: (i) => setState(() => _tab = i),
-    selectedItemColor: AdminTheme.orange, unselectedItemColor: AdminTheme.muted,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
     type: BottomNavigationBarType.fixed,
     items: const [
       BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: 'Overview'),
@@ -538,7 +397,6 @@ class AdminDashboardState extends State<AdminDashboard> {
           distanceCalculator: _getDistance, onTabNavigate: (idx) => setState(() => _tab = idx),
         );
       case 1:
-<<<<<<< HEAD
         return emp_page.AdminEmployeesPage(
           employees: _employees,
           searchQuery: _search,
@@ -560,72 +418,21 @@ class AdminDashboardState extends State<AdminDashboard> {
           onBack: closeAttendanceVerification,
         )
             : AdminAttendancePage(title: 'Attendance / Logins', logs: _loginLogs, accent: AdminTheme.green, searchQuery: _search, onRefreshNeeded: _fetchAll, locations: _locations);
-=======
-        return AdminEmployeesPage(employees: _employees, searchQuery: _search, onRefreshNeeded: _fetchAll);
-      case 2:
-        return AdminAddEmployeePage(onRefreshNeeded: _fetchAll);
-      case 3:
-        return AdminAttendancePage(title: 'Attendance / Logins', logs: _loginLogs, accent: AdminTheme.green, searchQuery: _search, onRefreshNeeded: _fetchAll);
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
       case 4:
         return AdminActivityPage(employees: _employees, userLogs: _userLogs, searchQuery: _search);
       case 5:
         return AdminTrackingPage(locations: _locations, officeLat: officeLat, officeLng: officeLng, radiusLimit: radiusLimit, distanceCalculator: _getDistance);
       case 6:
-<<<<<<< HEAD
         if (_selectedPayrollEmployee != null) {
           return AdminPayrollManagementPage(employeeData: _selectedPayrollEmployee!);
         }
         return AdminPayrollPage(
           employees: _employees,
           userLogs: _userLogs,
-          onSelectEmployee: (emp) => openPayrollManagement(emp), // Ayos na ang lambda wrapper para iwas type mismatch error
+          onSelectEmployee: (emp) => openPayrollManagement(emp),
         );
-=======
-        return AdminPayrollPage(employees: _employees, userLogs: _userLogs);
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
       default:
         return const Center(child: Text('View not found'));
     }
   }
-<<<<<<< HEAD
-=======
-
-  void _openBackfillDialog() {
-    final missing = _employees.where((e) => (e['password'] ?? '').toString().isEmpty).toList();
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AdminTheme.white,
-        title: const Text('Backfill Security Hashes'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (missing.isEmpty) const Text('All accounts populated.') else ...[
-              Text('Missing hashes: ${missing.length}'),
-              TextField(controller: _bf1E, decoration: const InputDecoration(labelText: 'Target Email')),
-              TextField(controller: _bf1P, decoration: const InputDecoration(labelText: 'Password Injection')),
-            ]
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          if (missing.isNotEmpty)
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: AdminTheme.orange, foregroundColor: AdminTheme.white),
-              onPressed: () async {
-                Navigator.pop(context);
-                final map = {_bf1E.text.trim(): _bf1P.text.trim()};
-                final msg = await AdminDatabase.backfillPasswords(map);
-                _bf1E.clear(); _bf1P.clear();
-                _snack(msg ?? 'Task completed');
-                _fetchAll();
-              },
-              child: const Text('Execute Routine'),
-            )
-        ],
-      ),
-    );
-  }
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 }

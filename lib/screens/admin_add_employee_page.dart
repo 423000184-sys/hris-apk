@@ -1,10 +1,7 @@
-<<<<<<< HEAD
+// lib/screens/admin_add_employee_page.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-=======
-import 'package:flutter/material.dart';
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 import 'admin_database.dart';
 import 'admin_theme.dart';
 
@@ -19,7 +16,6 @@ class AdminAddEmployeePage extends StatefulWidget {
 
 class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   final _fKey = GlobalKey<FormState>();
-<<<<<<< HEAD
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _birthdayCtrl = TextEditingController();
@@ -48,28 +44,10 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     _idCtrl.dispose();
     _nfcCtrl.dispose();
     _pinCtrl.dispose();
-=======
-  final _firstCtrl = TextEditingController();
-  final _lastCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
-  final _roleCtrl = TextEditingController();
-  final _deptCtrl = TextEditingController();
-  final _nfcCtrl = TextEditingController();
-  final _pinCtrl = TextEditingController();
-  final _passCtrl = TextEditingController();
-  bool _saving = false;
-  bool _passVis = false;
-
-  @override
-  void dispose() {
-    _firstCtrl.dispose(); _lastCtrl.dispose(); _emailCtrl.dispose(); _roleCtrl.dispose();
-    _deptCtrl.dispose(); _nfcCtrl.dispose(); _pinCtrl.dispose(); _passCtrl.dispose();
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
     super.dispose();
   }
 
   void _snack(String msg, {bool error = false}) {
-<<<<<<< HEAD
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
@@ -82,14 +60,10 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     String f = firstName.isNotEmpty ? firstName[0].toUpperCase() : '';
     String l = lastName.isNotEmpty ? lastName[0].toUpperCase() : '';
     return '$f$l'.isEmpty ? 'E' : '$f$l';
-=======
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: error ? AdminTheme.red : AdminTheme.green));
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   }
 
   @override
   Widget build(BuildContext context) {
-<<<<<<< HEAD
     return Scaffold(
       backgroundColor: _bg,
       floatingActionButton: FloatingActionButton(
@@ -404,11 +378,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                             if (!_fKey.currentState!.validate()) return;
                             setS(() => _saving = true);
 
-                            // ---- try/catch added: prevents the dialog from
-                            // hanging on "saving" forever if AdminDatabase
-                            // throws (network drop, Firestore rules, etc.)
-                            // instead of just returning an error string, and
-                            // guarantees the loading state always resets.
                             try {
                               final fullName = _nameCtrl.text.trim();
                               final parts = fullName.split(' ');
@@ -429,22 +398,14 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                               if (!mounted) return;
 
                               if (err != null) {
-                                // Handled error string returned by AdminDatabase
                                 _snack(err, error: true);
                               } else {
                                 Navigator.pop(ctx);
                                 _snack('Employee saved & credentials deployed successfully!');
-                                // Rebuild -> FutureBuilder above re-calls
-                                // AdminDatabase.getEmployees(), so the new
-                                // employee is pulled fresh from Firestore.
                                 setState(() {});
-                                // Tells the parent (Admin Employees page) to
-                                // refresh its own list too, so the new hire
-                                // shows up there permanently, not just here.
                                 widget.onRefreshNeeded();
                               }
                             } catch (e) {
-                              // Unhandled exception from the database call
                               if (!mounted) return;
                               _snack('Failed to add employee: $e', error: true);
                             } finally {
@@ -757,77 +718,4 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     decoration: BoxDecoration(color: active ? _orange : Colors.transparent, borderRadius: BorderRadius.circular(6)),
     child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: active ? Colors.white : _textDark)),
   );
-=======
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AdminTheme.s4),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Register New Staff', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AdminTheme.text, letterSpacing: -0.3)),
-        const SizedBox(height: AdminTheme.s4),
-        Form(
-          key: _fKey,
-          child: Container(
-            decoration: AdminTheme.card(),
-            padding: const EdgeInsets.all(AdminTheme.s5),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              TextFormField(controller: _firstCtrl, decoration: const InputDecoration(labelText: 'First Name *'), validator: (v) => v!.isEmpty ? 'Field required' : null),
-              TextFormField(controller: _lastCtrl, decoration: const InputDecoration(labelText: 'Last Name *'), validator: (v) => v!.isEmpty ? 'Field required' : null),
-              TextFormField(controller: _emailCtrl, decoration: const InputDecoration(labelText: 'Email Address *'), validator: (v) => v!.contains('@') ? null : 'Provide valid email'),
-              TextFormField(controller: _roleCtrl, decoration: const InputDecoration(labelText: 'Role / Designation *'), validator: (v) => v!.isEmpty ? 'Field required' : null),
-              TextFormField(controller: _deptCtrl, decoration: const InputDecoration(labelText: 'Department *'), validator: (v) => v!.isEmpty ? 'Field required' : null),
-              const SizedBox(height: AdminTheme.s3),
-              TextFormField(controller: _nfcCtrl, decoration: const InputDecoration(labelText: 'Keyfob NFC Serial *'), validator: (v) => v!.isEmpty ? 'Field required' : null),
-              TextFormField(controller: _pinCtrl, decoration: const InputDecoration(labelText: 'Backup Auth Security PIN *'), keyboardType: TextInputType.number, validator: (v) => v!.length >= 4 ? null : 'Minimum 4 digits required'),
-              TextFormField(
-                controller: _passCtrl,
-                obscureText: !_passVis,
-                decoration: InputDecoration(
-                  labelText: 'Portal Password Setup *',
-                  suffixIcon: IconButton(icon: Icon(_passVis ? Icons.visibility : Icons.visibility_off), onPressed: () => setState(() => _passVis = !_passVis)),
-                ),
-                validator: (v) => v!.length >= 6 ? null : 'Minimum 6 character password required',
-              ),
-              const SizedBox(height: AdminTheme.s5),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(backgroundColor: AdminTheme.orange, foregroundColor: AdminTheme.white, padding: const EdgeInsets.symmetric(vertical: 14)),
-                  icon: const Icon(Icons.person_add_rounded),
-                  label: _saving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: AdminTheme.white, strokeWidth: 2)) : const Text('Write Employee to Registry', style: TextStyle(fontWeight: FontWeight.bold)),
-                  onPressed: _saving ? null : _submitAdd,
-                ),
-              ),
-            ]),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  Future<void> _submitAdd() async {
-    if (!_fKey.currentState!.validate()) return;
-    setState(() => _saving = true);
-
-    final err = await AdminDatabase.addEmployee(
-      firstName: _firstCtrl.text.trim(),
-      lastName: _lastCtrl.text.trim(),
-      email: _emailCtrl.text.trim(),
-      password: _passCtrl.text.trim(),
-      role: _roleCtrl.text.trim(),
-      department: _deptCtrl.text.trim(),
-      nfcTagId: _nfcCtrl.text.trim(),
-      pin: _pinCtrl.text.trim(),
-    );
-
-    setState(() => _saving = false);
-    if (err != null) {
-      _snack(err, error: true);
-    } else {
-      for (final c in [_firstCtrl, _lastCtrl, _emailCtrl, _roleCtrl, _deptCtrl, _nfcCtrl, _pinCtrl, _passCtrl]) {
-        c.clear();
-      }
-      _snack('Employee saved & credentials deployed to Firebase Auth module!');
-      widget.onRefreshNeeded();
-    }
-  }
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 }

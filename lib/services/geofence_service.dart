@@ -51,16 +51,10 @@ class GeofenceService {
   GeofenceService._();
   static final GeofenceService instance = GeofenceService._();
 
-<<<<<<< HEAD
   static const double _officeLat           = 14.6021393;
   static const double _officeLng           = 120.9993248;
   static const String _officeAddress       = '256 Lacson Ave, Sampaloc Manila 1008';
-=======
-  static const double _officeLat           = 14.59805;
-  static const double _officeLng           = 120.98917;
-  static const String _officeAddress       = '629 J. Nepomuceno St., Quiapo, Manila 1001';
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-  static const double _allowedRadiusMeters = 100.0; 
+  static const double _allowedRadiusMeters = 100.0;
 
   final _statusController = StreamController<GeofenceResult>.broadcast();
   Stream<GeofenceResult> get statusStream => _statusController.stream;

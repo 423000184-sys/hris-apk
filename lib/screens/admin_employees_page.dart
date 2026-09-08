@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
@@ -18,30 +17,19 @@ class CustomAppScrollBehavior extends MaterialScrollBehavior {
     PointerDeviceKind.stylus,
   };
 }
-=======
-import 'package:flutter/material.dart';
-import 'admin_database.dart';
-import 'admin_theme.dart';
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 
 class AdminEmployeesPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
   final String searchQuery;
   final VoidCallback onRefreshNeeded;
-<<<<<<< HEAD
   final VoidCallback? onAddEmployee;
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 
   const AdminEmployeesPage({
     super.key,
     required this.employees,
     required this.searchQuery,
     required this.onRefreshNeeded,
-<<<<<<< HEAD
     this.onAddEmployee,
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   });
 
   @override
@@ -49,27 +37,23 @@ class AdminEmployeesPage extends StatefulWidget {
 }
 
 class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
-<<<<<<< HEAD
   final ScrollController _scrollController = ScrollController();
 
   // Controllers para sa Edit
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   final _editFirstCtrl = TextEditingController();
   final _editLastCtrl = TextEditingController();
   final _editRoleCtrl = TextEditingController();
   final _editDeptCtrl = TextEditingController();
   final _editEmailCtrl = TextEditingController();
-<<<<<<< HEAD
   final _editPhoneCtrl = TextEditingController();
   final _editPassCtrl = TextEditingController();
   final _editKeyfobCtrl = TextEditingController();
   final _editPinCtrl = TextEditingController();
   bool _editSaving = false;
   bool _editPassVis = false;
-  bool _isEditingEmployee = false; // Bagong state para sa full-page edit
+  bool _isEditingEmployee = false;
 
-  // Controllers para sa Add Employee (Inline para hindi mawala ang nav)
+  // Controllers para sa Add Employee
   final _addFirstCtrl = TextEditingController();
   final _addLastCtrl = TextEditingController();
   final _addEmailCtrl = TextEditingController();
@@ -144,9 +128,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   bool _match(String text) => _s(text).toLowerCase().contains(_s(_filterText).toLowerCase());
 
   void _snack(String msg, {bool error = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
         content: Text(msg),
-        backgroundColor: error ? AdminTheme.red : AdminTheme.green));
+        backgroundColor: error ? AdminTheme.red : AdminTheme.green,
+      ),
+    );
   }
 
   String _nameOf(Map<String, dynamic> e) {
@@ -304,16 +291,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       return _buildEmployeeProfilePage(_selectedProfileEmp!);
     }
 
-    // Compute + validate the department filter FIRST, against the current
-    // employees list, before using it to filter. Doing this validation
-    // AFTER filtering (as before) meant a stale `_department` value (e.g.
-    // left over from a department that no longer has any members) would
-    // silently zero out `filtered` for the current build — the header
-    // count (widget.employees.length) stayed correct, but the directory
-    // grid showed "No records match search parameters." until some other
-    // interaction forced a rebuild with the corrected value. That's why a
-    // freshly-added employee could disappear from the Employee Directory
-    // even though it was really saved.
     final departments = <String>{
       'All Departments',
       ...widget.employees.map((e) => _s(e['department'], '')).where((d) => d.isNotEmpty && d != '—'),
@@ -465,11 +442,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
                       setState(() => _addSaving = true);
 
-                      // ---- try/catch added: without this, any thrown
-                      // exception from AdminDatabase (network drop,
-                      // Firestore rules rejection, etc.) would leave the
-                      // button stuck in its loading state forever and
-                      // never surface an error to HR.
                       try {
                         final data = {
                           'firstName': firstName,
@@ -491,7 +463,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                         if (!mounted) return;
 
                         if (err != null) {
-                          // Handled error string returned by AdminDatabase
                           _snack('Failed to add employee: $err', error: true);
                         } else {
                           _snack('Employee successfully added!');
@@ -502,16 +473,10 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                           _addRoleCtrl.clear();
                           _addDeptCtrl.clear();
                           _addPassCtrl.clear();
-                          // Back to the directory view. Since the directory
-                          // reads from widget.employees (owned by the
-                          // parent), onRefreshNeeded() below is what
-                          // actually re-pulls the updated list so the new
-                          // hire shows up here permanently.
                           setState(() => _isAddingEmployee = false);
                           widget.onRefreshNeeded();
                         }
                       } catch (e) {
-                        // Unhandled exception from the database call
                         if (!mounted) return;
                         _snack('Failed to add employee: $e', error: true);
                       } finally {
@@ -530,17 +495,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       ),
     );
   }
-
-  // ================================================================
-  // EDIT FIELD (used inside _buildEditEmployeePage)
-  // ================================================================
-  //
-  // Uniform style: always white background, gray placeholder text,
-  // black typed text. No color-switching — matches the rest of the
-  // white cards on the page. Editable by default; pass
-  // readOnly: true only for fields that genuinely should not change
-  // (there are none left in the biometrics card now).
-  // ================================================================
 
   Widget _editField(String label, TextEditingController controller, {bool readOnly = false}) {
     return TextField(
@@ -636,27 +590,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                           'This photo will be used for digital identification across the portal.',
                           style: TextStyle(fontSize: 12, color: _muted),
                         ),
-                        const SizedBox(height: 16),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFFBEE),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: const Color(0xFFFDE68A)),
-                          ),
-                          child: const Row(
-                            children: [
-                              Icon(Icons.info_outline, size: 18, color: Color(0xFFD97706)),
-                              SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'Ensure the employee\'s name matches their government-issued ID for biometric verification compliance.',
-                                  style: TextStyle(fontSize: 11, color: Color(0xFFB45309)),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -736,37 +669,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                             const SizedBox(height: 20),
                             Row(
                               children: [
-                                Expanded(
-                                  child: _editField('KEYFOB SERIAL', _editKeyfobCtrl),
-                                ),
+                                Expanded(child: _editField('KEYFOB SERIAL', _editKeyfobCtrl)),
                                 const SizedBox(width: 16),
-                                Expanded(
-                                  child: _editField('4-DIGIT PIN', _editPinCtrl),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Chip(
-                                  backgroundColor: Colors.white,
-                                  side: const BorderSide(color: _cardBorder),
-                                  avatar: const Icon(Icons.check, size: 14, color: Colors.green),
-                                  label: const Text(
-                                    'NFC Ready',
-                                    style: TextStyle(color: Colors.black, fontWeight: FontWeight.w600),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Chip(
-                                  backgroundColor: Colors.white,
-                                  side: const BorderSide(color: _cardBorder),
-                                  avatar: const Icon(Icons.check, size: 14, color: Colors.green),
-                                  label: const Text(
-                                    'Pin-pad Enabled',
-                                    style: TextStyle(color: Colors.black, fontWeight: FontWeight.w600),
-                                  ),
-                                ),
+                                Expanded(child: _editField('4-DIGIT PIN', _editPinCtrl)),
                               ],
                             ),
                           ],
@@ -909,7 +814,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: _text),
             ),
             const SizedBox(height: 24),
-
             LayoutBuilder(builder: (context, c) {
               final isMobile = c.maxWidth < 850;
               return IntrinsicHeight(
@@ -959,48 +863,22 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                                 const SizedBox(height: 4),
                                 Text(role, style: const TextStyle(fontSize: 15, color: _orange, fontWeight: FontWeight.w600)),
                                 const SizedBox(height: 32),
-
                                 Row(
                                   children: [
-                                    Expanded(
-                                      child: _profileDetailItem(
-                                        icon: Icons.apartment_rounded,
-                                        title: 'Department',
-                                        value: dept,
-                                      ),
-                                    ),
-                                    Expanded(
-                                      child: _profileDetailItem(
-                                        icon: Icons.email_outlined,
-                                        title: 'Work Email',
-                                        value: email,
-                                      ),
-                                    ),
+                                    Expanded(child: _profileDetailItem(icon: Icons.apartment_rounded, title: 'Department', value: dept)),
+                                    Expanded(child: _profileDetailItem(icon: Icons.email_outlined, title: 'Work Email', value: email)),
                                   ],
                                 ),
                                 const SizedBox(height: 28),
                                 Row(
                                   children: [
-                                    Expanded(
-                                      child: _profileDetailItem(
-                                        icon: Icons.phone_outlined,
-                                        title: 'Phone Extension',
-                                        value: phone,
-                                      ),
-                                    ),
-                                    Expanded(
-                                      child: _profileDetailItem(
-                                        icon: Icons.calendar_today_outlined,
-                                        title: 'Joining Date',
-                                        value: joiningDate,
-                                      ),
-                                    ),
+                                    Expanded(child: _profileDetailItem(icon: Icons.phone_outlined, title: 'Phone Extension', value: phone)),
+                                    Expanded(child: _profileDetailItem(icon: Icons.calendar_today_outlined, title: 'Joining Date', value: joiningDate)),
                                   ],
                                 ),
                               ],
                             ),
                             const SizedBox(height: 36),
-
                             Row(
                               children: [
                                 ElevatedButton.icon(
@@ -1033,9 +911,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                         ),
                       ),
                     ),
-
                     if (isMobile) const SizedBox(height: 20) else const SizedBox(width: 20),
-
                     Expanded(
                       flex: isMobile ? 0 : 4,
                       child: Container(
@@ -1056,7 +932,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                               ],
                             ),
                             const SizedBox(height: 24),
-
                             Container(
                               width: double.infinity,
                               padding: const EdgeInsets.all(20),
@@ -1068,173 +943,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Row(
-                                    children: [
-                                      Text('NFC/KEYFOB ID', style: TextStyle(fontSize: 11, color: _muted, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-                                      Spacer(),
-                                      Icon(Icons.info_outline, size: 16, color: _muted),
-                                    ],
-                                  ),
+                                  const Text('NFC/KEYFOB ID', style: TextStyle(fontSize: 11, color: _muted, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
                                   const SizedBox(height: 12),
-                                  Text(
-                                    nfcId,
-                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: _text),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Row(
-                                    children: [
-                                      Icon(Icons.check_circle_rounded, size: 14, color: nfcId != 'NOT ASSIGNED' ? _orange : _muted),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        nfcId != 'NOT ASSIGNED' ? 'Verified Credential' : 'Unregistered',
-                                        style: TextStyle(fontSize: 12, color: nfcId != 'NOT ASSIGNED' ? _proText : _muted, fontWeight: FontWeight.w600),
-                                      ),
-                                    ],
-                                  )
+                                  Text(nfcId, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: _text)),
                                 ],
                               ),
                             ),
-                            const SizedBox(height: 20),
-
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(20),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF8FAFC),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: const Color(0xFFE2E8F0)),
-                              ),
-                              child: const Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('BIOMETRIC STATUS', style: TextStyle(fontSize: 11, color: _muted, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-                                  SizedBox(height: 14),
-                                  Row(
-                                    children: [
-                                      Icon(Icons.face_rounded, size: 20, color: _orange),
-                                      SizedBox(width: 6),
-                                      Text('Face', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _text)),
-                                      SizedBox(width: 24),
-                                      Icon(Icons.fingerprint_rounded, size: 20, color: _orange),
-                                      SizedBox(width: 6),
-                                      Text('Thumb', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _text)),
-                                    ],
-                                  )
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }),
-
-            const SizedBox(height: 24),
-
-            LayoutBuilder(builder: (context, c) {
-              final isMobile = c.maxWidth < 850;
-              return IntrinsicHeight(
-                child: Flex(
-                  direction: isMobile ? Axis.vertical : Axis.horizontal,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      flex: isMobile ? 0 : 7,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 32),
-                        constraints: const BoxConstraints(minHeight: 280),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: _cardBorder),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                const Text('Recent Attendance', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _text)),
-                                const Spacer(),
-                                TextButton(
-                                  onPressed: () {},
-                                  child: const Text('View All Logs', style: TextStyle(color: _orange, fontSize: 13, fontWeight: FontWeight.bold)),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 20),
-
-                            if (attendanceList.isEmpty)
-                              const Expanded(
-                                child: Center(
-                                  child: Padding(
-                                    padding: EdgeInsets.symmetric(vertical: 40),
-                                    child: Text(
-                                      'No Time In / Time Out logs available for this employee.',
-                                      style: TextStyle(color: _muted, fontSize: 14),
-                                    ),
-                                  ),
-                                ),
-                              )
-                            else
-                              Table(
-                                columnWidths: const {
-                                  0: FlexColumnWidth(1.2),
-                                  1: FlexColumnWidth(1.0),
-                                  2: FlexColumnWidth(1.0),
-                                  3: FlexColumnWidth(1.0),
-                                  4: FlexColumnWidth(1.0),
-                                },
-                                children: [
-                                  const TableRow(
-                                    decoration: BoxDecoration(border: Border(bottom: BorderSide(color: _cardBorder))),
-                                    children: [
-                                      Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('DATE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _muted))),
-                                      Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('TIME IN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _muted))),
-                                      Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('TIME OUT', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _muted))),
-                                      Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('TOTAL HRS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _muted))),
-                                      Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('STATUS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _muted))),
-                                    ],
-                                  ),
-                                  ...attendanceList.map((log) {
-                                    final date = _s(log['date'], '—');
-                                    final timeIn = _s(log['timeIn'] ?? log['time_in'], '—');
-                                    final timeOut = _s(log['timeOut'] ?? log['time_out'], '—');
-                                    final totalHrs = _s(log['totalHrs'] ?? log['total_hrs'], '—');
-                                    final status = _s(log['status'], 'Present');
-                                    final statusColor = status.toLowerCase() == 'late' ? _orange : _green;
-
-                                    return _attendanceRow(date, timeIn, timeOut, totalHrs, status, statusColor);
-                                  }),
-                                ],
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                    if (isMobile) const SizedBox(height: 20) else const SizedBox(width: 20),
-
-                    Expanded(
-                      flex: isMobile ? 0 : 4,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
-                        constraints: const BoxConstraints(minHeight: 280),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: _cardBorder),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('Leave Balance', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _text)),
-                            const SizedBox(height: 24),
-                            _leaveProgressItem('ANNUAL LEAVE', annualLeaveUsed, 18, const Color(0xFFB45309)),
-                            const SizedBox(height: 24),
-                            _leaveProgressItem('SICK LEAVE', sickLeaveUsed, 18, const Color(0xFF4B5563)),
                           ],
                         ),
                       ),
@@ -1273,56 +987,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  TableRow _attendanceRow(String date, String inTime, String outTime, String hrs, String status, Color statusColor) {
-    return TableRow(
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6)))),
-      children: [
-        Padding(padding: const EdgeInsets.symmetric(vertical: 14), child: Text(date, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _text))),
-        Padding(padding: const EdgeInsets.symmetric(vertical: 14), child: Text(inTime, style: const TextStyle(fontSize: 13, color: _muted))),
-        Padding(padding: const EdgeInsets.symmetric(vertical: 14), child: Text(outTime, style: const TextStyle(fontSize: 13, color: _muted))),
-        Padding(padding: const EdgeInsets.symmetric(vertical: 14), child: Text(hrs, style: const TextStyle(fontSize: 13, color: _text))),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(color: statusColor.withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
-            child: Text(status, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _leaveProgressItem(String title, int used, int total, Color color) {
-    final remaining = total - used;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
-              child: Text(title, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold)),
-            ),
-            const Spacer(),
-            Text('$remaining Days Left', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _text)),
-          ],
-        ),
-        const SizedBox(height: 10),
-        LinearProgressIndicator(
-          value: used / total,
-          backgroundColor: const Color(0xFFE5E7EB),
-          color: color,
-          minHeight: 8,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        const SizedBox(height: 6),
-        Text('$used of $total Days Used', style: const TextStyle(fontSize: 11, color: _muted)),
-      ],
-    );
-  }
-
   Widget _header() {
     return LayoutBuilder(builder: (_, c) {
       final narrow = c.maxWidth < 640;
@@ -1357,8 +1021,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         label: const Text('Add New Employee', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
       );
 
-      // "Clear All Logs" — wipes activity_logs, attendance_logs, clock_ins,
-      // clock_outs, leave_applications, and user_locations entirely.
       final wipeButton = ElevatedButton.icon(
         onPressed: () => _confirmWipeAllLogs(),
         style: ElevatedButton.styleFrom(
@@ -1499,258 +1161,21 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   Widget _directoryGrid(List<Map<String, dynamic>> items, {required bool showQuickInvite}) {
-    if (!showQuickInvite || items.length < 2) {
-      return LayoutBuilder(builder: (_, c) {
-        final cols = c.maxWidth > 900 ? 3 : (c.maxWidth > 600 ? 2 : 1);
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: cols,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
-            mainAxisExtent: 320,
-          ),
-          itemCount: items.length,
-          itemBuilder: (_, index) => _employeeCard(items[index]),
-        );
-      });
-    }
-
-    final featured = items.first;
-    final rest = items.skip(1).toList();
-    final leftover = rest.skip(1).toList();
-
-    final bottomCards = <Widget>[
-      for (final e in leftover.take(2)) _employeeCard(e),
-    ];
-    if (bottomCards.length < 2) {
-      bottomCards.add(_quickInviteCard());
-    }
-
     return LayoutBuilder(builder: (_, c) {
-      final narrow = c.maxWidth < 900;
-
-      final topRow = narrow
-          ? Column(children: [
-        _featuredCard(featured),
-        const SizedBox(height: 16),
-        rest.isNotEmpty ? _employeeCard(rest[0], showButton: false) : _quickInviteCard(),
-      ])
-          : IntrinsicHeight(
-        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Expanded(flex: 2, child: _featuredCard(featured)),
-          const SizedBox(width: 16),
-          Expanded(child: rest.isNotEmpty ? _employeeCard(rest[0], showButton: false) : _quickInviteCard()),
-        ]),
-      );
-
-      final bottomRow = narrow
-          ? Column(children: [
-        for (int i = 0; i < bottomCards.length; i++) ...[
-          bottomCards[i],
-          if (i != bottomCards.length - 1) const SizedBox(height: 16),
-        ],
-      ])
-          : IntrinsicHeight(
-        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          for (int i = 0; i < bottomCards.length; i++) ...[
-            Expanded(child: bottomCards[i]),
-            if (i != bottomCards.length - 1) const SizedBox(width: 16),
-          ],
-        ]),
-      );
-
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          topRow,
-          const SizedBox(height: 16),
-          bottomRow,
-        ],
+      final cols = c.maxWidth > 900 ? 3 : (c.maxWidth > 600 ? 2 : 1);
+      return GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: cols,
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+          mainAxisExtent: 320,
+        ),
+        itemCount: items.length,
+        itemBuilder: (_, index) => _employeeCard(items[index]),
       );
     });
-  }
-
-  Widget _featuredCard(Map<String, dynamic> emp) {
-    final name = _nameOf(emp);
-    final initials = name.trim().isEmpty
-        ? '?'
-        : name.trim().split(RegExp(r'\s+')).map((p) => p[0]).take(2).join().toUpperCase();
-    final role = _s(emp['role'], 'Staff Member');
-    final dept = _s(emp['department'], 'General');
-    final id = _s(emp['id']);
-    final active = _s(emp['status'], 'active') == 'active';
-    final pro = _isPro(emp);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _cardBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x05000000),
-            blurRadius: 10,
-            offset: Offset(0, 4),
-          )
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Stack(children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: const BoxDecoration(shape: BoxShape.circle, color: _featuredAvatarBlue),
-              child: ClipOval(child: _avatarContent(emp, initials, size: 72, fontSize: 22)),
-            ),
-            if (active)
-              Positioned(
-                right: 2,
-                bottom: 2,
-                child: Container(
-                  width: 14,
-                  height: 14,
-                  decoration: BoxDecoration(
-                    color: _green,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2),
-                  ),
-                ),
-              ),
-          ]),
-          const SizedBox(width: 20),
-
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Row(children: [
-                  Flexible(
-                    child: Text(
-                      name,
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _text),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (pro) ...[
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(color: _proBg, borderRadius: BorderRadius.circular(4)),
-                      child: const Text('PRO', style: TextStyle(color: _proText, fontSize: 10, fontWeight: FontWeight.bold)),
-                    ),
-                  ],
-                ]),
-                const SizedBox(height: 4),
-                Text(role, style: const TextStyle(color: _muted, fontSize: 13), overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 16),
-                Row(children: [
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const Text('DEPARTMENT', style: TextStyle(color: _muted, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-                      const SizedBox(height: 2),
-                      Text(dept, style: const TextStyle(color: _text, fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
-                    ]),
-                  ),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const Text('EMPLOYEE ID', style: TextStyle(color: _muted, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-                      const SizedBox(height: 2),
-                      Text(id.isEmpty || id == '—' ? '—' : '#$id', style: const TextStyle(color: _text, fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
-                    ]),
-                  ),
-                ]),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-
-          Column(
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: [
-              _roundedIconButton(
-                icon: Icons.assignment_ind_outlined,
-                onTap: () => setState(() => _selectedProfileEmp = emp),
-                tooltip: 'View Profile',
-              ),
-              const SizedBox(height: 10),
-              _roundedIconButton(
-                icon: Icons.phone_outlined,
-                onTap: () {
-                  final phone = _s(emp['phone'], _s(emp['mobile'], 'No phone registered'));
-                  _snack('Contact number: $phone');
-                },
-                tooltip: 'Contact Employee',
-              ),
-              const SizedBox(height: 10),
-              PopupMenuButton<String>(
-                color: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                icon: const Icon(Icons.more_vert_rounded, color: _muted, size: 20),
-                onSelected: (v) {
-                  if (v == 'profile') {
-                    setState(() => _selectedProfileEmp = emp);
-                  } else if (v == 'delete') {
-                    _confirmDelete(_s(emp['id']), name);
-                  }
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                    value: 'profile',
-                    child: Row(
-                      children: [
-                        Icon(Icons.person_outline_rounded, size: 16, color: _text),
-                        SizedBox(width: 8),
-                        Text('View Profile', style: TextStyle(color: _text, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'delete',
-                    child: Row(
-                      children: [
-                        Icon(Icons.delete_outline_rounded, size: 16, color: Colors.red),
-                        SizedBox(width: 8),
-                        Text('Terminate', style: TextStyle(color: Colors.red, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _roundedIconButton({required IconData icon, required VoidCallback onTap, String? tooltip}) {
-    return Tooltip(
-      message: tooltip ?? '',
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFAFAFA),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE5E7EB)),
-            ),
-            child: Icon(icon, size: 18, color: const Color(0xFF374151)),
-          ),
-        ),
-      ),
-    );
   }
 
   Widget _employeeCard(Map<String, dynamic> emp, {bool showButton = true}) {
@@ -1823,9 +1248,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               ],
             ),
           ),
-
           const SizedBox(width: 12),
-
           Column(
             mainAxisAlignment: MainAxisAlignment.start,
             children: [
@@ -1835,7 +1258,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 tooltip: 'View Profile',
               ),
               const SizedBox(height: 8),
-
               _roundedIconButton(
                 icon: Icons.phone_outlined,
                 onTap: () {
@@ -1845,7 +1267,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 tooltip: 'Contact Employee',
               ),
               const SizedBox(height: 4),
-
               PopupMenuButton<String>(
                 color: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -1887,32 +1308,25 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  Widget _quickInviteCard() {
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 320),
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: _bg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFD1D5DB), style: BorderStyle.solid),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: const BoxDecoration(color: Color(0xFFFEEFEB), shape: BoxShape.circle),
-            child: const Icon(Icons.add_rounded, color: _orange, size: 24),
+  Widget _roundedIconButton({required IconData icon, required VoidCallback onTap, String? tooltip}) {
+    return Tooltip(
+      message: tooltip ?? '',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFAFAFA),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: Icon(icon, size: 18, color: const Color(0xFF374151)),
           ),
-          const SizedBox(height: 16),
-          const Text('Quick Invite', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: _text)),
-          const SizedBox(height: 8),
-          const Text('Send joining link to new staff members via email.',
-              textAlign: TextAlign.center, style: TextStyle(color: _muted, fontSize: 12), overflow: TextOverflow.ellipsis, maxLines: 2),
-        ],
+        ),
       ),
     );
   }
@@ -1981,191 +1395,27 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     setState(() {
       _isEditingEmployee = true;
     });
-=======
-  final _editPassCtrl = TextEditingController();
-  bool _editSaving = false;
-  bool _editPassVis = false;
-
-  @override
-  void dispose() {
-    _editFirstCtrl.dispose(); _editLastCtrl.dispose(); _editRoleCtrl.dispose();
-    _editDeptCtrl.dispose(); _editEmailCtrl.dispose(); _editPassCtrl.dispose();
-    super.dispose();
-  }
-
-  bool _match(String text) => text.toLowerCase().contains(widget.searchQuery.toLowerCase());
-
-  void _snack(String msg, {bool error = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: error ? AdminTheme.red : AdminTheme.green));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filtered = widget.employees.where((e) => _match('${e['firstName']} ${e['lastName']} ${e['name']} ${e['department']}')).toList();
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AdminTheme.s4),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Staff Directory', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AdminTheme.text, letterSpacing: -0.3)),
-        const SizedBox(height: AdminTheme.s4),
-        if (filtered.isEmpty) _emptyState() else ...filtered.map((emp) => _employeeCard(emp)),
-      ]),
-    );
-  }
-
-  Widget _employeeCard(Map<String, dynamic> emp) {
-    final name = emp['name'] ?? '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}'.trim();
-    final initial = name.toString().isNotEmpty ? name.toString()[0].toUpperCase() : '?';
-    final role = emp['role'] ?? 'Staff Member';
-    final dept = emp['department'] ?? 'General';
-    final email = emp['email'] ?? '—';
-    final nfc = emp['nfcTagId'] ?? '—';
-    final status = emp['status'] ?? 'active';
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: AdminTheme.s3),
-      decoration: AdminTheme.card(),
-      padding: const EdgeInsets.all(AdminTheme.s4),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          CircleAvatar(radius: 22, backgroundColor: AdminTheme.blueLight, child: Text(initial, style: const TextStyle(color: AdminTheme.blue, fontWeight: FontWeight.bold))),
-          const SizedBox(width: AdminTheme.s3),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(name, style: const TextStyle(color: AdminTheme.text, fontSize: 14, fontWeight: FontWeight.bold)),
-              Text('$role · $dept', style: const TextStyle(color: AdminTheme.textMuted, fontSize: AdminTheme.textBase)),
-            ]),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(color: status == 'active' ? AdminTheme.greenLight : AdminTheme.grayAvatar, borderRadius: BorderRadius.circular(AdminTheme.radiusSm)),
-            child: Text(status.toString().toUpperCase(), style: TextStyle(color: status == 'active' ? AdminTheme.green : AdminTheme.grayText, fontSize: 10, fontWeight: FontWeight.bold)),
-          ),
-        ]),
-        const Padding(padding: EdgeInsets.symmetric(vertical: AdminTheme.s2), child: Divider(height: 1, color: AdminTheme.borderLight)),
-        Row(children: [
-          Expanded(child: _detailItem(Icons.email_rounded, 'EMAIL ADDRESS', email)),
-          Expanded(child: _detailItem(Icons.contactless_rounded, 'NFC ID SERIAL', nfc)),
-        ]),
-        const SizedBox(height: AdminTheme.s3),
-        Row(children: [
-          Expanded(child: _outlineBtn('Modify', Icons.edit_rounded, AdminTheme.blue, () => _openEditDialog(emp))),
-          const SizedBox(width: AdminTheme.s2),
-          Expanded(child: _outlineBtn('Terminate', Icons.delete_outline_rounded, AdminTheme.red, () => _confirmDelete((emp['id'] ?? '').toString(), name))),
-        ]),
-      ]),
-    );
-  }
-
-  Widget _detailItem(IconData icon, String label, String text) => Row(children: [
-    Icon(icon, size: 16, color: AdminTheme.muted),
-    const SizedBox(width: 8),
-    Expanded(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(color: AdminTheme.muted, fontSize: 9, fontWeight: FontWeight.bold)),
-        Text(text, style: const TextStyle(color: AdminTheme.text, fontSize: 11.5), overflow: TextOverflow.ellipsis),
-      ]),
-    ),
-  ]);
-
-  Widget _outlineBtn(String label, IconData icon, Color color, VoidCallback actions) => OutlinedButton.icon(
-    style: OutlinedButton.styleFrom(
-      foregroundColor: color,
-      side: BorderSide(color: color, width: 0.5),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdminTheme.radiusSm)),
-    ),
-    icon: Icon(icon, size: 14),
-    label: Text(label, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
-    onPressed: actions,
-  );
-
-  void _openEditDialog(Map<String, dynamic> emp) {
-    _editFirstCtrl.text = (emp['firstName'] ?? '').toString();
-    _editLastCtrl.text = (emp['lastName'] ?? '').toString();
-    _editRoleCtrl.text = (emp['role'] ?? '').toString();
-    _editDeptCtrl.text = (emp['department'] ?? '').toString();
-    _editEmailCtrl.text = (emp['email'] ?? '').toString();
-    _editPassCtrl.text = (emp['password'] ?? '').toString();
-    _editPassVis = false;
-
-    showDialog(
-      context: context,
-      builder: (_) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
-        backgroundColor: AdminTheme.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdminTheme.radiusLg)),
-        title: const Text('Update Employee File', style: TextStyle(color: AdminTheme.text, fontWeight: FontWeight.bold, fontSize: 16)),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(controller: _editFirstCtrl, decoration: const InputDecoration(labelText: 'First Name')),
-            TextField(controller: _editLastCtrl, decoration: const InputDecoration(labelText: 'Last Name')),
-            TextField(controller: _editEmailCtrl, decoration: const InputDecoration(labelText: 'Email Address')),
-            TextField(controller: _editRoleCtrl, decoration: const InputDecoration(labelText: 'Role / Designation')),
-            TextField(controller: _editDeptCtrl, decoration: const InputDecoration(labelText: 'Department')),
-            TextField(
-              controller: _editPassCtrl,
-              obscureText: !_editPassVis,
-              decoration: InputDecoration(
-                labelText: 'Account Password Update',
-                suffixIcon: IconButton(icon: Icon(_editPassVis ? Icons.visibility : Icons.visibility_off), onPressed: () => setS(() => _editPassVis = !_editPassVis)),
-              ),
-            ),
-          ]),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: AdminTheme.muted))),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AdminTheme.orange, foregroundColor: AdminTheme.white),
-            onPressed: _editSaving ? null : () async {
-              setS(() => _editSaving = true);
-              final pass = _editPassCtrl.text.trim();
-              final data = {
-                'firstName': _editFirstCtrl.text.trim(),
-                'lastName': _editLastCtrl.text.trim(),
-                'name': '${_editFirstCtrl.text.trim()} ${_editLastCtrl.text.trim()}',
-                'email': _editEmailCtrl.text.trim(),
-                'role': _editRoleCtrl.text.trim(),
-                'department': _editDeptCtrl.text.trim(),
-                if (pass.isNotEmpty) 'password': pass,
-              };
-              final err = await AdminDatabase.updateEmployee((emp['id'] ?? '').toString(), data);
-              setS(() => _editSaving = false);
-              if (!mounted) return;
-              Navigator.pop(ctx);
-              if (err != null) _snack('Update failed: $err', error: true);
-              else { _snack('Employee profile written!'); widget.onRefreshNeeded(); }
-            },
-            child: _editSaving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: AdminTheme.white, strokeWidth: 2)) : const Text('Save Changes'),
-          ),
-        ],
-      )),
-    );
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   }
 
   void _confirmDelete(String docId, String name) => showDialog(
     context: context,
     builder: (_) => AlertDialog(
-      backgroundColor: AdminTheme.white,
+      backgroundColor: Colors.white,
       title: const Text('Confirm Record Deletion'),
       content: Text('Are you sure you want to completely erase the database file for $name? This action cannot be undone.'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         ElevatedButton(
-          style: ElevatedButton.styleFrom(backgroundColor: AdminTheme.red, foregroundColor: AdminTheme.white),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
           onPressed: () async {
             Navigator.pop(context);
             final err = await AdminDatabase.deleteEmployee(docId);
-<<<<<<< HEAD
             if (err != null) {
               _snack('Deletion failed: $err', error: true);
             } else {
               _snack('Profile record deleted.');
               widget.onRefreshNeeded();
             }
-=======
-            if (err != null) _snack('Deletion failed: $err', error: true);
-            else { _snack('Profile record deleted.'); widget.onRefreshNeeded(); }
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
           },
           child: const Text('Delete Permanently'),
         ),
@@ -2173,23 +1423,18 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     ),
   );
 
-<<<<<<< HEAD
-  // Wipes ALL documents in activity_logs, attendance_logs, clock_ins,
-  // clock_outs, leave_applications, and user_locations. This does NOT
-  // touch the employees collection itself. Irreversible — confirm first.
   void _confirmWipeAllLogs() => showDialog(
     context: context,
     builder: (_) => AlertDialog(
-      backgroundColor: AdminTheme.white,
+      backgroundColor: Colors.white,
       title: const Text('Wipe Everything?'),
       content: const Text(
-        'This will permanently delete ALL employees and ALL their activity, '
-            'attendance, clock-in/out, leave, and location records. This cannot be undone.',
+        'This will permanently delete ALL activity, attendance, clock-in/out, leave, and location records. This cannot be undone.',
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         ElevatedButton(
-          style: ElevatedButton.styleFrom(backgroundColor: AdminTheme.red, foregroundColor: AdminTheme.white),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
           onPressed: () async {
             Navigator.pop(context);
             final err = await AdminDatabase.wipeEverything();
@@ -2208,22 +1453,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
   Widget _emptyState() => Container(
     width: double.infinity,
-    padding: const EdgeInsets.all(AdminTheme.s6),
+    padding: const EdgeInsets.all(32),
     decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(12), border: Border.all(color: _cardBorder)),
     child: const Column(children: [
       Icon(Icons.data_usage_rounded, size: 32, color: _muted),
       SizedBox(height: 8),
-      Text('No records match search parameters.', style: TextStyle(color: _muted, fontSize: AdminTheme.textBase)),
-=======
-  Widget _emptyState() => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(AdminTheme.s6),
-    decoration: AdminTheme.card(),
-    child: const Column(children: [
-      Icon(Icons.data_usage_rounded, size: 32, color: AdminTheme.muted),
-      SizedBox(height: 8),
-      Text('No records match search parameters.', style: TextStyle(color: AdminTheme.muted, fontSize: AdminTheme.textBase)),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+      Text('No records match search parameters.', style: TextStyle(color: _muted, fontSize: 14)),
     ]),
   );
 }
