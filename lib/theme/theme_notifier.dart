@@ -1,33 +1,71 @@
-// lib/theme/theme_notifier.dart
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ThemeNotifier extends ChangeNotifier {
-  static const _key = 'is_dark_mode';
+  static const _key = 'theme_mode';
 
-  bool _isDark = false;
+  ThemeMode _themeMode = ThemeMode.system;
+  Brightness _systemBrightness = Brightness.light;
 
-  bool get isDark => _isDark;
-  ThemeMode get themeMode => _isDark ? ThemeMode.dark : ThemeMode.light;
+  ThemeMode get themeMode => _themeMode;
+  bool get isDark => _themeMode == ThemeMode.dark;
+  bool get isLight => _themeMode == ThemeMode.light;
+  bool get isSystem => _themeMode == ThemeMode.system;
+  Brightness get systemBrightness => _systemBrightness;
+
+  bool get effectiveIsDark {
+    if (_themeMode == ThemeMode.system) {
+      return _systemBrightness == Brightness.dark;
+    }
+    return _themeMode == ThemeMode.dark;
+  }
 
   ThemeNotifier() {
+    _systemBrightness =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    debugPrint('🌗 Initial system brightness: $_systemBrightness');
+
+    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged =
+        () {
+      final newBrightness =
+          WidgetsBinding.instance.platformDispatcher.platformBrightness;
+      debugPrint('🌗 System brightness changed to: $newBrightness');
+      _systemBrightness = newBrightness;
+      notifyListeners();
+    };
+
     _loadFromPrefs();
   }
 
   Future<void> _loadFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    _isDark = prefs.getBool(_key) ?? false; // default to light mode
-    notifyListeners(); // ← notify after loading so UI updates
-  }
-
-  void toggle() {
-    _isDark = !_isDark;
+    final saved = prefs.getString(_key);
+    _themeMode = switch (saved) {
+      'light' => ThemeMode.light,
+      'dark' => ThemeMode.dark,
+      _ => ThemeMode.system,
+    };
+    debugPrint('🌗 Loaded theme mode from prefs: $_themeMode (saved: $saved)');
     notifyListeners();
-    _saveToPrefs();
   }
 
-  Future<void> _saveToPrefs() async {
+  Future<void> setThemeMode(ThemeMode mode) async {
+    _themeMode = mode;
+    debugPrint('🌗 Theme mode changed to: $mode');
+    notifyListeners();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_key, _isDark);
+    await prefs.setString(_key, mode.name);
+  }
+
+  Future<void> toggle() async {
+    final newMode = isDark ? ThemeMode.light : ThemeMode.dark;
+    await setThemeMode(newMode);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged =
+    null;
+    super.dispose();
   }
 }

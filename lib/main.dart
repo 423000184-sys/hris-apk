@@ -1,10 +1,10 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
-import 'screens/landing_screen.dart';
-import 'screens/admin_dashboard.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'screens/splash_screen.dart';
 import 'firebase_options.dart';
 import 'services/database_service.dart';
@@ -13,15 +13,6 @@ import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Solid status bar matching the app's orange header.
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Color(0xFFFF8A00),
-      statusBarIconBrightness: Brightness.light,
-      statusBarBrightness: Brightness.dark,
-    ),
-  );
 
   try {
     await Firebase.initializeApp(
@@ -42,6 +33,19 @@ void main() async {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // TEMPORARY: i-force reset sa system default.
+  // ALISIN ITO pagkatapos ng unang test.
+  // ─────────────────────────────────────────────────────────────
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('theme_mode');
+    debugPrint('🌗 Theme pref reset to system default');
+  } catch (e) {
+    debugPrint('🌗 Reset error: $e');
+  }
+  // ─────────────────────────────────────────────────────────────
+
   const String startPage =
   String.fromEnvironment('page', defaultValue: 'landing');
 
@@ -55,7 +59,6 @@ void main() async {
 
 class MyApp extends StatelessWidget {
   final String startPage;
-
   const MyApp({super.key, required this.startPage});
 
   @override
@@ -67,6 +70,7 @@ class MyApp extends StatelessWidget {
           title: 'HRIS Biometrics',
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
+          // ✅ Ito ang nag-re-rebuild ng buong app kapag nagbago ang theme
           themeMode: themeNotifier.themeMode,
           home: SplashScreen(startPage: startPage),
         );

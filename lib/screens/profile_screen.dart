@@ -1,36 +1,6 @@
 // lib/screens/profile_screen.dart
-//
-// CONVERTED FROM HTML DESIGN:
-//   - Orange gradient header, "Profile & Settings" title (no back button —
-//     this is a bottom-tab screen, not a pushed route)
-//   - Profile card: avatar overlaps the top edge of the card, status dot,
-//     name, position (orange text), Employee ID pill badge
-//   - "PERSONAL DETAILS" card: Email / Phone / Location rows, each with a
-//     gradient icon square, a muted label, and an orange value
-//   - "APP SETTINGS" card: Dark Mode + Push Notifications toggle switches
-//     (custom-drawn to match the mockup's pill/gradient track), Language row
-//   - "ACCOUNT SECURITY" card: biometric enrollment rows, Change Password,
-//     Attendance History
-//   - "DATA & BACKUP" card: Cloud Backup row
-//   - "SECURITY & LEGAL" card: Privacy Policy row
-//   - "DANGER ZONE" card: Delete My Account row
-//   - Sign Out: light card with a red border, matching the mockup's pill
-//
-// NOTE: the mockup shows Phone and Location fields that aren't on the
-// current `Employee` model yet. They're read defensively via `_dynGet` so
-// this compiles today and will pick the real values up automatically once
-// those fields exist on the model — until then they show "—".
-//
-// This screen intentionally uses the mockup's own light palette (white /
-// #F8F8F8 cards, #FFA500 borders & value text) rather than the app-wide
-// dark `AppColors` palette, the same way the mobile attendance cards do.
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 import '../theme/app_theme.dart';
 import '../theme/theme_notifier.dart';
@@ -39,15 +9,38 @@ import '../services/security_service.dart';
 import '../services/auth_service.dart';
 import '../models/employee.dart';
 import 'landing_screen.dart';
-import 'attendance_history_screen.dart';
 
+// Brand colors (same in both themes)
 class _Mock {
   static const Color orange = Color(0xFFFFA500);
   static const Color lime = Color(0xFFC4FF0A);
   static const Color red = Color(0xFFFB2C36);
-  static const Color textMuted = Color(0xFF71717A);
-  static const Color cardBg = Color(0xFFF8F8F8);
   static const Color switchTrackOff = Color(0xFF3F3F46);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// _ThemeColors — theme-aware colors for profile screen
+// ═══════════════════════════════════════════════════════════════════════════
+class _ThemeColors {
+  final bool isDark;
+  const _ThemeColors(this.isDark);
+
+  Color get bg => isDark ? const Color(0xFF0F0F10) : Colors.white;
+
+  Color get cardBg => isDark ? const Color(0xFF18181B) : const Color(0xFFF8F8F8);
+  Color get cardBorder =>
+      isDark ? const Color(0xFF3F3F46) : _Mock.orange;
+
+  Color get textPrimary => isDark ? Colors.white : Colors.black;
+  Color get textMuted =>
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF71717A);
+
+  // Row divider
+  Color get rowDivider =>
+      isDark ? const Color(0xFF27272A) : _Mock.orange.withValues(alpha: 0.3);
+
+  // Section label color (same for both = black/white)
+  Color get sectionLabel => isDark ? Colors.white : Colors.black;
 }
 
 class ProfileScreen extends StatefulWidget {
@@ -61,10 +54,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   Employee? _employee;
   bool _loading = true;
-  bool _isSyncing = false;
-  bool _isDeleting = false;
   bool _pushEnabled = true;
-  final _localAuth = LocalAuthentication();
 
   @override
   void initState() {
@@ -98,437 +88,115 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Future<void> _confirmDeleteAccount() async {
-    if (_employee == null) return;
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(children: [
-          Icon(Icons.warning_amber_rounded, color: _Mock.red),
-          SizedBox(width: 10),
-          Text('Delete Account',
-              style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700)),
-        ]),
-        content: const Text(
-          'Are you sure you want to permanently delete your account? '
-              'This will remove all your data from the local database, '
-              'cloud storage, and admin records. This cannot be undone.',
-          style: TextStyle(color: _Mock.textMuted, fontSize: 13, height: 1.6),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel', style: TextStyle(color: _Mock.textMuted)),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: _Mock.red,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10))),
-            child: const Text('Delete Permanently',
-                style: TextStyle(fontWeight: FontWeight.w700)),
-          ),
-        ],
-      ),
+  void _comingSoon(String feature) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$feature feature coming soon!')),
     );
-
-    if (confirm == true) {
-      setState(() => _isDeleting = true);
-      try {
-        await AuthService.instance.deleteAccount(_employee!);
-        await SecurityService.instance.clearSession();
-        if (mounted) {
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(builder: (_) => const LandingScreen()),
-                (_) => false,
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Error deleting account: $e'),
-            backgroundColor: _Mock.red,
-          ));
-        }
-      } finally {
-        if (mounted) setState(() => _isDeleting = false);
-      }
-    }
-  }
-
-  Future<void> _syncToFirebase() async {
-    if (_employee == null || _isSyncing) return;
-    setState(() => _isSyncing = true);
-
-    try {
-      User? user = AuthService.instance.currentUser;
-
-      if (user == null) {
-        final pin = await _promptForPin();
-        if (pin == null || pin.length < 4) {
-          throw 'Valid 4-digit PIN required to link cloud account';
-        }
-        final email = _employee!.email;
-        final password = pin.padRight(6, '0');
-        try {
-          await AuthService.instance.login(email: email, password: password);
-        } catch (e) {
-          await AuthService.instance.registerEmployee(
-            email: email,
-            password: password,
-            employee: _employee!,
-          );
-        }
-        user = AuthService.instance.currentUser;
-      }
-
-      if (user == null) throw 'Could not authenticate with Firebase';
-
-      final data = _employee!.toMap();
-      data['uid'] = user.uid;
-      data['last_manual_sync'] = FieldValue.serverTimestamp();
-
-      await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(user.uid)
-          .set(data, SetOptions(merge: true));
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('✓ Profile successfully backed up to Cloud!'),
-          backgroundColor: AppColors.success,
-        ));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Sync failed: $e'),
-          backgroundColor: _Mock.red,
-        ));
-      }
-    } finally {
-      if (mounted) setState(() => _isSyncing = false);
-    }
-  }
-
-  Future<String?> _promptForPin() async {
-    String pinInput = '';
-    return showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Link Cloud Account',
-            style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Enter your 4-digit PIN to secure your cloud backup.',
-              style: TextStyle(color: _Mock.textMuted, fontSize: 13, height: 1.5),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              obscureText: true,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 28,
-                  letterSpacing: 10,
-                  color: Colors.black,
-                  fontWeight: FontWeight.w700),
-              onChanged: (v) => pinInput = v,
-              decoration: const InputDecoration(
-                hintText: '––––',
-                counterText: '',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel', style: TextStyle(color: _Mock.textMuted)),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, pinInput),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: _Mock.orange,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10))),
-            child: const Text('CONFIRM',
-                style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: 1)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _enroll(String type) async {
-    if (_employee == null) return;
-    bool canCheck = await _localAuth.canCheckBiometrics ||
-        await _localAuth.isDeviceSupported();
-    if (!canCheck) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Biometrics not available.'),
-        backgroundColor: _Mock.red,
-      ));
-      return;
-    }
-    try {
-      bool authenticated = await _localAuth.authenticate(
-        localizedReason: 'Scan to enroll $type',
-        options: const AuthenticationOptions(
-            biometricOnly: true, stickyAuth: true),
-      );
-      if (authenticated) {
-        await _updateBiometricFlag(type, enrolled: true);
-        final updated =
-        await DatabaseService.instance.getEmployeeById(_employee!.id);
-        if (mounted) {
-          setState(() => _employee = updated);
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('$type enrolled successfully'),
-            backgroundColor: AppColors.success,
-          ));
-        }
-      }
-    } catch (e) {
-      debugPrint('Enrollment error: $e');
-    }
-  }
-
-  Future<void> _unenroll(String type) async {
-    if (_employee == null) return;
-    await _updateBiometricFlag(type, enrolled: false);
-    final updated =
-    await DatabaseService.instance.getEmployeeById(_employee!.id);
-    if (mounted) {
-      setState(() => _employee = updated);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('$type removed'),
-        backgroundColor: AppColors.warning,
-      ));
-    }
-  }
-
-  Future<void> _updateBiometricFlag(String type,
-      {required bool enrolled}) async {
-    final emp = _employee;
-    if (emp == null) return;
-    final Employee updatedEmployee;
-    if (type == 'Face ID') {
-      updatedEmployee =
-          emp.copyWith(faceEmbedding: enrolled ? emp.faceEmbedding : null);
-    } else if (type == 'Fingerprint') {
-      updatedEmployee = emp.copyWith(
-          fingerprintHash: enrolled ? emp.fingerprintHash : null);
-    } else {
-      return;
-    }
-    await DatabaseService.instance.updateEmployee(updatedEmployee);
-  }
-
-  void _comingSoon(String label) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('$label — coming soon'),
-      backgroundColor: _Mock.textMuted,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      margin: const EdgeInsets.all(12),
-    ));
-  }
-
-  String _dynGet(dynamic obj, dynamic Function(dynamic) getter,
-      {String fallback = '—'}) {
-    if (obj == null) return fallback;
-    try {
-      final v = getter(obj);
-      if (v == null || v.toString().isEmpty) return fallback;
-      return v.toString();
-    } catch (_) {
-      return fallback;
-    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading || _isDeleting) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
+    if (_loading) {
       return Scaffold(
-        backgroundColor: Colors.white,
-        body: Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const CircularProgressIndicator(color: _Mock.orange),
-            if (_isDeleting) ...[
-              const SizedBox(height: 20),
-              const Text('Deleting account data...',
-                  style: TextStyle(color: _Mock.textMuted)),
-            ],
-          ]),
-        ),
+        backgroundColor: tc.bg,
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: tc.bg,
       body: SafeArea(
         child: Column(
           children: [
             _buildHeader(),
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 44, 20, 40),
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildProfileCard(),
-                    const SizedBox(height: 24),
+                    _buildProfileCard(tc),
+                    const SizedBox(height: 32),
 
-                    _sectionLabel('Personal Details'),
+                    _sectionLabel(tc, 'Personal Details'),
                     const SizedBox(height: 10),
-                    _sectionCard([
+                    _sectionCard(tc, [
                       _detailRow(
+                        tc: tc,
                         icon: Icons.email_rounded,
                         label: 'Email Address',
                         value: _employee?.email ?? '—',
                       ),
                       _detailRow(
-                        icon: Icons.phone_rounded,
+                        tc: tc,
+                        icon: Icons.phone_android_rounded,
                         label: 'Phone Number',
-                        value: _dynGet(_employee, (e) => e.phone),
+                        value: _employee?.phone ?? '—',
                       ),
                       _detailRow(
+                        tc: tc,
                         icon: Icons.location_on_rounded,
                         label: 'Location',
-                        value: _dynGet(_employee, (e) => e.location),
+                        value: _employee?.department ?? '—',
                         isLast: true,
                       ),
                     ]),
                     const SizedBox(height: 24),
 
-                    _sectionLabel('App Settings'),
+                    _sectionLabel(tc, 'App Settings'),
                     const SizedBox(height: 10),
-                    Builder(builder: (ctx) {
-                      final themeNotifier = ctx.watch<ThemeNotifier>();
-                      return _sectionCard([
-                        _toggleRow(
-                          icon: Icons.dark_mode_outlined,
-                          label: 'Dark Mode',
-                          subtitle: 'Toggle dark theme',
-                          value: themeNotifier.isDark,
-                          onChanged: (_) => themeNotifier.toggle(),
-                        ),
-                        _toggleRow(
-                          icon: Icons.notifications_rounded,
-                          label: 'Push Notifications',
-                          subtitle: 'Updates and alerts',
-                          value: _pushEnabled,
-                          onChanged: (v) => setState(() => _pushEnabled = v),
-                        ),
-                        _chevronRow(
-                          icon: Icons.language_rounded,
-                          label: 'Language',
-                          subtitle: 'English (US)',
-                          onTap: () => _comingSoon('Language selection'),
-                          isLast: true,
-                        ),
-                      ]);
-                    }),
-                    const SizedBox(height: 24),
-
-                    _sectionLabel('Account Security'),
-                    const SizedBox(height: 10),
-                    _sectionCard([
-                      _biometricRow(
-                        icon: Icons.face_rounded,
-                        label: 'Face ID Setup',
-                        enrolled: _employee?.hasFaceEnrolled ?? false,
-                        onEnroll: () => _enroll('Face ID'),
-                        onUnenroll: () => _unenroll('Face ID'),
+                    _sectionCard(tc, [
+                      _toggleRow(
+                        tc: tc,
+                        icon: Icons.dark_mode_rounded,
+                        label: 'Dark Mode',
+                        subtitle: 'Toggle dark theme',
+                        value: context.watch<ThemeNotifier>().isDark,
+                        onChanged: (v) =>
+                            context.read<ThemeNotifier>().toggle(),
                       ),
-                      _biometricRow(
-                        icon: Icons.fingerprint_rounded,
-                        label: 'Fingerprint Setup',
-                        enrolled: _employee?.hasFingerprintEnrolled ?? false,
-                        onEnroll: () => _enroll('Fingerprint'),
-                        onUnenroll: () => _unenroll('Fingerprint'),
+                      _toggleRow(
+                        tc: tc,
+                        icon: Icons.notifications_active_rounded,
+                        label: 'Push Notifications',
+                        subtitle: 'Updates and alerts',
+                        value: _pushEnabled,
+                        onChanged: (v) =>
+                            setState(() => _pushEnabled = v),
                       ),
                       _chevronRow(
+                        tc: tc,
+                        icon: Icons.translate_rounded,
+                        label: 'Language',
+                        subtitle: 'English (US)',
+                        onTap: () => _comingSoon('Language selection'),
+                        isLast: true,
+                      ),
+                    ]),
+                    const SizedBox(height: 24),
+
+                    _sectionLabel(tc, 'Security'),
+                    const SizedBox(height: 10),
+                    _sectionCard(tc, [
+                      _chevronRow(
+                        tc: tc,
                         icon: Icons.lock_reset_rounded,
                         label: 'Change Password',
                         onTap: () => _comingSoon('Change password'),
                       ),
                       _chevronRow(
-                        icon: Icons.history_rounded,
-                        label: 'Attendance History',
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => AttendanceHistoryScreen(
-                                initialEmployee: _employee),
-                          ),
-                        ),
-                        isLast: true,
-                      ),
-                    ]),
-                    const SizedBox(height: 24),
-
-                    _sectionLabel('Data & Backup'),
-                    const SizedBox(height: 10),
-                    _sectionCard([
-                      _chevronRow(
-                        icon: Icons.cloud_sync_rounded,
-                        label: 'Cloud Backup',
-                        subtitle: 'Sync your profile to Firebase',
-                        trailing: _isSyncing
-                            ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: _Mock.orange))
-                            : null,
-                        onTap: _isSyncing ? null : _syncToFirebase,
-                        isLast: true,
-                      ),
-                    ]),
-                    const SizedBox(height: 24),
-
-                    _sectionLabel('Security & Legal'),
-                    const SizedBox(height: 10),
-                    _sectionCard([
-                      _chevronRow(
+                        tc: tc,
                         icon: Icons.privacy_tip_rounded,
                         label: 'Privacy Policy',
                         onTap: () => _comingSoon('Privacy policy'),
                         isLast: true,
                       ),
                     ]),
-                    const SizedBox(height: 24),
-
-                    _sectionLabel('Danger Zone', color: _Mock.red),
-                    const SizedBox(height: 10),
-                    _sectionCard([
-                      _chevronRow(
-                        icon: Icons.delete_forever_rounded,
-                        label: 'Delete My Account',
-                        labelColor: _Mock.red,
-                        onTap: _confirmDeleteAccount,
-                        isLast: true,
-                      ),
-                    ], borderColor: _Mock.red.withOpacity(0.4)),
 
                     const SizedBox(height: 32),
-                    _buildSignOut(),
+                    _buildSignOut(tc),
                   ],
                 ),
               ),
@@ -539,8 +207,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  static const double _kHeaderActionSize = 40;
-
+  // ── Header (same brand gradient in both themes) ──────────────────────
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
@@ -553,51 +220,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
           bottomRight: Radius.circular(25),
         ),
       ),
-      child: SizedBox(
-        height: _kHeaderActionSize,
-        child: Row(
-          children: [
-            const SizedBox(width: _kHeaderActionSize),
-            const Expanded(
-              child: Text(
-                'Profile & Settings',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+      child: const SizedBox(
+        height: 40,
+        child: Center(
+          child: Text(
+            'Profile & Settings',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
             ),
-            _headerQuickActionsButton(),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _headerQuickActionsButton() {
-    return GestureDetector(
-      onTap: () => _comingSoon('Quick actions'),
-      child: Container(
-        width: _kHeaderActionSize,
-        height: _kHeaderActionSize,
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.18),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: const Icon(
-          Icons.grid_view_rounded,
-          color: Colors.white,
-          size: 20,
-        ),
-      ),
-    );
-  }
-
+  // ── Profile Card ────────────────────────────────────────────────────
   static const double _kAvatarSize = 88;
 
-  Widget _buildProfileCard() {
+  Widget _buildProfileCard(_ThemeColors tc) {
     return Stack(
       clipBehavior: Clip.none,
       alignment: Alignment.topCenter,
@@ -607,12 +250,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           width: double.infinity,
           padding: EdgeInsets.fromLTRB(16, _kAvatarSize / 2 + 12, 16, 20),
           decoration: BoxDecoration(
-            color: _Mock.cardBg,
+            color: tc.cardBg,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _Mock.orange),
+            border: Border.all(color: tc.cardBorder),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.06),
+                color: Colors.black.withValues(alpha: 0.06),
                 blurRadius: 10,
                 offset: const Offset(0, 12),
               ),
@@ -623,10 +266,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Text(
                 _employee?.fullName ?? 'Unknown',
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w500,
-                  color: Colors.black,
+                  color: tc.textPrimary,
                 ),
               ),
               const SizedBox(height: 4),
@@ -641,20 +284,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               const SizedBox(height: 12),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                 decoration: BoxDecoration(
-                  color: _Mock.cardBg,
+                  color: tc.cardBg,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _Mock.orange),
+                  border: Border.all(color: tc.cardBorder),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.badge_outlined, size: 14, color: _Mock.orange),
+                    const Icon(Icons.badge_outlined,
+                        size: 14, color: _Mock.orange),
                     const SizedBox(width: 6),
                     Text(
                       _employee?.employeeId ?? _employee?.id ?? '—',
-                      style: const TextStyle(fontSize: 12, color: _Mock.orange),
+                      style:
+                      const TextStyle(fontSize: 12, color: _Mock.orange),
                     ),
                   ],
                 ),
@@ -674,17 +320,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 border: Border.all(color: _Mock.orange, width: 3.3),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
+                    color: Colors.black.withValues(alpha: 0.15),
                     blurRadius: 6,
                     offset: const Offset(0, 4),
                   ),
                 ],
               ),
-              child: _avatarPhotoUrl() != null
+              child: _avatarPhotoPath() != null
                   ? ClipRRect(
                 borderRadius: BorderRadius.circular(13),
                 child: Image.network(
-                  _avatarPhotoUrl()!,
+                  _avatarPhotoPath()!,
                   width: _kAvatarSize,
                   height: _kAvatarSize,
                   fit: BoxFit.cover,
@@ -702,7 +348,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 decoration: BoxDecoration(
                   color: _Mock.lime,
                   shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF18181B), width: 1),
+                  border: Border.all(
+                      color: const Color(0xFF18181B), width: 1),
                 ),
               ),
             ),
@@ -712,9 +359,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  String? _avatarPhotoUrl() {
-    final v = _dynGet(_employee, (e) => e.photoUrl, fallback: '');
-    return v.isEmpty ? null : v;
+  String? _avatarPhotoPath() {
+    if (_employee?.photoPath != null && _employee!.photoPath!.isNotEmpty) {
+      return _employee!.photoPath;
+    }
+    return null;
   }
 
   Widget _avatarInitials() {
@@ -730,30 +379,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _sectionLabel(String text, {Color color = Colors.black}) {
+  // ── UI Helpers ──────────────────────────────────────────────────────
+  Widget _sectionLabel(_ThemeColors tc, String text) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Text(
-        text.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-          letterSpacing: 0.5,
-          color: color,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          text.toUpperCase(),
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.5,
+            color: tc.sectionLabel,
+          ),
         ),
       ),
     );
   }
 
-  Widget _sectionCard(List<Widget> rows, {Color? borderColor}) {
+  Widget _sectionCard(_ThemeColors tc, List<Widget> rows,
+      {Color? borderColor}) {
     return Container(
       decoration: BoxDecoration(
-        color: _Mock.cardBg,
+        color: tc.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: borderColor ?? _Mock.orange),
+        border: Border.all(color: borderColor ?? tc.cardBorder),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 3,
             offset: const Offset(0, 1),
           ),
@@ -776,13 +430,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  BoxDecoration _rowDivider(bool isLast) => BoxDecoration(
+  BoxDecoration _rowDivider(_ThemeColors tc, bool isLast) => BoxDecoration(
     border: isLast
         ? null
-        : Border(bottom: BorderSide(color: _Mock.orange.withOpacity(0.3))),
+        : Border(
+      bottom: BorderSide(color: tc.rowDivider),
+    ),
   );
 
   Widget _detailRow({
+    required _ThemeColors tc,
     required IconData icon,
     required String label,
     required String value,
@@ -790,7 +447,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }) {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: _rowDivider(isLast),
+      decoration: _rowDivider(tc, isLast),
       child: Row(
         children: [
           _iconBox(icon),
@@ -800,7 +457,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(label,
-                    style: const TextStyle(fontSize: 12, color: _Mock.textMuted)),
+                    style: TextStyle(fontSize: 12, color: tc.textMuted)),
                 const SizedBox(height: 2),
                 Text(
                   value,
@@ -819,6 +476,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _toggleRow({
+    required _ThemeColors tc,
     required IconData icon,
     required String label,
     required String subtitle,
@@ -828,7 +486,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }) {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: _rowDivider(isLast),
+      decoration: _rowDivider(tc, isLast),
       child: Row(
         children: [
           _iconBox(icon),
@@ -844,7 +502,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         color: _Mock.orange)),
                 const SizedBox(height: 2),
                 Text(subtitle,
-                    style: const TextStyle(fontSize: 12, color: _Mock.textMuted)),
+                    style: TextStyle(fontSize: 12, color: tc.textMuted)),
               ],
             ),
           ),
@@ -855,19 +513,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _chevronRow({
+    required _ThemeColors tc,
     required IconData icon,
     required String label,
     String? subtitle,
-    Widget? trailing,
     VoidCallback? onTap,
-    Color? labelColor,
     bool isLast = false,
   }) {
     return InkWell(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(16),
-        decoration: _rowDivider(isLast),
+        decoration: _rowDivider(tc, isLast),
         child: Row(
           children: [
             _iconBox(icon),
@@ -877,94 +534,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(label,
-                      style: TextStyle(
+                      style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w500,
-                          color: labelColor ?? _Mock.orange)),
+                          color: _Mock.orange)),
                   if (subtitle != null) ...[
                     const SizedBox(height: 2),
                     Text(subtitle,
-                        style: const TextStyle(fontSize: 12, color: _Mock.textMuted)),
+                        style:
+                        TextStyle(fontSize: 12, color: tc.textMuted)),
                   ],
                 ],
               ),
             ),
-            trailing ??
-                const Icon(Icons.chevron_right_rounded,
-                    color: _Mock.textMuted, size: 20),
+            Icon(Icons.chevron_right_rounded,
+                color: tc.textMuted, size: 20),
           ],
         ),
       ),
     );
   }
 
-  Widget _biometricRow({
-    required IconData icon,
-    required String label,
-    required bool enrolled,
-    required VoidCallback onEnroll,
-    required VoidCallback onUnenroll,
-    bool isLast = false,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: _rowDivider(isLast),
-      child: Row(
-        children: [
-          _iconBox(icon),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: _Mock.orange)),
-                const SizedBox(height: 2),
-                Text(
-                  enrolled ? 'Enabled' : 'Not configured',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: enrolled ? AppColors.success : _Mock.textMuted,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          GestureDetector(
-            onTap: enrolled ? onUnenroll : onEnroll,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: enrolled
-                    ? _Mock.red.withOpacity(0.08)
-                    : _Mock.orange.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: enrolled
-                      ? _Mock.red.withOpacity(0.4)
-                      : _Mock.orange.withOpacity(0.4),
-                ),
-              ),
-              child: Text(
-                enrolled ? 'DISABLE' : 'SET UP',
-                style: TextStyle(
-                  color: enrolled ? _Mock.red : _Mock.orange,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 10,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSignOut() {
+  Widget _buildSignOut(_ThemeColors tc) {
     return InkWell(
       onTap: _logout,
       borderRadius: BorderRadius.circular(12),
@@ -972,7 +563,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         height: 48,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: _Mock.cardBg,
+          color: tc.cardBg,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _Mock.red),
         ),

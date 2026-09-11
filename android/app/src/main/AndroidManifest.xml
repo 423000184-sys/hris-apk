@@ -25,12 +25,9 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
 
-<<<<<<< HEAD
     <!-- Idinagdag: kailangan ng image_picker / file_picker para sa gallery access sa Android 13+ -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <uses-permission android:name="android.permission.NFC" />
@@ -42,11 +39,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
-<<<<<<< HEAD
         android:label="(R.A.C.O.M.A) Real-time Attendance Capture and Online Monitoring Application"
-=======
-        android:label="Admin RACOMA"
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
@@ -62,15 +55,12 @@
             android:name="android.window.SPLASH_SCREEN_ICON"
             android:resource="@mipmap/ic_launcher" />
 
-<<<<<<< HEAD
         <!-- Idinagdag: kailangan ng google_maps_flutter -->
         <!-- PALITAN ang YOUR_GOOGLE_MAPS_API_KEY ng aktwal na API key mula sa Google Cloud Console -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="YOUR_GOOGLE_MAPS_API_KEY" />
 
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="location" />
@@ -126,10 +116,7 @@
     </application>
 
     <queries>
-<<<<<<< HEAD
         <!-- Web Links -->
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
@@ -138,7 +125,6 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="http" />
         </intent>
-<<<<<<< HEAD
 
         <!-- Idinagdag para sa Email (mailto:) -->
         <intent>
@@ -151,8 +137,6 @@
             <action android:name="android.intent.action.DIAL" />
             <data android:scheme="tel" />
         </intent>
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
     </queries>
 
 </manifest>

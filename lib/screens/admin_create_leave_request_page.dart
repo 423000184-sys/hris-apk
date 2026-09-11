@@ -1,27 +1,20 @@
+// lib/screens/admin_create_leave_request_page.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-
-// ============================================================
-// R.A.C.O.M.A. Admin — Create Leave Request
-// ============================================================
-
-const Color kOrange = Color(0xFFFF7A00);
-const Color kOrangeLight = Color(0xFFFFF7ED);
-const Color kBg = Color(0xFFF8F9FA);
-const Color kBorder = Color(0xFFEBEAE6);
-const Color kTextDark = Color(0xFF111827);
-const Color kTextGray = Color(0xFF6B7280);
-const Color kTextGray2 = Color(0xFF374151);
-const Color kGreen = Color(0xFF16A34A);
+import 'package:intl/intl.dart';
+import 'admin_theme.dart';
+import '../widgets/bootstrap_grid.dart';
 
 class AdminCreateLeaveRequestPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
   final VoidCallback? onBack;
+  final VoidCallback? onSuccess;
 
   const AdminCreateLeaveRequestPage({
     super.key,
     this.employees = const [],
     this.onBack,
+    this.onSuccess,
   });
 
   @override
@@ -31,124 +24,70 @@ class AdminCreateLeaveRequestPage extends StatefulWidget {
 
 class _AdminCreateLeaveRequestPageState
     extends State<AdminCreateLeaveRequestPage> {
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
+  // THEME ACCESSOR
+  // ══════════════════════════════════════════════════════════════
+  AdminColors get tc => AdminTheme.getColors(context);
+
+  // ══════════════════════════════════════════════════════════════
   // TEXT CONTROLLERS
-  // ============================================================
-
-  final TextEditingController _nameController =
-  TextEditingController();
-
-  final TextEditingController _positionController =
-  TextEditingController();
-
-  final TextEditingController _departmentController =
-  TextEditingController();
-
-  final TextEditingController _relieverController =
-  TextEditingController();
-
-  final TextEditingController _fromDateController =
-  TextEditingController();
-
-  final TextEditingController _toDateController =
-  TextEditingController();
-
+  // ══════════════════════════════════════════════════════════════
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _positionController = TextEditingController();
+  final TextEditingController _departmentController = TextEditingController();
+  final TextEditingController _relieverController = TextEditingController();
+  final TextEditingController _fromDateController = TextEditingController();
+  final TextEditingController _toDateController = TextEditingController();
   final TextEditingController _daysController =
   TextEditingController(text: "0");
-
   final TextEditingController _hoursController =
   TextEditingController(text: "0");
+  final TextEditingController _returnDateController = TextEditingController();
+  final TextEditingController _returnTimeController = TextEditingController();
+  final TextEditingController _reasonController = TextEditingController();
 
-  final TextEditingController _returnDateController =
-  TextEditingController();
-
-  final TextEditingController _returnTimeController =
-  TextEditingController();
-
-  final TextEditingController _reasonController =
-  TextEditingController();
-
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // DATE / TIME VALUES
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   DateTime? _dateFrom;
   DateTime? _dateTo;
   DateTime? _returnDate;
   TimeOfDay? _returnTime;
-
   double _totalDays = 0;
   double _totalHours = 0;
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // LEAVE TYPES
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   final List<Map<String, String>> _leaveTypes = const [
-    {
-      "code": "SL",
-      "desc": "Sick Leave",
-    },
-    {
-      "code": "VL",
-      "desc": "Vacation Leave",
-    },
-    {
-      "code": "EL",
-      "desc": "Emergency",
-    },
-    {
-      "code": "BL",
-      "desc": "Bereavement",
-    },
-    {
-      "code": "ML",
-      "desc": "Maternity/Paternity",
-    },
-    {
-      "code": "Others",
-      "desc": "Specify below",
-    },
+    {"code": "SL", "desc": "Sick Leave"},
+    {"code": "VL", "desc": "Vacation Leave"},
+    {"code": "EL", "desc": "Emergency"},
+    {"code": "BL", "desc": "Bereavement"},
+    {"code": "ML", "desc": "Maternity/Paternity"},
+    {"code": "Others", "desc": "Specify below"},
   ];
-
   String _selectedLeaveType = "SL";
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // EMPLOYEE
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   String? _selectedEmployeeId;
-
   bool _isSubmitting = false;
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // EMPLOYEE NAME HELPER
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   String _empName(Map<String, dynamic> employee) {
     final dynamic name = employee['name'];
-
     if (name != null && name.toString().trim().isNotEmpty) {
       return name.toString().trim();
     }
-
-    final String first =
-    (employee['firstName'] ?? '').toString().trim();
-
-    final String last =
-    (employee['lastName'] ?? '').toString().trim();
-
-    final String fullName =
-    '$first $last'.trim();
-
-    return fullName.isEmpty
-        ? 'Unknown'
-        : fullName;
+    final String first = (employee['firstName'] ?? '').toString().trim();
+    final String last = (employee['lastName'] ?? '').toString().trim();
+    final String fullName = '$first $last'.trim();
+    return fullName.isEmpty ? 'Unknown' : fullName;
   }
-
-  // ============================================================
-  // DISPOSE
-  // ============================================================
 
   @override
   void dispose() {
@@ -163,62 +102,55 @@ class _AdminCreateLeaveRequestPageState
     _returnDateController.dispose();
     _returnTimeController.dispose();
     _reasonController.dispose();
-
     super.dispose();
   }
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // BUILD
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: kBg,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildBackLink(),
-
-            const SizedBox(height: 8),
-
-            _buildPageHeading(),
-
-            const SizedBox(height: 24),
-
-            _buildFormCard(),
-          ],
+    return Scaffold(
+      backgroundColor: tc.background,
+      resizeToAvoidBottomInset: true,
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: SingleChildScrollView(
+          child: BsContainer(
+            maxWidth: 1400,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildBackLink(),
+                const SizedBox(height: 8),
+                _buildPageHeading(),
+                const SizedBox(height: 24),
+                _buildFormCard(),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // BACK LINK
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   Widget _buildBackLink() {
     return InkWell(
-      onTap: widget.onBack ??
-              () {
-            Navigator.of(context).maybePop();
-          },
-      child: const Row(
+      onTap: widget.onBack ?? () => Navigator.of(context).maybePop(),
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.arrow_back,
-            size: 14,
-            color: kOrange,
-          ),
-          SizedBox(width: 6),
+          Icon(Icons.arrow_back, size: 14, color: tc.orange),
+          const SizedBox(width: 6),
           Text(
             "Back to Activity & Leave",
             style: TextStyle(
-              color: kOrange,
-              fontSize: 13,
+              color: tc.orange,
+              fontSize: 14,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -227,129 +159,109 @@ class _AdminCreateLeaveRequestPageState
     );
   }
 
-  // ============================================================
-  // PAGE HEADING
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
+  // PAGE HEADING — responsive font
+  // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeading() {
-    return const Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          "Create Leave Request",
-          style: TextStyle(
-            fontSize: 26,
-            fontWeight: FontWeight.w800,
-            color: kTextDark,
-          ),
-        ),
-        SizedBox(height: 2),
-        Text(
-          "Application for Leave of Absence",
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-            color: kOrange,
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ============================================================
-  // FORM CARD
-  // ============================================================
-
-  Widget _buildFormCard() {
-    return Container(
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(
-          color: kBorder,
-        ),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // INSTRUCTION
-          _buildInstructionBox(),
-
-          const SizedBox(height: 24),
-
-          // EMPLOYEE INFORMATION
-          _sectionLabel(
-            "EMPLOYEE INFORMATION",
+          Text(
+            "Create Leave Request",
+            style: TextStyle(
+              fontSize: r.responsive<double>(
+                xs: 22, sm: 26, md: 28, lg: 32,
+              ),
+              fontWeight: FontWeight.w700,
+              color: tc.text,
+              letterSpacing: -0.3,
+            ),
           ),
-
-          const SizedBox(height: 16),
-
-          _buildEmployeeInformation(),
-
-          const SizedBox(height: 32),
-
-          // LEAVE DETAILS
-          _sectionLabel(
-            "LEAVE DETAILS",
+          const SizedBox(height: 2),
+          Text(
+            "Application for Leave of Absence",
+            style: TextStyle(
+              fontSize: r.responsive<double>(xs: 13, md: 16),
+              fontWeight: FontWeight.w500,
+              color: tc.orange,
+            ),
           ),
-
-          const SizedBox(height: 16),
-
-          _buildLeaveDetails(),
-
-          const SizedBox(height: 20),
-
-          // RETURN TO WORK
-          _buildReturnToWork(),
-
-          const SizedBox(height: 32),
-
-          // LEAVE APPLIED FOR
-          _sectionLabel(
-            "LEAVE APPLIED FOR",
-          ),
-
-          const SizedBox(height: 16),
-
-          _buildLeaveTypes(),
-
-          const SizedBox(height: 20),
-
-          // REASON
-          _buildReasonField(),
-
-          const SizedBox(height: 28),
-
-          // SUBMIT
-          _buildSubmitButton(),
         ],
-      ),
-    );
+      );
+    });
   }
 
-  // ============================================================
-  // INSTRUCTION BOX
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
+  // FORM CARD — responsive padding
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildFormCard() {
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      final padding = r.responsive<double>(
+        xs: 16, sm: 20, md: 24, lg: 32,
+      );
 
+      return Container(
+        padding: EdgeInsets.all(padding),
+        decoration: BoxDecoration(
+          color: tc.card,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: tc.border),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildInstructionBox(),
+            const SizedBox(height: 24),
+            _sectionLabel("EMPLOYEE INFORMATION"),
+            const SizedBox(height: 16),
+            _buildEmployeeInformation(),
+            const SizedBox(height: 32),
+            _sectionLabel("LEAVE DETAILS"),
+            const SizedBox(height: 16),
+            _buildLeaveDetails(),
+            const SizedBox(height: 20),
+            _buildReturnToWork(),
+            const SizedBox(height: 32),
+            _sectionLabel("LEAVE APPLIED FOR"),
+            const SizedBox(height: 16),
+            _buildLeaveTypes(),
+            const SizedBox(height: 20),
+            _buildReasonField(),
+            const SizedBox(height: 28),
+            _buildApprovalWorkflow(),
+            const SizedBox(height: 24),
+            _buildActionButtons(),
+          ],
+        ),
+      );
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // INSTRUCTION BOX
+  // ══════════════════════════════════════════════════════════════
   Widget _buildInstructionBox() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(
-        horizontal: 16,
-        vertical: 14,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
       decoration: BoxDecoration(
-        color: const Color(0xFFF0F4FF),
-        borderRadius: BorderRadius.circular(6),
-        border: const Border(
-          left: BorderSide(
-            color: kOrange,
-            width: 4,
-          ),
+        color: tc.orange.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border(
+          left: BorderSide(color: tc.orange, width: 4),
         ),
       ),
-      child: const Text(
+      child: Text(
         "INSTRUCTION: This form should be filled out BEFORE an "
             "employee goes on leave. In case of emergency or illness, "
             "this form must be filled out IMMEDIATELY upon return for "
@@ -358,192 +270,168 @@ class _AdminCreateLeaveRequestPageState
         style: TextStyle(
           fontSize: 12,
           height: 1.5,
-          color: Colors.black,
+          color: tc.text,
+          fontWeight: FontWeight.w500,
         ),
       ),
     );
   }
-
-  // ============================================================
-  // SECTION LABEL
-  // ============================================================
 
   Widget _sectionLabel(String text) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.w800,
-        color: kOrange,
-        letterSpacing: 0.5,
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: tc.border, width: 1),
+        ),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          color: tc.orange,
+          letterSpacing: 0.5,
+        ),
       ),
     );
   }
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
+  // RESPONSIVE GRID HELPER (2 columns on md+, 1 column on xs/sm)
+  // ══════════════════════════════════════════════════════════════
+  Widget _responsiveGrid({required List<Widget> children}) {
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      // Stack on xs/sm, 2-col on md+
+      final narrow = !r.up(BsSize.md);
+
+      if (narrow) {
+        return Column(
+          children: children
+              .map((child) => Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: child,
+          ))
+              .toList(),
+        );
+      }
+      return Wrap(
+        spacing: 20,
+        runSpacing: 20,
+        children: children
+            .map((child) => SizedBox(
+          width: (c.maxWidth - 20) / 2,
+          child: child,
+        ))
+            .toList(),
+      );
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // EMPLOYEE INFORMATION
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   Widget _buildEmployeeInformation() {
-    return _ResponsiveGrid(
+    return _responsiveGrid(
       children: [
-        _labeledField(
-          "Name of Employee",
-          _buildNameField(),
-        ),
-
-        _labeledField(
-          "Designation / Position",
-          _textField(
-            _positionController,
-            "Enter job title",
-          ),
-        ),
-
-        _labeledField(
-          "Section / Department",
-          _textField(
-            _departmentController,
-            "Enter department",
-          ),
-        ),
-
-        _labeledField(
-          "Name of Reliever (Optional)",
-          _textField(
-            _relieverController,
-            "Who will cover your duties?",
-          ),
-        ),
+        _labeledField("Name of Employee", _buildNameField()),
+        _labeledField("Designation / Position",
+            _textField(_positionController, "Enter job title")),
+        _labeledField("Section / Department",
+            _textField(_departmentController, "Enter department")),
+        _labeledField("Name of Reliever (Optional)",
+            _textField(_relieverController, "Who will cover your duties?")),
       ],
     );
   }
 
-  // ============================================================
-  // NAME FIELD
-  //
-  // ADMIN CAN TYPE THE NAME.
-  // If the typed name matches an employee from the list,
-  // the employee document ID is automatically detected.
-  // ============================================================
-
   Widget _buildNameField() {
     return TextField(
       controller: _nameController,
-      style: const TextStyle(
-        fontSize: 13,
-        color: kTextDark,
-      ),
-      decoration: _inputDecoration(
-        "Enter full name",
-      ),
-      onChanged: (value) {
-        _tryFindEmployee(value);
-      },
+      style: TextStyle(fontSize: 16, color: tc.text),
+      decoration: _inputDecoration("Enter full name"),
+      onChanged: _tryFindEmployee,
     );
   }
 
-  // ============================================================
-  // FIND EMPLOYEE FROM TYPED NAME
-  // ============================================================
-
   void _tryFindEmployee(String value) {
-    final String typedName =
-    value.trim().toLowerCase();
-
+    final String typedName = value.trim().toLowerCase();
     if (typedName.isEmpty) {
-      setState(() {
-        _selectedEmployeeId = null;
-      });
+      setState(() => _selectedEmployeeId = null);
       return;
     }
-
     for (final employee in widget.employees) {
-      final String employeeName =
-      _empName(employee).trim().toLowerCase();
-
+      final String employeeName = _empName(employee).trim().toLowerCase();
       if (employeeName == typedName) {
-        setState(() {
-          _selectedEmployeeId =
-              (employee['id'] ?? '').toString();
-        });
-
+        setState(
+                () => _selectedEmployeeId = (employee['id'] ?? '').toString());
         return;
       }
     }
-
-    setState(() {
-      _selectedEmployeeId = null;
-    });
+    setState(() => _selectedEmployeeId = null);
   }
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // LEAVE DETAILS
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   Widget _buildLeaveDetails() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        border: Border.all(
-          color: const Color(0xFFE2E8F0),
-        ),
-        borderRadius: BorderRadius.circular(10),
+        color: tc.blue.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tc.border),
       ),
-      child: _ResponsiveGrid(
+      child: _responsiveGrid(
         children: [
-          // ------------------------------------------------------
-          // INCLUSIVE DATES
-          // ------------------------------------------------------
-
           _labeledField(
             "Inclusive Dates",
-            Row(
-              children: [
-                Expanded(
-                  child: _editableDateField(
-                    label: "From",
-                    controller:
-                    _fromDateController,
-                    onDateSelected: (date) {
-                      setState(() {
-                        _dateFrom = date;
-                        _fromDateController.text =
-                            _fmtDate(date);
-                      });
+            LayoutBuilder(builder: (_, c) {
+              // Stack From/To on very narrow
+              final veryNarrow = c.maxWidth < 320;
+              final fromField = _editableDateField(
+                label: "From",
+                controller: _fromDateController,
+                onDateSelected: (date) {
+                  setState(() {
+                    _dateFrom = date;
+                    _fromDateController.text = _fmtDate(date);
+                  });
+                  _calculateTotalDays();
+                },
+              );
+              final toField = _editableDateField(
+                label: "To",
+                controller: _toDateController,
+                onDateSelected: (date) {
+                  setState(() {
+                    _dateTo = date;
+                    _toDateController.text = _fmtDate(date);
+                  });
+                  _calculateTotalDays();
+                },
+              );
 
-                      _calculateTotalDays();
-                    },
-                  ),
-                ),
-
-                const SizedBox(width: 10),
-
-                Expanded(
-                  child: _editableDateField(
-                    label: "To",
-                    controller:
-                    _toDateController,
-                    onDateSelected: (date) {
-                      setState(() {
-                        _dateTo = date;
-                        _toDateController.text =
-                            _fmtDate(date);
-                      });
-
-                      _calculateTotalDays();
-                    },
-                  ),
-                ),
-              ],
-            ),
+              if (veryNarrow) {
+                return Column(
+                  children: [
+                    fromField,
+                    const SizedBox(height: 10),
+                    toField,
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: fromField),
+                  const SizedBox(width: 10),
+                  Expanded(child: toField),
+                ],
+              );
+            }),
           ),
-
-          // ------------------------------------------------------
-          // TOTAL TIME OUT
-          // ------------------------------------------------------
-
           _labeledField(
             "Total Time Out",
             Row(
@@ -553,25 +441,19 @@ class _AdminCreateLeaveRequestPageState
                     "Days",
                     _daysController,
                     onChanged: (value) {
-                      setState(() {
-                        _totalDays =
-                            double.tryParse(value) ?? 0;
-                      });
+                      setState(
+                              () => _totalDays = double.tryParse(value) ?? 0);
                     },
                   ),
                 ),
-
                 const SizedBox(width: 10),
-
                 Expanded(
                   child: _numberField(
                     "Hours",
                     _hoursController,
                     onChanged: (value) {
-                      setState(() {
-                        _totalHours =
-                            double.tryParse(value) ?? 0;
-                      });
+                      setState(
+                              () => _totalHours = double.tryParse(value) ?? 0);
                     },
                   ),
                 ),
@@ -583,10 +465,6 @@ class _AdminCreateLeaveRequestPageState
     );
   }
 
-  // ============================================================
-  // EDITABLE DATE FIELD
-  // ============================================================
-
   Widget _editableDateField({
     required String label,
     required TextEditingController controller,
@@ -595,53 +473,30 @@ class _AdminCreateLeaveRequestPageState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 11,
-            color: kTextGray,
-          ),
-        ),
-
+        Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: tc.muted)),
         const SizedBox(height: 4),
-
         TextField(
           controller: controller,
           keyboardType: TextInputType.datetime,
-          style: const TextStyle(
-            fontSize: 13,
-            color: kTextDark,
-          ),
+          style: TextStyle(fontSize: 16, color: tc.text),
           decoration: _inputDecoration(
             "mm/dd/yyyy",
             suffixIcon: IconButton(
               tooltip: "Select date",
-              icon: const Icon(
-                Icons.calendar_today_outlined,
-                size: 18,
-              ),
-              onPressed: () {
-                _pickDate(
-                  onDateSelected,
-                );
-              },
+              icon: Icon(Icons.calendar_today_outlined,
+                  size: 18, color: tc.muted),
+              onPressed: () => _pickDate(onDateSelected),
             ),
           ),
           onChanged: (value) {
-            final date =
-            _parseDate(value);
-
+            final date = _parseDate(value);
             if (date != null) {
-              if (controller ==
-                  _fromDateController) {
-                _dateFrom = date;
-              }
-
-              if (controller ==
-                  _toDateController) {
-                _dateTo = date;
-              }
-
+              if (controller == _fromDateController) _dateFrom = date;
+              if (controller == _toDateController) _dateTo = date;
               _calculateTotalDays();
             }
           },
@@ -650,298 +505,148 @@ class _AdminCreateLeaveRequestPageState
     );
   }
 
-  // ============================================================
-  // DATE PICKER
-  // ============================================================
-
-  Future<void> _pickDate(
-      void Function(DateTime) onPicked,
-      ) async {
-    final DateTime initialDate =
-    DateTime.now();
-
-    final DateTime? picked =
-    await showDatePicker(
+  Future<void> _pickDate(void Function(DateTime) onPicked) async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: initialDate,
+      initialDate: DateTime.now(),
       firstDate: DateTime(2020),
       lastDate: DateTime(2100),
+      builder: (ctx, child) => Theme(
+        data: AdminTheme.themeData(isDark),
+        child: child!,
+      ),
     );
-
-    if (picked != null) {
-      onPicked(picked);
-    }
+    if (picked != null) onPicked(picked);
   }
 
-  // ============================================================
-  // DATE PARSER
-  // ============================================================
-
   DateTime? _parseDate(String value) {
-    final String input = value.trim();
-
-    if (input.isEmpty) {
-      return null;
-    }
-
-    final RegExp regex =
-    RegExp(r'^(\d{1,2})/(\d{1,2})/(\d{4})$');
-
-    final Match? match =
-    regex.firstMatch(input);
-
-    if (match == null) {
-      return null;
-    }
-
-    final int? month =
-    int.tryParse(match.group(1)!);
-
-    final int? day =
-    int.tryParse(match.group(2)!);
-
-    final int? year =
-    int.tryParse(match.group(3)!);
-
-    if (month == null ||
-        day == null ||
-        year == null) {
-      return null;
-    }
-
+    final input = value.trim();
+    if (input.isEmpty) return null;
+    final regex = RegExp(r'^(\d{1,2})/(\d{1,2})/(\d{4})$');
+    final match = regex.firstMatch(input);
+    if (match == null) return null;
+    final month = int.tryParse(match.group(1)!);
+    final day = int.tryParse(match.group(2)!);
+    final year = int.tryParse(match.group(3)!);
+    if (month == null || day == null || year == null) return null;
     try {
-      final DateTime date =
-      DateTime(year, month, day);
-
-      if (date.year != year ||
-          date.month != month ||
-          date.day != day) {
+      final date = DateTime(year, month, day);
+      if (date.year != year || date.month != month || date.day != day)
         return null;
-      }
-
       return date;
     } catch (_) {
       return null;
     }
   }
 
-  // ============================================================
-  // CALCULATE DAYS
-  // ============================================================
-
   void _calculateTotalDays() {
-    if (_dateFrom == null ||
-        _dateTo == null) {
-      return;
-    }
-
+    if (_dateFrom == null || _dateTo == null) return;
     if (_dateTo!.isBefore(_dateFrom!)) {
       setState(() {
         _totalDays = 0;
         _daysController.text = "0";
       });
-
       return;
     }
-
-    final int days =
-        _dateTo!
-            .difference(_dateFrom!)
-            .inDays +
-            1;
-
+    final days = _dateTo!.difference(_dateFrom!).inDays + 1;
     setState(() {
       _totalDays = days.toDouble();
-
-      _daysController.text =
-          days.toString();
+      _daysController.text = days.toString();
     });
   }
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // RETURN TO WORK
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   Widget _buildReturnToWork() {
-    return _ResponsiveGrid(
+    return _responsiveGrid(
       children: [
-        _labeledField(
-          "Return to Work Date",
-          _buildReturnDateField(),
-        ),
-
-        _labeledField(
-          "Return to Work Time",
-          _buildReturnTimeField(),
-        ),
+        _labeledField("Return to Work Date", _buildReturnDateField()),
+        _labeledField("Return to Work Time", _buildReturnTimeField()),
       ],
     );
   }
-
-  // ============================================================
-  // RETURN DATE
-  // ============================================================
 
   Widget _buildReturnDateField() {
     return TextField(
       controller: _returnDateController,
       keyboardType: TextInputType.datetime,
-      style: const TextStyle(
-        fontSize: 13,
-        color: kTextDark,
-      ),
+      style: TextStyle(fontSize: 16, color: tc.text),
       decoration: _inputDecoration(
         "mm/dd/yyyy",
         suffixIcon: IconButton(
           tooltip: "Select date",
-          icon: const Icon(
-            Icons.calendar_today_outlined,
-            size: 18,
-          ),
-          onPressed: () {
-            _pickDate(
-                  (date) {
-                setState(() {
-                  _returnDate = date;
-
-                  _returnDateController.text =
-                      _fmtDate(date);
-                });
-              },
-            );
-          },
+          icon: Icon(Icons.calendar_today_outlined,
+              size: 18, color: tc.muted),
+          onPressed: () => _pickDate((date) {
+            setState(() {
+              _returnDate = date;
+              _returnDateController.text = _fmtDate(date);
+            });
+          }),
         ),
       ),
-      onChanged: (value) {
-        _returnDate =
-            _parseDate(value);
-      },
+      onChanged: (value) => _returnDate = _parseDate(value),
     );
   }
-
-  // ============================================================
-  // RETURN TIME
-  // ============================================================
 
   Widget _buildReturnTimeField() {
     return TextField(
       controller: _returnTimeController,
       keyboardType: TextInputType.datetime,
-      style: const TextStyle(
-        fontSize: 13,
-        color: kTextDark,
-      ),
+      style: TextStyle(fontSize: 16, color: tc.text),
       decoration: _inputDecoration(
         "--:--",
         suffixIcon: IconButton(
           tooltip: "Select time",
-          icon: const Icon(
-            Icons.access_time_outlined,
-            size: 18,
-          ),
-          onPressed: () {
-            _pickTime();
-          },
+          icon: Icon(Icons.access_time_outlined,
+              size: 18, color: tc.muted),
+          onPressed: _pickTime,
         ),
       ),
-      onChanged: (value) {
-        _returnTime =
-            _parseTime(value);
-      },
+      onChanged: (value) => _returnTime = _parseTime(value),
     );
   }
 
-  // ============================================================
-  // TIME PICKER
-  // ============================================================
-
   Future<void> _pickTime() async {
-    final TimeOfDay? picked =
-    await showTimePicker(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final picked = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.now(),
+      builder: (ctx, child) => Theme(
+        data: AdminTheme.themeData(isDark),
+        child: child!,
+      ),
     );
-
     if (picked != null) {
       setState(() {
         _returnTime = picked;
-
-        _returnTimeController.text =
-            picked.format(context);
+        _returnTimeController.text = picked.format(context);
       });
     }
   }
 
-  // ============================================================
-  // TIME PARSER
-  // ============================================================
-
   TimeOfDay? _parseTime(String value) {
-    final String input =
-    value.trim().toLowerCase();
-
-    if (input.isEmpty) {
-      return null;
-    }
-
-    // Supports:
-    // 8:00
-    // 08:00
-    // 8:00 AM
-    // 08:30 PM
-
-    final RegExp regex = RegExp(
-      r'^(\d{1,2}):(\d{2})(?:\s*(am|pm))?$',
-      caseSensitive: false,
-    );
-
-    final Match? match =
-    regex.firstMatch(input);
-
-    if (match == null) {
-      return null;
-    }
-
-    int hour =
-        int.tryParse(match.group(1)!) ?? -1;
-
-    final int minute =
-        int.tryParse(match.group(2)!) ?? -1;
-
-    final String? period =
-    match.group(3)?.toLowerCase();
-
-    if (minute < 0 || minute > 59) {
-      return null;
-    }
-
+    final input = value.trim().toLowerCase();
+    if (input.isEmpty) return null;
+    final regex =
+    RegExp(r'^(\d{1,2}):(\d{2})(?:\s*(am|pm))?$', caseSensitive: false);
+    final match = regex.firstMatch(input);
+    if (match == null) return null;
+    int hour = int.tryParse(match.group(1)!) ?? -1;
+    final minute = int.tryParse(match.group(2)!) ?? -1;
+    final period = match.group(3)?.toLowerCase();
+    if (minute < 0 || minute > 59) return null;
     if (period != null) {
-      if (hour < 1 || hour > 12) {
-        return null;
-      }
-
-      if (period == "pm" && hour != 12) {
-        hour += 12;
-      }
-
-      if (period == "am" && hour == 12) {
-        hour = 0;
-      }
+      if (hour < 1 || hour > 12) return null;
+      if (period == "pm" && hour != 12) hour += 12;
+      if (period == "am" && hour == 12) hour = 0;
     } else {
-      if (hour < 0 || hour > 23) {
-        return null;
-      }
+      if (hour < 0 || hour > 23) return null;
     }
-
-    return TimeOfDay(
-      hour: hour,
-      minute: minute,
-    );
+    return TimeOfDay(hour: hour, minute: minute);
   }
-
-  // ============================================================
-  // NUMBER FIELD
-  // ============================================================
 
   Widget _numberField(
       String label,
@@ -949,117 +654,88 @@ class _AdminCreateLeaveRequestPageState
         required void Function(String) onChanged,
       }) {
     return Column(
-      crossAxisAlignment:
-      CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 11,
-            color: kTextGray,
-          ),
-        ),
-
+        Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: tc.muted)),
         const SizedBox(height: 4),
-
         TextField(
           controller: controller,
           keyboardType:
-          const TextInputType.numberWithOptions(
-            decimal: true,
-          ),
-          style: const TextStyle(
-            fontSize: 13,
-            color: kTextDark,
-          ),
-          decoration:
-          _inputDecoration("0"),
+          const TextInputType.numberWithOptions(decimal: true),
+          style: TextStyle(fontSize: 16, color: tc.text),
+          decoration: _inputDecoration("0"),
           onChanged: onChanged,
         ),
       ],
     );
   }
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // LEAVE TYPES
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   Widget _buildLeaveTypes() {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: _leaveTypes.map(
-            (type) {
-          final bool selected =
-              _selectedLeaveType ==
-                  type["code"];
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      // Chips get wider on smaller screens for better tap targets
+      final chipWidth = r.responsive<double>(
+        xs: (c.maxWidth - 24) / 2, // 2 cols on phone
+        sm: 130,
+        md: 130,
+        lg: 130,
+      );
 
+      return Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: _leaveTypes.map((type) {
+          final selected = _selectedLeaveType == type["code"];
           return InkWell(
-            onTap: () {
-              setState(() {
-                _selectedLeaveType =
-                type["code"]!;
-              });
-            },
-            borderRadius:
-            BorderRadius.circular(8),
+            onTap: () =>
+                setState(() => _selectedLeaveType = type["code"]!),
+            borderRadius: BorderRadius.circular(12),
             child: Container(
-              width: 130,
+              width: chipWidth,
               padding:
-              const EdgeInsets.symmetric(
-                vertical: 12,
-                horizontal: 10,
-              ),
+              const EdgeInsets.symmetric(vertical: 11, horizontal: 10),
               decoration: BoxDecoration(
-                color: selected
-                    ? kOrangeLight
-                    : Colors.white,
+                color:
+                selected ? tc.orange.withValues(alpha: 0.12) : tc.card,
                 border: Border.all(
-                  color: selected
-                      ? kOrange
-                      : const Color(
-                    0xFFE2E8F0,
-                  ),
-                ),
-                borderRadius:
-                BorderRadius.circular(8),
+                    color: selected ? tc.orange : tc.border),
+                borderRadius: BorderRadius.circular(12),
               ),
               child: Column(
                 children: [
                   Text(
                     type["code"]!,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight:
-                      FontWeight.w700,
-                      color: kTextDark,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: tc.text,
                     ),
                   ),
-
                   const SizedBox(height: 2),
-
                   Text(
                     type["desc"]!,
-                    textAlign:
-                    TextAlign.center,
-                    style:
-                    const TextStyle(
-                      fontSize: 10,
-                      color: kTextGray,
-                    ),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: tc.muted,
+                        fontWeight: FontWeight.w500),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
           );
-        },
-      ).toList(),
-    );
+        }).toList(),
+      );
+    });
   }
-
-  // ============================================================
-  // REASON
-  // ============================================================
 
   Widget _buildReasonField() {
     return _labeledField(
@@ -1067,512 +743,394 @@ class _AdminCreateLeaveRequestPageState
       TextField(
         controller: _reasonController,
         maxLines: 4,
-        style: const TextStyle(
-          fontSize: 13,
-          color: kTextDark,
-        ),
+        style: TextStyle(fontSize: 16, color: tc.text),
         decoration: _inputDecoration(
-          "State reason for leave...",
-        ),
+            "Please provide specific details regarding your leave request..."),
       ),
     );
   }
 
-  // ============================================================
-  // SUBMIT BUTTON
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
+  // APPROVAL WORKFLOW — responsive
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildApprovalWorkflow() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: tc.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tc.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "Approval Workflow (Automatic Routing)",
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: tc.text,
+            ),
+          ),
+          const SizedBox(height: 16),
 
-  Widget _buildSubmitButton() {
-    return Align(
-      alignment: Alignment.centerRight,
-      child: ElevatedButton(
+          // Signature block — responsive
+          LayoutBuilder(builder: (_, c) {
+            final narrow = c.maxWidth < 400;
+            final sigInfo = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Digital Signature",
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: tc.text),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  "Will be attached upon submission",
+                  style: TextStyle(fontSize: 12, color: tc.muted),
+                ),
+              ],
+            );
+            final dateInfo = Column(
+              crossAxisAlignment: narrow
+                  ? CrossAxisAlignment.start
+                  : CrossAxisAlignment.end,
+              children: [
+                Text("Date",
+                    style: TextStyle(fontSize: 12, color: tc.muted)),
+                const SizedBox(height: 2),
+                Text(
+                  DateFormat('MMM d, yyyy').format(DateTime.now()),
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: tc.text),
+                ),
+              ],
+            );
+
+            return Container(
+              padding: const EdgeInsets.only(top: 16, bottom: 12),
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: tc.border, width: 1),
+                ),
+              ),
+              child: narrow
+                  ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  sigInfo,
+                  const SizedBox(height: 12),
+                  dateInfo,
+                ],
+              )
+                  : Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(child: sigInfo),
+                  const SizedBox(width: 16),
+                  dateInfo,
+                ],
+              ),
+            );
+          }),
+
+          // Approval items
+          _buildApprovalItem("Section Head", "Pending Recommendation"),
+          _buildApprovalItem("Department Head", "Pending Approval"),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildApprovalItem(String title, String status) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 16,
+            backgroundColor: tc.blue.withValues(alpha: 0.15),
+            child: Icon(Icons.person_outline, size: 16, color: tc.blue),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: tc.text),
+                ),
+                Text(
+                  status,
+                  style: TextStyle(fontSize: 12, color: tc.muted),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ACTION BUTTONS — stack on narrow
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildActionButtons() {
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      final narrow = !r.up(BsSize.sm);
+
+      final cancelBtn = OutlinedButton(
         onPressed:
-        _isSubmitting
-            ? null
-            : _submitLeaveRequest,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: kOrange,
-          foregroundColor: Colors.white,
-          disabledBackgroundColor:
-          kOrange.withOpacity(0.6),
+        widget.onBack ?? () => Navigator.of(context).maybePop(),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: tc.text,
+          side: BorderSide(color: tc.border),
           padding:
-          const EdgeInsets.symmetric(
-            horizontal: 24,
-            vertical: 14,
-          ),
-          shape:
-          RoundedRectangleBorder(
-            borderRadius:
-            BorderRadius.circular(8),
-          ),
+          const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8)),
+        ),
+        child: const Text(
+          "Cancel",
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        ),
+      );
+
+      final submitBtn = ElevatedButton(
+        onPressed: _isSubmitting
+            ? null
+            : () {
+          FocusScope.of(context).unfocus();
+          _submitLeaveRequest();
+        },
+        style: ElevatedButton.styleFrom(
+          backgroundColor: tc.orange,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: tc.orange.withValues(alpha: 0.6),
+          padding:
+          const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8)),
+          elevation: 0,
         ),
         child: _isSubmitting
             ? const SizedBox(
-          width: 16,
-          height: 16,
-          child:
-          CircularProgressIndicator(
-            strokeWidth: 2,
-            color: Colors.white,
-          ),
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: Colors.white),
         )
             : const Text(
-          "Submit Leave Request",
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight:
-            FontWeight.w600,
-          ),
+          "Submit Request",
+          style:
+          TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         ),
-      ),
-    );
+      );
+
+      if (narrow) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            submitBtn,
+            const SizedBox(height: 12),
+            cancelBtn,
+          ],
+        );
+      }
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          cancelBtn,
+          const SizedBox(width: 16),
+          submitBtn,
+        ],
+      );
+    });
   }
 
-  // ============================================================
+  // ══════════════════════════════════════════════════════════════
   // SUBMIT LEAVE REQUEST
-  // ============================================================
-
+  // ══════════════════════════════════════════════════════════════
   Future<void> _submitLeaveRequest() async {
-    // ----------------------------------------------------------
-    // Parse manually typed dates
-    // ----------------------------------------------------------
-
-    final DateTime? parsedFrom =
-    _parseDate(
-      _fromDateController.text,
-    );
-
-    final DateTime? parsedTo =
-    _parseDate(
-      _toDateController.text,
-    );
-
-    final DateTime? parsedReturnDate =
-    _parseDate(
-      _returnDateController.text,
-    );
-
-    final TimeOfDay? parsedReturnTime =
-    _parseTime(
-      _returnTimeController.text,
-    );
+    final parsedFrom = _parseDate(_fromDateController.text);
+    final parsedTo = _parseDate(_toDateController.text);
+    final parsedReturnDate = _parseDate(_returnDateController.text);
+    final parsedReturnTime = _parseTime(_returnTimeController.text);
 
     _dateFrom = parsedFrom;
     _dateTo = parsedTo;
     _returnDate = parsedReturnDate;
     _returnTime = parsedReturnTime;
 
-    // ----------------------------------------------------------
-    // Find employee document ID
-    // ----------------------------------------------------------
-
-    _tryFindEmployee(
-      _nameController.text,
-    );
-
-    // ----------------------------------------------------------
-    // Validate employee
-    // ----------------------------------------------------------
+    _tryFindEmployee(_nameController.text);
 
     if (_nameController.text.trim().isEmpty) {
-      _showError(
-        "Please enter the employee name.",
-      );
+      _showError("Please enter the employee name.");
       return;
     }
-
-    if (_selectedEmployeeId == null ||
-        _selectedEmployeeId!.isEmpty) {
+    if (_selectedEmployeeId == null || _selectedEmployeeId!.isEmpty) {
       _showError(
-        "Employee name was not found. "
-            "Please type the exact employee name.",
-      );
+          "Employee name was not found. Please type the exact employee name.");
       return;
     }
-
-    // ----------------------------------------------------------
-    // Validate dates
-    // ----------------------------------------------------------
-
     if (_dateFrom == null) {
-      _showError(
-        "Please enter a valid From date.",
-      );
+      _showError("Please enter a valid From date.");
       return;
     }
-
     if (_dateTo == null) {
-      _showError(
-        "Please enter a valid To date.",
-      );
+      _showError("Please enter a valid To date.");
       return;
     }
-
     if (_dateTo!.isBefore(_dateFrom!)) {
-      _showError(
-        "The To date cannot be earlier than the From date.",
-      );
+      _showError("The To date cannot be earlier than the From date.");
       return;
     }
 
-    // ----------------------------------------------------------
-    // Calculate days one more time
-    // ----------------------------------------------------------
+    _totalDays = _dateTo!.difference(_dateFrom!).inDays + 1;
+    _totalHours = double.tryParse(_hoursController.text.trim()) ?? 0;
+    _daysController.text = _totalDays.toString();
 
-    _totalDays =
-        _dateTo!
-            .difference(_dateFrom!)
-            .inDays +
-            1;
-
-    final double enteredHours =
-        double.tryParse(
-          _hoursController.text.trim(),
-        ) ??
-            0;
-
-    _totalHours = enteredHours;
-
-    _daysController.text =
-        _totalDays.toString();
-
-    // ----------------------------------------------------------
-    // Loading
-    // ----------------------------------------------------------
-
-    setState(() {
-      _isSubmitting = true;
-    });
-
-    // ----------------------------------------------------------
-    // Request data
-    // ----------------------------------------------------------
-
-    final String requestId =
-        FirebaseFirestore.instance
-            .collection('_')
-            .doc()
-            .id;
-
-    final Map<String, dynamic>
-    requestData = {
-      "id": requestId,
-
-      "employeeName":
-      _nameController.text.trim(),
-
-      "position":
-      _positionController.text.trim(),
-
-      "department":
-      _departmentController.text.trim(),
-
-      "reliever":
-      _relieverController.text.trim(),
-
-      "dateFrom":
-      Timestamp.fromDate(_dateFrom!),
-
-      "dateTo":
-      Timestamp.fromDate(_dateTo!),
-
-      "totalDays":
-      _totalDays,
-
-      "totalHours":
-      _totalHours,
-
-      "returnDate":
-      _returnDate != null
-          ? Timestamp.fromDate(
-        _returnDate!,
-      )
-          : null,
-
-      "returnTime":
-      _returnTime != null
-          ? "${_returnTime!.hour.toString().padLeft(2, '0')}:"
-          "${_returnTime!.minute.toString().padLeft(2, '0')}"
-          : null,
-
-      "leaveType":
-      _selectedLeaveType,
-
-      "reason":
-      _reasonController.text.trim(),
-
-      "status":
-      "pending",
-
-      "createdAt":
-      Timestamp.now(),
-    };
-
-    // ----------------------------------------------------------
-    // SAVE TO FIRESTORE
-    // ----------------------------------------------------------
+    if (!mounted) return;
+    setState(() => _isSubmitting = true);
 
     try {
+      final leaveData = {
+        'employeeId': _selectedEmployeeId,
+        'employeeName': _nameController.text.trim(),
+        'position': _positionController.text.trim(),
+        'department': _departmentController.text.trim(),
+        'reliever': _relieverController.text.trim(),
+        'leaveType': _selectedLeaveType,
+        'startDate': _dateFrom!.toIso8601String(),
+        'endDate': _dateTo!.toIso8601String(),
+        'days': _totalDays.toInt(),
+        'hours': _totalHours,
+        'returnDate': _returnDate?.toIso8601String(),
+        'returnTime': _returnTime != null
+            ? "${_returnTime!.hour.toString().padLeft(2, '0')}:${_returnTime!.minute.toString().padLeft(2, '0')}"
+            : null,
+        'reason': _reasonController.text.trim(),
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdBy': 'admin',
+      };
+
       await FirebaseFirestore.instance
-          .collection("employees")
+          .collection('leave_applications')
+          .add(leaveData);
+
+      await FirebaseFirestore.instance
+          .collection('employees')
           .doc(_selectedEmployeeId)
           .update({
-        "leaveRequests":
-        FieldValue.arrayUnion([
-          requestData,
+        'leaveRequests': FieldValue.arrayUnion([
+          {
+            'id': DateTime.now().millisecondsSinceEpoch.toString(),
+            'leaveType': _selectedLeaveType,
+            'startDate': _dateFrom!.toIso8601String(),
+            'endDate': _dateTo!.toIso8601String(),
+            'days': _totalDays.toInt(),
+            'reason': _reasonController.text.trim(),
+            'status': 'pending',
+            'createdAt': Timestamp.now(),
+          }
         ]),
       });
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
-        const SnackBar(
-          content: Text(
-            "Leave request submitted.",
-          ),
-          backgroundColor: kGreen,
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("Leave request submitted successfully!"),
+          backgroundColor: tc.green,
         ),
       );
 
-      Navigator.of(context)
-          .maybePop(true);
-
+      widget.onSuccess?.call();
+      Navigator.of(context).maybePop(true);
       widget.onBack?.call();
     } catch (e) {
-      if (!mounted) {
-        return;
-      }
-
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            "Failed to submit: $e",
-          ),
-          backgroundColor:
-          Colors.redAccent,
+          content: Text("Failed to submit: ${e.toString()}"),
+          backgroundColor: tc.red,
         ),
       );
     } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
-      }
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
-  // ============================================================
-  // ERROR MESSAGE
-  // ============================================================
-
   void _showError(String message) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor:
-        Colors.redAccent,
-      ),
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: tc.red),
     );
   }
 
-  // ============================================================
-  // TEXT FIELD
-  // ============================================================
-
-  Widget _textField(
-      TextEditingController controller,
-      String hint, {
-        TextInputType? keyboardType,
-      }) {
+  Widget _textField(TextEditingController controller, String hint,
+      {TextInputType? keyboardType}) {
     return TextField(
       controller: controller,
       keyboardType: keyboardType,
-      style: const TextStyle(
-        fontSize: 13,
-        color: kTextDark,
-      ),
-      decoration:
-      _inputDecoration(hint),
+      style: TextStyle(fontSize: 16, color: tc.text),
+      decoration: _inputDecoration(hint),
     );
   }
 
-  // ============================================================
-  // LABELED FIELD
-  // ============================================================
-
-  Widget _labeledField(
-      String label,
-      Widget field,
-      ) {
+  Widget _labeledField(String label, Widget field) {
     return Column(
-      crossAxisAlignment:
-      CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight:
-            FontWeight.w600,
-            color: kTextGray2,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: tc.text,
           ),
         ),
-
         const SizedBox(height: 6),
-
         field,
       ],
     );
   }
 
-  // ============================================================
-  // INPUT DECORATION
-  // ============================================================
-
-  InputDecoration _inputDecoration(
-      String hint, {
-        Widget? suffixIcon,
-      }) {
+  InputDecoration _inputDecoration(String hint, {Widget? suffixIcon}) {
     return InputDecoration(
       hintText: hint,
-
-      hintStyle:
-      const TextStyle(
-        color: Color(0xFF9CA3AF),
-        fontSize: 13,
-      ),
-
-      suffixIcon:
-      suffixIcon,
-
+      hintStyle: TextStyle(color: tc.muted, fontSize: 14),
+      suffixIcon: suffixIcon,
       filled: true,
-
-      fillColor:
-      Colors.white,
-
+      fillColor: tc.card,
       contentPadding:
-      const EdgeInsets.symmetric(
-        horizontal: 14,
-        vertical: 12,
+      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: tc.border),
       ),
-
-      border:
-      OutlineInputBorder(
-        borderRadius:
-        BorderRadius.circular(8),
-        borderSide:
-        const BorderSide(
-          color: Color(
-            0xFFD1D5DB,
-          ),
-        ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: tc.border),
       ),
-
-      enabledBorder:
-      OutlineInputBorder(
-        borderRadius:
-        BorderRadius.circular(8),
-        borderSide:
-        const BorderSide(
-          color: Color(
-            0xFFD1D5DB,
-          ),
-        ),
-      ),
-
-      focusedBorder:
-      OutlineInputBorder(
-        borderRadius:
-        BorderRadius.circular(8),
-        borderSide:
-        const BorderSide(
-          color: kOrange,
-          width: 1.2,
-        ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: tc.orange, width: 1.2),
       ),
     );
   }
-
-  // ============================================================
-  // DATE FORMAT
-  // ============================================================
 
   String _fmtDate(DateTime date) {
-    return "${date.month.toString().padLeft(2, '0')}/"
-        "${date.day.toString().padLeft(2, '0')}/"
-        "${date.year}";
-  }
-}
-
-// ============================================================
-// RESPONSIVE GRID
-// ============================================================
-
-class _ResponsiveGrid
-    extends StatelessWidget {
-  final List<Widget> children;
-
-  const _ResponsiveGrid({
-    required this.children,
-  });
-
-  @override
-  Widget build(
-      BuildContext context,
-      ) {
-    return LayoutBuilder(
-      builder: (
-          BuildContext context,
-          BoxConstraints constraints,
-          ) {
-        final bool isNarrow =
-            constraints.maxWidth < 600;
-
-        // ------------------------------------------------------
-        // MOBILE
-        // ------------------------------------------------------
-
-        if (isNarrow) {
-          return Column(
-            children: children
-                .map(
-                  (child) => Padding(
-                padding:
-                const EdgeInsets.only(
-                  bottom: 20,
-                ),
-                child: child,
-              ),
-            )
-                .toList(),
-          );
-        }
-
-        // ------------------------------------------------------
-        // DESKTOP
-        // ------------------------------------------------------
-
-        return Wrap(
-          spacing: 20,
-          runSpacing: 20,
-          children: children
-              .map(
-                (child) => SizedBox(
-              width:
-              (constraints.maxWidth -
-                  20) /
-                  2,
-              child: child,
-            ),
-          )
-              .toList(),
-        );
-      },
-    );
+    return "${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}/${date.year}";
   }
 }

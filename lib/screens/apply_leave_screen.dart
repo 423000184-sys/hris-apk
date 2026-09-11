@@ -1,51 +1,71 @@
+// lib/screens/apply_leave_screen.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-<<<<<<< HEAD
+import 'package:intl/intl.dart';
 
-// ═══════════════════════════════════════════════════════════════════
-// Light-mode palette (pinanatili ang light colors)
-// ═══════════════════════════════════════════════════════════════════
-class _LightColors {
-  static const background   = Color(0xFFF8F8F8);
-  static const card         = Color(0xFFFFFFFF);
-  static const surface      = Color(0xFFF2F2F3);
-  static const cardBorder   = Color(0xFFE4E4E7);
-  static const textPrimary  = Color(0xFF18181B);
-  static const textSecondary= Color(0xFF52525B);
-  static const textMuted    = Color(0xFF9CA3AF);
+// ═══════════════════════════════════════════════════════════════════════════
+// THEME COLORS
+// ═══════════════════════════════════════════════════════════════════════════
+class _ThemeColors {
+  final bool isDark;
+  const _ThemeColors(this.isDark);
 
-  static const orange       = Color(0xFFFF8A00);
-  static const orangeDeep   = Color(0xFFFF6B00);
+  Color get bg => isDark ? const Color(0xFF0F0F10) : const Color(0xFFFFFFFF);
+  Color get cardBg => isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
+  Color get cardFill =>
+      isDark ? const Color(0xFF1F1F23) : const Color.fromRGBO(131, 131, 131, 0.07);
 
-  static const green   = Color(0xFF16A34A);
-  static const warning = Color(0xFFF59E0B);
-  static const error   = Color(0xFFDC2626);
-  static const info    = Color(0xFF2563EB);
-  static const white   = Colors.white;
+  Color get textBlack => isDark ? Colors.white : const Color(0xFF000000);
+  Color get textGray =>
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF71717A);
+  Color get textMuted =>
+      isDark ? const Color(0xFF888888) : const Color(0xFF9CA3AF);
 
-  static const gradientOrange = LinearGradient(
-    begin: Alignment.topCenter,
-    end: Alignment.bottomCenter,
-    colors: [orange, orangeDeep],
-  );
+  Color get border =>
+      isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
+  Color get darkBorder =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFF27272A);
 
-  static const gradientOrangeHot = LinearGradient(
-    begin: Alignment.centerLeft,
-    end: Alignment.centerRight,
-    colors: [orange, orangeDeep],
-  );
+  Color get navBg => isDark ? const Color(0xFF18181B) : Colors.white;
+  Color get navUnselected =>
+      isDark ? const Color(0xFF888888) : const Color(0xFF71717A);
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Leave types
-// ═══════════════════════════════════════════════════════════════════
-=======
-import '../theme/app_theme.dart';
+// ─── BRAND COLORS ─────────────────────────────────────────────
+class _T {
+  static const Color orange = Color(0xFFFF8A00);
+  static const Color orangeBorder = Color(0xFFFFA500);
+  static const Color orangeLight = Color(0xFFFA6A00);
+  static const Color orangeHot = Color(0xFFF54900);
+  static const Color neonGreen = Color(0xFF51FF00);
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Leave types
-// ══════════════════════════════════════════════════════════════════════════════
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+  static const Color green = Color(0xFF16A34A);
+  static const Color warning = Color(0xFFF59E0B);
+  static const Color error = Color(0xFFDC2626);
+  static const Color info = Color(0xFF2563EB);
+  static const Color white = Color(0xFFFFFFFF);
+
+  static const LinearGradient brandGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [orange, orangeLight, orangeHot],
+    stops: [0.0, 0.5, 1.0],
+  );
+
+  static const double r12 = 12;
+  static const double r14 = 14;
+  static const double r16 = 16;
+  static const double r20 = 20;
+}
+
+// ─── LEAVE CREDIT POLICY (SHARED WITH ADMIN) ─────────────────
+const int kAnnualLeaveTotal = 18;
+const int kSickLeaveTotal = 18;
+
+// Leave type mapping: VL → Annual, SL → Sick, others → separate
+bool _isAnnual(String code) => code.toUpperCase() == 'VL';
+bool _isSick(String code) => code.toUpperCase() == 'SL';
+
 class _LeaveType {
   final String code;
   final String label;
@@ -54,109 +74,985 @@ class _LeaveType {
 }
 
 const _leaveTypes = [
-  _LeaveType('SL', 'Sick',      Icons.medical_services_rounded),
-  _LeaveType('VL', 'Vacation',  Icons.beach_access_rounded),
+  _LeaveType('SL', 'Sick', Icons.medical_services_rounded),
+  _LeaveType('VL', 'Vacation', Icons.beach_access_rounded),
   _LeaveType('EL', 'Emergency', Icons.warning_amber_rounded),
-  _LeaveType('BL', 'Bereave',   Icons.sentiment_very_dissatisfied_rounded),
+  _LeaveType('BL', 'Bereave', Icons.sentiment_very_dissatisfied_rounded),
   _LeaveType('ML', 'Maternity', Icons.child_friendly_rounded),
 ];
 
-<<<<<<< HEAD
-// ═══════════════════════════════════════════════════════════════════
-// ApplyLeaveScreen
-// ═══════════════════════════════════════════════════════════════════
-=======
-// ══════════════════════════════════════════════════════════════════════════════
-// ApplyLeaveScreen
-// ══════════════════════════════════════════════════════════════════════════════
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-class ApplyLeaveScreen extends StatefulWidget {
+// ─── SAFE HELPERS ─────────────────────────────────────────────
+int _safeInt(dynamic v, [int fallback = 0]) {
+  if (v == null) return fallback;
+  if (v is int) return v;
+  if (v is double) return v.toInt();
+  if (v is num) return v.toInt();
+  return int.tryParse(v.toString()) ?? fallback;
+}
+
+// ─── STATS MODEL ──────────────────────────────────────────────
+class _LeaveStats {
+  int usedAnnual = 0;
+  int usedSick = 0;
+  int usedOther = 0;
+  int pendingCount = 0;
+
+  int get annualRemaining =>
+      (kAnnualLeaveTotal - usedAnnual).clamp(0, kAnnualLeaveTotal);
+  int get sickRemaining =>
+      (kSickLeaveTotal - usedSick).clamp(0, kSickLeaveTotal);
+  int get totalUsed => usedAnnual + usedSick + usedOther;
+}
+
+_LeaveStats _computeStats(List<Map<String, dynamic>> history) {
+  final s = _LeaveStats();
+  for (final h in history) {
+    final status = (h['status'] ?? 'pending').toString().toLowerCase();
+    final code = (h['leaveType'] ?? 'SL').toString();
+    final days = _safeInt(h['days'], 1);
+
+    if (status == 'approved') {
+      if (_isSick(code)) {
+        s.usedSick += days;
+      } else if (_isAnnual(code)) {
+        s.usedAnnual += days;
+      } else {
+        s.usedOther += days;
+      }
+    } else if (status == 'pending') {
+      s.pendingCount++;
+    }
+  }
+  return s;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  LEAVE APPLICATION FORM (dashboard)
+// ═══════════════════════════════════════════════════════════════
+class LeaveApplicationFormScreen extends StatefulWidget {
   final String employeeId;
   final String employeeName;
-  const ApplyLeaveScreen({
+  final VoidCallback? onBack;
+
+  const LeaveApplicationFormScreen({
     super.key,
     required this.employeeId,
     required this.employeeName,
+    this.onBack,
   });
 
   @override
-  State<ApplyLeaveScreen> createState() => _ApplyLeaveScreenState();
+  State<LeaveApplicationFormScreen> createState() =>
+      _LeaveApplicationFormScreenState();
 }
 
-class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
-    with TickerProviderStateMixin {
-<<<<<<< HEAD
-  int     _currentStep = 0;
-  String? _selectedLeaveType;
-  bool    _isSubmitting = false;
-  bool    _isCertified = false;
-=======
+class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen> {
+  int _selectedBottomIndex = 2;
+  _LeaveStats _stats = _LeaveStats();
+  List<Map<String, dynamic>> _leaveHistory = [];
+  bool _loading = true;
+  String? _error;
 
-  // State variables
-  int     _currentStep = 0;
+  @override
+  void initState() {
+    super.initState();
+    _fetchLeaveData();
+  }
+
+  void refreshData() {
+    _fetchLeaveData();
+  }
+
+  Future<void> _fetchLeaveData() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('leave_applications')
+          .where('employeeId', isEqualTo: widget.employeeId)
+          .get();
+
+      final List<Map<String, dynamic>> history = [];
+      for (var doc in snapshot.docs) {
+        final data = doc.data();
+        history.add({
+          'id': doc.id,
+          'leaveType': data['leaveType'] ?? 'SL',
+          'startDate': data['startDate'],
+          'endDate': data['endDate'],
+          'days': _safeInt(data['days'], 1),
+          'status': data['status'] ?? 'pending',
+          'reason': data['reason'] ?? '',
+          'createdAt': data['createdAt'],
+        });
+      }
+
+      history.sort((a, b) {
+        final aTime = a['createdAt'] as Timestamp?;
+        final bTime = b['createdAt'] as Timestamp?;
+        if (aTime == null && bTime == null) return 0;
+        if (aTime == null) return 1;
+        if (bTime == null) return -1;
+        return bTime.compareTo(aTime);
+      });
+
+      final stats = _computeStats(history);
+
+      setState(() {
+        _leaveHistory = history;
+        _stats = stats;
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('Error fetching leave history: $e');
+      setState(() {
+        _loading = false;
+        _error = 'Failed to load leave data. Please try again.';
+      });
+    }
+  }
+
+  String _formatDate(dynamic dateStr) {
+    if (dateStr == null) return 'N/A';
+    try {
+      if (dateStr is Timestamp) {
+        return DateFormat('MMM d, yyyy').format(dateStr.toDate());
+      }
+      if (dateStr is String) {
+        final dt = DateTime.parse(dateStr);
+        return DateFormat('MMM d, yyyy').format(dt);
+      }
+      return 'N/A';
+    } catch (_) {
+      return dateStr.toString();
+    }
+  }
+
+  String _leaveTypeLabel(String code) {
+    const map = {
+      'SL': 'Sick Leave',
+      'VL': 'Vacation Leave',
+      'EL': 'Emergency Leave',
+      'BL': 'Bereavement Leave',
+      'ML': 'Maternity/Paternity Leave',
+    };
+    return map[code] ?? code;
+  }
+
+  void _openItineraryLeaveForm() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ItineraryLeaveFormScreen(
+          employeeId: widget.employeeId,
+          employeeName: widget.employeeName,
+          onGoHome: () {
+            refreshData();
+            if (Navigator.canPop(context)) Navigator.pop(context);
+          },
+        ),
+      ),
+    ).then((_) => refreshData());
+  }
+
+  void _openItineraryFormWithStepper() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ItineraryScreen(
+          employeeId: widget.employeeId,
+          employeeName: widget.employeeName,
+          onGoHome: () {
+            refreshData();
+            if (Navigator.canPop(context)) Navigator.pop(context);
+          },
+        ),
+      ),
+    ).then((_) => refreshData());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
+    return Scaffold(
+      backgroundColor: tc.bg,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // HEADER
+            Container(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+              decoration: const BoxDecoration(
+                gradient: _T.brandGradient,
+                borderRadius: BorderRadius.only(
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(16),
+                ),
+              ),
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: () {
+                      if (widget.onBack != null) {
+                        widget.onBack!();
+                      } else if (Navigator.canPop(context)) {
+                        Navigator.pop(context);
+                      }
+                    },
+                    child: const Icon(Icons.arrow_back_ios_rounded,
+                        color: Colors.white, size: 20),
+                  ),
+                  const SizedBox(width: 16),
+                  const Expanded(
+                    child: Text('Leave Application Form',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w500)),
+                  ),
+                  GestureDetector(
+                    onTap: _openItineraryLeaveForm,
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      margin: const EdgeInsets.only(right: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF27272A).withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.3),
+                            width: 1.1),
+                      ),
+                      child: const Icon(Icons.assignment_rounded,
+                          color: Colors.white, size: 18),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: _openItineraryFormWithStepper,
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF27272A).withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.3),
+                            width: 1.1),
+                      ),
+                      child: const Icon(Icons.add_rounded,
+                          color: Colors.white, size: 20),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // STAT CARDS
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_error != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Center(
+                  child: Column(
+                    children: [
+                      Text(_error!, style: const TextStyle(color: _T.error)),
+                      const SizedBox(height: 8),
+                      ElevatedButton(
+                        onPressed: _fetchLeaveData,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Row(
+                  children: [
+                    _statCard(tc, 'Annual Left',
+                        '${_stats.annualRemaining}', _T.orange,
+                        subtitle: 'of $kAnnualLeaveTotal'),
+                    const SizedBox(width: 12),
+                    _statCard(tc, 'Sick Left',
+                        '${_stats.sickRemaining}', _T.green,
+                        subtitle: 'of $kSickLeaveTotal'),
+                    const SizedBox(width: 12),
+                    _statCard(tc, 'Total Used',
+                        '${_stats.totalUsed}', _T.orange),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 20),
+
+            // LEAVE HISTORY header
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Leave History',
+                    style: TextStyle(
+                        color: tc.textBlack,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500)),
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _leaveHistory.isEmpty
+                    ? Center(
+                  child: Text('No leave history yet.',
+                      style: TextStyle(color: tc.textGray)),
+                )
+                    : ListView.builder(
+                  itemCount: _leaveHistory.length,
+                  itemBuilder: (ctx, index) {
+                    final item = _leaveHistory[index];
+                    final leaveType =
+                    _leaveTypeLabel(item['leaveType']);
+                    final start = _formatDate(item['startDate']);
+                    final end = _formatDate(item['endDate']);
+                    final days = item['days'];
+                    final status =
+                    (item['status'] ?? 'pending').toString();
+                    final statusLower = status.toLowerCase();
+                    final isApproved = statusLower == 'approved';
+                    final isPending = statusLower == 'pending';
+
+                    final badgeBg = isApproved
+                        ? _T.green.withValues(alpha: 0.1)
+                        : (isPending
+                        ? _T.orange.withValues(alpha: 0.1)
+                        : _T.error.withValues(alpha: 0.1));
+                    final badgeBorder = isApproved
+                        ? _T.green.withValues(alpha: 0.2)
+                        : (isPending
+                        ? _T.orange.withValues(alpha: 0.2)
+                        : _T.error.withValues(alpha: 0.2));
+                    final badgeText = isApproved
+                        ? _T.green
+                        : (isPending ? _T.orange : _T.error);
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: tc.cardBg,
+                        borderRadius: BorderRadius.circular(16),
+                        border:
+                        Border.all(color: tc.border, width: 1),
+                        boxShadow: [
+                          BoxShadow(
+                            color:
+                            Colors.black.withValues(alpha: 0.05),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(leaveType,
+                                  style: TextStyle(
+                                      color: tc.textBlack,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500)),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: badgeBg,
+                                  borderRadius:
+                                  BorderRadius.circular(12),
+                                  border: Border.all(
+                                      color: badgeBorder),
+                                ),
+                                child: Text(
+                                  isApproved
+                                      ? 'Approved'
+                                      : (isPending
+                                      ? 'Pending'
+                                      : 'Rejected'),
+                                  style: TextStyle(
+                                      color: badgeText,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w500),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text('$start - $end',
+                                  style: TextStyle(
+                                      color: tc.textGray,
+                                      fontSize: 12)),
+                              Text('$days Days',
+                                  style: TextStyle(
+                                      color: tc.textBlack,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500)),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        backgroundColor: tc.navBg,
+        elevation: 2,
+        type: BottomNavigationBarType.fixed,
+        selectedItemColor: _T.orange,
+        unselectedItemColor: tc.navUnselected,
+        currentIndex: _selectedBottomIndex,
+        onTap: (index) => setState(() => _selectedBottomIndex = index),
+        items: const [
+          BottomNavigationBarItem(
+              icon: Icon(Icons.grid_view_rounded), label: 'Home'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.history_rounded), label: 'Logs'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.calendar_today_rounded), label: 'Leave'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.person_rounded), label: 'Profile'),
+        ],
+      ),
+    );
+  }
+
+  Widget _statCard(_ThemeColors tc, String label, String value, Color valueColor,
+      {String? subtitle}) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: tc.cardBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: tc.border, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 3,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Text(value,
+                style: TextStyle(
+                    color: valueColor,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500)),
+            const SizedBox(height: 2),
+            Text(label,
+                style: TextStyle(
+                    color: tc.textGray,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600)),
+            if (subtitle != null)
+              Text(subtitle,
+                  style: TextStyle(color: tc.textMuted, fontSize: 9)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ITINERARY LEAVE FORM (Dashboard with Stats & History)
+// ═══════════════════════════════════════════════════════════════
+class ItineraryLeaveFormScreen extends StatefulWidget {
+  final String employeeId;
+  final String employeeName;
+  final VoidCallback? onGoHome;
+
+  const ItineraryLeaveFormScreen({
+    super.key,
+    required this.employeeId,
+    required this.employeeName,
+    this.onGoHome,
+  });
+
+  @override
+  State<ItineraryLeaveFormScreen> createState() =>
+      _ItineraryLeaveFormScreenState();
+}
+
+class _ItineraryLeaveFormScreenState extends State<ItineraryLeaveFormScreen> {
+  _LeaveStats _stats = _LeaveStats();
+  List<Map<String, dynamic>> _leaveHistory = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchLeaveData();
+  }
+
+  Future<void> _fetchLeaveData() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('leave_applications')
+          .where('employeeId', isEqualTo: widget.employeeId)
+          .get();
+
+      final List<Map<String, dynamic>> history = [];
+      for (var doc in snapshot.docs) {
+        final data = doc.data();
+        history.add({
+          'id': doc.id,
+          'leaveType': data['leaveType'] ?? 'SL',
+          'startDate': data['startDate'],
+          'endDate': data['endDate'],
+          'days': _safeInt(data['days'], 1),
+          'status': data['status'] ?? 'pending',
+          'reason': data['reason'] ?? '',
+          'createdAt': data['createdAt'],
+        });
+      }
+
+      history.sort((a, b) {
+        final aTime = a['createdAt'] as Timestamp?;
+        final bTime = b['createdAt'] as Timestamp?;
+        if (aTime == null && bTime == null) return 0;
+        if (aTime == null) return 1;
+        if (bTime == null) return -1;
+        return bTime.compareTo(aTime);
+      });
+
+      final stats = _computeStats(history);
+
+      setState(() {
+        _leaveHistory = history;
+        _stats = stats;
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('Error fetching leave history: $e');
+      setState(() {
+        _loading = false;
+        _error = 'Failed to load leave data. Please try again.';
+      });
+    }
+  }
+
+  String _formatDate(dynamic dateStr) {
+    if (dateStr == null) return 'N/A';
+    try {
+      if (dateStr is Timestamp) {
+        return DateFormat('MMM d, yyyy').format(dateStr.toDate());
+      }
+      if (dateStr is String) {
+        final dt = DateTime.parse(dateStr);
+        return DateFormat('MMM d, yyyy').format(dt);
+      }
+      return 'N/A';
+    } catch (_) {
+      return dateStr.toString();
+    }
+  }
+
+  String _leaveTypeLabel(String code) {
+    const map = {
+      'SL': 'Sick Leave',
+      'VL': 'Vacation Leave',
+      'EL': 'Emergency Leave',
+      'BL': 'Bereavement Leave',
+      'ML': 'Maternity/Paternity Leave',
+    };
+    return map[code] ?? code;
+  }
+
+  void _openLeaveApplicationForm() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LeaveApplicationFormScreen(
+          employeeId: widget.employeeId,
+          employeeName: widget.employeeName,
+          onBack: () {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+          },
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
+    return Scaffold(
+      backgroundColor: tc.bg,
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildHeader(tc),
+            const SizedBox(height: 20),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Column(
+                  children: [
+                    if (_loading)
+                      const Center(child: CircularProgressIndicator())
+                    else if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 20),
+                        child: Column(
+                          children: [
+                            Text(_error!,
+                                style: const TextStyle(color: _T.error)),
+                            const SizedBox(height: 8),
+                            ElevatedButton(
+                              onPressed: _fetchLeaveData,
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      Row(
+                        children: [
+                          _statCard(tc, 'Annual Left',
+                              '${_stats.annualRemaining}', _T.orange,
+                              subtitle: 'of $kAnnualLeaveTotal'),
+                          const SizedBox(width: 12),
+                          _statCard(tc, 'Sick Left',
+                              '${_stats.sickRemaining}', _T.green,
+                              subtitle: 'of $kSickLeaveTotal'),
+                          const SizedBox(width: 12),
+                          _statCard(tc, 'Total Used',
+                              '${_stats.totalUsed}', _T.orange),
+                        ],
+                      ),
+                    const SizedBox(height: 20),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Leave History',
+                          style: TextStyle(
+                              color: tc.textBlack,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500)),
+                    ),
+                    const SizedBox(height: 10),
+                    if (_loading)
+                      const Center(child: CircularProgressIndicator())
+                    else if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 20),
+                        child: Column(
+                          children: [
+                            Text(_error!,
+                                style: const TextStyle(color: _T.error)),
+                            const SizedBox(height: 8),
+                            ElevatedButton(
+                              onPressed: _fetchLeaveData,
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      )
+                    else if (_leaveHistory.isEmpty)
+                        Center(
+                          child: Text('No leave history yet.',
+                              style: TextStyle(color: tc.textGray)),
+                        )
+                      else
+                        Column(
+                          children: _leaveHistory.map((item) {
+                            final leaveType = _leaveTypeLabel(item['leaveType']);
+                            final start = _formatDate(item['startDate']);
+                            final end = _formatDate(item['endDate']);
+                            final days = item['days'];
+                            final status =
+                            (item['status'] ?? 'pending').toString();
+                            final statusLower = status.toLowerCase();
+                            final isApproved = statusLower == 'approved';
+                            final isPending = statusLower == 'pending';
+                            final badgeBg = isApproved
+                                ? _T.green.withValues(alpha: 0.1)
+                                : (isPending
+                                ? _T.orange.withValues(alpha: 0.1)
+                                : _T.error.withValues(alpha: 0.1));
+                            final badgeBorder = isApproved
+                                ? _T.green.withValues(alpha: 0.2)
+                                : (isPending
+                                ? _T.orange.withValues(alpha: 0.2)
+                                : _T.error.withValues(alpha: 0.2));
+                            final badgeText = isApproved
+                                ? _T.green
+                                : (isPending ? _T.orange : _T.error);
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: tc.cardBg,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: tc.border, width: 1),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.05),
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(leaveType,
+                                          style: TextStyle(
+                                              color: tc.textBlack,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w500)),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: badgeBg,
+                                          borderRadius: BorderRadius.circular(12),
+                                          border:
+                                          Border.all(color: badgeBorder),
+                                        ),
+                                        child: Text(
+                                          isApproved
+                                              ? 'Approved'
+                                              : (isPending
+                                              ? 'Pending'
+                                              : 'Rejected'),
+                                          style: TextStyle(
+                                              color: badgeText,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w500),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text('$start - $end',
+                                          style: TextStyle(
+                                              color: tc.textGray, fontSize: 12)),
+                                      Text('$days Days',
+                                          style: TextStyle(
+                                              color: tc.textBlack,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500)),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(_ThemeColors tc) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+      decoration: const BoxDecoration(
+        gradient: _T.brandGradient,
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(16),
+          bottomRight: Radius.circular(16),
+        ),
+      ),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () {
+              if (widget.onGoHome != null) {
+                widget.onGoHome!();
+              } else if (Navigator.canPop(context)) {
+                Navigator.pop(context);
+              }
+            },
+            child: const Icon(Icons.arrow_back_ios_rounded,
+                color: Colors.white, size: 20),
+          ),
+          const SizedBox(width: 16),
+          const Expanded(
+            child: Text('Itinerary',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500)),
+          ),
+          GestureDetector(
+            onTap: _openLeaveApplicationForm,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: const Color(0xFF27272A).withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.3), width: 1.1),
+              ),
+              child:
+              const Icon(Icons.add_rounded, color: Colors.white, size: 20),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statCard(_ThemeColors tc, String label, String value, Color valueColor,
+      {String? subtitle}) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: tc.cardBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: tc.border, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 3,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Text(value,
+                style: TextStyle(
+                    color: valueColor,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500)),
+            const SizedBox(height: 2),
+            Text(label,
+                style: TextStyle(
+                    color: tc.textGray,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600)),
+            if (subtitle != null)
+              Text(subtitle,
+                  style: TextStyle(color: tc.textMuted, fontSize: 9)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ITINERARY FORM WITH STEPPER
+// ═══════════════════════════════════════════════════════════════
+class ItineraryScreen extends StatefulWidget {
+  final String employeeId;
+  final String employeeName;
+  final VoidCallback? onGoHome;
+
+  const ItineraryScreen({
+    super.key,
+    required this.employeeId,
+    required this.employeeName,
+    this.onGoHome,
+  });
+
+  @override
+  State<ItineraryScreen> createState() => _ItineraryScreenState();
+}
+
+class _ItineraryScreenState extends State<ItineraryScreen> {
+  int _currentStep = 0;
   String? _selectedLeaveType;
-  bool    _isSubmitting = false;
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+  bool _isSubmitting = false;
+  bool _isCertified = false;
 
   DateTime? _startDate;
   DateTime? _endDate;
   final _reasonCtrl = TextEditingController();
 
-<<<<<<< HEAD
-=======
-  // Animation
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-  late AnimationController _fadeCtrl;
-  late Animation<double>   _fadeAnim;
-
-  @override
-  void initState() {
-    super.initState();
-    _fadeCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 400));
-    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
-    _fadeCtrl.forward();
-  }
-
   @override
   void dispose() {
-    _fadeCtrl.dispose();
     _reasonCtrl.dispose();
     super.dispose();
   }
 
-<<<<<<< HEAD
-  // ── Helpers ──────────────────────────────────────────────────────
-=======
-  // ── Helpers ────────────────────────────────────────────────────────────────
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   int get _leaveDays {
     if (_startDate == null || _endDate == null) return 0;
     return _endDate!.difference(_startDate!).inDays + 1;
   }
 
-<<<<<<< HEAD
-  double get _leaveHours => _leaveDays * 8.0;
-
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   String _fmt(DateTime? d) {
     if (d == null) return 'dd/mm/yyyy';
-    const months = ['','Jan','Feb','Mar','Apr','May','Jun',
-      'Jul','Aug','Sep','Oct','Nov','Dec'];
+    const months = [
+      '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
     return '${months[d.month]} ${d.day}, ${d.year}';
   }
 
-<<<<<<< HEAD
   String get _leaveLabel {
     if (_selectedLeaveType == null) return '—';
     return _leaveTypes.firstWhere((l) => l.code == _selectedLeaveType).label;
   }
 
   String get _leaveDisplay => '$_leaveLabel ($_selectedLeaveType)';
-
   String get _durationDisplay => '$_leaveDays Days';
-
   String get _datesDisplay {
     if (_startDate == null || _endDate == null) return '—';
     return '${_fmt(_startDate)} - ${_fmt(_endDate)}';
@@ -165,31 +1061,21 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
   String get _reasonDisplay =>
       _reasonCtrl.text.trim().isEmpty ? '—' : _reasonCtrl.text.trim();
 
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   Future<void> _pickDate(bool isStart) async {
-    final now  = DateTime.now();
+    final now = DateTime.now();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
     final pick = await showDatePicker(
       context: context,
-      initialDate: isStart ? (_startDate ?? now) : (_endDate ?? _startDate ?? now),
+      initialDate:
+      isStart ? (_startDate ?? now) : (_endDate ?? _startDate ?? now),
       firstDate: now,
       lastDate: DateTime(now.year + 1),
       builder: (ctx, child) => Theme(
-<<<<<<< HEAD
-        data: ThemeData.light().copyWith(
-          colorScheme: const ColorScheme.light(
-            primary: _LightColors.orange,
-            surface: _LightColors.card,
-          ),
-          dialogBackgroundColor: _LightColors.card,
-=======
-        data: ThemeData.dark().copyWith(
-          colorScheme: const ColorScheme.dark(
-            primary: AppColors.orange,
-            surface: AppColors.surface,
-          ),
-          dialogBackgroundColor: AppColors.card,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+        data: Theme.of(context).copyWith(
+          colorScheme: ColorScheme.light(primary: _T.orange, surface: tc.bg),
+          dialogTheme: DialogThemeData(backgroundColor: tc.bg),
         ),
         child: child!,
       ),
@@ -205,369 +1091,379 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
     });
   }
 
-  void _goNext() {
-<<<<<<< HEAD
+  Future<bool> _hasEnoughBalance() async {
+    if (_selectedLeaveType == null || _leaveDays <= 0) return true;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('leave_applications')
+          .where('employeeId', isEqualTo: widget.employeeId)
+          .get();
+      int usedAnnual = 0, usedSick = 0;
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final status = (data['status'] ?? 'pending').toString().toLowerCase();
+        if (status != 'approved') continue;
+        final code = (data['leaveType'] ?? '').toString();
+        final days = _safeInt(data['days'], 1);
+        if (_isAnnual(code)) {
+          usedAnnual += days;
+        } else if (_isSick(code)) {
+          usedSick += days;
+        }
+      }
+      final annualRemaining = kAnnualLeaveTotal - usedAnnual;
+      final sickRemaining = kSickLeaveTotal - usedSick;
+      if (_isAnnual(_selectedLeaveType!) && _leaveDays > annualRemaining) {
+        _showToast(
+            'Insufficient Annual Leave. Remaining: $annualRemaining', _T.error);
+        return false;
+      }
+      if (_isSick(_selectedLeaveType!) && _leaveDays > sickRemaining) {
+        _showToast('Insufficient Sick Leave. Remaining: $sickRemaining',
+            _T.error);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      debugPrint('Balance check failed: $e');
+      return true; // don't block on network error
+    }
+  }
+
+  void _goNext() async {
     if (_currentStep == 0 && _selectedLeaveType == null) {
-      _showToast('Please select a leave type', _LightColors.warning);
+      _showToast('Please select a leave type', _T.warning);
       return;
     }
     if (_currentStep == 1) {
       if (_startDate == null || _endDate == null) {
-        _showToast('Please select dates', _LightColors.warning);
+        _showToast('Please select dates', _T.warning);
         return;
       }
       if (_reasonCtrl.text.trim().isEmpty) {
-        _showToast('Please enter a reason', _LightColors.warning);
+        _showToast('Please enter a reason', _T.warning);
         return;
       }
     }
     if (_currentStep == 2 && !_isCertified) {
-      _showToast('Please certify that all information is correct', _LightColors.warning);
+      _showToast('Please certify that all information is correct', _T.warning);
       return;
     }
-=======
-    // Validation for Step 1
-    if (_currentStep == 0 && _selectedLeaveType == null) {
-      _showToast('Please select a leave type', AppColors.warning);
-      return;
-    }
-    // Validation for Step 2
-    if (_currentStep == 1) {
-      if (_startDate == null || _endDate == null) {
-        _showToast('Please select dates', AppColors.warning);
-        return;
-      }
-      if (_reasonCtrl.text.trim().isEmpty) {
-        _showToast('Please enter a reason', AppColors.warning);
-        return;
-      }
-    }
-
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
     if (_currentStep < 2) {
-      _fadeCtrl.forward(from: 0);
       setState(() => _currentStep++);
     }
   }
 
   void _goBack() {
     if (_currentStep > 0) {
-      _fadeCtrl.forward(from: 0);
       setState(() => _currentStep--);
     } else {
-      Navigator.of(context).pop();
-    }
-  }
-
-  Future<void> _submitApplication() async {
-<<<<<<< HEAD
-    if (!_isCertified) {
-      _showToast('Please certify that all information is correct', _LightColors.warning);
-      return;
-    }
-
-=======
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-    setState(() => _isSubmitting = true);
-    try {
-      await FirebaseFirestore.instance.collection('leave_applications').add({
-        'employeeId'  : widget.employeeId,
-        'employeeName': widget.employeeName,
-        'leaveType'   : _selectedLeaveType,
-        'startDate'   : _startDate?.toIso8601String(),
-        'endDate'     : _endDate?.toIso8601String(),
-        'days'        : _leaveDays,
-<<<<<<< HEAD
-        'hours'       : _leaveHours,
-        'reason'      : _reasonCtrl.text.trim(),
-        'status'      : 'pending',
-        'certified'   : _isCertified,
-=======
-        'reason'      : _reasonCtrl.text.trim(),
-        'status'      : 'pending',
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-        'createdAt'   : FieldValue.serverTimestamp(),
-      });
-      if (!mounted) return;
-
-<<<<<<< HEAD
-=======
-      // Show success dialog
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-      showDialog(
-        barrierDismissible: false,
-        context: context,
-        builder: (ctx) => AlertDialog(
-<<<<<<< HEAD
-          backgroundColor: _LightColors.card,
-=======
-          backgroundColor: AppColors.card,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-<<<<<<< HEAD
-                color: _LightColors.orange.withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.check_circle_rounded,
-                  color: _LightColors.orange, size: 40),
-            ),
-            const SizedBox(height: 16),
-            const Text('Successfully added',
-                style: TextStyle(color: _LightColors.textPrimary,
-                    fontSize: 18, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 8),
-            const Text('Just wait for the HR Approval...',
-                style: TextStyle(color: _LightColors.textSecondary, fontSize: 13)),
-=======
-                color: AppColors.orange.withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.check_circle_rounded,
-                  color: AppColors.orange, size: 40),
-            ),
-            const SizedBox(height: 16),
-            const Text('Successfully added',
-                style: TextStyle(color: AppColors.textPrimary,
-                    fontSize: 18, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 8),
-            const Text('Just wait for the HR Approval...',
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-<<<<<<< HEAD
-                  backgroundColor: _LightColors.orange,
-=======
-                  backgroundColor: AppColors.orange,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                onPressed: () {
-                  Navigator.of(ctx).pop();
-<<<<<<< HEAD
-                  Navigator.of(context).pop();
-=======
-                  Navigator.of(context).pop(); // Exit screen
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                },
-                child: const Text('OK', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-              ),
-            ),
-          ]),
-        ),
-      );
-
-    } catch (e) {
-      if (mounted) {
-<<<<<<< HEAD
-        _showToast('Failed to submit. Try again.', _LightColors.error);
-=======
-        _showToast('Failed to submit. Try again.', AppColors.error);
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-        setState(() => _isSubmitting = false);
+      if (widget.onGoHome != null) {
+        widget.onGoHome!();
+      } else if (Navigator.canPop(context)) {
+        Navigator.pop(context);
       }
     }
   }
 
-  Future<void> _saveAsDraft() async {
-<<<<<<< HEAD
-    _showToast('Draft saved locally', _LightColors.info);
-=======
-    // Mock draft save
-    _showToast('Draft saved locally', AppColors.info);
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+  void _openLeaveApplicationForm() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LeaveApplicationFormScreen(
+          employeeId: widget.employeeId,
+          employeeName: widget.employeeName,
+          onBack: () {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _submitApplication() async {
+    if (!_isCertified) {
+      _showToast('Please certify that all information is correct', _T.warning);
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      // Check remaining balance first
+      final ok = await _hasEnoughBalance();
+      if (!ok) {
+        setState(() => _isSubmitting = false);
+        return;
+      }
+
+      await FirebaseFirestore.instance
+          .collection('leave_applications')
+          .add({
+        'employeeId': widget.employeeId,
+        'employeeName': widget.employeeName,
+        'leaveType': _selectedLeaveType,
+        'startDate': _startDate?.toIso8601String(),
+        'endDate': _endDate?.toIso8601String(),
+        'days': _leaveDays,
+        'reason': _reasonCtrl.text.trim(),
+        'status': 'pending',
+        'certified': _isCertified,
+        'createdAt': FieldValue.serverTimestamp(),
+      }).timeout(const Duration(seconds: 30));
+
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      _showSuccessDialog();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+        _showToast('Failed to submit: ${e.toString()}', _T.error);
+      }
+    }
+  }
+
+  void _showSuccessDialog() {
+    showDialog(
+      barrierDismissible: false,
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        contentPadding: EdgeInsets.zero,
+        content: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            gradient: _T.brandGradient,
+            borderRadius: BorderRadius.circular(_T.r20),
+            border: Border.all(color: const Color(0xFF27272A), width: 1.15),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 40,
+                spreadRadius: -8,
+                offset: const Offset(0, 20),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 112,
+                height: 112,
+                decoration: BoxDecoration(
+                  color: _T.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _T.neonGreen, width: 3),
+                ),
+                child: Icon(Icons.check_circle_rounded,
+                    color: _T.neonGreen, size: 72),
+              ),
+              const SizedBox(height: 24),
+              const Text('Successfully added',
+                  style: TextStyle(
+                      color: _T.white,
+                      fontSize: 30,
+                      fontWeight: FontWeight.w500,
+                      height: 1.2),
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              const Text('Just wait for the HR Approval...',
+                  style: TextStyle(
+                      color: Color(0xFFDFDFDF), fontSize: 14, height: 1.5),
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _T.white,
+                    foregroundColor: _T.orange,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(_T.r12)),
+                    elevation: 0,
+                    side: BorderSide(color: _T.orange.withValues(alpha: 0.3)),
+                  ),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    widget.onGoHome?.call();
+                  },
+                  child: const Text('OK',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w700, fontSize: 16)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _saveAsDraft() {
+    _showToast('Draft saved locally', _T.info);
   }
 
   void _showToast(String msg, Color color) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg,
-          style: const TextStyle(
-<<<<<<< HEAD
-              color: _LightColors.white,
-=======
-              color: AppColors.white,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-              fontWeight: FontWeight.w600)),
-      backgroundColor: color.withOpacity(0.9),
+          style:
+          const TextStyle(color: _T.white, fontWeight: FontWeight.w600)),
+      backgroundColor: color.withValues(alpha: 0.9),
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_T.r12)),
       margin: const EdgeInsets.all(16),
-      duration: const Duration(seconds: 2),
+      duration: const Duration(seconds: 3),
     ));
   }
 
-<<<<<<< HEAD
-  // ── Build ──────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
     return Scaffold(
-      backgroundColor: _LightColors.background,
-=======
-  // ── Build ──────────────────────────────────────────────────────────────────
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.primaryDeep,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+      backgroundColor: tc.bg,
       body: SafeArea(
-        child: Column(children: [
-          _buildHeader(),
-          Expanded(
-            child: FadeTransition(
-              opacity: _fadeAnim,
+        child: Column(
+          children: [
+            _buildHeader(tc),
+            Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                child: Column(children: [
-                  const SizedBox(height: 20),
-                  _buildHeroCard(),
-                  const SizedBox(height: 20),
-                  _buildStepper(),
-                  const SizedBox(height: 24),
-                  _buildStepContent(),
-                  const SizedBox(height: 24),
-                  _buildActions(),
-                ]),
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 12),
+                    _buildHeroCard(),
+                    const SizedBox(height: 20),
+                    _buildStepper(tc),
+                    const SizedBox(height: 24),
+                    _buildStepContent(tc),
+                    const SizedBox(height: 24),
+                    _buildActions(tc),
+                  ],
+                ),
               ),
             ),
-          ),
-        ]),
+          ],
+        ),
       ),
     );
   }
 
-<<<<<<< HEAD
-  // ── Header ────────────────────────────────────────────────────────
-=======
-  // ── Header ─────────────────────────────────────────────────────────────────
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-  Widget _buildHeader() {
+  Widget _buildHeader(_ThemeColors tc) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-      child: Row(children: [
-        GestureDetector(
-          onTap: _goBack,
-          child: Container(
-            width: 38, height: 38,
-            decoration: BoxDecoration(
-<<<<<<< HEAD
-              color: _LightColors.card,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _LightColors.cardBorder),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: _goBack,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: tc.bg,
+                borderRadius: BorderRadius.circular(_T.r12),
+                border: Border.all(color: tc.darkBorder, width: 1.15),
+              ),
+              child: Icon(Icons.chevron_left_rounded,
+                  color: tc.textGray, size: 22),
             ),
-            child: const Icon(Icons.chevron_left_rounded,
-                color: _LightColors.textSecondary, size: 22),
-=======
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AppColors.cardBorder),
-            ),
-            child: const Icon(Icons.chevron_left_rounded,
-                color: AppColors.textSecondary, size: 22),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
           ),
-        ),
-        const SizedBox(width: 14),
-        const Text('Apply for Leave',
-            style: TextStyle(
-<<<<<<< HEAD
-              color: _LightColors.textPrimary,
-=======
-              color: AppColors.textPrimary,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.3,
-            )),
-      ]),
-    );
-  }
-
-<<<<<<< HEAD
-  // ── Hero Card ─────────────────────────────────────────────────────
-=======
-  // ── Hero Card ──────────────────────────────────────────────────────────────
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-  Widget _buildHeroCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-<<<<<<< HEAD
-        gradient: _LightColors.gradientOrange,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: _LightColors.orange.withOpacity(0.25),
-=======
-        gradient: AppColors.gradientOrange,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.orange.withOpacity(0.35),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-            blurRadius: 20,
-            offset: const Offset(0, 8),
+          const SizedBox(width: 12),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Itinerary',
+                  style: TextStyle(
+                      color: tc.textBlack,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3)),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: _openLeaveApplicationForm,
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    gradient: _T.brandGradient,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: _T.orangeBorder, width: 1),
+                  ),
+                  child: const Icon(Icons.add_rounded,
+                      color: Colors.white, size: 18),
+                ),
+              ),
+            ],
           ),
         ],
       ),
-      child: Row(children: [
-        Container(
-          width: 48, height: 48,
-          decoration: BoxDecoration(
-<<<<<<< HEAD
-            color: Colors.black.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white.withOpacity(0.25)),
-=======
-            color: Colors.black.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white.withOpacity(0.2)),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-          ),
-          child: const Icon(Icons.event_note_rounded,
-              color: Colors.white, size: 24),
-        ),
-        const SizedBox(width: 14),
-        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('SELF SERVICE',
-              style: TextStyle(
-<<<<<<< HEAD
-                color: Colors.white.withOpacity(0.85),
-=======
-                color: Colors.white.withOpacity(0.7),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.4,
-              )),
-          const SizedBox(height: 2),
-          const Text('Apply for Leave',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.3,
-              )),
-        ]),
-      ]),
     );
   }
 
-<<<<<<< HEAD
-  // ── Stepper ──────────────────────────────────────────────────────
-=======
-  // ── Stepper ────────────────────────────────────────────────────────────────
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-  Widget _buildStepper() {
+  Widget _buildHeroCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: _T.brandGradient,
+        borderRadius: BorderRadius.circular(_T.r16),
+        border: Border.all(color: _T.orangeBorder, width: 1.15),
+        boxShadow: [
+          BoxShadow(
+              color: _T.orange.withValues(alpha: 0.25),
+              blurRadius: 20,
+              offset: const Offset(0, 8)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(_T.r14),
+              border:
+              Border.all(color: Colors.white.withValues(alpha: 0.25)),
+            ),
+            child: const Icon(Icons.event_note_rounded,
+                color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('SELF SERVICE',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.4,
+                  )),
+              const SizedBox(height: 2),
+              const Text('Apply for Leave',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                  )),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepper(_ThemeColors tc) {
     const steps = ['Type', 'Details', 'Submit'];
     return Row(
       children: List.generate(steps.length * 2 - 1, (i) {
@@ -579,11 +1475,8 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
               height: 2,
               margin: const EdgeInsets.symmetric(horizontal: 4),
               decoration: BoxDecoration(
-<<<<<<< HEAD
-                color: passed ? _LightColors.orange : _LightColors.cardBorder,
-=======
-                color: passed ? AppColors.orange : AppColors.cardBorder,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+                color:
+                passed ? _T.orange : tc.darkBorder.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(1),
               ),
             ),
@@ -591,308 +1484,209 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
         }
         final stepIndex = i ~/ 2;
         final active = _currentStep == stepIndex;
-        final done   = _currentStep > stepIndex;
-        return Column(mainAxisSize: MainAxisSize.min, children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            width: 32, height: 32,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: done
-<<<<<<< HEAD
-                  ? _LightColors.orange
-                  : active
-                  ? Colors.transparent
-                  : _LightColors.surface,
-              border: Border.all(
-                color: done || active ? _LightColors.orange : _LightColors.cardBorder,
-=======
-                  ? AppColors.orange
-                  : active
-                  ? Colors.transparent
-                  : AppColors.surface,
-              border: Border.all(
-                color: done || active ? AppColors.orange : AppColors.cardBorder,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                width: active ? 2 : 1.5,
+        final done = _currentStep > stepIndex;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: done
+                    ? _T.orange
+                    : active
+                    ? Colors.transparent
+                    : tc.cardFill,
+                border: Border.all(
+                  color: done || active
+                      ? _T.orange
+                      : tc.darkBorder.withValues(alpha: 0.2),
+                  width: active ? 2 : 1.5,
+                ),
+                boxShadow: active || done
+                    ? [
+                  BoxShadow(
+                      color: _T.orange.withValues(alpha: 0.3),
+                      blurRadius: 10)
+                ]
+                    : [],
               ),
-              boxShadow: active || done
-                  ? [BoxShadow(
-<<<<<<< HEAD
-                color: _LightColors.orange.withOpacity(0.3),
-=======
-                color: AppColors.orange.withOpacity(0.4),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                blurRadius: 10,
-              )]
-                  : [],
+              child: Center(
+                child: done
+                    ? const Icon(Icons.check_rounded,
+                    color: Colors.white, size: 16)
+                    : Text('${stepIndex + 1}',
+                    style: TextStyle(
+                      color: active ? _T.orange : tc.textMuted,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    )),
+              ),
             ),
-            child: Center(
-              child: done
-                  ? const Icon(Icons.check_rounded,
-                  color: Colors.white, size: 16)
-                  : Text('${stepIndex + 1}', style: TextStyle(
-<<<<<<< HEAD
-                color: active ? _LightColors.orange : _LightColors.textMuted,
-=======
-                color: active ? AppColors.orange : AppColors.textMuted,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-              )),
+            const SizedBox(height: 6),
+            Text(
+              steps[stepIndex],
+              style: TextStyle(
+                color: active
+                    ? tc.textBlack
+                    : done
+                    ? _T.orange
+                    : tc.textMuted,
+                fontSize: 11,
+                fontWeight: active ? FontWeight.w700 : FontWeight.normal,
+              ),
             ),
-          ),
-          const SizedBox(height: 6),
-          Text(steps[stepIndex], style: TextStyle(
-            color: active
-<<<<<<< HEAD
-                ? _LightColors.textPrimary
-                : done
-                ? _LightColors.orange
-                : _LightColors.textMuted,
-=======
-                ? AppColors.textPrimary
-                : done
-                ? AppColors.orange
-                : AppColors.textMuted,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-            fontSize: 11,
-            fontWeight: active ? FontWeight.w700 : FontWeight.normal,
-          )),
-        ]);
+          ],
+        );
       }),
     );
   }
 
-<<<<<<< HEAD
-  // ── Step Content ─────────────────────────────────────────────────
-  Widget _buildStepContent() {
+  Widget _buildStepContent(_ThemeColors tc) {
     switch (_currentStep) {
-      case 0: return _buildStep1();
-      case 1: return _buildStep2(); // ✅ Step 2 = Routing Summary + Duration + Justification (orange gradient)
-=======
-  // ── Step Content ───────────────────────────────────────────────────────────
-  Widget _buildStepContent() {
-    switch (_currentStep) {
-      case 0: return _buildStep1();
-      case 1: return _buildStep2();
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-      case 2: return _buildStep3();
-      default: return const SizedBox();
+      case 0:
+        return _buildStep1(tc);
+      case 1:
+        return _buildStep2(tc);
+      case 2:
+        return _buildStep3(tc);
+      default:
+        return const SizedBox();
     }
   }
 
-<<<<<<< HEAD
-  // ── STEP 1: Select Leave Type ────────────────────────────────────
-=======
-  // STEP 1: Select Leave Type
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-  Widget _buildStep1() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('SELECT LEAVE TYPE',
-          style: TextStyle(
-<<<<<<< HEAD
-            color: _LightColors.textMuted,
-=======
-            color: AppColors.textMuted,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.4,
-          )),
-      const SizedBox(height: 14),
-      GridView.count(
-        crossAxisCount: 3,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        childAspectRatio: 1.15,
-        children: _leaveTypes.map((lt) {
-          final sel = _selectedLeaveType == lt.code;
-          return GestureDetector(
-            onTap: () => setState(() => _selectedLeaveType = lt.code),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              decoration: BoxDecoration(
-<<<<<<< HEAD
-                gradient: sel ? _LightColors.gradientOrange : null,
-                color: sel ? null : _LightColors.card,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: sel ? _LightColors.orange : _LightColors.cardBorder,
-=======
-                gradient: sel ? AppColors.gradientOrange : null,
-                color: sel ? null : AppColors.card,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: sel
-                      ? AppColors.orange
-                      : AppColors.cardBorder,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                  width: sel ? 1.5 : 1,
-                ),
-                boxShadow: sel
-                    ? [BoxShadow(
-<<<<<<< HEAD
-                  color: _LightColors.orange.withOpacity(0.3),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                )]
-                    : [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.03),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-=======
-                  color: AppColors.orange.withOpacity(0.35),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                )]
-                    : [],
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(lt.icon,
-<<<<<<< HEAD
-                      color: sel ? Colors.white : _LightColors.textMuted,
-                      size: 22),
-                  const SizedBox(height: 6),
-                  Text(lt.code, style: TextStyle(
-                    color: sel ? Colors.white : _LightColors.textPrimary,
-=======
-                      color: sel
-                          ? Colors.white
-                          : AppColors.textMuted,
-                      size: 22),
-                  const SizedBox(height: 6),
-                  Text(lt.code, style: TextStyle(
-                    color: sel
-                        ? Colors.white
-                        : AppColors.textPrimary,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                    fontSize: 16,
-                    fontWeight: FontWeight.w900,
-                  )),
-                  const SizedBox(height: 2),
-                  Text(lt.label, style: TextStyle(
-<<<<<<< HEAD
-                    color: sel ? Colors.white.withOpacity(0.85) : _LightColors.textSecondary,
-=======
-                    color: sel
-                        ? Colors.white.withOpacity(0.8)
-                        : AppColors.textSecondary,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  )),
-                ],
-              ),
-            ),
-          );
-        }).toList(),
-      ),
-    ]);
-  }
-
-<<<<<<< HEAD
-  // ── STEP 2: Routing Summary + Duration Details + Justification ──
-  // ✅ Lahat ng cards dito ay orange gradient (tulad ng HTML)
-  Widget _buildStep2() {
+  Widget _buildStep1(_ThemeColors tc) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Routing Summary (Orange Gradient) ──
-        _buildOrangeCard(
-          icon: Icons.timeline_rounded,
-          title: 'ROUTING SUMMARY',
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
+        Text('SELECT LEAVE TYPE',
+            style: TextStyle(
+              color: tc.textMuted,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.4,
+            )),
+        const SizedBox(height: 14),
+        GridView.count(
+          crossAxisCount: 3,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+          childAspectRatio: 1.15,
+          children: _leaveTypes.map((lt) {
+            final sel = _selectedLeaveType == lt.code;
+            return GestureDetector(
+              onTap: () => setState(() => _selectedLeaveType = lt.code),
+              behavior: HitTestBehavior.opaque,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
                 decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                  image: const DecorationImage(
-                    image: NetworkImage('https://i.pravatar.cc/150?u=a042581f4e29026704d'),
-                    fit: BoxFit.cover,
+                  gradient: sel ? _T.brandGradient : null,
+                  color: sel ? null : tc.cardBg,
+                  borderRadius: BorderRadius.circular(_T.r14),
+                  border: Border.all(
+                    color: sel
+                        ? _T.orange
+                        : tc.darkBorder.withValues(alpha: 0.15),
+                    width: sel ? 1.5 : 1,
                   ),
+                  boxShadow: sel
+                      ? [
+                    BoxShadow(
+                        color: _T.orange.withValues(alpha: 0.3),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4))
+                  ]
+                      : [
+                    BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.03),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2))
+                  ],
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text('Approved By',
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(lt.icon,
+                        color: sel ? Colors.white : tc.textMuted, size: 22),
+                    const SizedBox(height: 6),
+                    Text(lt.code,
                         style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700)),
-                    SizedBox(height: 2),
-                    Text('Ra Coma (Dept. Head)',
+                          color: sel ? Colors.white : tc.textBlack,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        )),
+                    const SizedBox(height: 2),
+                    Text(lt.label,
                         style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w400)),
+                          color: sel
+                              ? Colors.white.withValues(alpha: 0.85)
+                              : tc.textGray,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        )),
                   ],
                 ),
               ),
-            ],
-          ),
+            );
+          }).toList(),
         ),
-        const SizedBox(height: 16),
+      ],
+    );
+  }
 
-        // ── Duration Details (Orange Gradient) ──
-        _buildOrangeCard(
+  Widget _buildStep2(_ThemeColors tc) {
+    return Column(
+      children: [
+        _buildWhiteCard(
+          tc: tc,
           icon: Icons.calendar_today_rounded,
           title: 'Duration Details',
           child: Column(
             children: [
-              // Start Date
-              _buildOrangeDatePicker('Start Date', _startDate, () => _pickDate(true)),
+              _buildDatePicker(
+                  tc, 'Start Date', _startDate, () => _pickDate(true)),
               const SizedBox(height: 12),
-
-              // End Date
-              _buildOrangeDatePicker('End Date', _endDate, () => _pickDate(false)),
+              _buildDatePicker(
+                  tc, 'End Date', _endDate, () => _pickDate(false)),
               const SizedBox(height: 16),
-
-              // Total Days & Total Hours (row)
               Row(
                 children: [
-                  Expanded(child: _buildOrangeInfoField('Total Days', '${_leaveDays.toStringAsFixed(1)}')),
+                  Expanded(
+                      child: _buildInfoField(
+                          tc, 'Total Days', '${_leaveDays.toStringAsFixed(0)}')),
                   const SizedBox(width: 12),
-                  Expanded(child: _buildOrangeInfoField('Total Hours', '${_leaveHours.toStringAsFixed(1)}')),
+                  Expanded(
+                      child: _buildInfoField(tc, 'Total Hours',
+                          '${(_leaveDays * 8).toStringAsFixed(1)}')),
                 ],
               ),
             ],
           ),
         ),
         const SizedBox(height: 16),
-
-        // ── Justification (Orange Gradient) ──
-        _buildOrangeCard(
+        _buildWhiteCard(
+          tc: tc,
           icon: Icons.edit_note_rounded,
           title: 'Justification',
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.3),
+              color: tc.cardFill,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white.withOpacity(0.2)),
+              border: Border.all(color: tc.darkBorder.withValues(alpha: 0.15)),
             ),
             child: TextField(
               controller: _reasonCtrl,
               maxLines: 4,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-              decoration: const InputDecoration(
+              style: TextStyle(color: tc.textBlack, fontSize: 14),
+              decoration: InputDecoration(
                 hintText: 'Enter reason for leave...',
-                hintStyle: TextStyle(color: Colors.white54, fontSize: 14),
+                hintStyle: TextStyle(color: tc.textMuted, fontSize: 14),
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.zero,
               ),
@@ -903,202 +1697,100 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
     );
   }
 
-  // ── Orange Card Widget (para sa Step 2) ──
-  Widget _buildOrangeCard({
-    required IconData icon,
-    required String title,
-    required Widget child,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFFF8A00), Color(0xFFFF6B00), Color(0xFF281D15)],
-          stops: [0.0, 0.33, 1.0],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Color(0xFFFFA500), width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: Colors.white, size: 20),
-              const SizedBox(width: 10),
-              Text(title,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600)),
-            ],
-          ),
-          const SizedBox(height: 16),
-          child,
-        ],
-      ),
-    );
-  }
-
-  // ── Orange Date Picker ──
-  Widget _buildOrangeDatePicker(String label, DateTime? value, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600)),
-          const SizedBox(height: 6),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.3),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withOpacity(0.2)),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(_fmt(value),
-                      style: TextStyle(
-                        color: value != null ? Colors.white : Colors.white54,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      )),
-                ),
-                const Icon(Icons.calendar_today_rounded,
-                    color: Colors.white54, size: 18),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── Orange Info Field ──
-  Widget _buildOrangeInfoField(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 12,
-                fontWeight: FontWeight.w600)),
-        const SizedBox(height: 6),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-          decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.3),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white.withOpacity(0.2)),
-          ),
-          child: Text(value,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500)),
-        ),
-      ],
-    );
-  }
-
-  // ── STEP 3: Review & Submit ──────────────────────────────────────
-  Widget _buildStep3() {
+  Widget _buildStep3(_ThemeColors tc) {
     return Column(
       children: [
-        // ── Leave Information ──
         _buildWhiteCard(
+          tc: tc,
           title: 'Leave Information',
           editButton: true,
           onEdit: () => setState(() => _currentStep = 0),
-          child: Column(children: [
-            _infoRow('Type of Leave', _leaveDisplay),
-            const SizedBox(height: 12),
-            _infoRow('Duration', _durationDisplay),
-            const SizedBox(height: 12),
-            _infoRow('Dates', _datesDisplay),
-            const SizedBox(height: 12),
-            _infoRow('Reason', _reasonDisplay, isMultiLine: true),
-          ]),
+          child: Column(
+            children: [
+              _infoRow(tc, 'Type of Leave', _leaveDisplay),
+              const SizedBox(height: 12),
+              _infoRow(tc, 'Duration', _durationDisplay),
+              const SizedBox(height: 12),
+              _infoRow(tc, 'Dates', _datesDisplay),
+              const SizedBox(height: 12),
+              _infoRow(tc, 'Reason', _reasonDisplay, isMultiLine: true),
+            ],
+          ),
         ),
         const SizedBox(height: 16),
-
-        // ── Reliever Information ──
         _buildWhiteCard(
-          title: 'Reliever Information',
+          tc: tc,
+          title: 'Approver Information',
           editButton: true,
           onEdit: () => setState(() => _currentStep = 1),
-          child: Row(children: [
-            CircleAvatar(
-              radius: 28,
-              backgroundColor: _LightColors.surface,
-              backgroundImage: const NetworkImage('https://i.pravatar.cc/150?u=a042581f4e29026704d'),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text('Juliana Bantang',
+          child: Row(
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: tc.cardFill,
+                  border: Border.all(
+                      color: tc.darkBorder.withValues(alpha: 0.2), width: 2),
+                ),
+                child: Center(
+                  child: Text('HR',
                       style: TextStyle(
-                          color: _LightColors.textPrimary,
+                          color: tc.textGray,
                           fontSize: 16,
-                          fontWeight: FontWeight.w700)),
-                  Text('Logistics Department',
-                      style: TextStyle(
-                          color: _LightColors.textSecondary,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600)),
-                ],
+                          fontWeight: FontWeight.w800)),
+                ),
               ),
-            ),
-            const Icon(Icons.chevron_right_rounded, color: _LightColors.textMuted),
-          ]),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('HR',
+                        style: TextStyle(
+                            color: tc.textBlack,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700)),
+                    Text('Human Resources',
+                        style: TextStyle(
+                            color: tc.textGray,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: tc.textMuted),
+            ],
+          ),
         ),
         const SizedBox(height: 16),
-
-        // ── Approval Workflow ──
         _buildWhiteCard(
+          tc: tc,
           title: 'Approval Workflow',
           editButton: false,
-          child: Column(children: [
-            _workflowStep(
-              stage: 'Stage 1',
-              role: 'Immediate Supervisor',
-              status: 'David Henderson (Pending)',
-              isComplete: false,
-            ),
-            const SizedBox(height: 16),
-            _workflowStep(
-              stage: 'Final Stage',
-              role: 'Department Head',
-              status: 'Automatic routing upon Stage 1 approval',
-              isComplete: false,
-              isLast: true,
-            ),
-          ]),
+          child: Column(
+            children: [
+              _workflowStep(
+                tc: tc,
+                stage: 'Stage 1',
+                role: 'Immediate Supervisor',
+                status: 'David Henderson (Pending)',
+                isComplete: false,
+              ),
+              const SizedBox(height: 16),
+              _workflowStep(
+                tc: tc,
+                stage: 'Final Stage',
+                role: 'Department Head',
+                status: 'Automatic routing upon Stage 1 approval',
+                isComplete: false,
+                isLast: true,
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 16),
-
-        // ── Certification ──
         Container(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(
@@ -1106,15 +1798,18 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
             children: [
               GestureDetector(
                 onTap: () => setState(() => _isCertified = !_isCertified),
+                behavior: HitTestBehavior.opaque,
                 child: Container(
                   width: 24,
                   height: 24,
                   margin: const EdgeInsets.only(top: 2),
                   decoration: BoxDecoration(
-                    color: _isCertified ? _LightColors.orange : _LightColors.card,
+                    color: _isCertified ? _T.orange : tc.bg,
                     borderRadius: BorderRadius.circular(4),
                     border: Border.all(
-                      color: _isCertified ? _LightColors.orange : _LightColors.cardBorder,
+                      color: _isCertified
+                          ? _T.orange
+                          : tc.darkBorder.withValues(alpha: 0.3),
                       width: 1.5,
                     ),
                   ),
@@ -1124,14 +1819,11 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
                 ),
               ),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                 child: Text(
                   'I certify that all information provided above is true and that my reliever has been fully briefed on my pending tasks.',
                   style: TextStyle(
-                    color: _LightColors.textSecondary,
-                    fontSize: 12,
-                    height: 1.6,
-                  ),
+                      color: tc.textGray, fontSize: 12, height: 1.6),
                 ),
               ),
             ],
@@ -1141,10 +1833,11 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
     );
   }
 
-  // ── White Card (para sa Step 3) ──
   Widget _buildWhiteCard({
+    required _ThemeColors tc,
     required String title,
     required Widget child,
+    IconData? icon,
     bool editButton = false,
     VoidCallback? onEdit,
   }) {
@@ -1152,15 +1845,15 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: _LightColors.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _LightColors.cardBorder),
+        color: tc.cardBg,
+        borderRadius: BorderRadius.circular(_T.r16),
+        border:
+        Border.all(color: tc.darkBorder.withValues(alpha: 0.15), width: 1.15),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 6,
+              offset: const Offset(0, 2)),
         ],
       ),
       child: Column(
@@ -1169,17 +1862,26 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(title,
-                  style: const TextStyle(
-                      color: _LightColors.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700)),
+              Row(
+                children: [
+                  if (icon != null) ...[
+                    Icon(icon, color: _T.orange, size: 20),
+                    const SizedBox(width: 10),
+                  ],
+                  Text(title,
+                      style: TextStyle(
+                          color: tc.textBlack,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
               if (editButton && onEdit != null)
                 GestureDetector(
                   onTap: onEdit,
+                  behavior: HitTestBehavior.opaque,
                   child: const Text('Edit',
                       style: TextStyle(
-                          color: _LightColors.orange,
+                          color: _T.orange,
                           fontSize: 12,
                           fontWeight: FontWeight.w600)),
                 ),
@@ -1192,40 +1894,117 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
     );
   }
 
-  Widget _infoRow(String label, String value, {bool isMultiLine = false}) {
+  Widget _buildDatePicker(
+      _ThemeColors tc, String label, DateTime? value, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: TextStyle(
+                  color: tc.textMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            decoration: BoxDecoration(
+              color: tc.cardFill,
+              borderRadius: BorderRadius.circular(_T.r12),
+              border: Border.all(color: tc.darkBorder.withValues(alpha: 0.15)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _fmt(value),
+                    style: TextStyle(
+                      color: value != null ? tc.textBlack : tc.textMuted,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                Icon(Icons.calendar_today_rounded,
+                    color: tc.textMuted, size: 18),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoField(_ThemeColors tc, String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: TextStyle(
+                color: tc.textMuted,
+                fontSize: 12,
+                fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          decoration: BoxDecoration(
+            color: tc.cardFill,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: tc.darkBorder.withValues(alpha: 0.15)),
+          ),
+          child: Text(value,
+              style: TextStyle(
+                  color: tc.textBlack,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500)),
+        ),
+      ],
+    );
+  }
+
+  Widget _infoRow(_ThemeColors tc, String label, String value,
+      {bool isMultiLine = false}) {
     return Row(
-      crossAxisAlignment: isMultiLine ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+      crossAxisAlignment:
+      isMultiLine ? CrossAxisAlignment.start : CrossAxisAlignment.center,
       children: [
         SizedBox(
           width: 100,
           child: Text(label,
-              style: const TextStyle(
-                  color: _LightColors.textMuted,
+              style: TextStyle(
+                  color: tc.textMuted,
                   fontSize: 12,
                   fontWeight: FontWeight.w600)),
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: Text(value,
-              style: const TextStyle(
-                color: _LightColors.textPrimary,
+          child: Text(
+            value,
+            style: TextStyle(
+                color: tc.textBlack,
                 fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: isMultiLine ? 3 : 1,
-              overflow: TextOverflow.ellipsis),
+                fontWeight: FontWeight.w600),
+            maxLines: isMultiLine ? 3 : 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
       ],
     );
   }
 
   Widget _workflowStep({
+    required _ThemeColors tc,
     required String stage,
     required String role,
     required String status,
     required bool isComplete,
     bool isLast = false,
   }) {
+    final int stepNumber = stage == 'Stage 1' ? 1 : 2;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1236,18 +2015,20 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
               height: 32,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: isComplete ? _LightColors.orange : _LightColors.surface,
+                color: isComplete ? _T.orange : tc.cardFill,
                 border: Border.all(
-                  color: isComplete ? _LightColors.orange : _LightColors.cardBorder,
+                  color: isComplete
+                      ? _T.orange
+                      : tc.darkBorder.withValues(alpha: 0.15),
                   width: 2,
                 ),
               ),
               child: isComplete
                   ? const Icon(Icons.check, color: Colors.white, size: 16)
                   : Center(
-                child: Text('${_workflowStepIndex(stage)}',
-                    style: const TextStyle(
-                        color: _LightColors.textSecondary,
+                child: Text('$stepNumber',
+                    style: TextStyle(
+                        color: tc.textGray,
                         fontSize: 12,
                         fontWeight: FontWeight.w700)),
               ),
@@ -1256,7 +2037,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
               SizedBox(
                 height: 32,
                 child: VerticalDivider(
-                  color: _LightColors.cardBorder,
+                  color: tc.darkBorder.withValues(alpha: 0.15),
                   width: 2,
                   thickness: 2,
                   indent: 4,
@@ -1271,19 +2052,19 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(stage,
-                  style: const TextStyle(
-                      color: _LightColors.textMuted,
+                  style: TextStyle(
+                      color: tc.textMuted,
                       fontSize: 11,
                       fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
               Text(role,
-                  style: const TextStyle(
-                      color: _LightColors.textPrimary,
+                  style: TextStyle(
+                      color: tc.textBlack,
                       fontSize: 14,
                       fontWeight: FontWeight.w700)),
               Text(status,
-                  style: const TextStyle(
-                      color: _LightColors.textSecondary,
+                  style: TextStyle(
+                      color: tc.textGray,
                       fontSize: 12,
                       fontWeight: FontWeight.w400)),
             ],
@@ -1293,398 +2074,117 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen>
     );
   }
 
-  int _workflowStepIndex(String stage) {
-    switch (stage) {
-      case 'Stage 1': return 1;
-      case 'Final Stage': return 2;
-      default: return 0;
-    }
-  }
-
-  // ── Actions ──────────────────────────────────────────────────────
-=======
-  // STEP 2: Details (Dates, Reason, Routing Summary)
-  Widget _buildStep2() {
-    final leaveLabel = _selectedLeaveType != null
-        ? _leaveTypes.firstWhere((l) => l.code == _selectedLeaveType).label
-        : '';
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // Routing Summary Card (As seen in image)
-      Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.card,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.cardBorder),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            const Icon(Icons.timeline_rounded, color: AppColors.orange, size: 18),
-            const SizedBox(width: 8),
-            const Text('ROUTING SUMMARY',
-                style: TextStyle(color: AppColors.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
-          ]),
-          const SizedBox(height: 12),
-          Row(children: [
-            const Icon(Icons.check_circle_rounded, color: AppColors.green, size: 16),
-            const SizedBox(width: 6),
-            const Expanded(
-              child: Text('Approved By Ra Coma (Dept. Head)',
-                  style: TextStyle(color: AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600)),
-            ),
-          ]),
-        ]),
-      ),
-      const SizedBox(height: 20),
-
-      // Duration Details
-      const Text('DURATION DETAILS',
-          style: TextStyle(
-            color: AppColors.textMuted,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.4,
-          )),
-      const SizedBox(height: 12),
-
-      // Leave Type Label
-      if(leaveLabel.isNotEmpty) ...[
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: AppColors.orange.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text('$leaveLabel ($_selectedLeaveType)', style: const TextStyle(color: AppColors.orange, fontSize: 12, fontWeight: FontWeight.w700)),
-        ),
-        const SizedBox(height: 12),
-      ],
-
-      // Date Pickers
-      Row(children: [
-        Expanded(child: _datePicker('Start Date', _startDate, () => _pickDate(true))),
-        const SizedBox(width: 12),
-        Expanded(child: _datePicker('End Date', _endDate, () => _pickDate(false))),
-      ]),
-      const SizedBox(height: 12),
-
-      // Justification (Reason)
-      const Text('JUSTIFICATION',
-          style: TextStyle(
-            color: AppColors.textMuted,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.4,
-          )),
-      const SizedBox(height: 12),
-      Container(
-        decoration: BoxDecoration(
-          color: AppColors.card,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.cardBorder),
-        ),
-        child: TextField(
-          controller: _reasonCtrl,
-          maxLines: 4,
-          style: const TextStyle(
-              color: AppColors.textPrimary, fontSize: 14),
-          decoration: const InputDecoration(
-            hintText: 'Enter reason for leave...',
-            hintStyle: TextStyle(
-                color: AppColors.textMuted, fontSize: 13),
-            border: InputBorder.none,
-            contentPadding: EdgeInsets.all(16),
-          ),
-        ),
-      ),
-    ]);
-  }
-
-  // STEP 3: Review & Submit (Leaves & Reliever Info)
-  Widget _buildStep3() {
-    final leaveLabel = _selectedLeaveType != null
-        ? _leaveTypes.firstWhere((l) => l.code == _selectedLeaveType).label
-        : '—';
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('LEAVE INFORMATION',
-          style: TextStyle(
-            color: AppColors.textMuted,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.4,
-          )),
-      const SizedBox(height: 14),
-
-      // Summary Card
-      Container(
-        decoration: BoxDecoration(
-          color: AppColors.card,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.cardBorder),
-        ),
-        child: Column(children: [
-          _reviewRow(Icons.label_rounded, 'Type', '$leaveLabel ($_selectedLeaveType)'),
-          _divider(),
-          _reviewRow(Icons.calendar_today_rounded, 'Duration', '$_leaveDays Days'),
-          _divider(),
-          _reviewRow(Icons.date_range_rounded, 'Dates', '${_fmt(_startDate)} - ${_fmt(_endDate)}'),
-          _divider(),
-          _reviewRow(Icons.format_quote_rounded, 'Reason',
-              _reasonCtrl.text.trim().isEmpty ? '—' : _reasonCtrl.text.trim()),
-        ]),
-      ),
-
-      const SizedBox(height: 20),
-
-      // Reliever Information (As seen in image)
-      const Text('RELIEVER INFORMATION',
-          style: TextStyle(
-            color: AppColors.textMuted,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.4,
-          )),
-      const SizedBox(height: 12),
-      Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.card,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.cardBorder),
-        ),
-        child: Row(children: [
-          CircleAvatar(
-            backgroundColor: AppColors.surface,
-            backgroundImage: const NetworkImage('https://i.pravatar.cc/150?u=a042581f4e29026704d'), // Placeholder
-          ),
-          const SizedBox(width: 12),
-          Expanded(child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: const [
-              Text('Reliever Name', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-              SizedBox(height: 2),
-              Text('Juliana Bantang', style: TextStyle(color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w700)),
-              Text('Logistics Dept.', style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
-            ],
-          )),
-          const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted),
-        ]),
-      ),
-    ]);
-  }
-
-  // ── Widgets ────────────────────────────────────────────────────────────────
-  Widget _datePicker(String label, DateTime? value, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label,
-            style: const TextStyle(
-                color: AppColors.textMuted, fontSize: 10, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 6),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: value != null ? AppColors.orange.withOpacity(0.6) : AppColors.cardBorder,
-              width: 1,
-            ),
-          ),
-          child: Text(_fmt(value), style: TextStyle(
-            color: value != null ? AppColors.textPrimary : AppColors.textMuted,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          )),
-        ),
-      ]),
-    );
-  }
-
-  Widget _reviewRow(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(children: [
-        Icon(icon, color: AppColors.orange, size: 16),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
-                const SizedBox(height: 2),
-                Text(value,
-                    style: const TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 2),
-              ]),
-        ),
-      ]),
-    );
-  }
-
-  Widget _divider() => Container(
-    height: 1,
-    margin: const EdgeInsets.symmetric(horizontal: 16),
-    color: AppColors.cardBorder,
-  );
-
-  // ── Actions ────────────────────────────────────────────────────────────────
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-  Widget _buildActions() {
+  Widget _buildActions(_ThemeColors tc) {
     final isLastStep = _currentStep == 2;
 
-    return Column(children: [
-<<<<<<< HEAD
-      // Primary Action
-=======
-      // Primary Action (Continue or Submit)
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-      GestureDetector(
-        onTap: isLastStep
-            ? (_isSubmitting ? null : _submitApplication)
-            : _goNext,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          width: double.infinity,
-          height: 54,
-          decoration: BoxDecoration(
-<<<<<<< HEAD
-            gradient: _LightColors.gradientOrangeHot,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: _LightColors.orange.withOpacity(0.3),
-=======
-            gradient: AppColors.gradientOrangeHot,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.orange.withOpacity(0.35),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                blurRadius: 16,
-                offset: const Offset(0, 6),
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: isLastStep
+              ? (_isSubmitting ? null : _submitApplication)
+              : _goNext,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: double.infinity,
+            height: 54,
+            decoration: BoxDecoration(
+              gradient: _T.brandGradient,
+              borderRadius: BorderRadius.circular(_T.r16),
+              border: Border.all(color: _T.orangeBorder, width: 1.15),
+              boxShadow: [
+                BoxShadow(
+                    color: _T.orange.withValues(alpha: 0.3),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6)),
+              ],
+            ),
+            child: Center(
+              child: _isSubmitting
+                  ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                    color: Colors.white, strokeWidth: 2.5),
+              )
+                  : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    isLastStep ? 'Submit Application' : 'Continue',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(
+                    isLastStep
+                        ? Icons.send_rounded
+                        : Icons.arrow_forward_rounded,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-          child: Center(
-            child: _isSubmitting
-                ? const SizedBox(
-              width: 22, height: 22,
-              child: CircularProgressIndicator(
-                  color: Colors.white, strokeWidth: 2.5),
-            )
-                : Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(
-                isLastStep ? 'Submit Application' : 'Continue',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
+        ),
+        const SizedBox(height: 12),
+        if (!isLastStep) ...[
+          GestureDetector(
+            onTap: _goBack,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              width: double.infinity,
+              height: 50,
+              decoration: BoxDecoration(
+                color: tc.bg,
+                borderRadius: BorderRadius.circular(_T.r16),
+                border: Border.all(
+                    color: tc.darkBorder.withValues(alpha: 0.15), width: 1.15),
+              ),
+              child: Center(
+                child: Text('Back',
+                    style: TextStyle(
+                        color: tc.textGray,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ),
+        ] else ...[
+          GestureDetector(
+            onTap: _isSubmitting ? null : _saveAsDraft,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              width: double.infinity,
+              height: 50,
+              decoration: BoxDecoration(
+                color: tc.bg,
+                borderRadius: BorderRadius.circular(_T.r16),
+                border: Border.all(
+                    color: tc.darkBorder.withValues(alpha: 0.15), width: 1.15),
+              ),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.save_alt_rounded,
+                        color: tc.textGray, size: 17),
+                    const SizedBox(width: 8),
+                    Text('Save as Draft',
+                        style: TextStyle(
+                            color: tc.textGray,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700)),
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              Icon(
-                isLastStep
-                    ? Icons.send_rounded
-                    : Icons.arrow_forward_rounded,
-                color: Colors.white, size: 18,
-              ),
-            ]),
-          ),
-        ),
-      ),
-      const SizedBox(height: 12),
-
-<<<<<<< HEAD
-      // Secondary Action
-=======
-      // Secondary Action (Back or Save Draft)
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-      if (!isLastStep) ...[
-        GestureDetector(
-          onTap: _goBack,
-          child: Container(
-            width: double.infinity,
-            height: 50,
-            decoration: BoxDecoration(
-<<<<<<< HEAD
-              color: _LightColors.card,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _LightColors.cardBorder),
-=======
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.cardBorder),
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-            ),
-            child: const Center(
-              child: Text('Back',
-                  style: TextStyle(
-<<<<<<< HEAD
-                    color: _LightColors.textSecondary,
-=======
-                    color: AppColors.textSecondary,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  )),
             ),
           ),
-        ),
-      ] else ...[
-<<<<<<< HEAD
-=======
-        // Save as Draft only on last step
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-        GestureDetector(
-          onTap: _saveAsDraft,
-          child: Container(
-            width: double.infinity,
-            height: 50,
-            decoration: BoxDecoration(
-<<<<<<< HEAD
-              color: _LightColors.card,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _LightColors.cardBorder),
-            ),
-            child: const Center(
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.save_alt_rounded, color: _LightColors.textSecondary, size: 17),
-                SizedBox(width: 8),
-                Text('Save as Draft',
-                    style: TextStyle(
-                      color: _LightColors.textSecondary,
-=======
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.cardBorder),
-            ),
-            child: const Center(
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.save_alt_rounded, color: AppColors.textSecondary, size: 17),
-                SizedBox(width: 8),
-                Text('Save as Draft',
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    )),
-              ]),
-            ),
-          ),
-        ),
+        ],
       ],
-    ]);
+    );
   }
 }

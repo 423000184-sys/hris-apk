@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-<<<<<<< HEAD
     <!-- Gradient background: white -> peach -> orange -->
     <item>
         <shape android:shape="rectangle">
@@ -43,23 +42,4 @@
         android:height="38dp"
         android:gravity="center"
         android:drawable="@drawable/ic_hand_splash" />
-=======
-
-    <!-- Dark background -->
-    <item>
-        <shape android:shape="rectangle">
-            <solid android:color="#0A0A0A" />
-        </shape>
-    </item>
-
-    <!-- Centered logo icon -->
-    <item
-        android:gravity="center"
-        android:bottom="120dp">
-        <bitmap
-            android:src="@mipmap/ic_launcher"
-            android:gravity="center" />
-    </item>
-
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
 </layer-list>

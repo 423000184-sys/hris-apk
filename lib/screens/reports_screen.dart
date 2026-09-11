@@ -1,13 +1,4 @@
 // lib/screens/reports_screen.dart
-//
-// SIMPLIFIED PAYSLIP VIEW:
-//   - Orange gradient header (Back + Print icon)
-//   - Summary card: company name, "Paid" badge, month label
-//   - Employee name & ID (displayed below the card)
-//   - "Download as PDF / Print" button
-//   - All detailed breakdown (earnings, deductions, net salary) is
-//     only shown in the generated PDF (payroll_pdf_service.dart)
-
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -18,15 +9,35 @@ import '../services/security_service.dart';
 import '../services/payroll_pdf_service.dart';
 import '../models/employee.dart';
 
-// Mockup-specific light palette
+// Brand colors (same in both themes)
 class _Mock {
-  static const Color cardBg = Color(0xFFF8F8F8);
-  static const Color cardBorder = Color(0xFF27272A);
   static const Color orange = Color(0xFFFF8A00);
   static const Color lime = Color(0xFFC4FF0A);
-  static const Color textGrayDark = Color(0xFF52525B);
   static const Color paidBg = Color(0x1AC4FF0A);
   static const Color paidBorder = Color(0x33C4FF0A);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// _ThemeColors — theme-aware colors for reports screen
+// ═══════════════════════════════════════════════════════════════════════════
+class _ThemeColors {
+  final bool isDark;
+  const _ThemeColors(this.isDark);
+
+  Color get bg => isDark ? const Color(0xFF0F0F10) : Colors.white;
+
+  Color get cardBg => isDark ? const Color(0xFF18181B) : const Color(0xFFF8F8F8);
+  Color get cardBorder =>
+      isDark ? const Color(0xFF27272A) : const Color(0xFF27272A);
+
+  Color get textPrimary => isDark ? Colors.white : Colors.black;
+  Color get textGrayDark =>
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF52525B);
+
+  // Print icon button
+  Color get printButtonBg => isDark ? const Color(0xFF27272A) : Colors.white;
+  Color get printButtonBorder =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFF27272A);
 }
 
 class ReportsScreen extends StatefulWidget {
@@ -86,7 +97,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
               .get();
           if (snap.docs.isNotEmpty) {
             data = snap.docs.first.data();
-            final r = data['hourlyRate'] ?? data['hourly_rate'] ?? data['rate'];
+            final r =
+                data['hourlyRate'] ?? data['hourly_rate'] ?? data['rate'];
             if (r != null) rate = (r as num).toDouble();
           }
         } catch (_) {}
@@ -101,7 +113,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final special = (data?['specialAllowance'] as num?)?.toDouble() ??
           basic * 0.075;
       final pf = (data?['providentFund'] as num?)?.toDouble() ?? basic * 0.0225;
-      final tax = (data?['professionalTax'] as num?)?.toDouble() ?? basic * 0.0025;
+      final tax =
+          (data?['professionalTax'] as num?)?.toDouble() ?? basic * 0.0025;
 
       if (mounted) {
         setState(() {
@@ -116,7 +129,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
           _bankName = (data?['bankName'] as String?) ?? '—';
           _accountNumber = (data?['accountNumber'] as String?) ?? '—';
           _department = (data?['department'] as String?) ?? '—';
-          _designation = (data?['designation'] as String?) ?? emp?.position ?? '—';
+          _designation =
+              (data?['designation'] as String?) ?? emp?.position ?? '—';
           _loading = false;
         });
       }
@@ -176,7 +190,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
   void _showSnack(String msg, {bool error = false}) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
-      backgroundColor: error ? const Color(0xFFFF4D6D) : const Color(0xFF00E5A0),
+      backgroundColor:
+      error ? const Color(0xFFFF4D6D) : const Color(0xFF00E5A0),
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       margin: const EdgeInsets.all(16),
@@ -185,27 +200,34 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
     final thisMonth = DateFormat('MMMM yyyy').format(DateTime.now());
-    final empName = _employee?.fullName ?? widget.initialEmployee?.fullName ?? '—';
-    final empId = _employee?.employeeId ?? widget.initialEmployee?.employeeId ?? '—';
+    final empName =
+        _employee?.fullName ?? widget.initialEmployee?.fullName ?? '—';
+    final empId = _employee?.employeeId ??
+        widget.initialEmployee?.employeeId ??
+        '—';
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: tc.bg,
       body: SafeArea(
         child: _loading
             ? const Center(
-            child: CircularProgressIndicator(color: _Mock.orange, strokeWidth: 2.5))
+            child: CircularProgressIndicator(
+                color: _Mock.orange, strokeWidth: 2.5))
             : Column(
           children: [
-            _buildHeader(thisMonth),
+            _buildHeader(tc, thisMonth),
             Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
                 child: Column(
                   children: [
-                    _buildPayslipCard(thisMonth, empName, empId),
+                    _buildPayslipCard(tc, thisMonth, empName, empId),
                     const SizedBox(height: 12),
-                    _buildEmployeeInfo(empName, empId),
+                    _buildEmployeeInfo(tc, empName, empId),
                     const SizedBox(height: 20),
                     _buildDownloadButton(),
                   ],
@@ -218,7 +240,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
-  Widget _buildHeader(String thisMonth) {
+  Widget _buildHeader(_ThemeColors tc, String thisMonth) {
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
@@ -238,7 +260,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 onTap: () => Navigator.maybePop(context),
                 child: const Row(
                   children: [
-                    Icon(Icons.chevron_left_rounded, color: Colors.white, size: 22),
+                    Icon(Icons.chevron_left_rounded,
+                        color: Colors.white, size: 22),
                     Text('Back',
                         style: TextStyle(
                             color: Colors.white,
@@ -254,9 +277,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   width: 38,
                   height: 38,
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: tc.printButtonBg,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _Mock.cardBorder),
+                    border: Border.all(color: tc.printButtonBorder),
                   ),
                   child: _exporting
                       ? const Padding(
@@ -289,16 +312,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
-  Widget _buildPayslipCard(String thisMonth, String empName, String empId) {
+  Widget _buildPayslipCard(
+      _ThemeColors tc, String thisMonth, String empName, String empId) {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: _Mock.cardBg,
+        color: tc.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _Mock.cardBorder),
+        border: Border.all(color: tc.cardBorder),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
+            color: Colors.black.withValues(alpha: 0.06),
             blurRadius: 10,
             offset: const Offset(0, 12),
           ),
@@ -320,11 +344,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           fontSize: 20,
                           fontWeight: FontWeight.w500)),
                   const SizedBox(height: 8),
-                  const Text('Smart HR Information System',
-                      style: TextStyle(color: Colors.black, fontSize: 12)),
+                  Text('Smart HR Information System',
+                      style: TextStyle(
+                          color: tc.textPrimary, fontSize: 12)),
                   const SizedBox(height: 8),
-                  const Text('Jumbo HQ, Manila, Philippines',
-                      style: TextStyle(color: _Mock.textGrayDark, fontSize: 10)),
+                  Text('Jumbo HQ, Manila, Philippines',
+                      style: TextStyle(
+                          color: tc.textGrayDark, fontSize: 10)),
                 ],
               ),
             ),
@@ -332,7 +358,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: _Mock.paidBg,
                     borderRadius: BorderRadius.circular(12),
@@ -340,11 +367,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.check_circle_rounded,
+                    children: const [
+                      Icon(Icons.check_circle_rounded,
                           color: _Mock.lime, size: 14),
-                      const SizedBox(width: 6),
-                      const Text('Paid',
+                      SizedBox(width: 6),
+                      Text('Paid',
                           style: TextStyle(
                               color: _Mock.lime,
                               fontSize: 12,
@@ -356,8 +383,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 Text(
                   'Payslip for\n$thisMonth',
                   textAlign: TextAlign.right,
-                  style: const TextStyle(
-                      color: Colors.black,
+                  style: TextStyle(
+                      color: tc.textPrimary,
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
                       height: 1.3),
@@ -370,14 +397,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
-  Widget _buildEmployeeInfo(String empName, String empId) {
+  Widget _buildEmployeeInfo(
+      _ThemeColors tc, String empName, String empId) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
       decoration: BoxDecoration(
-        color: _Mock.cardBg,
+        color: tc.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _Mock.cardBorder.withOpacity(0.5)),
+        border: Border.all(color: tc.cardBorder.withValues(alpha: 0.5)),
       ),
       child: Row(
         children: [
@@ -385,15 +413,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Employee',
+                Text('Employee',
                     style: TextStyle(
-                        color: _Mock.textGrayDark,
+                        color: tc.textGrayDark,
                         fontSize: 10,
                         fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
                 Text(empName,
-                    style: const TextStyle(
-                        color: Colors.black,
+                    style: TextStyle(
+                        color: tc.textPrimary,
                         fontSize: 14,
                         fontWeight: FontWeight.w600)),
               ],
@@ -403,15 +431,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                const Text('Employee ID',
+                Text('Employee ID',
                     style: TextStyle(
-                        color: _Mock.textGrayDark,
+                        color: tc.textGrayDark,
                         fontSize: 10,
                         fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
                 Text(empId,
-                    style: const TextStyle(
-                        color: Colors.black,
+                    style: TextStyle(
+                        color: tc.textPrimary,
                         fontSize: 14,
                         fontWeight: FontWeight.w600)),
               ],
@@ -433,7 +461,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.1),
+              color: Colors.black.withValues(alpha: 0.1),
               blurRadius: 3,
               offset: const Offset(0, 2),
             ),
@@ -449,7 +477,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
               : const Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.download_rounded, color: Colors.white, size: 20),
+              Icon(Icons.download_rounded,
+                  color: Colors.white, size: 20),
               SizedBox(width: 10),
               Text(
                 'Download as PDF / Print',

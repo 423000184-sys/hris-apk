@@ -1,8 +1,11 @@
+// lib/screens/admin_tracking_page.dart
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'admin_theme.dart';
+import '../widgets/bootstrap_grid.dart';
 
 class AdminTrackingPage extends StatefulWidget {
   final List<Map<String, dynamic>> locations;
@@ -25,19 +28,17 @@ class AdminTrackingPage extends StatefulWidget {
 }
 
 class _AdminTrackingPageState extends State<AdminTrackingPage> {
-  // OpenStreetMap Controller
+  AdminColors get tc => AdminTheme.getColors(context);
+
   final MapController _mapController = MapController();
 
-  // Active Coordinates at Geofence Limits
   late double _currentLat;
   late double _currentLng;
   late double _currentRadius;
 
-  // Selected Card Index
   int _selectedLocationIndex = 0;
   bool _isSaving = false;
 
-  // Automation Switch States
   bool _autoClockOut = true;
   bool _geofenceViolation = true;
   bool _entryReminders = true;
@@ -52,7 +53,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     _loadSettingsFromFirestore();
   }
 
-  // Live Sync mula sa Cloud Firestore Settings Collection
   Future<void> _loadSettingsFromFirestore() async {
     try {
       final doc = await FirebaseFirestore.instance
@@ -61,6 +61,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           .get();
       if (doc.exists && doc.data() != null) {
         final data = doc.data()!;
+        if (!mounted) return;
         setState(() {
           _autoClockOut = data['autoClockOut'] ?? _autoClockOut;
           _geofenceViolation = data['geofenceViolation'] ?? _geofenceViolation;
@@ -78,7 +79,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
   }
 
-  // Database Save Function
   Future<void> _saveConfigToFirestore() async {
     setState(() => _isSaving = true);
     try {
@@ -94,144 +94,138 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Geofence configuration successfully saved!'),
-            backgroundColor: Color(0xFF10B981),
-          ),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Geofence configuration successfully saved!'),
+          backgroundColor: tc.green,
+        ),
+      );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to save settings: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save settings: $e'),
+          backgroundColor: tc.red,
+        ),
+      );
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
-  // Map Camera Movement Function
   void _moveMapToPosition(double lat, double lng) {
     _mapController.move(LatLng(lat, lng), 15.5);
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // BUILD — Root layout safe mula sa unbounded constraints
+  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(28.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 1. HEADER SECTION
-          const Text(
-            'Geofencing & Locations',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF11142D),
-              letterSpacing: -0.3,
-            ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Configure authorized attendance zones, map office perimeters, and manage site-specific radius validation rules.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF6C727F)),
-          ),
-          const SizedBox(height: 20),
-
-          // 2. MAIN GRID (Interactive OpenStreetMap + Active Locations List)
-          LayoutBuilder(builder: (context, constraints) {
-            bool isDesktop = constraints.maxWidth >= 900;
-            if (isDesktop) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(flex: 2, child: _buildOpenStreetMapCard()),
-                  const SizedBox(width: 20),
-                  Expanded(flex: 1, child: _buildActiveLocationsPanel()),
-                ],
-              );
-            } else {
-              return Column(
-                children: [
-                  _buildOpenStreetMapCard(),
-                  const SizedBox(height: 20),
-                  _buildActiveLocationsPanel(),
-                ],
-              );
-            }
-          }),
-          const SizedBox(height: 20),
-
-          // 3. AUTOMATION SETTINGS CARD
-          _buildAutomationCard(),
-          const SizedBox(height: 20),
-
-          // 4. ACTION BUTTONS
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+    return Container(
+      color: tc.background,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24.0),
+        child: BsContainer(
+          maxWidth: 1600,
+          padding: EdgeInsets.zero,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              OutlinedButton(
-                onPressed: () => _loadSettingsFromFirestore(),
-                style: OutlinedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: const Color(0xFF1C1D21),
-                  side: const BorderSide(color: Color(0xFFDCE4F0)),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 20, vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-                child: const Text('Discard Changes',
-                    style:
-                    TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-              ),
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                onPressed: _isSaving ? null : _saveConfigToFirestore,
-                icon: _isSaving
-                    ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
-                )
-                    : const Icon(Icons.save_outlined, size: 16),
-                label: Text(_isSaving ? 'Saving...' : 'Save Geofence Config'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF8A00),
-                  foregroundColor: Colors.white,
-                  elevation: 2,
-                  shadowColor: const Color(0xFFFF8A00).withOpacity(0.3),
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
+              // 1. HEADER
+              _buildHeader(),
+              const SizedBox(height: 20),
+
+              // 2. MAIN GRID — Map (2/3) + Locations (1/3)
+              _buildMainGrid(),
+              const SizedBox(height: 20),
+
+              // 3. AUTOMATION SETTINGS
+              _buildAutomationCard(),
+              const SizedBox(height: 20),
+
+              // 4. ACTION BUTTONS
+              _buildActionButtons(),
+              const SizedBox(height: 40),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  // --- OPENSTREETMAP WIDGET ---
+  // ══════════════════════════════════════════════════════════════
+  // HEADER
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildHeader() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Geofencing & Locations',
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.w800,
+            color: tc.text,
+            letterSpacing: -0.3,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Configure authorized attendance zones, map office perimeters, and manage site-specific radius validation rules.',
+          style: TextStyle(fontSize: 13, color: tc.muted),
+        ),
+      ],
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // MAIN GRID — Bootstrap-style 2/3 + 1/3 ratio
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildMainGrid() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
+        final r = BsResponsive(w);
+        final isDesktop = r.up(BsSize.lg); // lg = 992px+
+
+        if (isDesktop) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 2, child: _buildOpenStreetMapCard()),
+              const SizedBox(width: 20),
+              Expanded(flex: 1, child: _buildActiveLocationsPanel()),
+            ],
+          );
+        }
+
+        // Mobile / tablet: stack vertically
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildOpenStreetMapCard(),
+            const SizedBox(height: 20),
+            _buildActiveLocationsPanel(),
+          ],
+        );
+      },
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // OPENSTREETMAP CARD
+  // ══════════════════════════════════════════════════════════════
   Widget _buildOpenStreetMapCard() {
     final LatLng centerPoint = LatLng(_currentLat, _currentLng);
 
     return Container(
       height: 380,
       decoration: BoxDecoration(
-        color: const Color(0xFFEDF2F9),
+        color: tc.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFDCE4F0)),
+        border: Border.all(color: tc.border),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
@@ -255,8 +249,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       point: centerPoint,
                       radius: _currentRadius,
                       useRadiusInMeter: true,
-                      color: const Color(0xFFFF8A00).withOpacity(0.2),
-                      borderColor: const Color(0xFFFF8A00),
+                      color: tc.orange.withValues(alpha: 0.2),
+                      borderColor: tc.orange,
                       borderStrokeWidth: 2.5,
                     ),
                   ],
@@ -267,9 +261,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       point: centerPoint,
                       width: 40,
                       height: 40,
-                      child: const Icon(
+                      child: Icon(
                         Icons.location_on,
-                        color: Color(0xFFFF8A00),
+                        color: tc.orange,
                         size: 38,
                       ),
                     ),
@@ -277,6 +271,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 ),
               ],
             ),
+
+            // Top center badge
             Positioned(
               top: 16,
               left: 0,
@@ -286,11 +282,11 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   padding:
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: tc.card,
                     borderRadius: BorderRadius.circular(8),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
+                        color: Colors.black.withValues(alpha: 0.1),
                         blurRadius: 10,
                         offset: const Offset(0, 4),
                       ),
@@ -299,66 +295,66 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text(
+                      Text(
                         'CURRENT ACTIVE GEOFENCE',
                         style: TextStyle(
                             fontSize: 9,
                             fontWeight: FontWeight.w800,
-                            color: Color(0xFF6C727F),
+                            color: tc.muted,
                             letterSpacing: 0.5),
                       ),
                       const SizedBox(height: 1),
                       Text(
                         'Radius: ${_currentRadius.toInt()} Meters',
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
-                            color: Color(0xFF11142D)),
+                            color: tc.text),
                       ),
                     ],
                   ),
                 ),
               ),
             ),
+
+            // Zoom controls
             Positioned(
               top: 16,
               left: 16,
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: tc.card,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFD0D7DE)),
+                      border: Border.all(color: tc.border),
                     ),
                     child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         InkWell(
                           onTap: () {
                             _mapController.move(_mapController.camera.center,
                                 _mapController.camera.zoom + 0.5);
                           },
-                          child: const SizedBox(
+                          child: SizedBox(
                             width: 32,
                             height: 32,
-                            child: Icon(Icons.add,
-                                size: 16, color: Color(0xFF444444)),
+                            child: Icon(Icons.add, size: 16, color: tc.text),
                           ),
                         ),
-                        Container(
-                            height: 1,
-                            width: 32,
-                            color: const Color(0xFFEAEAEA)),
+                        Container(height: 1, width: 32, color: tc.border),
                         InkWell(
                           onTap: () {
                             _mapController.move(_mapController.camera.center,
                                 _mapController.camera.zoom - 0.5);
                           },
-                          child: const SizedBox(
+                          child: SizedBox(
                             width: 32,
                             height: 32,
-                            child: Icon(Icons.remove,
-                                size: 16, color: Color(0xFF444444)),
+                            child:
+                            Icon(Icons.remove, size: 16, color: tc.text),
                           ),
                         ),
                       ],
@@ -371,57 +367,68 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       width: 32,
                       height: 32,
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: tc.card,
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFFD0D7DE)),
+                        border: Border.all(color: tc.border),
                       ),
-                      child: const Icon(Icons.my_location,
-                          size: 14, color: Color(0xFF444444)),
+                      child:
+                      Icon(Icons.my_location, size: 14, color: tc.text),
                     ),
                   ),
                 ],
               ),
             ),
+
+            // Bottom-left coords card
             Positioned(
               bottom: 16,
               left: 16,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(10),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.08),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.location_on,
-                        color: Color(0xFFFF8A00), size: 16),
-                    const SizedBox(width: 8),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${_currentLat.toStringAsFixed(4)}° N, ${_currentLng.toStringAsFixed(4)}° E',
-                          style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF11142D)),
+              right: 16,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: tc.card,
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.location_on, color: tc.orange, size: 16),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${_currentLat.toStringAsFixed(4)}° N, ${_currentLng.toStringAsFixed(4)}° E',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: tc.text),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              'Primary Infrastructure Zone',
+                              style:
+                              TextStyle(fontSize: 10, color: tc.muted),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
                         ),
-                        const Text(
-                          'Primary Infrastructure Zone',
-                          style:
-                          TextStyle(fontSize: 10, color: Color(0xFF8C8F9A)),
-                        ),
-                      ],
-                    ),
-                  ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -431,7 +438,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     );
   }
 
-  // --- ACTIVE LOCATIONS LIST PANEL ---
+  // ══════════════════════════════════════════════════════════════
+  // ACTIVE LOCATIONS PANEL
+  // ══════════════════════════════════════════════════════════════
   Widget _buildActiveLocationsPanel() {
     final List<Map<String, dynamic>> activeLocs = widget.locations.isNotEmpty
         ? widget.locations
@@ -455,197 +464,99 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFFEDF2F9),
+        color: tc.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFDCE4F0)),
+        border: Border.all(color: tc.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'Active Locations',
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF11142D)),
+              Expanded(
+                child: Text(
+                  'Active Locations',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: tc.text),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
+              const SizedBox(width: 8),
               InkWell(
                 onTap: () {},
                 child: Container(
                   width: 24,
                   height: 24,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFFF8A00),
+                  decoration: BoxDecoration(
+                    color: tc.orange,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.add, color: Colors.white, size: 16),
+                  child: const Icon(Icons.add,
+                      color: Colors.white, size: 16),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16),
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: activeLocs.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 12),
-            itemBuilder: (context, index) {
-              final loc = activeLocs[index];
-              final bool isSelected = _selectedLocationIndex == index;
 
-              final String title =
-              (loc['name'] ?? loc['employeeId'] ?? 'HQ Office').toString();
-              final String sub =
-              (loc['sub'] ?? 'Primary Hub Area').toString();
-              final double lat =
-                  (loc['latitude'] as num?)?.toDouble() ?? widget.officeLat;
-              final double lng =
-                  (loc['longitude'] as num?)?.toDouble() ?? widget.officeLng;
-              final String staff = (loc['staff'] ?? '120').toString();
-
-              return GestureDetector(
-                onTap: () {
-                  setState(() {
-                    _selectedLocationIndex = index;
-                    _currentLat = lat;
-                    _currentLng = lng;
-                  });
-                  _moveMapToPosition(lat, lng);
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: isSelected
-                          ? const Color(0xFFFF8A00)
-                          : const Color(0xFFE1E6ED),
-                      width: isSelected ? 1.5 : 1,
-                    ),
-                  ),
-                  child: Stack(
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                title,
-                                style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF11142D)),
-                              ),
-                              Container(
-                                width: 14,
-                                height: 14,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: isSelected
-                                      ? const Color(0xFFC27803)
-                                      : Colors.transparent,
-                                  border: Border.all(
-                                    color: isSelected
-                                        ? const Color(0xFFC27803)
-                                        : const Color(0xFFCCCCCC),
-                                  ),
-                                ),
-                                child: isSelected
-                                    ? const Icon(Icons.check,
-                                    size: 10, color: Colors.white)
-                                    : null,
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(sub,
-                              style: const TextStyle(
-                                  fontSize: 11, color: Color(0xFF6C727F))),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text('RADIUS',
-                                      style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.w800,
-                                          color: Color(0xFF8C8F9A))),
-                                  const SizedBox(height: 2),
-                                  Text('${_currentRadius.toInt()}m',
-                                      style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                          color: Color(0xFF11142D))),
-                                ],
-                              ),
-                              const SizedBox(width: 24),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text('STAFF',
-                                      style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.w800,
-                                          color: Color(0xFF8C8F9A))),
-                                  const SizedBox(height: 2),
-                                  Text(staff,
-                                      style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                          color: Color(0xFF11142D))),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const Positioned(
-                        bottom: 0,
-                        right: 0,
-                        child: Icon(Icons.edit_outlined,
-                            size: 14, color: Color(0xFF8C8F9A)),
-                      ),
-                    ],
-                  ),
+          // ✅ FIX: Column-based location cards (imbes na ListView.separated
+          //         na may shrinkWrap sa loob ng SingleChildScrollView)
+          if (activeLocs.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: Text(
+                  'No active locations',
+                  style: TextStyle(fontSize: 12, color: tc.muted),
                 ),
-              );
-            },
-          ),
+              ),
+            )
+          else
+            Column(
+              children: activeLocs.asMap().entries.map((entry) {
+                final index = entry.key;
+                final loc = entry.value;
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == activeLocs.length - 1 ? 0 : 12,
+                  ),
+                  child: _buildLocationCard(loc, index),
+                );
+              }).toList(),
+            ),
+
           const SizedBox(height: 20),
+
+          // Global Default Radius slider
           Container(
             padding: const EdgeInsets.only(top: 16),
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: Color(0xFFDCE4F0))),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: tc.border)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'GLOBAL DEFAULT RADIUS',
                   style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w800,
-                      color: Color(0xFF6C727F),
+                      color: tc.muted,
                       letterSpacing: 0.5),
                 ),
                 const SizedBox(height: 8),
                 SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 6,
-                    activeTrackColor: const Color(0xFFFF8A00),
-                    inactiveTrackColor: const Color(0xFFD0D7DE),
-                    thumbColor: Colors.white,
+                    activeTrackColor: tc.orange,
+                    inactiveTrackColor: tc.border,
+                    thumbColor: tc.card,
                     thumbShape: const RoundSliderThumbShape(
                         enabledThumbRadius: 8, elevation: 2),
-                    overlayColor: const Color(0xFFFF8A00).withOpacity(0.2),
+                    overlayColor: tc.orange.withValues(alpha: 0.2),
                   ),
                   child: Slider(
                     value: _currentRadius.clamp(50.0, 2000.0),
@@ -657,25 +568,29 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   ),
                 ),
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('50m',
-                        style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF8C8F9A))),
+                    Expanded(
+                      child: Text('50m',
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: tc.muted)),
+                    ),
                     Text(
                       'Current: ${_currentRadius.toInt()}m',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w800,
-                          color: Color(0xFFFF8A00)),
+                          color: tc.orange),
                     ),
-                    const Text('2000m',
-                        style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF8C8F9A))),
+                    Expanded(
+                      child: Text('2000m',
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: tc.muted)),
+                    ),
                   ],
                 ),
               ],
@@ -686,76 +601,210 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     );
   }
 
-  // --- AUTOMATION CARDS ---
+  Widget _buildLocationCard(Map<String, dynamic> loc, int index) {
+    final bool isSelected = _selectedLocationIndex == index;
+
+    final String title =
+    (loc['name'] ?? loc['employeeId'] ?? 'HQ Office').toString();
+    final String sub = (loc['sub'] ?? 'Primary Hub Area').toString();
+    final double lat =
+        (loc['latitude'] as num?)?.toDouble() ?? widget.officeLat;
+    final double lng =
+        (loc['longitude'] as num?)?.toDouble() ?? widget.officeLng;
+    final String staff = (loc['staff'] ?? '120').toString();
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedLocationIndex = index;
+          _currentLat = lat;
+          _currentLng = lng;
+        });
+        _moveMapToPosition(lat, lng);
+      },
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: tc.card,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? tc.orange : tc.border,
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Title + radio
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: tc.text),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isSelected ? tc.orange : Colors.transparent,
+                    border: Border.all(
+                      color: isSelected ? tc.orange : tc.muted,
+                    ),
+                  ),
+                  child: isSelected
+                      ? const Icon(Icons.check,
+                      size: 10, color: Colors.white)
+                      : null,
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(sub,
+                style: TextStyle(fontSize: 11, color: tc.muted),
+                overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('RADIUS',
+                          style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                              color: tc.muted)),
+                      const SizedBox(height: 2),
+                      Text('${_currentRadius.toInt()}m',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: tc.text)),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('STAFF',
+                          style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                              color: tc.muted)),
+                      const SizedBox(height: 2),
+                      Text(staff,
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: tc.text)),
+                    ],
+                  ),
+                ),
+                Icon(Icons.edit_outlined, size: 14, color: tc.muted),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // AUTOMATION CARDS — Safe Wrap-based grid
+  // ══════════════════════════════════════════════════════════════
   Widget _buildAutomationCard() {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFFEDF2F9),
+        color: tc.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFDCE4F0)),
+        border: Border.all(color: tc.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
               Icon(Icons.notifications_none_rounded,
-                  color: Color(0xFFFF8A00), size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Automation & Notifications',
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF11142D)),
+                  color: tc.orange, size: 20),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Automation & Notifications',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: tc.text),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 16),
           LayoutBuilder(builder: (context, constraints) {
-            bool isWide = constraints.maxWidth >= 800;
+            final w = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : 800.0;
+            final bool isWide = w >= 800;
+
+            // 4 cards: 3 cols sa desktop (may 1 sa susunod na row),
+            //          1 col sa mobile
+            const double gap = 16;
+            final int cols;
+            if (w >= 1200) {
+              cols = 4;
+            } else if (w >= 800) {
+              cols = 3;
+            } else if (w >= 500) {
+              cols = 2;
+            } else {
+              cols = 1;
+            }
+            final double itemWidth = (w - (cols - 1) * gap) / cols;
+
+            final cards = <Widget>[
+              _buildToggleCard(
+                title: 'Auto Clock-Out',
+                subtitle: 'When staff leaves zone',
+                value: _autoClockOut,
+                onChanged: (v) => setState(() => _autoClockOut = v),
+              ),
+              _buildToggleCard(
+                title: 'Geofence Violation',
+                subtitle: 'Alert admins on deviation',
+                value: _geofenceViolation,
+                onChanged: (v) => setState(() => _geofenceViolation = v),
+              ),
+              _buildToggleCard(
+                title: 'Entry Reminders',
+                subtitle: 'Push notice at perimeter',
+                value: _entryReminders,
+                onChanged: (v) => setState(() => _entryReminders = v),
+              ),
+              _buildToggleCard(
+                title: 'Event and Holiday',
+                subtitle: 'When Holiday or Event occurs',
+                value: _eventAndHoliday,
+                onChanged: (v) => setState(() => _eventAndHoliday = v),
+              ),
+            ];
+
             return Wrap(
-              spacing: 16,
-              runSpacing: 16,
-              children: [
-                _buildToggleCard(
-                  title: 'Auto Clock-Out',
-                  subtitle: 'When staff leaves zone',
-                  value: _autoClockOut,
-                  onChanged: (v) => setState(() => _autoClockOut = v),
-                  width: isWide
-                      ? (constraints.maxWidth - 32) / 3
-                      : constraints.maxWidth,
-                ),
-                _buildToggleCard(
-                  title: 'Geofence Violation',
-                  subtitle: 'Alert admins on deviation',
-                  value: _geofenceViolation,
-                  onChanged: (v) => setState(() => _geofenceViolation = v),
-                  width: isWide
-                      ? (constraints.maxWidth - 32) / 3
-                      : constraints.maxWidth,
-                ),
-                _buildToggleCard(
-                  title: 'Entry Reminders',
-                  subtitle: 'Push notice at perimeter',
-                  value: _entryReminders,
-                  onChanged: (v) => setState(() => _entryReminders = v),
-                  width: isWide
-                      ? (constraints.maxWidth - 32) / 3
-                      : constraints.maxWidth,
-                ),
-                _buildToggleCard(
-                  title: 'Event and Holiday',
-                  subtitle: 'When Holiday or Event occurs',
-                  value: _eventAndHoliday,
-                  onChanged: (v) => setState(() => _eventAndHoliday = v),
-                  width: isWide
-                      ? (constraints.maxWidth - 32) / 3
-                      : constraints.maxWidth,
-                ),
-              ],
+              spacing: gap,
+              runSpacing: gap,
+              children: cards
+                  .map((c) => SizedBox(width: itemWidth, child: c))
+                  .toList(),
             );
           }),
         ],
@@ -768,18 +817,15 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     required String subtitle,
     required bool value,
     required ValueChanged<bool> onChanged,
-    required double width,
   }) {
     return Container(
-      width: width,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: tc.card,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE1E6ED)),
+        border: Border.all(color: tc.border),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Expanded(
             child: Column(
@@ -787,31 +833,104 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFF11142D)),
+                      color: tc.text),
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
-                  style: const TextStyle(
-                      fontSize: 11, color: Color(0xFF6C727F)),
+                  style: TextStyle(fontSize: 11, color: tc.muted),
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
+          const SizedBox(width: 8),
           Switch(
             value: value,
-            activeColor: const Color(0xFFFF8A00),
-            activeTrackColor: const Color(0xFFFF8A00).withOpacity(0.4),
+            activeColor: tc.orange,
+            activeTrackColor: tc.orange.withValues(alpha: 0.4),
             inactiveThumbColor: Colors.white,
-            inactiveTrackColor: const Color(0xFFCCCCCC),
+            inactiveTrackColor: tc.muted,
             onChanged: onChanged,
           ),
         ],
       ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ACTION BUTTONS
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildActionButtons() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
+        final narrow = w < 500;
+
+        final discardBtn = OutlinedButton(
+          onPressed: _loadSettingsFromFirestore,
+          style: OutlinedButton.styleFrom(
+            backgroundColor: tc.card,
+            foregroundColor: tc.text,
+            side: BorderSide(color: tc.border),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ),
+          child: const Text('Discard Changes',
+              style:
+              TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+        );
+
+        final saveBtn = ElevatedButton.icon(
+          onPressed: _isSaving ? null : _saveConfigToFirestore,
+          icon: _isSaving
+              ? const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: Colors.white),
+          )
+              : const Icon(Icons.save_outlined, size: 16),
+          label: Text(_isSaving ? 'Saving...' : 'Save Geofence Config'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: tc.orange,
+            foregroundColor: Colors.white,
+            elevation: 2,
+            shadowColor: tc.orange.withValues(alpha: 0.3),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ),
+        );
+
+        if (narrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              saveBtn,
+              const SizedBox(height: 10),
+              discardBtn,
+            ],
+          );
+        }
+
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            discardBtn,
+            const SizedBox(width: 12),
+            saveBtn,
+          ],
+        );
+      },
     );
   }
 }

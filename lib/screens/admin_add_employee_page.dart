@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'admin_database.dart';
 import 'admin_theme.dart';
+import '../widgets/bootstrap_grid.dart';
 
 class AdminAddEmployeePage extends StatefulWidget {
   final VoidCallback onRefreshNeeded;
@@ -16,42 +17,29 @@ class AdminAddEmployeePage extends StatefulWidget {
 
 class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   final _fKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
-  final _birthdayCtrl = TextEditingController();
-  final _phoneCtrl = TextEditingController();
-  final _deptCtrl = TextEditingController();
-  final _idCtrl = TextEditingController();
-  final _nfcCtrl = TextEditingController();
-  final _pinCtrl = TextEditingController();
   bool _saving = false;
 
   Uint8List? _profileImageBytes;
 
-  static const Color _bg = Color(0xFFF8F9FA);
-  static const Color _cardBorder = Color(0xFFEBEAE6);
-  static const Color _orange = Color(0xFFFF7A00);
-  static const Color _textDark = Color(0xFF111827);
-  static const Color _muted = Color(0xFF6B7280);
+  // ✅ I-cache ang future para hindi paulit-ulit na mag-query sa bawat rebuild
+  late Future<List<Map<String, dynamic>>> _employeesFuture;
+
+  AdminColors get tc => AdminTheme.getColors(context);
 
   @override
-  void dispose() {
-    _nameCtrl.dispose();
-    _emailCtrl.dispose();
-    _birthdayCtrl.dispose();
-    _phoneCtrl.dispose();
-    _deptCtrl.dispose();
-    _idCtrl.dispose();
-    _nfcCtrl.dispose();
-    _pinCtrl.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _employeesFuture = AdminDatabase.getEmployees();
   }
 
+  // ✅ Tinanggal na ang mga controller sa dispose() — wala na sila rito
+
   void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
-        backgroundColor: error ? AdminTheme.red : AdminTheme.green,
+        backgroundColor: error ? tc.red : tc.green,
       ),
     );
   }
@@ -62,467 +50,713 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     return '$f$l'.isEmpty ? 'E' : '$f$l';
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // BUILD
+  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _bg,
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _snack('Print report initiated...'),
-        backgroundColor: _orange,
-        child: const Icon(Icons.print, color: Colors.white),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(32.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SizedBox(
+          height: constraints.maxHeight,
+          child: Container(
+            color: tc.background,
+            child: Stack(
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text(
-                      'Add Employee',
-                      style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: _textDark),
+                Positioned.fill(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(32.0),
+                    child: BsContainer(
+                      maxWidth: 1600,
+                      padding: EdgeInsets.zero,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildPageHeader(),
+                          const SizedBox(height: 24),
+                          _buildFilterCard(),
+                          const SizedBox(height: 24),
+                          _buildEmployeesTable(),
+                          const SizedBox(height: 100),
+                        ],
+                      ),
                     ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Real-time verification of professional shifts and geofencing status.',
-                      style: TextStyle(fontSize: 13, color: _muted),
-                    ),
-                  ],
+                  ),
                 ),
-                Row(
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: () => _snack('CSV Exported'),
-                      icon: const Icon(Icons.download, size: 16),
-                      label: const Text('Export CSV'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: _textDark,
-                        side: const BorderSide(color: Color(0xFFD1D5DB)),
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    ElevatedButton.icon(
-                      onPressed: _openAddDialog,
-                      icon: const Icon(Icons.add, size: 16),
-                      label: const Text('Manual Entry'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _orange,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        elevation: 0,
-                      ),
-                    ),
-                  ],
+                Positioned(
+                  bottom: 24,
+                  right: 24,
+                  child: FloatingActionButton(
+                    onPressed: () => _snack('Print report initiated...'),
+                    backgroundColor: tc.orange,
+                    foregroundColor: tc.onOrange,
+                    elevation: 4,
+                    child: const Icon(Icons.print_rounded),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 24),
-            Container(
-              width: 320,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _cardBorder),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'DATE RANGE',
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _muted, letterSpacing: 0.5),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF9FAFB),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFE5E7EB)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: const [
-                        Text('Sept 1, 2025 - Sept 16, 2025', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _textDark)),
-                        Icon(Icons.calendar_month, size: 18, color: _muted),
-                      ],
-                    ),
-                  ),
-                ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PAGE HEADER
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildPageHeader() {
+    return LayoutBuilder(
+      builder: (_, c) {
+        final r = BsResponsive(c.maxWidth);
+        final narrow = !r.up(BsSize.md);
+
+        final title = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Add Employee',
+              style: TextStyle(
+                fontSize: r.responsive<double>(xs: 22, sm: 26, md: 28, lg: 32),
+                fontWeight: FontWeight.w700,
+                color: tc.text,
+                letterSpacing: -0.3,
               ),
             ),
-            const SizedBox(height: 24),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _cardBorder),
-              ),
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFFAFAFA),
-                      border: Border(bottom: BorderSide(color: _cardBorder)),
-                    ),
-                    child: Row(
-                      children: const [
-                        Expanded(flex: 3, child: Text('EMPLOYEE NAME', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _muted))),
-                        Expanded(flex: 2, child: Text('ROLE / DEPT', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _muted))),
-                        SizedBox(width: 50, child: Text('ACTIONS', textAlign: TextAlign.right, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _muted))),
-                      ],
-                    ),
-                  ),
-                  FutureBuilder<List<Map<String, dynamic>>>(
-                    future: AdminDatabase.getEmployees(),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Padding(
-                          padding: EdgeInsets.all(32.0),
-                          child: Center(child: CircularProgressIndicator(color: _orange)),
-                        );
-                      }
-
-                      if (snapshot.hasError) {
-                        return Padding(
-                          padding: const EdgeInsets.all(24.0),
-                          child: Text('Error loading employees: ${snapshot.error}', style: const TextStyle(color: Colors.red)),
-                        );
-                      }
-
-                      final employees = snapshot.data ?? [];
-
-                      if (employees.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.all(32.0),
-                          child: Center(
-                            child: Text('No registered employees found in database.', style: TextStyle(color: _muted)),
-                          ),
-                        );
-                      }
-
-                      return Column(
-                        children: employees.map((emp) {
-                          final firstName = emp['firstName'] ?? emp['first_name'] ?? '';
-                          final lastName = emp['lastName'] ?? emp['last_name'] ?? '';
-                          final fullName = '$firstName $lastName'.trim().isEmpty ? (emp['name'] ?? 'Unknown Staff') : '$firstName $lastName';
-                          final empId = emp['nfcTagId'] ?? emp['id'] ?? 'N/A';
-                          final role = emp['role'] ?? 'Staff';
-                          final dept = emp['department'] ?? 'General';
-                          final initials = _getInitials(firstName, lastName);
-
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                            decoration: const BoxDecoration(
-                              border: Border(bottom: BorderSide(color: _cardBorder)),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  flex: 3,
-                                  child: Row(
-                                    children: [
-                                      CircleAvatar(
-                                        radius: 18,
-                                        backgroundColor: const Color(0xFFFFEDD5),
-                                        child: Text(
-                                          initials,
-                                          style: const TextStyle(color: Color(0xFFEA580C), fontSize: 12, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(fullName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _textDark)),
-                                          Text('NFC: $empId', style: const TextStyle(fontSize: 11, color: _muted)),
-                                        ],
-                                      )
-                                    ],
-                                  ),
-                                ),
-                                Expanded(
-                                  flex: 2,
-                                  child: Text('$role ($dept)', style: const TextStyle(fontSize: 13, color: _textDark)),
-                                ),
-                                SizedBox(
-                                  width: 50,
-                                  child: IconButton(
-                                    alignment: Alignment.centerRight,
-                                    icon: const Icon(Icons.more_vert, color: _muted, size: 18),
-                                    onPressed: () {},
-                                  ),
-                                )
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                      );
-                    },
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                    color: const Color(0xFFFAFAFA),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('System Records Active', style: TextStyle(fontSize: 12, color: _muted)),
-                        Row(
-                          children: [
-                            _pageBtn(Icons.chevron_left, false),
-                            _pageNumberBtn('1', true),
-                            _pageBtn(Icons.chevron_right, false),
-                          ],
-                        )
-                      ],
-                    ),
-                  )
-                ],
+            const SizedBox(height: 4),
+            Text(
+              'Real-time verification of professional shifts and geofencing status.',
+              style: TextStyle(
+                fontSize: r.responsive<double>(xs: 13, md: 16),
+                color: tc.textMuted,
               ),
             ),
           ],
-        ),
+        );
+
+        final exportBtn = OutlinedButton.icon(
+          onPressed: () => _snack('CSV Exported'),
+          icon: Icon(Icons.download_rounded, size: 16, color: tc.text),
+          label: Text(
+            'Export CSV',
+            style: TextStyle(color: tc.text, fontWeight: FontWeight.w700, fontSize: 14),
+          ),
+          style: OutlinedButton.styleFrom(
+            backgroundColor: tc.card,
+            side: BorderSide(color: tc.border),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            elevation: 0,
+          ),
+        );
+
+        final manualBtn = ElevatedButton.icon(
+          onPressed: _openAddDialog,
+          icon: Icon(Icons.add_rounded, size: 16, color: tc.onOrange),
+          label: Text(
+            'Manual Entry',
+            style: TextStyle(color: tc.onOrange, fontWeight: FontWeight.w700, fontSize: 14),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: tc.orange,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            elevation: 0,
+          ),
+        );
+
+        if (narrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              title,
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(child: exportBtn),
+                  const SizedBox(width: 12),
+                  Expanded(child: manualBtn),
+                ],
+              ),
+            ],
+          );
+        }
+
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: title),
+            Row(
+              children: [
+                exportBtn,
+                const SizedBox(width: 12),
+                manualBtn,
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // FILTER CARD
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildFilterCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: tc.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tc.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'DATE RANGE',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: tc.textMuted, letterSpacing: 0.5),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: tc.surface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: tc.border),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Sept 1, 2025 - Sept 16, 2025',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: tc.text),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Icon(Icons.calendar_month_rounded, size: 20, color: tc.textMuted),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // EMPLOYEES TABLE
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildEmployeesTable() {
+    return LayoutBuilder(
+      builder: (_, c) {
+        final r = BsResponsive(c.maxWidth);
+        final isMobile = !r.up(BsSize.md);
+
+        return Container(
+          decoration: BoxDecoration(
+            color: tc.card,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: tc.border),
+          ),
+          child: Column(
+            children: [
+              if (!isMobile) _buildTableHeader(),
+              FutureBuilder<List<Map<String, dynamic>>>(
+                future: _employeesFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return Padding(
+                      padding: const EdgeInsets.all(48.0),
+                      child: Center(child: CircularProgressIndicator(color: tc.orange)),
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Text('Error loading employees: ${snapshot.error}', style: TextStyle(color: tc.red)),
+                    );
+                  }
+                  final employees = snapshot.data ?? [];
+                  if (employees.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.all(48.0),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            Icon(Icons.people_outline_rounded, size: 48, color: tc.muted),
+                            const SizedBox(height: 12),
+                            Text('No registered employees found in database.', style: TextStyle(color: tc.muted, fontSize: 14)),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                  return Column(
+                    children: employees.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final emp = entry.value;
+                      final isLast = index == employees.length - 1;
+                      return isMobile
+                          ? _buildEmployeeMobileCard(emp, isLast: isLast)
+                          : _buildEmployeeRow(emp, isLast: isLast);
+                    }).toList(),
+                  );
+                },
+              ),
+              _buildTableFooter(),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTableHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      decoration: BoxDecoration(
+        color: tc.surface,
+        borderRadius: const BorderRadius.only(topLeft: Radius.circular(12), topRight: Radius.circular(12)),
+        border: Border(bottom: BorderSide(color: tc.borderWarm, width: 1)),
+      ),
+      child: Row(
+        children: [
+          _th('EMPLOYEE NAME', flex: 3),
+          _th('ROLE / DEPT', flex: 2),
+          SizedBox(
+            width: 60,
+            child: Text('ACTIONS', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: tc.textMuted, letterSpacing: 0.5)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTableFooter() {
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      final narrow = !r.up(BsSize.sm);
+      final info = Text('System Records Active', style: TextStyle(fontSize: 13, color: tc.textMuted));
+      final controls = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _pageBtn(Icons.chevron_left_rounded, false),
+          const SizedBox(width: 6),
+          _pageNumberBtn('1', true),
+          const SizedBox(width: 6),
+          _pageBtn(Icons.chevron_right_rounded, false),
+        ],
+      );
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: BoxDecoration(
+          color: tc.surface,
+          borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(12), bottomRight: Radius.circular(12)),
+          border: Border(top: BorderSide(color: tc.borderWarm, width: 1)),
+        ),
+        child: narrow
+            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [info, const SizedBox(height: 12), controls])
+            : Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [info, controls]),
+      );
+    });
+  }
+
+  Widget _th(String label, {required int flex}) {
+    return Expanded(
+      flex: flex,
+      child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: tc.textMuted, letterSpacing: 0.5)),
+    );
+  }
+
+  Widget _buildEmployeeRow(Map<String, dynamic> emp, {bool isLast = false}) {
+    final firstName = emp['firstName'] ?? emp['first_name'] ?? '';
+    final lastName = emp['lastName'] ?? emp['last_name'] ?? '';
+    final fullName = '$firstName $lastName'.trim().isEmpty ? (emp['name'] ?? 'Unknown Staff') : '$firstName $lastName';
+    final empId = emp['nfcTagId'] ?? emp['id'] ?? 'N/A';
+    final displayId = empId.toString().length > 12 ? '${empId.toString().substring(0, 12)}...' : empId.toString();
+    final role = emp['role'] ?? 'Staff';
+    final dept = emp['department'] ?? 'General';
+    final initials = _getInitials(firstName, lastName);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      decoration: BoxDecoration(border: isLast ? null : Border(bottom: BorderSide(color: tc.border, width: 0.5))),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Row(
+              children: [
+                Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    color: tc.orange.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1),
+                  ),
+                  child: Center(child: Text(initials, style: TextStyle(color: tc.orangeText, fontSize: 13, fontWeight: FontWeight.w700))),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(fullName, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: tc.text), overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 2),
+                      Text('ID: $displayId', style: TextStyle(fontSize: 12, color: tc.textMuted), overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(flex: 2, child: Text('$role ($dept)', style: TextStyle(fontSize: 14, color: tc.text, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis)),
+          SizedBox(width: 60, child: Align(alignment: Alignment.centerRight, child: _buildActionsMenu(fullName))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmployeeMobileCard(Map<String, dynamic> emp, {bool isLast = false}) {
+    final firstName = emp['firstName'] ?? emp['first_name'] ?? '';
+    final lastName = emp['lastName'] ?? emp['last_name'] ?? '';
+    final fullName = '$firstName $lastName'.trim().isEmpty ? (emp['name'] ?? 'Unknown Staff') : '$firstName $lastName';
+    final empId = emp['nfcTagId'] ?? emp['id'] ?? 'N/A';
+    final displayId = empId.toString().length > 12 ? '${empId.toString().substring(0, 12)}...' : empId.toString();
+    final role = emp['role'] ?? 'Staff';
+    final dept = emp['department'] ?? 'General';
+    final initials = _getInitials(firstName, lastName);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(border: isLast ? null : Border(bottom: BorderSide(color: tc.border, width: 0.5))),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44, height: 44,
+            decoration: BoxDecoration(
+              color: tc.orange.withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+              border: Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1),
+            ),
+            child: Center(child: Text(initials, style: TextStyle(color: tc.orangeText, fontSize: 14, fontWeight: FontWeight.w700))),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(fullName, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: tc.text), overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text('ID: $displayId', style: TextStyle(fontSize: 12, color: tc.textMuted), overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 6),
+                Text('$role ($dept)', style: TextStyle(fontSize: 13, color: tc.text, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+          _buildActionsMenu(fullName),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionsMenu(String fullName) {
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.more_vert_rounded, color: tc.textMuted, size: 20),
+      color: tc.card,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: BorderSide(color: tc.border)),
+      tooltip: 'Actions',
+      itemBuilder: (_) => [
+        PopupMenuItem<String>(
+          value: 'edit',
+          child: Row(children: [Icon(Icons.edit_outlined, size: 16, color: tc.orange), const SizedBox(width: 10), Text('Edit', style: TextStyle(color: tc.text, fontSize: 13))]),
+        ),
+        PopupMenuItem<String>(
+          value: 'delete',
+          child: Row(children: [Icon(Icons.delete_outline_rounded, size: 16, color: tc.red), const SizedBox(width: 10), Text('Delete', style: TextStyle(color: tc.text, fontSize: 13))]),
+        ),
+      ],
+      onSelected: (value) => _snack('$value: $fullName'),
+    );
+  }
+
+  Widget _pageBtn(IconData icon, bool active) => Container(
+    margin: const EdgeInsets.symmetric(horizontal: 2),
+    width: 32, height: 32,
+    decoration: BoxDecoration(color: active ? tc.orange : Colors.transparent, borderRadius: BorderRadius.circular(6)),
+    child: Icon(icon, size: 18, color: active ? tc.onOrange : tc.textMuted),
+  );
+
+  Widget _pageNumberBtn(String text, bool active) => Container(
+    margin: const EdgeInsets.symmetric(horizontal: 2),
+    width: 32, height: 32,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(color: active ? tc.orange : Colors.transparent, borderRadius: BorderRadius.circular(6)),
+    child: Text(text, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: active ? tc.onOrange : tc.text)),
+  );
+
+  // ══════════════════════════════════════════════════════════════
+  // ADD DIALOG
+  // ✅ CRITICAL FIX: Ang mga controllers ay LOCAL na ngayon sa dialog,
+  //    hindi na sa parent State. Kaya hindi sila ma-didispose ng parent rebuild.
+  // ══════════════════════════════════════════════════════════════
   void _openAddDialog() {
     _profileImageBytes = null;
+    _saving = false;
+
+    // ✅ Gumawa ng fresh controllers para sa dialog session na ito
+    final nameCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
+    final birthdayCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final deptCtrl = TextEditingController();
+    final idCtrl = TextEditingController();
+    final nfcCtrl = TextEditingController();
+    final pinCtrl = TextEditingController();
 
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (_) => StatefulBuilder(
-        builder: (ctx, setS) => Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(16),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 960),
-            padding: const EdgeInsets.all(28),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF7F6F4),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _cardBorder),
-            ),
-            child: SingleChildScrollView(
-              child: Form(
-                key: _fKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Add New Employee',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _orange),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Employee Registration',
-                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF0F172A)),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Onboard a new team member and configure their biometric access credentials.',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-                    ),
-                    const SizedBox(height: 20),
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        if (constraints.maxWidth > 750) {
+        builder: (ctx, setS) {
+          final dialogTc = AdminTheme.getColors(ctx);
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: EdgeInsets.all(BsResponsive.of(ctx).isXs ? 8 : 16),
+            child: Container(
+              constraints: BoxConstraints(maxWidth: 960, maxHeight: MediaQuery.of(ctx).size.height * 0.95),
+              padding: EdgeInsets.all(BsResponsive.of(ctx).isXs ? 16 : 28),
+              decoration: BoxDecoration(
+                color: dialogTc.background,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: dialogTc.border),
+              ),
+              child: SingleChildScrollView(
+                child: Form(
+                  key: _fKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Add New Employee', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: dialogTc.orange)),
+                      const SizedBox(height: 4),
+                      Text('Employee Registration', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: dialogTc.text)),
+                      const SizedBox(height: 4),
+                      Text('Onboard a new team member and configure their biometric access credentials.', style: TextStyle(fontSize: 12, color: dialogTc.muted)),
+                      const SizedBox(height: 20),
+
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final stack = !BsResponsive(constraints.maxWidth).up(BsSize.md);
+                          if (stack) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _buildProfileCard(ctx, setS, dialogTc),
+                                const SizedBox(height: 20),
+                                _buildRightColumn(ctx, dialogTc, nameCtrl, emailCtrl, birthdayCtrl, phoneCtrl, deptCtrl, idCtrl, nfcCtrl, pinCtrl),
+                              ],
+                            );
+                          }
                           return Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              SizedBox(width: 280, child: _buildProfileCard(setS)),
+                              SizedBox(width: 280, child: _buildProfileCard(ctx, setS, dialogTc)),
                               const SizedBox(width: 20),
-                              Expanded(child: _buildRightColumn()),
+                              Expanded(child: _buildRightColumn(ctx, dialogTc, nameCtrl, emailCtrl, birthdayCtrl, phoneCtrl, deptCtrl, idCtrl, nfcCtrl, pinCtrl)),
                             ],
                           );
-                        } else {
-                          return Column(
-                            children: [
-                              _buildProfileCard(setS),
-                              const SizedBox(height: 16),
-                              _buildRightColumn(),
-                            ],
+                        },
+                      ),
+                      const SizedBox(height: 24),
+
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final stack = BsResponsive(constraints.maxWidth).isXs;
+
+                          final cancelBtn = OutlinedButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: dialogTc.text,
+                              side: BorderSide(color: dialogTc.border),
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            child: const Text('Cancel', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                           );
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        OutlinedButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFF475569),
-                            side: const BorderSide(color: Color(0xFFCBD5E1)),
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: const Text('Cancel', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                        ),
-                        const SizedBox(width: 12),
-                        ElevatedButton(
-                          onPressed: _saving
-                              ? null
-                              : () async {
-                            if (!_fKey.currentState!.validate()) return;
-                            setS(() => _saving = true);
 
-                            try {
-                              final fullName = _nameCtrl.text.trim();
-                              final parts = fullName.split(' ');
-                              final firstName = parts.isNotEmpty ? parts.first : fullName;
-                              final lastName = parts.length > 1 ? parts.sublist(1).join(' ') : 'Doe';
+                          final submitBtn = ElevatedButton(
+                            onPressed: _saving
+                                ? null
+                                : () async {
+                              if (_fKey.currentState == null || !_fKey.currentState!.validate()) return;
+                              if (!ctx.mounted) return;
+                              setS(() => _saving = true);
 
-                              final err = await AdminDatabase.addEmployee(
-                                firstName: firstName,
-                                lastName: lastName,
-                                email: _emailCtrl.text.trim(),
-                                password: 'password123',
-                                role: 'Staff',
-                                department: _deptCtrl.text.trim(),
-                                nfcTagId: _nfcCtrl.text.trim(),
-                                pin: _pinCtrl.text.trim(),
-                              );
+                              try {
+                                final fullName = nameCtrl.text.trim();
+                                final parts = fullName.split(' ');
+                                final firstName = parts.isNotEmpty ? parts.first : fullName;
+                                final lastName = parts.length > 1 ? parts.sublist(1).join(' ') : 'Doe';
 
-                              if (!mounted) return;
+                                final err = await AdminDatabase.addEmployee(
+                                  firstName: firstName,
+                                  lastName: lastName,
+                                  email: emailCtrl.text.trim(),
+                                  password: 'password123',
+                                  role: 'Staff',
+                                  department: deptCtrl.text.trim(),
+                                  nfcTagId: nfcCtrl.text.trim(),
+                                  pin: pinCtrl.text.trim(),
+                                );
 
-                              if (err != null) {
-                                _snack(err, error: true);
-                              } else {
-                                Navigator.pop(ctx);
-                                _snack('Employee saved & credentials deployed successfully!');
-                                setState(() {});
-                                widget.onRefreshNeeded();
+                                if (!ctx.mounted) return;
+
+                                if (err != null) {
+                                  _snack(err, error: true);
+                                } else {
+                                  Navigator.pop(ctx);
+                                  if (mounted) {
+                                    _snack('Employee saved & credentials deployed successfully!');
+                                    setState(() {
+                                      _employeesFuture = AdminDatabase.getEmployees();
+                                    });
+                                    widget.onRefreshNeeded();
+                                  }
+                                }
+                              } catch (e) {
+                                if (!ctx.mounted) return;
+                                _snack('Failed to add employee: $e', error: true);
+                              } finally {
+                                if (ctx.mounted) {
+                                  setS(() => _saving = false);
+                                }
                               }
-                            } catch (e) {
-                              if (!mounted) return;
-                              _snack('Failed to add employee: $e', error: true);
-                            } finally {
-                              if (mounted) setS(() => _saving = false);
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _orange,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            elevation: 0,
-                          ),
-                          child: _saving
-                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                              : const Text('Complete Onboarding', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                        ),
-                      ],
-                    ),
-                  ],
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: dialogTc.orange,
+                              foregroundColor: dialogTc.onOrange,
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              elevation: 0,
+                            ),
+                            child: _saving
+                                ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: dialogTc.onOrange, strokeWidth: 2))
+                                : const Text('Complete Onboarding', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                          );
+
+                          if (stack) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [submitBtn, const SizedBox(height: 12), cancelBtn],
+                            );
+                          }
+                          return Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [cancelBtn, const SizedBox(width: 12), submitBtn],
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
-    );
+    ).then((_) {
+      // ✅ I-dispose ang mga controllers kapag nagsara na ang dialog
+      nameCtrl.dispose();
+      emailCtrl.dispose();
+      birthdayCtrl.dispose();
+      phoneCtrl.dispose();
+      deptCtrl.dispose();
+      idCtrl.dispose();
+      nfcCtrl.dispose();
+      pinCtrl.dispose();
+    });
   }
 
-  Widget _buildProfileCard(StateSetter setS) {
+  // ══════════════════════════════════════════════════════════════
+  // PROFILE CARD
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildProfileCard(BuildContext ctx, StateSetter setS, AdminColors dialogTc) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: dialogTc.card,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _cardBorder),
+        border: Border.all(color: dialogTc.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
             onTap: () async {
-              FilePickerResult? result = await FilePicker.platform.pickFiles(
-                type: FileType.image,
-                allowMultiple: false,
-              );
-
+              FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: false);
               if (result != null && result.files.single.bytes != null) {
-                setS(() {
-                  _profileImageBytes = result.files.single.bytes;
-                });
-                _snack('Profile picture updated successfully!');
+                if (ctx.mounted) {
+                  setS(() {
+                    _profileImageBytes = result.files.single.bytes;
+                  });
+                  _snack('Profile picture updated successfully!');
+                }
               }
             },
             child: Container(
-              width: double.infinity,
-              height: 220,
+              width: double.infinity, height: 220,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(10),
-                color: const Color(0xFFF3F4F6),
-                image: _profileImageBytes != null
-                    ? DecorationImage(
-                  image: MemoryImage(_profileImageBytes!),
-                  fit: BoxFit.cover,
-                )
-                    : null,
+                color: dialogTc.surface,
+                image: _profileImageBytes != null ? DecorationImage(image: MemoryImage(_profileImageBytes!), fit: BoxFit.cover) : null,
               ),
               child: Stack(
                 children: [
                   if (_profileImageBytes == null)
-                    const Center(
+                    Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.person_outline, size: 56, color: Color(0xFF9CA3AF)),
-                          SizedBox(height: 8),
-                          Text(
-                            'Upload Photo',
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)),
-                          ),
+                          Icon(Icons.person_outline_rounded, size: 56, color: dialogTc.muted),
+                          const SizedBox(height: 8),
+                          Text('Upload Photo', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: dialogTc.muted)),
                         ],
                       ),
                     ),
                   const Positioned(
-                    bottom: 8,
-                    right: 8,
-                    child: CircleAvatar(
-                      backgroundColor: Colors.black54,
-                      radius: 16,
-                      child: Icon(Icons.camera_alt, color: Colors.white, size: 16),
-                    ),
+                    bottom: 8, right: 8,
+                    child: CircleAvatar(backgroundColor: Colors.black54, radius: 16, child: Icon(Icons.camera_alt_rounded, color: Colors.white, size: 16)),
                   ),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 14),
-          const Text('Profile Identity', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: _textDark)),
+          Text('Profile Identity', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: dialogTc.text)),
           const SizedBox(height: 4),
-          const Text('Click image to upload/change employee photo.', style: TextStyle(fontSize: 11, color: _muted, height: 1.3)),
+          Text('Click image to upload/change employee photo.', style: TextStyle(fontSize: 11, color: dialogTc.muted, height: 1.3)),
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: const Color(0xFFFFFBEB),
+              color: dialogTc.pillWarnBg,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFFDE68A)),
+              border: Border.all(color: dialogTc.pillWarnTx.withValues(alpha: 0.3)),
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Icon(Icons.info_outline, size: 14, color: Color(0xFF92400E)),
-                SizedBox(width: 8),
+              children: [
+                Icon(Icons.info_outline, size: 14, color: dialogTc.pillWarnTx),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     "Ensure the employee's name matches their government-issued ID for biometric verification compliance.",
-                    style: TextStyle(fontSize: 10, color: Color(0xFF92400E), fontWeight: FontWeight.w500, height: 1.3),
+                    style: TextStyle(fontSize: 10, color: dialogTc.pillWarnTx, fontWeight: FontWeight.w500, height: 1.3),
                   ),
                 ),
               ],
@@ -533,67 +767,58 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     );
   }
 
-  Widget _buildRightColumn() {
+  // ══════════════════════════════════════════════════════════════
+  // RIGHT COLUMN
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildRightColumn(
+      BuildContext ctx,
+      AdminColors dialogTc,
+      TextEditingController nameCtrl,
+      TextEditingController emailCtrl,
+      TextEditingController birthdayCtrl,
+      TextEditingController phoneCtrl,
+      TextEditingController deptCtrl,
+      TextEditingController idCtrl,
+      TextEditingController nfcCtrl,
+      TextEditingController pinCtrl,
+      ) {
     return Column(
       children: [
         Container(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _cardBorder),
-          ),
+          decoration: BoxDecoration(color: dialogTc.card, borderRadius: BorderRadius.circular(12), border: Border.all(color: dialogTc.border)),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: const [
-                  Icon(Icons.badge_outlined, size: 16, color: _orange),
-                  SizedBox(width: 8),
-                  Text('Personal Information', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: _textDark)),
-                ],
-              ),
+              Row(children: [Icon(Icons.badge_outlined, size: 16, color: dialogTc.orange), const SizedBox(width: 8), Text('Personal Information', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: dialogTc.text))]),
               const SizedBox(height: 14),
               LayoutBuilder(
                 builder: (context, constraints) {
-                  bool isWide = constraints.maxWidth > 400;
+                  final narrow = constraints.maxWidth < 500;
+                  if (narrow) {
+                    return Column(
+                      children: [
+                        _buildInput('FULL NAME', nameCtrl, 'Full Name', dialogTc),
+                        const SizedBox(height: 12),
+                        _buildInput('EMAIL ADDRESS', emailCtrl, 'Email Address', dialogTc),
+                        const SizedBox(height: 12),
+                        _buildInput('BIRTHDAY', birthdayCtrl, 'Birthday', dialogTc),
+                        const SizedBox(height: 12),
+                        _buildInput('PHONE NO.', phoneCtrl, 'Phone No.', dialogTc),
+                        const SizedBox(height: 12),
+                        _buildInput('DEPARTMENT', deptCtrl, 'Department', dialogTc),
+                        const SizedBox(height: 12),
+                        _buildInput('EMPLOYEE ID', idCtrl, 'Employee ID', dialogTc),
+                      ],
+                    );
+                  }
                   return Column(
                     children: [
-                      Row(
-                        children: [
-                          Expanded(child: _buildInput('FULL NAME', _nameCtrl, 'Full Name')),
-                          if (isWide) const SizedBox(width: 12),
-                          if (isWide) Expanded(child: _buildInput('EMAIL ADDRESS', _emailCtrl, 'Email Address')),
-                        ],
-                      ),
-                      if (!isWide) ...[
-                        const SizedBox(height: 12),
-                        _buildInput('EMAIL ADDRESS', _emailCtrl, 'Email Address'),
-                      ],
+                      Row(children: [Expanded(child: _buildInput('FULL NAME', nameCtrl, 'Full Name', dialogTc)), const SizedBox(width: 12), Expanded(child: _buildInput('EMAIL ADDRESS', emailCtrl, 'Email Address', dialogTc))]),
                       const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(child: _buildInput('BIRTHDAY', _birthdayCtrl, 'Birthday')),
-                          if (isWide) const SizedBox(width: 12),
-                          if (isWide) Expanded(child: _buildInput('PHONE NO.', _phoneCtrl, 'Phone No.')),
-                        ],
-                      ),
-                      if (!isWide) ...[
-                        const SizedBox(height: 12),
-                        _buildInput('PHONE NO.', _phoneCtrl, 'Phone No.'),
-                      ],
+                      Row(children: [Expanded(child: _buildInput('BIRTHDAY', birthdayCtrl, 'Birthday', dialogTc)), const SizedBox(width: 12), Expanded(child: _buildInput('PHONE NO.', phoneCtrl, 'Phone No.', dialogTc))]),
                       const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(child: _buildInput('DEPARTMENT', _deptCtrl, 'Department')),
-                          if (isWide) const SizedBox(width: 12),
-                          if (isWide) Expanded(child: _buildInput('EMPLOYEE ID', _idCtrl, 'Employee ID')),
-                        ],
-                      ),
-                      if (!isWide) ...[
-                        const SizedBox(height: 12),
-                        _buildInput('EMPLOYEE ID', _idCtrl, 'Employee ID'),
-                      ],
+                      Row(children: [Expanded(child: _buildInput('DEPARTMENT', deptCtrl, 'Department', dialogTc)), const SizedBox(width: 12), Expanded(child: _buildInput('EMPLOYEE ID', idCtrl, 'Employee ID', dialogTc))]),
                     ],
                   );
                 },
@@ -604,48 +829,39 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         const SizedBox(height: 16),
         Container(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _cardBorder),
-          ),
+          decoration: BoxDecoration(color: dialogTc.card, borderRadius: BorderRadius.circular(12), border: Border.all(color: dialogTc.border)),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: const [
-                  Icon(Icons.fingerprint, size: 16, color: _orange),
-                  SizedBox(width: 8),
-                  Text('Biometric Credentials', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: _textDark)),
-                ],
-              ),
+              Row(children: [Icon(Icons.fingerprint, size: 16, color: dialogTc.orange), const SizedBox(width: 8), Text('Biometric Credentials', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: dialogTc.text))]),
               const SizedBox(height: 14),
               LayoutBuilder(
                 builder: (context, constraints) {
-                  bool isWide = constraints.maxWidth > 400;
-                  return Column(
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(child: _buildInput('KEYFOB SERIAL', _nfcCtrl, 'Keyfob Serial', suffixIcon: Icons.wifi)),
-                          if (isWide) const SizedBox(width: 12),
-                          if (isWide) Expanded(child: _buildInput('4-DIGIT PIN', _pinCtrl, '4-Digit PIN', obscure: true)),
-                        ],
-                      ),
-                      if (!isWide) ...[
+                  final narrow = constraints.maxWidth < 500;
+                  if (narrow) {
+                    return Column(
+                      children: [
+                        _buildInput('KEYFOB SERIAL', nfcCtrl, 'Keyfob Serial', dialogTc, suffixIcon: Icons.wifi),
                         const SizedBox(height: 12),
-                        _buildInput('4-DIGIT PIN', _pinCtrl, '4-Digit PIN', obscure: true),
+                        _buildInput('4-DIGIT PIN', pinCtrl, '4-Digit PIN', dialogTc, obscure: true),
                       ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: _buildInput('KEYFOB SERIAL', nfcCtrl, 'Keyfob Serial', dialogTc, suffixIcon: Icons.wifi)),
+                      const SizedBox(width: 12),
+                      Expanded(child: _buildInput('4-DIGIT PIN', pinCtrl, '4-Digit PIN', dialogTc, obscure: true)),
                     ],
                   );
                 },
               ),
               const SizedBox(height: 12),
-              Row(
+              Wrap(
+                spacing: 8, runSpacing: 8,
                 children: [
-                  _buildBadge('NFC Ready'),
-                  const SizedBox(width: 8),
-                  _buildBadge('Pin-pad Enabled'),
+                  _buildBadge('NFC Ready', dialogTc),
+                  _buildBadge('Pin-pad Enabled', dialogTc),
                 ],
               ),
             ],
@@ -655,67 +871,53 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     );
   }
 
-  Widget _buildInput(String label, TextEditingController controller, String hint, {bool obscure = false, IconData? suffixIcon}) {
+  Widget _buildInput(
+      String label,
+      TextEditingController controller,
+      String hint,
+      AdminColors dialogTc, {
+        bool obscure = false,
+        IconData? suffixIcon,
+      }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFF475569), letterSpacing: 0.5)),
+        Text(label, style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: dialogTc.muted, letterSpacing: 0.5)),
         const SizedBox(height: 4),
         TextFormField(
           controller: controller,
           obscureText: obscure,
           validator: (v) => v == null || v.isEmpty ? 'Required' : null,
-          style: const TextStyle(fontSize: 12, color: Color(0xFF334155), fontWeight: FontWeight.w500),
+          style: TextStyle(fontSize: 12, color: dialogTc.text, fontWeight: FontWeight.w500),
           decoration: InputDecoration(
             hintText: hint,
-            hintStyle: const TextStyle(color: _muted),
+            hintStyle: TextStyle(color: dialogTc.muted),
             filled: true,
-            fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            suffixIcon: suffixIcon != null ? Icon(suffixIcon, size: 14, color: const Color(0xFF64748B)) : null,
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: _orange, width: 1.5)),
-            errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Colors.red, width: 1.5)),
-            focusedErrorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Colors.red, width: 1.5)),
+            fillColor: dialogTc.surface,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            suffixIcon: suffixIcon != null ? Icon(suffixIcon, size: 14, color: dialogTc.muted) : null,
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: dialogTc.border)),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: dialogTc.orange, width: 1.5)),
+            errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: dialogTc.red, width: 1.5)),
+            focusedErrorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: dialogTc.red, width: 1.5)),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildBadge(String text) {
+  Widget _buildBadge(String text, AdminColors dialogTc) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(color: dialogTc.surface, borderRadius: BorderRadius.circular(20), border: Border.all(color: dialogTc.border)),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.check_circle, size: 10, color: _orange),
-          const SizedBox(width: 4),
-          Text(text, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Color(0xFF475569))),
+          Icon(Icons.check_circle, size: 11, color: dialogTc.orange),
+          const SizedBox(width: 5),
+          Text(text, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: dialogTc.text)),
         ],
       ),
     );
   }
-
-  Widget _pageBtn(IconData icon, bool active) => Container(
-    margin: const EdgeInsets.symmetric(horizontal: 2),
-    width: 28,
-    height: 28,
-    decoration: BoxDecoration(color: active ? _orange : Colors.transparent, borderRadius: BorderRadius.circular(6)),
-    child: Icon(icon, size: 16, color: active ? Colors.white : _muted),
-  );
-
-  Widget _pageNumberBtn(String text, bool active) => Container(
-    margin: const EdgeInsets.symmetric(horizontal: 2),
-    width: 28,
-    height: 28,
-    alignment: Alignment.center,
-    decoration: BoxDecoration(color: active ? _orange : Colors.transparent, borderRadius: BorderRadius.circular(6)),
-    child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: active ? Colors.white : _textDark)),
-  );
 }

@@ -8,6 +8,7 @@ class AdminDatabase {
   static CollectionReference get employees => fs.collection('employees');
   static CollectionReference get activityLogs => fs.collection('activity logs');
   static CollectionReference get locations => fs.collection('user locations');
+  static CollectionReference get attendanceLogs => fs.collection('attendance_logs');
 
   static const List<String> employeeLinkedCollections = [
     'activity_logs',
@@ -20,20 +21,55 @@ class AdminDatabase {
 
   static String _msg(Object e) => e is FirebaseException ? (e.message ?? e.toString()) : e.toString();
 
-  // --- STREAMS WITH ERROR HANDLING ---
+  // ─── SORT HELPER (client-side, safe kahit walang createdAt) ──
+
+  static void _sortByCreatedAtDesc(List<Map<String, dynamic>> list) {
+    list.sort((a, b) {
+      final ca = a['createdAt'];
+      final cb = b['createdAt'];
+      if (ca is Timestamp && cb is Timestamp) return cb.compareTo(ca);
+      if (ca is Timestamp) return -1; // may createdAt muna sa taas
+      if (cb is Timestamp) return 1;
+      return 0; // pareho walang createdAt, huwag baguhin ang order
+    });
+  }
+
+  // ─── EMPLOYEES ──────────────────────────────────────────────
 
   static Stream<List<Map<String, dynamic>>> streamEmployees() {
     try {
-      return employees.orderBy('createdAt', descending: true).snapshots().map(
-            (s) => s.docs.map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id}).toList(),
-      ).handleError((e) {
-        debugPrint('streamEmployees: ${_msg(e)}');
+      return employees.snapshots().map((s) {
+        final list = s.docs
+            .map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id})
+            .toList();
+        _sortByCreatedAtDesc(list);
+        debugPrint('📡 streamEmployees: ${list.length} docs from Firestore');
+        return list;
+      }).handleError((e) {
+        debugPrint('❌ streamEmployees ERROR: ${_msg(e)}');
       });
     } catch (e) {
-      debugPrint('streamEmployees setup: ${_msg(e)}');
+      debugPrint('❌ streamEmployees setup ERROR: ${_msg(e)}');
       return Stream.value([]);
     }
   }
+
+  static Future<List<Map<String, dynamic>>> getEmployees() async {
+    try {
+      final s = await employees.get(); // walang orderBy sa query mismo — kinukuha LAHAT
+      final list = s.docs
+          .map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id})
+          .toList();
+      _sortByCreatedAtDesc(list);
+      debugPrint('📥 getEmployees: ${list.length} docs from Firestore');
+      return list;
+    } catch (e) {
+      debugPrint('❌ getEmployees ERROR: ${_msg(e)}');
+      return [];
+    }
+  }
+
+  // ─── ACTIVITY LOGS ──────────────────────────────────────────
 
   static Stream<List<Map<String, dynamic>>> streamLogs(String type) {
     try {
@@ -48,31 +84,6 @@ class AdminDatabase {
     } catch (e) {
       debugPrint('streamLogs setup ($type): ${_msg(e)}');
       return Stream.value([]);
-    }
-  }
-
-  static Stream<List<Map<String, dynamic>>> streamLocations() {
-    try {
-      return locations.snapshots().map(
-            (s) => s.docs.map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id}).toList(),
-      ).handleError((e) {
-        debugPrint('streamLocations: ${_msg(e)}');
-      });
-    } catch (e) {
-      debugPrint('streamLocations setup: ${_msg(e)}');
-      return Stream.value([]);
-    }
-  }
-
-  // --- FUTURES & QUERIES ---
-
-  static Future<List<Map<String, dynamic>>> getEmployees() async {
-    try {
-      final s = await employees.orderBy('createdAt', descending: true).get();
-      return s.docs.map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id}).toList();
-    } catch (e) {
-      debugPrint('getEmployees: ${_msg(e)}');
-      return [];
     }
   }
 
@@ -96,6 +107,76 @@ class AdminDatabase {
     }
   }
 
+  // ─── ATTENDANCE LOGS ────────────────────────────────────────
+
+  static Map<String, dynamic> _convertAttendanceDoc(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    DateTime? ts;
+
+    final timestampVal = data['timestamp'];
+    if (timestampVal is Timestamp) {
+      ts = timestampVal.toDate();
+    } else if (timestampVal is String) {
+      final dateStr = data['date'] as String?;
+      final timeStr = data['time'] as String?;
+      if (dateStr != null && timeStr != null) {
+        try {
+          ts = DateTime.parse('$dateStr $timeStr');
+        } catch (_) {}
+      } else {
+        try {
+          ts = DateTime.parse(timestampVal);
+        } catch (_) {}
+      }
+    }
+
+    return {
+      ...data,
+      'id': doc.id,
+      'timestamp': ts,
+    };
+  }
+
+  static Stream<List<Map<String, dynamic>>> streamAttendanceLogs() {
+    try {
+      return attendanceLogs
+          .orderBy('timestamp', descending: true)
+          .snapshots()
+          .map((s) => s.docs.map(_convertAttendanceDoc).toList())
+          .handleError((e) {
+        debugPrint('streamAttendanceLogs: ${_msg(e)}');
+      });
+    } catch (e) {
+      debugPrint('streamAttendanceLogs setup: ${_msg(e)}');
+      return Stream.value([]);
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> getAttendanceLogs() async {
+    try {
+      final s = await attendanceLogs.orderBy('timestamp', descending: true).get();
+      return s.docs.map(_convertAttendanceDoc).toList();
+    } catch (e) {
+      debugPrint('getAttendanceLogs: ${_msg(e)}');
+      return [];
+    }
+  }
+
+  // ─── LOCATIONS ──────────────────────────────────────────────
+
+  static Stream<List<Map<String, dynamic>>> streamLocations() {
+    try {
+      return locations.snapshots().map(
+            (s) => s.docs.map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id}).toList(),
+      ).handleError((e) {
+        debugPrint('streamLocations: ${_msg(e)}');
+      });
+    } catch (e) {
+      debugPrint('streamLocations setup: ${_msg(e)}');
+      return Stream.value([]);
+    }
+  }
+
   static Future<List<Map<String, dynamic>>> getLocations() async {
     try {
       final s = await locations.get();
@@ -105,6 +186,8 @@ class AdminDatabase {
       return [];
     }
   }
+
+  // ─── CRUD OPERATIONS ────────────────────────────────────────
 
   static Future<String?> addEmployee({
     required String firstName,
@@ -179,8 +262,6 @@ class AdminDatabase {
     }
   }
 
-  /// Deletes an employee AND cascades delete to every record in
-  /// [employeeLinkedCollections] that references their employeeId.
   static Future<String?> deleteEmployee(String docId) async {
     try {
       for (final collection in employeeLinkedCollections) {
@@ -202,7 +283,6 @@ class AdminDatabase {
     }
   }
 
-  /// Wipes every document out of the given collections entirely.
   static Future<String?> wipeAllLogs({
     List<String> collections = employeeLinkedCollections,
   }) async {
@@ -216,7 +296,6 @@ class AdminDatabase {
     }
   }
 
-  /// Wipes every employee AND every log collection — a full reset.
   static Future<String?> wipeEverything() async {
     try {
       for (final collection in employeeLinkedCollections) {
@@ -240,7 +319,7 @@ class AdminDatabase {
   }
 
   static Future<void> _deleteQueryInBatches(Query query) async {
-    const chunkSize = 400; // stay under Firestore's 500-write batch limit
+    const chunkSize = 400;
     while (true) {
       final snapshot = await query.limit(chunkSize).get();
       if (snapshot.docs.isEmpty) break;

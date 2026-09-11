@@ -1,6 +1,4 @@
-# Run this in your project folder
-@"
-# Flutter/Dart
+﻿# Flutter/Dart
 build/
 .dart_tool/
 .flutter-plugins
@@ -13,10 +11,17 @@ build/
 android/.gradle/
 android/local.properties
 android/key.properties
+android/app/debug
+android/app/profile
+android/app/release
 
 # iOS
 ios/Pods/
 ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
 
 # IDE
 .idea/
@@ -26,4 +31,15 @@ ios/.symlinks/
 # Env
 .env
 *.env
-"@ | Out-File -FilePath .gitignore -Encoding utf8
+
+# Firebase (sensitive)
+google-services.json
+GoogleService-Info.plist
+.firebase/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

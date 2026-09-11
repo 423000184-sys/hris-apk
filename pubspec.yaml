@@ -10,61 +10,48 @@ dependencies:
   flutter:
     sdk: flutter
 
-<<<<<<< HEAD
   # ─── Firebase ──────────────────────────────────────────────────────
-=======
-  # Firebase
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   firebase_core: ^3.10.1
   firebase_auth: ^5.4.1
   cloud_firestore: ^5.6.2
 
-<<<<<<< HEAD
   # ─── Maps & Location ──────────────────────────────────────────────
   google_maps_flutter: ^2.10.0
   geolocator: ^13.0.2
-  geocoding: ^3.0.0                    # ✅ reverse geocoding
+  geocoding: ^3.0.0
   permission_handler: ^11.3.1
 
   # ─── UI & Animation ───────────────────────────────────────────────
-=======
-  # UI & Animation
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   cupertino_icons: ^1.0.8
   flutter_animate: ^4.5.0
   lottie: ^3.1.0
   shimmer: ^3.0.0
   fl_chart: ^0.69.0
-<<<<<<< HEAD
   flutter_svg: ^2.0.10+1
+  google_fonts: ^6.2.1
+  flutter_staggered_animations: ^1.1.1
+
+  # ─── Bootstrap UI ─────────────────────────────────────────────────
+  bootstrap_icons: ^1.11.3
+  flutter_bootstrap_widgets: ^1.0.0
 
   # ─── Local Database ───────────────────────────────────────────────
-  sqflite: ^2.3.3
-  path: ^1.9.0
-  path_provider: ^2.1.4               # ✅ for PDF file saving
-  shared_preferences: ^2.3.4
-
-  # ─── Biometrics & Security ────────────────────────────────────────
-=======
-
-  # Local DB
   sqflite: ^2.3.3
   path: ^1.9.0
   path_provider: ^2.1.4
   shared_preferences: ^2.3.4
 
-  # Biometrics & Security
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+  # ─── Biometrics & Security ────────────────────────────────────────
   local_auth: ^2.3.0
   flutter_secure_storage: ^9.2.2
   crypto: ^3.0.3
 
-<<<<<<< HEAD
   # ─── Face Detection ───────────────────────────────────────────────
   google_mlkit_face_detection: ^0.11.0
 
   # ─── Camera & Image ───────────────────────────────────────────────
   camera: ^0.10.5+9
+  camera_web: ^0.3.3               # ✅ IDINAGDAG — para sa web camera support
   image_picker: ^1.1.2
   file_picker: ^8.1.2
   image: ^4.2.0
@@ -77,72 +64,36 @@ dependencies:
   provider: ^6.1.2
 
   # ─── Utilities ────────────────────────────────────────────────────
-  intl: ^0.19.0                      # ✅ date formatting
+  intl: ^0.19.0
   uuid: ^4.5.1
   qr_flutter: ^4.1.0
   device_info_plus: ^10.1.0
   connectivity_plus: ^6.1.1
   url_launcher: ^6.2.5
 
-  # ─── Exporting (PDF, Excel) ──────────────────────────────────────
-  pdf: ^3.10.8                       # ✅ PDF generation
-  printing: ^5.13.1                  # ✅ PDF printing/share
+  # ─── Exporting (PDF, Excel, CSV) ──────────────────────────────────
+  pdf: ^3.10.8
+  printing: ^5.13.1
   excel: ^4.0.6
+  csv: ^5.0.0
 
-  # ─── NFC ───────────────────────────────────────────────────────────
+  # ─── NFC ──────────────────────────────────────────────────────────
   nfc_manager: ^3.5.1
   rxdart: ^0.28.0
 
   # ─── Background Services ──────────────────────────────────────────
-=======
-  # Face Detection
-  google_mlkit_face_detection: ^0.11.0
-
-  # Camera & Image
-  camera: ^0.10.5+9
-  image_picker: ^1.1.2
-  image: ^4.2.0
-
-  # HTTP & Networking
-  http: ^1.2.2
-  dio: ^5.7.0
-
-  # State Management
-  provider: ^6.1.2
-
-  # Utils
-  intl: ^0.19.0
-  uuid: ^4.5.1
-  qr_flutter: ^4.1.0
-  permission_handler: ^11.3.1   # location permission prompts (Android/iOS)
-  geolocator: ^13.0.2            # GPS distance + position
-  device_info_plus: ^10.1.0
-  connectivity_plus: ^6.1.1
-
-  # Exporting
-  pdf: ^3.10.8
-  printing: ^5.12.0
-  excel: ^4.0.6
-
-  # NFC
-  nfc_manager: ^3.5.0
-  rxdart: ^0.28.0
-
-  # Ringtone & Background
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
   flutter_ringtone_player: ^4.0.0+4
   flutter_background_service: ^5.0.10
   flutter_local_notifications: ^17.2.3
 
-<<<<<<< HEAD
   # ─── Video & Map ──────────────────────────────────────────────────
   video_player: ^2.8.6
   flutter_map: ^8.3.2
   latlong2: ^0.10.1
-=======
-  # Video Player
-  video_player: ^2.8.6
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+
+  # ─── Additional UI Enhancements ───────────────────────────────────
+  syncfusion_flutter_datepicker: ^25.1.35
+  dropdown_search: ^5.0.6
 
 dev_dependencies:
   flutter_test:
@@ -156,9 +107,5 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/animations/
-<<<<<<< HEAD
     - assets/videos/hris.mp4
-    - assets/images/logo.png
-=======
-    - assets/videos/hris.mp4
->>>>>>> 65fa6bcdba6f48188055af1712f5fd32886c0ab1
+    - assets/images/logo1.png

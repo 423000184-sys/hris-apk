@@ -1,0 +1,329 @@
+════════════════════════════════════════════════════════════════
+  HRIS BIOMETRICS — HOW TO RUN (Complete Guide)
+  Project: C:\Users\april\Documents\hris_biometrics
+  PC IP: 192.168.1.5
+════════════════════════════════════════════════════════════════
+
+📌 PURPOSE
+   Para i-test ang Flutter web app sa ibang devices (phone/tablet)
+   via HTTPS gamit ang ngrok tunnel.
+
+════════════════════════════════════════════════════════════════
+  PART 1 — ONE-TIME SETUP (gawin mo lang ito ONCE)
+════════════════════════════════════════════════════════════════
+
+1.1  INSTALL NGROK
+     → Buksan: https://ngrok.com/download
+     → Pindutin "Microsoft Store Installer"
+     → Install mula sa Store
+
+1.2  SIGN UP NGROK
+     → Buksan: https://dashboard.ngrok.com/signup
+     → Mag-sign up gamit email o Google
+
+1.3  KUHAIN ANG AUTHTOKEN
+     → Buksan: https://dashboard.ngrok.com/get-started/your-authtoken
+     → Pindutin "Copy" button
+
+1.4  I-SAVE ANG AUTHTOKEN SA PC
+     → Buksan ang PowerShell
+     → I-run: ngrok config add-authtoken <PASTE_TOKEN_HERE>
+     → Dapat lumabas: "Authtoken saved..."
+
+1.5  FIREWALL RULE (para sa LAN testing via IP)
+     → Buksan PowerShell as Administrator
+     → I-run:
+       netsh advfirewall firewall add rule name="Flutter Web 8080" dir=in action=allow protocol=TCP localport=8080
+
+════════════════════════════════════════════════════════════════
+  PART 2 — EVERY TIME NA MAG-TEST (Daily Workflow)
+════════════════════════════════════════════════════════════════
+
+STEP 1 — BUILD ANG FLUTTER WEB APP
+────────────────────────────────────
+   → Buksan PowerShell
+   → I-run:
+     cd C:\Users\april\Documents\hris_biometrics
+     flutter build web --release
+
+   ⏱️  Hintayin matapos (~30-60 seconds)
+   ✅  Dapat lumabas: "✓ Built build\web"
+
+   ⚠️  Gawin lang ito kapag:
+       - First time mo mag-test
+       - Nag-edit ka ng code sa lib/
+       - Gusto mo fresh version
+
+────────────────────────────────────
+STEP 2 — START ANG PYTHON SERVER (Terminal #1)
+────────────────────────────────────
+   → Buksan BAGONG PowerShell
+   → I-run:
+     cd C:\Users\april\Documents\hris_biometrics\build\web
+     python -m http.server 8080 --bind 0.0.0.0
+
+   ✅  Dapat lumabas:
+     Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...
+
+   ⚠️  HUWAG ISARA ITONG WINDOW habang nag-test!
+   ⚠️  Ito yung "server" — nagbibigay ng files sa browser
+
+────────────────────────────────────
+STEP 3 — START ANG NGROK TUNNEL (Terminal #2)
+────────────────────────────────────
+   → Buksan BAGONG PowerShell (hindi pareho sa Step 2!)
+   → I-run:
+         ngrok http 8080
+
+   ✅  Dapat lumabas:
+     Session Status    online
+     Account           your-email@gmail.com (Plan: Free)
+     Forwarding        https://abc123xyz.ngrok-free.dev -> http://localhost:8080
+
+   📋  KOPYAHIN ang HTTPS URL (yung "https://abc123xyz...")
+       → ITO ANG PUBLIC URL MO — gamitin sa lahat ng devices!
+
+   ⚠️  HUWAG ISARA ITONG WINDOW habang nag-test!
+   ⚠️  Bawat restart ng ngrok = BAGONG URL (iba-iba kada run)
+
+────────────────────────────────────
+STEP 4 — I-UPDATE ANG FIREBASE AUTH
+────────────────────────────────────
+   ⚠️  Gawin lang ito kapag BAGO ang ngrok URL
+       (kung nag-restart ka ng ngrok)
+
+   → Buksan: https://console.firebase.google.com
+   → Piliin ang project mo (week-9-activity-53484)
+   → Authentication → Settings tab
+   → Authorized domains → Add domain
+   → I-paste ang bagong ngrok domain (WALANG https://)
+
+   HALIMBAWA:
+     ✅  TAMA:   lushly-festival-recycler.ngrok-free.dev
+     ❌  MALI:   https://lushly-festival-recycler.ngrok-free.dev
+     ❌  MALI:   lushly-festival-recycler.ngrok-free.dev/
+
+   → Pindutin "Add" button
+   → I-delete ang lumang ngrok URL (kung meron)
+
+────────────────────────────────────
+STEP 5 — TEST SA IBANG DEVICE
+────────────────────────────────────
+   → Sa phone/tablet/PC (kahit mobile data):
+   → Buksan Chrome
+   → I-type ang ngrok URL:
+     https://abc123xyz.ngrok-free.dev
+
+   FIRST VISIT:
+     → May lalabas na "Visit Site" button (ngrok warning)
+     → Pindutin ito
+
+   LOCATION PROMPT:
+     → "Allow" ang location permission
+
+   ✅  Dapat mag-load ang app!
+   ✅  Dapat gumana ang login (kung may Firebase Auth)
+
+════════════════════════════════════════════════════════════════
+  PART 3 — PARA SA TESTING SA PHONE VIA USB/WIFI (Localhost)
+════════════════════════════════════════════════════════════════
+
+⚠️  Ito ay ALTERNATIVE sa ngrok — mabilis pero kailangan
+    naka-USB/naka-WiFi ADB ang phone.
+
+STEP 1 — Start Python server (tulad ng Step 2 sa itaas)
+
+STEP 2 — ADB REVERSE
+   → Buksan bagong PowerShell
+   → I-run:
+     adb reverse tcp:8080 tcp:8080
+     adb reverse --list
+
+   ✅  Dapat lumabas: "host-21 tcp:8080 tcp:8080"
+
+STEP 3 — TEST SA PHONE
+   → Sa Chrome ng phone, i-type:
+     localhost:8080
+
+   ⚠️  "localhost" — HINDI 192.168.1.5
+   ⚠️  Kailangang tumatakbo pa ang Python server
+
+════════════════════════════════════════════════════════════════
+  PART 4 — MGA COMMON ISSUES AT FIX
+════════════════════════════════════════════════════════════════
+
+❌  ERROR: "Site can't be reached"
+    → Hindi tumatakbo ang ngrok
+    → I-restart: Ctrl+C sa Terminal #2, tapos i-run ulit
+      ngrok http 8080
+
+❌  ERROR: "502 Bad Gateway"
+    → Hindi tumatakbo ang Python server
+    → Tignan ang Terminal #1, i-restart kung kailangan:
+      python -m http.server 8080 --bind 0.0.0.0
+
+❌  ERROR: "auth/unauthorized-domain"
+    → Hindi pa na-add ang ngrok URL sa Firebase
+    → Sundin ang Step 4 sa itaas
+    → I-verify may TULDOK: lushly-festival-recycler.ngrok-free.dev
+
+❌  ERROR: "Outside Work Zone" (location issue)
+    → Nasa labas ka ng 1500m radius ng office
+    → Gumamit ng Fake GPS app:
+      1. Enable Developer Mode (Settings → About → Build number x7)
+      2. Install "Fake GPS Location" mula Play Store
+      3. Settings → Developer Options → Mock location app → Fake GPS
+      4. Sa Fake GPS app: latitude=14.6114, longitude=120.9936
+      5. Start button
+
+❌  ERROR: White screen sa browser
+    → Ctrl+Shift+R (hard refresh)
+    → O kaya i-clear browser cache
+
+❌  ERROR: "ngrok: command not found"
+    → Hindi naka-install o wala sa PATH
+    → I-install: MS Store → "ngrok"
+    → O i-restart PowerShell
+
+❌  ERROR: "adb: command not found"
+    → Idagdag sa PATH (temporary):
+      $env:Path += ";$env:LOCALAPPDATA\Android\Sdk\platform-tools"
+
+════════════════════════════════════════════════════════════════
+  PART 5 — QUICK REFERENCE (Copy-Paste Commands)
+════════════════════════════════════════════════════════════════
+
+[TERMINAL #1 — Server]
+cd C:\Users\april\Documents\hris_biometrics\build\web
+python -m http.server 8080 --bind 0.0.0.0
+
+[TERMINAL #2 — Ngrok]
+ngrok http 8080
+
+[KAPAG NAG-EDIT NG CODE — rebuild muna]
+cd C:\Users\april\Documents\hris_biometrics
+flutter build web --release
+
+[ADB Reverse (para sa USB/WiFi phone testing)]
+adb reverse tcp:8080 tcp:8080
+
+[Firebase Console]
+https://console.firebase.google.com
+
+════════════════════════════════════════════════════════════════
+  PART 6 — BUOD NG FLOW (Cheat Sheet)
+════════════════════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────┐
+  │ 1. flutter build web --release      │  (kung may code changes)
+  │    ⏱️ 30-60 sec                     │
+  └─────────────────────────────────────┘
+                  ↓
+  ┌─────────────────────────────────────┐
+  │ 2. python -m http.server 8080       │  ← Terminal #1
+  │    (WAG ISARA)                      │
+  └─────────────────────────────────────┘
+                  ↓
+  ┌─────────────────────────────────────┐
+  │ 3. ngrok http 8080                  │  ← Terminal #2
+  │    → Copy https://xxx.ngrok...      │  (WAG ISARA)
+  └─────────────────────────────────────┘
+                  ↓
+  ┌─────────────────────────────────────┐
+  │ 4. Firebase → Authorized domains    │  (kung bagong ngrok URL)
+  │    → Add xxx.ngrok-free.dev         │
+  └─────────────────────────────────────┘
+                  ↓
+  ┌─────────────────────────────────────┐
+  │ 5. Ibang device browser:            │
+  │    https://xxx.ngrok-free.dev       │
+  │    → Visit Site → Allow location    │
+  │    ✅  APP GUMAGANA!                 │
+  └─────────────────────────────────────┘
+
+════════════════════════════════════════════════════════════════
+  PART 7 — MGA REMINDERS
+════════════════════════════════════════════════════════════════
+
+  ✅  Kailangang tumatakbo BOTH Terminal #1 at #2
+  ✅  Bawat restart ng ngrok = BAGONG URL
+  ✅  Bawat bagong URL = i-update ang Firebase Auth
+  ✅  Wag isara ang terminals habang may nag-te-test
+  ✅  Sa Firebase, WALANG https:// at WALANG trailing /
+  ✅  Sa browser, may https:// sa simula
+  ✅  Ctrl+C para i-stop ang server/ngrok
+  ✅  Ctrl+Shift+R para hard refresh sa browser
+
+════════════════════════════════════════════════════════════════
+  PART 8 — ONE-TIME SETUP NGROK (Reference)
+════════════════════════════════════════════════════════════════
+
+  Base URL:  https://dashboard.ngrok.com
+
+  Steps:
+  1. Sign up → https://dashboard.ngrok.com/signup
+  2. Get token → https://dashboard.ngrok.com/get-started/your-authtoken
+  3. Save token → PowerShell: ngrok config add-authtoken <TOKEN>
+  4. Verify → PowerShell: ngrok config check
+
+  After setup, hindi mo na kailangan ito ulit.
+
+════════════════════════════════════════════════════════════════
+  PART 9 — FIREBASE AUTH DOMAINS (Reference)
+════════════════════════════════════════════════════════════════
+
+  Console:  https://console.firebase.google.com
+  Project:  week-9-activity-53484
+
+  Path:  Authentication → Settings tab → Authorized domains
+
+  Current domains (for reference):
+    ✅  localhost                                Default
+    ✅  week-9-activity-53484.firebaseapp.com    Default
+    ✅  week-9-activity-53484.web.app            Default
+    ✅  lushly-festival-recycler.ngrok-free.dev  ← ngrok (changes kada restart)
+
+  ⚠️  Alisin ang lumang ngrok domain kapag nag-restart ng ngrok.
+  ⚠️  I-add ang bagong domain kada bagong ngrok URL.
+
+════════════════════════════════════════════════════════════════
+  PART 10 — PERMANENT SOLUTION (Optional, para iwas hassle)
+════════════════════════════════════════════════════════════════
+
+  Kung ayaw mo palaging mag-restart ng ngrok at mag-update ng Firebase:
+
+  ► DEPLOY SA FIREBASE HOSTING (Libre, permanent URL)
+
+  Setup (once lang):
+    cd C:\Users\april\Documents\hris_biometrics
+    npm install -g firebase-tools
+    firebase login
+    firebase init hosting
+      → Project: week-9-activity-53484
+      → Public directory: build/web
+      → Single-page app: Yes
+      → Overwrite index.html: No
+      → Setup auto builds: No
+
+  Deploy (bawat update):
+    flutter build web --release
+    firebase deploy --only hosting
+
+  Resulta:
+    Hosting URL: https://week-9-activity-53484.web.app
+
+  ✅  Permanent URL — kahit isara mo PC
+  ✅  Hindi na kailangan ng ngrok
+  ✅  Automatic na nasa Firebase Authorized domains
+  ✅  Free tier
+
+════════════════════════════════════════════════════════════════
+  END OF GUIDE
+════════════════════════════════════════════════════════════════
+
+  If may problema, i-screenshot at i-verify ang:
+    1. Terminal #1 — server running?
+    2. Terminal #2 — ngrok running? URL?
+    3. Firebase Auth — naka-add ba ang domain?
+
+  Good luck! 🚀
