@@ -37,10 +37,8 @@ class AdminDashboardState extends State<AdminDashboard>
   String _search = '';
   final _searchCtrl = TextEditingController();
 
-  // ✅ GLOBAL KEY PARA SA DRAWER
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // ✅ ANIMATION CONTROLLER PARA SA HAMBURGER ICON
   late AnimationController _menuIconCtrl;
   late Animation<double> _menuIconRotation;
 
@@ -58,7 +56,6 @@ class AdminDashboardState extends State<AdminDashboard>
   String? _error;
   bool _initialLoadDone = false;
 
-  // Stream subscriptions
   StreamSubscription? _empSub;
   StreamSubscription? _attendanceSub;
   StreamSubscription? _locSub;
@@ -67,10 +64,8 @@ class AdminDashboardState extends State<AdminDashboard>
   Map<String, dynamic>? _verifyLogData;
   Map<String, dynamic>? _selectedPayrollEmployee;
 
-  // ─── THEME ACCESSOR ──────────────────────────────────────────
   AdminColors get _c => ThemeProvider.instance.colors;
 
-  // ─── CONSTANTS ──────────────────────────────────────────────
   static const double officeLat = 14.6114;
   static const double officeLng = 120.9936;
   static const double radiusLimit = 1500.0;
@@ -97,15 +92,10 @@ class AdminDashboardState extends State<AdminDashboard>
     return r * 2 * asin(sqrt(a));
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // LIFE CYCLE
-  // ══════════════════════════════════════════════════════════════
-
   @override
   void initState() {
     super.initState();
 
-    // ✅ ANIMATION CONTROLLER (0 → 0.25 sa 250ms)
     _menuIconCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 250),
@@ -154,12 +144,18 @@ class AdminDashboardState extends State<AdminDashboard>
     });
   }
 
+  // ✅ Open Payroll Detail
   void openPayrollManagement(Map<String, dynamic> employeeData) {
+    debugPrint('🟢 openPayrollManagement: ${employeeData['name']}');
     setState(() => _selectedPayrollEmployee = employeeData);
   }
 
+  // ✅ Close Payroll Detail — BABALIK SA PAYROLL LIST
   void closePayrollManagement() {
-    setState(() => _selectedPayrollEmployee = null);
+    debugPrint('🔵 closePayrollManagement: back to payroll list');
+    setState(() {
+      _selectedPayrollEmployee = null;
+    });
   }
 
   bool _showCreateLeave = false;
@@ -172,12 +168,8 @@ class AdminDashboardState extends State<AdminDashboard>
     setState(() => _showCreateLeave = false);
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // DRAWER HELPERS
-  // ══════════════════════════════════════════════════════════════
   void _openDrawer() {
     _scaffoldKey.currentState?.openDrawer();
-    // Ang icon animation ay hinahawakan ng onDrawerChanged callback.
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -211,12 +203,8 @@ class AdminDashboardState extends State<AdminDashboard>
   void _setupStreams() {
     _empSub = AdminDatabase.streamEmployees().listen(
           (emps) {
-        debugPrint('🔄 Stream employees: ${emps.length} employees');
         if (mounted) {
-          if (_initialLoadDone && emps.isEmpty) {
-            debugPrint('⚠️ Stream returned empty, ignoring.');
-            return;
-          }
+          if (_initialLoadDone && emps.isEmpty) return;
           setState(() {
             _employees = emps;
             _buildUserLogs();
@@ -228,7 +216,6 @@ class AdminDashboardState extends State<AdminDashboard>
         }
       },
       onError: (e) {
-        debugPrint('❌ Stream employees error: $e');
         if (mounted) {
           setState(() {
             _loading = false;
@@ -306,10 +293,6 @@ class AdminDashboardState extends State<AdminDashboard>
     setState(() => _loading = false);
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BUILD
-  // ══════════════════════════════════════════════════════════════
-
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -334,8 +317,7 @@ class AdminDashboardState extends State<AdminDashboard>
       return Scaffold(
         backgroundColor: _c.background,
         body: Center(
-          child: Text('Error: $_error',
-              style: TextStyle(color: _c.red)),
+          child: Text('Error: $_error', style: TextStyle(color: _c.red)),
         ),
       );
     }
@@ -348,7 +330,6 @@ class AdminDashboardState extends State<AdminDashboard>
           backgroundColor: _c.background,
           appBar: buildTopBar(wide),
           drawer: wide ? null : buildDrawer(),
-          // ✅ AUTO-ANIMATE ANG ICON KAPAG BUMUKAS/SARADO ANG DRAWER
           onDrawerChanged: (isOpened) {
             if (isOpened) {
               _menuIconCtrl.forward();
@@ -360,7 +341,7 @@ class AdminDashboardState extends State<AdminDashboard>
             data: MediaQuery.of(context).removePadding(removeTop: true),
             child: wide
                 ? Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 buildSidebar(),
                 Expanded(child: buildPage()),
@@ -374,28 +355,18 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ANIMATED HAMBURGER ICON
-  // ══════════════════════════════════════════════════════════════
   Widget _buildAnimatedMenuIcon(Color color) {
     return AnimatedBuilder(
       animation: _menuIconRotation,
       builder: (context, _) {
         return Transform.rotate(
           angle: _menuIconRotation.value * 2 * pi,
-          child: Icon(
-            Icons.menu_rounded,
-            color: color,
-            size: 22,
-          ),
+          child: Icon(Icons.menu_rounded, color: color, size: 22),
         );
       },
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // TOP BAR
-  // ══════════════════════════════════════════════════════════════
   PreferredSizeWidget buildTopBar(bool wide) {
     final c = _c;
     return AppBar(
@@ -426,7 +397,6 @@ class AdminDashboardState extends State<AdminDashboard>
         ),
       ),
       actions: [
-        // ── SEARCH BOX ──
         if (wide)
           Container(
             width: 260,
@@ -463,8 +433,6 @@ class AdminDashboardState extends State<AdminDashboard>
             ),
           ),
         if (wide) const SizedBox(width: 12),
-
-        // ── DARK MODE TOGGLE ──
         IconButton(
           tooltip: ThemeProvider.instance.isDark
               ? 'Switch to Light Mode'
@@ -486,24 +454,17 @@ class AdminDashboardState extends State<AdminDashboard>
             ),
           ),
         ),
-
-        // ── BELL ──
         IconButton(
           icon: Icon(Icons.notifications_none_rounded,
               size: 21, color: c.accent),
           onPressed: () {},
           tooltip: 'Notifications',
         ),
-
-        // ── HELP ──
         IconButton(
-          icon: Icon(Icons.help_outline_rounded,
-              size: 21, color: c.accent),
+          icon: Icon(Icons.help_outline_rounded, size: 21, color: c.accent),
           onPressed: () {},
           tooltip: 'Help',
         ),
-
-        // ── PROFILE AVATAR ──
         Padding(
           padding: const EdgeInsets.only(right: 16, left: 4),
           child: Container(
@@ -514,26 +475,20 @@ class AdminDashboardState extends State<AdminDashboard>
               color: c.accent.withValues(alpha: 0.15),
               border: Border.all(color: c.navBorder, width: 1),
             ),
-            child: Icon(Icons.person_rounded,
-                size: 16, color: c.accent),
+            child: Icon(Icons.person_rounded, size: 16, color: c.accent),
           ),
         ),
       ],
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // SIDEBAR
-  // ══════════════════════════════════════════════════════════════
   Widget buildSidebar() {
     final c = _c;
     return Container(
       width: 240,
       decoration: BoxDecoration(
         color: c.navBg,
-        border: Border(
-          right: BorderSide(color: c.navBorder, width: 1),
-        ),
+        border: Border(right: BorderSide(color: c.navBorder, width: 1)),
       ),
       child: SafeArea(
         child: Column(
@@ -599,8 +554,8 @@ class AdminDashboardState extends State<AdminDashboard>
               padding: const EdgeInsets.all(12),
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 14),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                 decoration: BoxDecoration(
                   color: c.clockCardBg,
                   borderRadius: BorderRadius.circular(8),
@@ -651,9 +606,6 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // NAV TILE (may smooth animation)
-  // ══════════════════════════════════════════════════════════════
   Widget _navTile(_AdminNavItem item) {
     final c = _c;
     final sel = _tab == item.index;
@@ -701,9 +653,6 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // DRAWER (mobile) — may smooth slide + fade animation
-  // ══════════════════════════════════════════════════════════════
   Widget buildDrawer() {
     final c = _c;
     return Drawer(
@@ -797,8 +746,6 @@ class AdminDashboardState extends State<AdminDashboard>
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 2),
                       onTap: () {
-                        // ✅ Awtomatikong hahawakan ng onDrawerChanged
-                        // ang icon reverse — huwag nang manual.
                         Navigator.pop(context);
                         setState(() {
                           _tab = item.index;
@@ -817,9 +764,6 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BOTTOM NAV (mobile)
-  // ══════════════════════════════════════════════════════════════
   Widget buildBottomNav() {
     final c = _c;
     return BottomNavigationBar(
@@ -926,8 +870,14 @@ class AdminDashboardState extends State<AdminDashboard>
         );
       case 6:
         if (_selectedPayrollEmployee != null) {
+          final empId =
+              _selectedPayrollEmployee!['id']?.toString() ?? 'unknown';
+          debugPrint('🟠 Showing payroll detail for: $empId');
           return AdminPayrollManagementPage(
+            key: ValueKey('payroll_$empId'),
             employeeData: _selectedPayrollEmployee!,
+            // ✅ Back button wiring
+            onBack: closePayrollManagement,
           );
         }
         return AdminPayrollPage(

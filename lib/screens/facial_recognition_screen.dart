@@ -8,6 +8,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/employee.dart';
+import '../services/face_matcher.dart';
 import 'main_screen.dart';
 import 'clock_in_success_screen.dart';
 
@@ -51,6 +52,17 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   bool _cancelPressed = false;
   bool _isProcessing = false;
   bool _isScanning = false;
+
+  // ✅ Face match fields
+  bool _faceMatched = false;
+  double _matchScore = 0.0;
+
+  /// ⚙️ Config: kung true, block ang scan kapag walang naka-register na face.
+  /// Kung false, allow ang scan kahit walang embedding (para sa testing).
+  static const bool _strictFaceMatch = false;
+
+  /// ⚙️ Similarity threshold (0..1). 0.85 = 85% match needed.
+  static const double _matchThreshold = 0.85;
 
   late final FaceDetector _faceDetector;
 
@@ -137,8 +149,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _ringCtrl.repeat();
     _fadeCtrl.forward();
 
-    // ✅ WALANG AUTO-START — hintayin ang user mag-tap sa camera icon
-    debugPrint('📷 Facial recognition screen ready — waiting for user tap');
+    debugPrint('📷 Facial recognition ready — waiting for user tap');
   }
 
   @override
@@ -158,7 +169,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<bool> _ensureCameraPermission() async {
-    // ✅ Sa web, ipapaubaya sa browser ang permission prompt
     if (kIsWeb) return true;
 
     try {
@@ -197,10 +207,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         front,
         ResolutionPreset.medium,
         enableAudio: false,
-        // ✅ Web gumagamit ng JPEG; native NV21
-        imageFormatGroup: kIsWeb
-            ? ImageFormatGroup.jpeg
-            : ImageFormatGroup.nv21,
+        imageFormatGroup: kIsWeb ? ImageFormatGroup.jpeg : ImageFormatGroup.nv21,
       );
       await ctrl.initialize();
       if (!mounted) return;
@@ -218,7 +225,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // START SCAN — WEB MOCK + NATIVE REAL
+  // START SCAN
   // ═══════════════════════════════════════════════════════════════════════
   Future<void> _startScan() async {
     if (!mounted || _isScanning) return;
@@ -228,6 +235,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _closedFrames = 0;
     _sharpnessBuffer.clear();
     _facePresent = false;
+    _faceMatched = false;
+    _matchScore = 0.0;
 
     setState(() {
       _faceState = _FaceState.scanning;
@@ -235,7 +244,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _faceWarning = _FaceWarning.none;
     });
 
-    // ✅ WEB: subukang buksan ang camera + mock scan flow
     if (kIsWeb) {
       debugPrint('🌐 Web detected — trying real camera + mock scan');
       if (!_camReady) await _initCamera();
@@ -244,7 +252,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return;
     }
 
-    // ✅ NATIVE: Real camera + ML Kit
     if (!_camReady) await _initCamera();
     if (!_camReady || !mounted) {
       _isScanning = false;
@@ -256,15 +263,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // WEB MOCK SCAN FLOW
+  // WEB MOCK SCAN
   // ═══════════════════════════════════════════════════════════════════════
   Future<void> _runMockWebScan() async {
-    // Stage 1: Looking for face
     await Future.delayed(const Duration(milliseconds: 800));
     if (!mounted || !_isScanning) return;
     setState(() => _facePresent = false);
 
-    // Stage 2: Face detected
     await Future.delayed(const Duration(milliseconds: 1200));
     if (!mounted || !_isScanning) return;
     setState(() {
@@ -272,7 +277,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _faceWarning = _FaceWarning.none;
     });
 
-    // Stage 3: Simulate eyes starting to close
     await Future.delayed(const Duration(milliseconds: 1500));
     if (!mounted || !_isScanning) return;
     setState(() {
@@ -280,7 +284,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _closedFrames = _minClosedFrames;
     });
 
-    // Stage 4: Blink complete
     await Future.delayed(const Duration(milliseconds: 400));
     if (!mounted || !_isScanning) return;
     setState(() {
@@ -288,12 +291,28 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _eyesWereClosed = false;
     });
 
-    // Stage 5: Success
     await Future.delayed(const Duration(milliseconds: 600));
     if (!mounted) return;
     _isScanning = false;
     _scanLineCtrl.stop();
-    debugPrint('✅ Mock face scan complete');
+
+    // ✅ Sa web, mock lang ang match (auto-pass) pero pwede mong subukan
+    // ang real match kung gusto mo — i-uncomment ang block sa baba.
+    // try {
+    //   final picture = await _camCtrl?.takePicture();
+    //   if (picture != null) {
+    //     final bytes = await picture.readAsBytes();
+    //     final result = await FaceMatcher.verify(
+    //       widget.employee.id, bytes, threshold: _matchThreshold,
+    //     );
+    //     _matchScore = result.score;
+    //     _faceMatched = result.matched;
+    //     if (!result.matched) { _onFaceMismatch(); return; }
+    //   }
+    // } catch (e) { debugPrint('Web face verify failed: $e'); }
+
+    _faceMatched = true;
+    _matchScore = 1.0;
     await _onSuccess();
   }
 
@@ -361,13 +380,21 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         } else if (avgOpen > _blinkOpenThreshold &&
             _eyesWereClosed &&
             _closedFrames >= _minClosedFrames) {
+          // ✅ BLINK DETECTED — verify face match na
           _blinkDetected = true;
           _eyesWereClosed = false;
           _closedFrames = 0;
           await _camCtrl!.stopImageStream();
           _isScanning = false;
           _scanLineCtrl.stop();
-          await _onSuccess();
+
+          // → VERIFY FACE MATCH
+          final matched = await _verifyFaceMatch();
+          if (matched) {
+            await _onSuccess();
+          } else {
+            _onFaceMismatch();
+          }
           _isProcessing = false;
           return;
         } else {
@@ -397,6 +424,84 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     } catch (_) {}
 
     _isProcessing = false;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // FACE MATCH VERIFICATION
+  // ═══════════════════════════════════════════════════════════════════════
+  Future<bool> _verifyFaceMatch() async {
+    try {
+      if (_camCtrl == null || !_camCtrl!.value.isInitialized) {
+        debugPrint('⚠️ Camera not ready for verification');
+        return false;
+      }
+
+      // Capture live frame
+      final picture = await _camCtrl!.takePicture();
+      final bytes = await picture.readAsBytes();
+
+      // Verify laban sa stored embedding
+      final result = await FaceMatcher.verify(
+        widget.employee.id,
+        bytes,
+        threshold: _matchThreshold,
+      );
+
+      _matchScore = result.score;
+      _faceMatched = result.matched;
+
+      debugPrint('📊 Match score: ${(result.score * 100).toStringAsFixed(1)}%');
+
+      // Kung walang embedding sa Firestore, check ang config
+      if (!result.hasEmbedding) {
+        debugPrint('⚠️ No face embedding registered');
+        if (_strictFaceMatch) {
+          return false;
+        } else {
+          // Non-strict: allow kahit walang embedding (for testing)
+          debugPrint('⚠️ Non-strict mode: allowing without embedding');
+          return true;
+        }
+      }
+
+      return result.matched;
+    } catch (e) {
+      debugPrint('⚠️ Face verify failed: $e');
+      return false;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // FACE MISMATCH HANDLER
+  // ═══════════════════════════════════════════════════════════════════════
+  void _onFaceMismatch() {
+    if (!mounted) return;
+    _isScanning = false;
+    _scanLineCtrl.stop();
+
+    setState(() {
+      _faceState = _FaceState.error;
+      _errorMessage = 'Face does not match the registered employee.\n\n'
+          'Similarity: ${(_matchScore * 100).toStringAsFixed(1)}%\n'
+          'Required: ${(_matchThreshold * 100).toStringAsFixed(0)}%\n\n'
+          'Please try again or contact HR.';
+    });
+
+    _shakeCtrl.forward(from: 0);
+
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted) {
+        setState(() {
+          _faceState = _FaceState.idle;
+          _errorMessage = null;
+          _blinkDetected = false;
+          _facePresent = false;
+          _faceMatched = false;
+          _matchScore = 0.0;
+          _camTried = false; // para pwede mag-restart ng camera sa susunod na scan
+        });
+      }
+    });
   }
 
   _FaceWarning _assessFaceQuality(Face face, CameraImage image) {
@@ -511,10 +616,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     try {
       await FirebaseFirestore.instance.collection('activity logs').add({
-        'type': 'facial_recognition_verified_with_blink',
+        'type': 'facial_recognition_verified',
         'employeeId': widget.employee.id,
         'employee_name': widget.employee.fullName,
         'email': widget.employee.email,
+        'face_match_score': _matchScore,
+        'face_matched': _faceMatched,
         'timestamp': FieldValue.serverTimestamp(),
         'device': kIsWeb ? 'Web Browser' : 'Mobile App',
       });
@@ -918,9 +1025,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // CAMERA PREVIEW — REAL CAMERA (web + native) with mock fallback
-  // ═══════════════════════════════════════════════════════════════════════
   Widget _buildCameraPreview() {
     final faceDetected = _facePresent;
     final hasWarning = _faceWarning != _FaceWarning.none;
@@ -953,7 +1057,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               alignment: Alignment.center,
               fit: StackFit.expand,
               children: [
-                // Priority: real camera preview kung available
                 if (_camCtrl != null &&
                     _camCtrl!.value.isInitialized &&
                     _camCtrl!.value.previewSize != null)
@@ -973,7 +1076,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                 else
                   Container(color: Colors.black),
 
-                // Scan line
                 Positioned.fill(
                   child: Align(
                     alignment: Alignment(0, (_scanLineAnim.value * 2) - 1),
@@ -994,14 +1096,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   ),
                 ),
 
-                // Face brackets
                 Positioned.fill(
                   child: CustomPaint(
                     painter: _FaceBracketPainter(color: borderColor),
                   ),
                 ),
 
-                // Hold progress ring
                 if (faceDetected &&
                     !hasWarning &&
                     _eyesWereClosed &&
@@ -1017,7 +1117,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                     ),
                   ),
 
-                // Border glow
                 Positioned.fill(
                   child: IgnorePointer(
                     child: Container(
@@ -1036,7 +1135,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   ),
                 ),
 
-                // Status badge
                 Positioned(
                   top: 6,
                   right: 6,
@@ -1071,7 +1169,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   ),
                 ),
 
-                // Bottom hint
                 if (hasWarning)
                   Positioned(
                     bottom: 6,
@@ -1158,7 +1255,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     );
   }
 
-  // Mock preview kung walang camera (web fallback)
   Widget _buildMockPreviewBackground(bool faceDetected) {
     return AnimatedBuilder(
       animation: _ringAnim,
@@ -1263,7 +1359,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   String get _scanProgressLabel {
-    if (_blinkDetected) return 'Verified';
+    if (_blinkDetected) return 'Verifying...';
     if (_faceWarning != _FaceWarning.none) return 'Fix issue';
     if (_facePresent) return 'Blink to finish';
     return 'Looking for face';
@@ -1324,7 +1420,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   int get _detectedFaceCount => _facePresent ? 1 : 0;
 
   String get _statusBadgeText {
-    if (_blinkDetected) return 'BLINK ✓';
+    if (_blinkDetected) return 'VERIFYING';
     switch (_faceWarning) {
       case _FaceWarning.blurry:
         return 'BLURRY';
@@ -1363,7 +1459,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       case _FaceState.idle:
         return 'Facial\nRecognition';
       case _FaceState.scanning:
-        if (_blinkDetected) return 'Blink\nVerified!';
+        if (_blinkDetected) return 'Verifying\nIdentity...';
         if (_detectedFaceCount > 0) {
           return _faceWarning != _FaceWarning.none
               ? 'Quality\nCheck Failed'
@@ -1382,7 +1478,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       case _FaceState.idle:
         return 'Tap the camera icon to start\nfacial scan';
       case _FaceState.scanning:
-        if (_blinkDetected) return 'Blink confirmed!\nProceeding...';
+        if (_blinkDetected) return 'Matching your face\nwith registered photo...';
         if (_detectedFaceCount > 0) {
           if (_faceWarning != _FaceWarning.none) {
             return _warningHintText;
@@ -1404,7 +1500,7 @@ enum _FaceState { idle, scanning, success, error }
 enum _FaceWarning { none, blurry, faceMask, occluded, headAngle, eyesClosed }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Painters
+// Painters (unchanged)
 // ═══════════════════════════════════════════════════════════════════════════
 class _BackArrowPainter extends CustomPainter {
   @override

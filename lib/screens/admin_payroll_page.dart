@@ -24,7 +24,23 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
 
   String _selectedPayPeriod = 'Oct 01 - Oct 15, 2023';
   String _selectedDepartment = 'All Departments';
-  final String _searchQuery = '';
+  String _searchQuery = '';
+
+  final TextEditingController _searchCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  // ✅ Helper — kumuha ng totoong salary mula sa employee data
+  double _getSalary(Map<String, dynamic> emp) {
+    final raw = emp['basicSalary'];
+    if (raw is num) return raw.toDouble();
+    if (raw is String) return double.tryParse(raw) ?? 0.0;
+    return 0.0;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,14 +57,14 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
           '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}')
           .toString()
           .toLowerCase();
-      final id =
-      (emp['id'] ?? emp['employeeId'] ?? '').toString().toLowerCase();
+      final id = (emp['id'] ?? emp['employeeId'] ?? '').toString().toLowerCase();
       final dept = (emp['department'] ?? '').toString();
 
-      final matchesSearch = name.contains(_searchQuery.toLowerCase()) ||
+      final matchesSearch = _searchQuery.isEmpty ||
+          name.contains(_searchQuery.toLowerCase()) ||
           id.contains(_searchQuery.toLowerCase());
-      final matchesDept = _selectedDepartment == 'All Departments' ||
-          dept == _selectedDepartment;
+      final matchesDept =
+          _selectedDepartment == 'All Departments' || dept == _selectedDepartment;
 
       return matchesSearch && matchesDept;
     }).toList();
@@ -57,8 +73,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     int pendingCount = 0;
 
     for (var emp in filteredEmployees) {
-      final basicSalary =
-          (emp['basicSalary'] as num?)?.toDouble() ?? 45000.0;
+      final basicSalary = _getSalary(emp);
       final netPay = basicSalary * 0.9;
       totalNetDisbursement += netPay;
 
@@ -81,6 +96,8 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
             children: [
               _buildPageHeader(),
               const SizedBox(height: 20),
+              _buildSearchBar(),
+              const SizedBox(height: 16),
               _buildStatsRow(totalNetDisbursement, pendingCount),
               const SizedBox(height: 20),
               _buildFiltersRow(departments),
@@ -88,7 +105,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
               _buildTable(filteredEmployees),
               const SizedBox(height: 16),
               Text(
-                'Showing ${filteredEmployees.length} of employees',
+                'Showing ${filteredEmployees.length} of ${widget.employees.length} employees',
                 style: TextStyle(fontSize: 12, color: tc.muted),
               ),
               const SizedBox(height: 40),
@@ -99,9 +116,6 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PAGE HEADER — responsive: nags-stack sa mobile
-  // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeader() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -133,16 +147,12 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
           icon: Icon(Icons.tune, size: 16, color: tc.text),
           label: Text('Filters',
               style: TextStyle(
-                  color: tc.text,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13)),
+                  color: tc.text, fontWeight: FontWeight.w600, fontSize: 13)),
           style: OutlinedButton.styleFrom(
             backgroundColor: tc.card,
             side: BorderSide(color: tc.border),
-            padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8)),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
 
@@ -157,10 +167,8 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
           style: ElevatedButton.styleFrom(
             backgroundColor: tc.orange,
             elevation: 0,
-            padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8)),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
 
@@ -200,9 +208,47 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // STATS — Wrap-based, responsive (2/3 + 1/3 ratio)
-  // ══════════════════════════════════════════════════════════════
+  Widget _buildSearchBar() {
+    return Container(
+      height: 46,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: tc.card,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: tc.border),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.search_rounded, size: 18, color: tc.muted),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              onChanged: (v) => setState(() => _searchQuery = v),
+              style: TextStyle(color: tc.text, fontSize: 14),
+              cursorColor: tc.orange,
+              decoration: InputDecoration(
+                hintText: 'Search by name or employee ID...',
+                hintStyle: TextStyle(color: tc.muted, fontSize: 14),
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ),
+          if (_searchQuery.isNotEmpty)
+            IconButton(
+              icon: Icon(Icons.close_rounded, size: 18, color: tc.muted),
+              onPressed: () {
+                _searchCtrl.clear();
+                setState(() => _searchQuery = '');
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStatsRow(double totalNetDisbursement, int pendingCount) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -214,13 +260,15 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
         final pendingCard = _buildPendingCard(pendingCount);
 
         if (isWide) {
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(flex: 2, child: totalCard),
-              const SizedBox(width: gap),
-              Expanded(flex: 1, child: pendingCard),
-            ],
+          return IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: 2, child: totalCard),
+                const SizedBox(width: gap),
+                Expanded(flex: 1, child: pendingCard),
+              ],
+            ),
           );
         }
 
@@ -349,17 +397,13 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FILTERS — Wrap-based para hindi mag-overflow sa mobile
-  // ══════════════════════════════════════════════════════════════
   Widget _buildFiltersRow(List<String> departments) {
     return Wrap(
       spacing: 12,
       runSpacing: 12,
       children: [
         Container(
-          padding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           height: 42,
           decoration: BoxDecoration(
             color: tc.card,
@@ -370,8 +414,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
             child: DropdownButton<String>(
               value: _selectedPayPeriod,
               dropdownColor: tc.card,
-              icon: Icon(Icons.keyboard_arrow_down,
-                  size: 16, color: tc.muted),
+              icon: Icon(Icons.keyboard_arrow_down, size: 16, color: tc.muted),
               items: const [
                 'Oct 01 - Oct 15, 2023',
                 'Oct 16 - Oct 31, 2023'
@@ -394,8 +437,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
           ),
         ),
         Container(
-          padding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           height: 42,
           decoration: BoxDecoration(
             color: tc.card,
@@ -406,8 +448,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
             child: DropdownButton<String>(
               value: _selectedDepartment,
               dropdownColor: tc.card,
-              icon: Icon(Icons.keyboard_arrow_down,
-                  size: 16, color: tc.muted),
+              icon: Icon(Icons.keyboard_arrow_down, size: 16, color: tc.muted),
               items: departments.map((dept) {
                 return DropdownMenuItem(
                   value: dept,
@@ -430,9 +471,6 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // TABLE
-  // ══════════════════════════════════════════════════════════════
   Widget _buildTable(List<Map<String, dynamic>> filteredEmployees) {
     return Container(
       width: double.infinity,
@@ -445,16 +483,34 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
         borderRadius: BorderRadius.circular(16),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final w = constraints.maxWidth.isFinite
-                ? constraints.maxWidth
-                : 800.0;
+            final w =
+            constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
+
+            if (filteredEmployees.isEmpty) {
+              return Container(
+                padding: const EdgeInsets.all(48),
+                child: Center(
+                  child: Column(
+                    children: [
+                      Icon(Icons.people_outline_rounded,
+                          size: 48, color: tc.muted),
+                      const SizedBox(height: 12),
+                      Text(
+                        'No employees match your filters.',
+                        style: TextStyle(color: tc.muted, fontSize: 14),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
             return SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: ConstrainedBox(
                 constraints: BoxConstraints(minWidth: w),
                 child: DataTable(
-                  headingRowColor:
-                  WidgetStateProperty.all(tc.surface),
+                  headingRowColor: WidgetStateProperty.all(tc.surface),
                   dataRowMinHeight: 64,
                   dataRowMaxHeight: 72,
                   columnSpacing: 32,
@@ -477,8 +533,8 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                         '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}';
                     final initials = _getInitials(name);
 
-                    final double basicSalary =
-                        (emp['basicSalary'] as num?)?.toDouble() ?? 50000.0;
+                    // ✅ TOTOONG SALARY (walang fallback)
+                    final double basicSalary = _getSalary(emp);
                     final double deduction = basicSalary * 0.09;
                     final double netPay = basicSalary - deduction;
                     final String status =
@@ -506,10 +562,8 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                               constraints:
                               const BoxConstraints(maxWidth: 180),
                               child: Column(
-                                crossAxisAlignment:
-                                CrossAxisAlignment.start,
-                                mainAxisAlignment:
-                                MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Text(name,
@@ -520,19 +574,21 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                                       overflow: TextOverflow.ellipsis),
                                   Text('ID: $displayId',
                                       style: TextStyle(
-                                          fontSize: 11,
-                                          color: tc.muted)),
+                                          fontSize: 11, color: tc.muted)),
                                 ],
                               ),
                             ),
                           ],
                         ),
                       ),
-                      DataCell(Text('₱${_formatCurrency(basicSalary)}',
+                      DataCell(Text(
+                          basicSalary > 0
+                              ? '₱${_formatCurrency(basicSalary)}'
+                              : 'Not set',
                           style: TextStyle(
                               fontWeight: FontWeight.w500,
                               fontSize: 13,
-                              color: tc.text))),
+                              color: basicSalary > 0 ? tc.text : tc.muted))),
                       DataCell(
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -545,8 +601,8 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                                     fontWeight: FontWeight.w500,
                                     fontSize: 13)),
                             Text('SSS, PhilHealth, Pag-IBIG',
-                                style: TextStyle(
-                                    fontSize: 10, color: tc.muted)),
+                                style:
+                                TextStyle(fontSize: 10, color: tc.muted)),
                           ],
                         ),
                       ),

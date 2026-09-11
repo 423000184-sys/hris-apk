@@ -1,0 +1,283 @@
+════════════════════════════════════════════════════════════════
+  R.A.C.O.M.A. HRIS BIOMETRICS — COMPLETE WORKFLOW GUIDE
+  Project: C:\Users\april\Documents\hris_biometrics
+  Repo:    github.com/423000184-sys/hris-apk
+  Landing: https://week-9-activity-53484.web.app
+════════════════════════════════════════════════════════════════
+
+📌 OVERVIEW — ANG BUONG SETUP
+
+  ┌─────────────────────────────────────────────────────┐
+  │  Component       │  Location                        │
+  ├─────────────────────────────────────────────────────┤
+  │  Source Code     │  github.com/423000184-sys/hris-apk │
+  │  APK Releases    │  same repo → Releases tab        │
+  │  Landing Page    │  week-9-activity-53484.web.app   │
+  │  Local Project   │  C:\Users\april\...\hris_biometrics │
+  │  Hosting Folder  │  C:\hris-apk-hosting             │
+  └─────────────────────────────────────────────────────┘
+
+════════════════════════════════════════════════════════════════
+  PART 1 — WORKFLOW KAPAG MAY BINAGO SA CODE
+════════════════════════════════════════════════════════════════
+
+STEP 1 — I-EDIT ANG CODE
+  • Buksan ang VS Code
+  • Edit ang .dart files
+  • I-save (Ctrl+S)
+
+────────────────────────────────────
+STEP 2 — I-TEST LOCALLY (OPTIONAL)
+────────────────────────────────────
+  cd C:\Users\april\Documents\hris_biometrics
+  flutter run -d chrome
+
+────────────────────────────────────
+STEP 3 — I-REBUILD ANG APK
+────────────────────────────────────
+  cd C:\Users\april\Documents\hris_biometrics
+  flutter build apk --release
+
+  ⏱️  3-10 minutes
+  ✅  Dapat lumabas: "✓ Built build\app\outputs\flutter-apk\app-release.apk"
+
+────────────────────────────────────
+STEP 4 — I-DELETE ANG LUMANG RELEASE
+────────────────────────────────────
+  Buksan sa browser:
+    https://github.com/423000184-sys/hris-apk/releases
+
+  • Hanapin ang lumang release (e.g. v1.0.0)
+  • Pindutin ang 🗑️ trash icon (Delete)
+  • Kumpirmahin ang delete
+
+  ⚠️  Kailangang i-delete muna bago gumawa ng bago
+      (hindi pwede mag-upload ng same tag twice)
+
+────────────────────────────────────
+STEP 5 — GUMAWA NG BAGONG RELEASE
+────────────────────────────────────
+  $gh = "C:\Program Files\GitHub CLI\gh.exe"
+
+  & $gh release create v1.0.1 `
+    "C:\Users\april\Documents\hris_biometrics\build\app\outputs\flutter-apk\app-release.apk" `
+    --repo 423000184-sys/hris-apk `
+    --title "HRIS Biometrics v1.0.1" `
+    --notes "Latest update"
+
+  ⚠️  Palitan ang v1.0.1 ng bagong version number
+  ⏱️  1-3 minutes (upload ng 119 MB)
+  ✅  Dapat lumabas: https://github.com/.../releases/tag/v1.0.1
+
+────────────────────────────────────
+STEP 6 — I-UPDATE ANG LANDING PAGE
+────────────────────────────────────
+  Buksan: C:\hris-apk-hosting\index.html (gamit Notepad)
+
+  Hanapin:
+    releases/download/v1.0.0/app-release.apk
+  Palitan ng:
+    releases/download/v1.0.1/app-release.apk
+
+  I-save (Ctrl+S)
+
+────────────────────────────────────
+STEP 7 — I-DEPLOY ANG LANDING PAGE
+────────────────────────────────────
+  cd C:\hris-apk-hosting
+  firebase deploy --only hosting
+
+  ⏱️  30 seconds
+  ✅  Dapat lumabas: Hosting URL: https://week-9-activity-53484.web.app
+
+────────────────────────────────────
+STEP 8 — I-UPLOAD ANG UPDATED SOURCE CODE
+────────────────────────────────────
+  cd C:\Users\april\Documents\hris_biometrics
+  git add .
+  git commit -m "Update: describe changes"
+  git push
+
+  ✅  Tapos na!
+
+════════════════════════════════════════════════════════════════
+  PART 2 — ONE-TIME SETUP (KADA RESTART NG PC/POWERSHELL)
+════════════════════════════════════════════════════════════════
+
+  Kada bagong PowerShell window:
+    $gh = "C:\Program Files\GitHub CLI\gh.exe"
+
+  I-verify:
+    & $gh --version
+  ✅  Dapat lumabas: gh version 2.100.0
+
+  Kung na-expire ang login:
+    & $gh auth login
+  • GitHub.com → HTTPS → Y → Login with a web browser
+  • I-copy ang code → pindutin Enter → paste sa browser → Authorize
+
+════════════════════════════════════════════════════════════════
+  PART 3 — QUICK COMMANDS REFERENCE
+════════════════════════════════════════════════════════════════
+
+  [BUILD APK]
+    cd C:\Users\april\Documents\hris_biometrics
+    flutter build apk --release
+
+  [CREATE GITHUB RELEASE]
+    $gh = "C:\Program Files\GitHub CLI\gh.exe"
+    & $gh release create v1.0.X `
+      "C:\Users\april\Documents\hris_biometrics\build\app\outputs\flutter-apk\app-release.apk" `
+      --repo 423000184-sys/hris-apk `
+      --title "HRIS Biometrics v1.0.X" `
+      --notes "Release notes"
+
+  [DELETE OLD RELEASE]
+    Buksan: https://github.com/423000184-sys/hris-apk/releases
+    Pindutin ang 🗑️ sa lumang version
+
+  [DEPLOY LANDING PAGE]
+    cd C:\hris-apk-hosting
+    firebase deploy --only hosting
+
+  [PUSH SOURCE CODE]
+    cd C:\Users\april\Documents\hris_biometrics
+    git add .
+    git commit -m "Update"
+    git push
+
+  [RUN LOCALLY]
+    cd C:\Users\april\Documents\hris_biometrics
+    flutter run -d chrome
+
+════════════════════════════════════════════════════════════════
+  PART 4 — IMPORTANT LOCATIONS
+════════════════════════════════════════════════════════════════
+
+  Project folder:      C:\Users\april\Documents\hris_biometrics
+  APK output:          ...\build\app\outputs\flutter-apk\app-release.apk
+  Hosting folder:      C:\hris-apk-hosting
+  Landing page HTML:   C:\hris-apk-hosting\index.html
+
+════════════════════════════════════════════════════════════════
+  PART 5 — IMPORTANT URLS
+════════════════════════════════════════════════════════════════
+
+  GitHub repo:         https://github.com/423000184-sys/hris-apk
+  Releases:            https://github.com/423000184-sys/hris-apk/releases
+  APK direct link:     https://github.com/423000184-sys/hris-apk/releases/download/v1.0.0/app-release.apk
+  Landing page:        https://week-9-activity-53484.web.app
+  Firebase Console:    https://console.firebase.google.com
+  QR Code Generator:   https://www.qr-code-generator.com
+
+════════════════════════════════════════════════════════════════
+  PART 6 — QR CODE (PARA SA IBA)
+════════════════════════════════════════════════════════════════
+
+  Para magbigay sa ibang tao:
+
+  1. Pumunta sa: https://www.qr-code-generator.com
+  2. Type: URL
+  3. I-paste: https://week-9-activity-53484.web.app
+  4. Generate QR Code
+  5. Download PNG (500x500 minimum)
+  6. I-print o i-display
+
+  FLOW:
+    [QR Code] → landing page → Download App → GitHub APK → Install
+
+════════════════════════════════════════════════════════════════
+  PART 7 — TESTING CHECKLIST
+════════════════════════════════════════════════════════════════
+
+  [ ] Landing page nag-load? → https://week-9-activity-53484.web.app
+  [ ] Download button gumagana? → Pindutin, dapat mag-download
+  [ ] APK nag-install sa phone? → Allow unknown sources → Install
+  [ ] App gumagana? → Buksan, test ang login + biometrics
+  [ ] QR code nag-scan? → Gamitan phone camera
+
+════════════════════════════════════════════════════════════════
+  PART 8 — SHORTCUT FILES (OPTIONAL)
+════════════════════════════════════════════════════════════════
+
+  Gumawa ng .bat files sa Desktop via PowerShell:
+
+  @'
+  @echo off
+  cd /d C:\Users\april\Documents\hris_biometrics
+  flutter build apk --release
+  pause
+  '@ | Out-File -FilePath "$env:USERPROFILE\Desktop\1-build-apk.bat" -Encoding ascii
+
+  @'
+  @echo off
+  cd /d C:\hris-apk-hosting
+  firebase deploy --only hosting
+  pause
+  '@ | Out-File -FilePath "$env:USERPROFILE\Desktop\2-deploy-landing.bat" -Encoding ascii
+
+  @'
+  @echo off
+  cd /d C:\Users\april\Documents\hris_biometrics
+  git add .
+  git commit -m "Auto-update"
+  git push
+  pause
+  '@ | Out-File -FilePath "$env:USERPROFILE\Desktop\3-push-source.bat" -Encoding ascii
+
+  Pagkatapos: Double-click lang ang .bat files kapag may update.
+
+════════════════════════════════════════════════════════════════
+  PART 9 — WORKFLOW SUMMARY (TYPICAL UPDATE)
+════════════════════════════════════════════════════════════════
+
+  1. Edit code sa VS Code
+  2. flutter build apk --release
+  3. Delete lumang release sa GitHub
+  4. gh release create v1.0.X
+  5. Update index.html (bagong version)
+  6. firebase deploy --only hosting
+  7. git add . && git commit && git push
+  8. Share QR code / landing page URL
+
+  ✅  Tapos na!
+
+════════════════════════════════════════════════════════════════
+  PART 10 — TROUBLESHOOTING
+════════════════════════════════════════════════════════════════
+
+  ❌ "gh: command not found"
+     → $gh = "C:\Program Files\GitHub CLI\gh.exe"
+     → & $gh --version
+
+  ❌ "Authentication failed"
+     → & $gh auth login
+
+  ❌ "Repository is empty"
+     → Kailangan may README.md. Push muna.
+
+  ❌ Firebase "HTTP 400 — Executable files forbidden"
+     → Bawal mag-host ng APK sa Firebase Spark plan.
+     → I-host sa GitHub Releases na lang (ginawa mo na).
+
+  ❌ Cache issues (web browser)
+     → Chrome Incognito o clear site data.
+
+  ❌ APK "Parse error"
+     → Rebuild. Baka corrupt ang file.
+
+  ❌ "App not installed"
+     → I-uninstall muna ang lumang version.
+
+  ❌ Camera hindi gumagana sa web
+     → HTTPS kailangan. Gamitin ang APK para sa real test.
+
+════════════════════════════════════════════════════════════════
+  END OF GUIDE
+════════════════════════════════════════════════════════════════
+
+  Good luck! 🚀
+
+  For questions or issues, check:
+  - github.com/423000184-sys/hris-apk
+  - console.firebase.google.com
