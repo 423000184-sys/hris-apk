@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 ﻿name: Build iOS IPA
+=======
+name: Build iOS IPA
+>>>>>>> 8943375dcb35c9b1a4c9b47d6ba104c5328f2318
 
 on:
   push:
@@ -16,8 +20,14 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+<<<<<<< HEAD
           flutter-version: '3.24.0'
           channel: 'stable'
+=======
+          flutter-version: '3.47.3'
+          channel: 'stable'
+          cache: true
+>>>>>>> 8943375dcb35c9b1a4c9b47d6ba104c5328f2318
 
       - name: Get dependencies
         run: flutter pub get
