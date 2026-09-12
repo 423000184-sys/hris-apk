@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart'; // ✅ Kailangan para sa PointerDeviceKind
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -70,8 +71,16 @@ class MyApp extends StatelessWidget {
           title: 'HRIS Biometrics',
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
-          // ✅ Ito ang nag-re-rebuild ng buong app kapag nagbago ang theme
           themeMode: themeNotifier.themeMode,
+          // ✅ Ito ang nag-aalis ng scrollbars sa web at nagpapagana ng drag scrolling
+          scrollBehavior: const MaterialScrollBehavior().copyWith(
+            dragDevices: {
+              PointerDeviceKind.touch,
+              PointerDeviceKind.mouse,
+              PointerDeviceKind.trackpad,
+            },
+            scrollbars: false,
+          ),
           home: SplashScreen(startPage: startPage),
         );
       },

@@ -1,10 +1,10 @@
 name: hris_biometrics
 description: A next-gen HRIS Biometrics application with smart innovation.
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.2+3                  # ✅ In-update para sa v1.0.2 release
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.6.0 <4.0.0'           # ✅ Updated — required ng flutter_map >=8.0.0
 
 dependencies:
   flutter:
@@ -14,7 +14,7 @@ dependencies:
   firebase_core: ^3.10.1
   firebase_auth: ^5.4.1
   cloud_firestore: ^5.6.2
-  firebase_storage: ^12.3.7      # ✅ IDINAGDAG — para sa employee photo storage
+  firebase_storage: ^12.3.7       # ✅ Para sa employee photo upload
 
   # ─── Maps & Location ──────────────────────────────────────────────
   google_maps_flutter: ^2.10.0
@@ -52,7 +52,7 @@ dependencies:
 
   # ─── Camera & Image ───────────────────────────────────────────────
   camera: ^0.10.5+9
-  camera_web: ^0.3.3
+  camera_web: ^0.3.3              # ✅ Para sa camera support sa web
   image_picker: ^1.1.2
   file_picker: ^8.1.2
   image: ^4.2.0
@@ -89,7 +89,7 @@ dependencies:
 
   # ─── Video & Map ──────────────────────────────────────────────────
   video_player: ^2.8.6
-  flutter_map: ^8.3.2
+  flutter_map: ^8.3.2             # ⚠️ Requires SDK >=3.6.0 (this is why naka-lock sa 3.6.0)
   latlong2: ^0.10.1
 
   # ─── Additional UI Enhancements ───────────────────────────────────
@@ -107,6 +107,5 @@ flutter:
     - assets/
     - assets/images/
     - assets/icons/
-    - assets/animations/
     - assets/videos/hris.mp4
     - assets/images/logo1.png

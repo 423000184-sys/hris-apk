@@ -8,9 +8,6 @@ import '../models/employee.dart';
 import 'main_screen.dart';
 import 'facial_recognition_screen.dart';
 
-// ═══════════════════════════════════════════════════════════════════════════
-// _ThemeColors
-// ═══════════════════════════════════════════════════════════════════════════
 class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
@@ -18,10 +15,8 @@ class _ThemeColors {
   Color get bgTop    => isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
   Color get bgMid    => isDark ? const Color(0xFF0F0D0B) : const Color(0xFFFFF0E5);
   Color get bgBottom => isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFE3D1);
-
   Color get cardBg     => isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
   Color get cardBorder => isDark ? const Color(0xFF3F3F46) : const Color(0xFFFDBA74);
-
   Color get textDark => isDark ? Colors.white : const Color(0xFF1F2937);
 }
 
@@ -62,7 +57,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   static const _modalBorderDefault = Color(0xFF564334);
   static const _modalBorderSuccess = Color(0xFF27272A);
-
   static const _successRing = Color(0xFF51FF00);
   static const _scrim = Color.fromRGBO(9, 9, 11, 0.44);
 
@@ -99,8 +93,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     _ringCtrl.repeat();
     _fadeCtrl.forward();
 
-    // ✅ WALANG AUTO-START — hintayin ang user mag-tap
-    debugPrint('🔒 Fingerprint screen ready — waiting for user tap');
+    // ✅ WALANG AUTO-START — laging hintayin ang user mag-tap
+    debugPrint('🔒 Fingerprint: waiting for user tap (isWeb=$kIsWeb)');
   }
 
   @override
@@ -115,6 +109,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   Future<void> _authenticate() async {
     if (!mounted) return;
+    debugPrint('👆 _authenticate called');
 
     setState(() {
       _fpState = _FpState.scanning;
@@ -123,7 +118,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     // ✅ WEB: Mock scan
     if (kIsWeb) {
-      debugPrint('🌐 Web detected — running mock fingerprint scan');
+      debugPrint('🌐 Web: mock fingerprint scan (2 seconds)');
       await Future.delayed(const Duration(milliseconds: 2200));
       if (!mounted) return;
       await _onSuccess();
@@ -239,7 +234,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           fit: StackFit.expand,
           children: [
             Opacity(opacity: 0.55, child: _buildDimmedBackground(tc)),
-            Container(color: _scrim),
+            // ✅ IgnorePointer — para hindi ma-block ang tap ng background
+            IgnorePointer(child: Container(color: _scrim)),
             SafeArea(
               child: Center(
                 child: Padding(
@@ -450,6 +446,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     final successAnim = _successAnim ?? const AlwaysStoppedAnimation(0.0);
     final shakeAnim = _shakeAnim ?? const AlwaysStoppedAnimation(0.0);
 
+    final canTap = _fpState == _FpState.idle || _fpState == _FpState.error;
+
     return AnimatedBuilder(
       animation: Listenable.merge([pulseAnim, ringAnim, successAnim, shakeAnim]),
       builder: (_, __) {
@@ -460,9 +458,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         return Transform.translate(
           offset: Offset(shakeX, 0),
           child: GestureDetector(
-            onTap: (_fpState == _FpState.idle || _fpState == _FpState.error)
-                ? _authenticate
-                : null,
+            // ✅ HitTestBehavior.opaque — para siguradong kumapit ang tap
+            behavior: HitTestBehavior.opaque,
+            onTap: canTap ? _authenticate : null,
             child: Stack(alignment: Alignment.center, children: [
               if (_fpState == _FpState.scanning)
                 Transform.rotate(
@@ -523,6 +521,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   Widget _buildCancelButton() {
     return GestureDetector(
       onTap: _onCancelTapped,
+      behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         width: double.infinity,
@@ -556,7 +555,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   String get _stateSubtitle {
     switch (_fpState) {
       case _FpState.idle:
-        return 'Tap the scanner icon to verify your fingerprint';
+        return kIsWeb
+            ? 'Tap the scanner icon to continue\n(Web: simulated scan)'
+            : 'Tap the scanner icon to verify your fingerprint';
       case _FpState.scanning:
         return 'Analyzing biometric data...';
       case _FpState.success:

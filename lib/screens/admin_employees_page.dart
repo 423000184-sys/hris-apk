@@ -215,7 +215,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   String _fmtDate(dynamic v, {String fallback = '—'}) {
-    final dt = _toDateTime(v);
+    final dt = v is DateTime ? v : _toDateTime(v);
     if (dt == null) return fallback;
     const m = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -225,7 +225,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   String _fmtTime(dynamic v, {String fallback = '—'}) {
-    final dt = _toDateTime(v);
+    final dt = v is DateTime ? v : _toDateTime(v);
     if (dt == null) return fallback;
     final h24 = dt.hour;
     final h12 = h24 == 0 ? 12 : (h24 > 12 ? h24 - 12 : h24);
@@ -242,20 +242,27 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // REAL FIRESTORE STREAMS (per employee)
+  // REAL FIRESTORE STREAMS
   // ══════════════════════════════════════════════════════════════
   Stream<List<Map<String, dynamic>>> _attendanceStream(String empId) {
     return AdminDatabase.fs
         .collection('attendance_logs')
-        .where('employeeId', isEqualTo: empId)
         .snapshots()
         .map((s) {
       final list = s.docs
           .map((d) => <String, dynamic>{...d.data(), 'id': d.id})
-          .toList();
+          .where((log) {
+        final eid = (log['employee_id'] ??
+            log['employeeId'] ??
+            log['employeeID'] ??
+            '')
+            .toString();
+        return eid == empId;
+      }).toList();
+
       list.sort((a, b) {
-        final da = _toDateTime(a['timestamp']);
-        final db = _toDateTime(b['timestamp']);
+        final da = _logTimestamp(a);
+        final db = _logTimestamp(b);
         if (da != null && db != null) return db.compareTo(da);
         if (da != null) return -1;
         if (db != null) return 1;
@@ -307,7 +314,184 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // LEAVE CREDIT COMPUTATION (18 Annual + 18 Sick)
+  // ATTENDANCE ROW HELPERS — combine IN/OUT per day
+  // ══════════════════════════════════════════════════════════════
+  DateTime? _logTimestamp(Map<String, dynamic> log) {
+    final raw = log['timestamp'] ??
+        log['createdAt'] ??
+        log['clockIn'] ??
+        log['timeIn'] ??
+        log['date'];
+    return _toDateTime(raw);
+  }
+
+  String _logType(Map<String, dynamic> log) {
+    return _s(log['type'], _s(log['status'], '')).toUpperCase();
+  }
+
+  /// Builds attendance rows per day. Computes actual hours worked.
+  List<Map<String, dynamic>> _buildAttendanceRows(
+      List<Map<String, dynamic>> logs) {
+    final Map<String, List<Map<String, dynamic>>> byDay = {};
+
+    for (final log in logs) {
+      final dt = _logTimestamp(log);
+      if (dt == null) continue;
+      final key =
+          '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+      byDay.putIfAbsent(key, () => []).add(log);
+    }
+
+    final rows = <Map<String, dynamic>>[];
+
+    byDay.forEach((key, dayLogs) {
+      dayLogs.sort((a, b) {
+        final ta = _logTimestamp(a);
+        final tb = _logTimestamp(b);
+        if (ta == null || tb == null) return 0;
+        return ta.compareTo(tb);
+      });
+
+      Map<String, dynamic>? inLog;
+      Map<String, dynamic>? outLog;
+      DateTime? inTs;
+      DateTime? outTs;
+
+      // 1. Check if a single document contains both timeIn and timeOut
+      for (final log in dayLogs) {
+        final rawIn = log['timeIn'] ??
+            log['clockIn'] ??
+            log['in'] ??
+            log['time_in'];
+        final rawOut = log['timeOut'] ??
+            log['clockOut'] ??
+            log['out'] ??
+            log['time_out'];
+        final parsedIn = _toDateTime(rawIn);
+        final parsedOut = _toDateTime(rawOut);
+        if (parsedIn != null && parsedOut != null) {
+          inTs = parsedIn;
+          outTs = parsedOut;
+          inLog = log;
+          outLog = log;
+          break;
+        }
+      }
+
+      // 2. If not found, look for separate IN/OUT logs
+      if (inTs == null || outTs == null) {
+        for (final l in dayLogs) {
+          final t = _logType(l);
+          final ts = _logTimestamp(l);
+          if ((t == 'IN' ||
+              t == 'LOGIN' ||
+              t == 'CLOCK IN' ||
+              t == 'TIME IN' ||
+              t == 'CLOCK_IN') &&
+              inLog == null) {
+            inLog = l;
+            inTs = ts;
+          }
+          if ((t == 'OUT' ||
+              t == 'LOGOUT' ||
+              t == 'CLOCK OUT' ||
+              t == 'TIME OUT' ||
+              t == 'CLOCK_OUT') &&
+              outLog == null) {
+            outLog = l;
+            outTs = ts;
+          }
+        }
+      }
+
+      // 3. Fallback if no type found
+      if (inTs == null && dayLogs.isNotEmpty) {
+        inLog = dayLogs.first;
+        inTs = _logTimestamp(inLog);
+      }
+      if (outTs == null && dayLogs.length > 1) {
+        outLog = dayLogs.last;
+        outTs = _logTimestamp(outLog);
+      }
+
+      String total = '—';
+      int totalMinutes = 0;
+
+      // Compute actual hours worked
+      if (inTs != null && outTs != null) {
+        if (outTs.isAfter(inTs) || outTs.isAtSameMomentAs(inTs)) {
+          final d = outTs.difference(inTs);
+          total = '${d.inHours}h ${d.inMinutes.remainder(60)}m';
+          totalMinutes = d.inMinutes;
+        }
+      }
+
+      String status;
+      bool isLate = false;
+      if (inTs != null && outTs != null) {
+        if (inTs.hour > 9 || (inTs.hour == 9 && inTs.minute > 15)) {
+          isLate = true;
+          status = 'Late';
+        } else {
+          status = 'On Time';
+        }
+      } else if (inTs != null) {
+        status = 'Working';
+      } else {
+        status = 'Present';
+      }
+
+      rows.add({
+        'date': inTs ?? outTs ?? DateTime.now(),
+        'in': inTs,
+        'out': outTs,
+        'total': total,
+        'totalMinutes': totalMinutes,
+        'status': status,
+        'isLate': isLate,
+      });
+    });
+
+    rows.sort((a, b) {
+      final da = a['date'] as DateTime;
+      final db = b['date'] as DateTime;
+      return db.compareTo(da);
+    });
+
+    return rows;
+  }
+
+  // ─── TOTAL MINUTES HELPERS ────────────────────────────────────
+  int _computeTotalMinutes(
+      List<Map<String, dynamic>> rows, {
+        int? filterMonth,
+        int? filterYear,
+      }) {
+    int total = 0;
+    for (final row in rows) {
+      final inTs = row['in'] as DateTime?;
+      final outTs = row['out'] as DateTime?;
+      if (inTs == null || outTs == null) continue;
+      // Allow equal timestamps (0 duration) but skip invalid out < in
+      if (outTs.isBefore(inTs)) continue;
+
+      if (filterMonth != null && inTs.month != filterMonth) continue;
+      if (filterYear != null && inTs.year != filterYear) continue;
+
+      total += outTs.difference(inTs).inMinutes;
+    }
+    return total;
+  }
+
+  String _formatMinutes(int minutes) {
+    if (minutes <= 0) return '0h 0m';
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    return '${h}h ${m}m';
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // LEAVE CREDIT COMPUTATION
   // ══════════════════════════════════════════════════════════════
   Map<String, int> _computeLeaveStats(List<Map<String, dynamic>> leaves) {
     int usedAnnual = 0;
@@ -1905,7 +2089,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // EDIT EMPLOYEE PAGE — MATCHES HTML DESIGN
+  // EDIT EMPLOYEE PAGE
   // ══════════════════════════════════════════════════════════════
   Widget _buildEditEmployeePage(Map<String, dynamic> emp) {
     final photoUrl = _s(emp['photoUrl'], '').isNotEmpty
@@ -1913,7 +2097,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         : _s(emp['photo'], '');
     final empId = _s(emp['employeeId'], _s(emp['id'], 'EMP-2024-024'));
 
-    // Pre-fill controllers
     final fullName =
     '${_s(emp['firstName'], '')} ${_s(emp['lastName'], '')}'.trim();
     _editFullNameCtrl.text = fullName.isEmpty ? _nameOf(emp) : fullName;
@@ -1924,13 +2107,10 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _editKeyfobCtrl.text = _s(emp['nfcTagId'], _s(emp['nfcId'], ''));
     _editPinCtrl.text = _s(emp['pin'], '');
 
-    // Birthday
     final bd = _toDateTime(emp['birthday'] ?? emp['birthDate']);
     _editBirthday = bd;
-    _editBirthdayCtrl.text =
-    bd == null ? '' : _fmtDate(bd, fallback: '');
+    _editBirthdayCtrl.text = bd == null ? '' : _fmtDate(bd, fallback: '');
 
-    // Department dropdown
     _editDepartmentDropdown = _departmentOptions.contains(_editDeptCtrl.text)
         ? _editDeptCtrl.text
         : null;
@@ -1947,7 +2127,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // ─── BREADCRUMB ──────────────────────────────────
                 GestureDetector(
                   onTap: () => setState(() => _isEditingEmployee = false),
                   behavior: HitTestBehavior.opaque,
@@ -1961,8 +2140,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   ),
                 ),
                 const SizedBox(height: 6),
-
-                // ─── TITLE ───────────────────────────────────────
                 Text(
                   'Edit Employee',
                   style: TextStyle(
@@ -1973,8 +2150,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   ),
                 ),
                 const SizedBox(height: 24),
-
-                // ─── 2-COLUMN LAYOUT ─────────────────────────────
                 LayoutBuilder(builder: (context, constraints) {
                   final stack =
                   !BsResponsive(constraints.maxWidth).up(BsSize.lg);
@@ -2015,7 +2190,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── LEFT COLUMN: PHOTO + WARNING ─────────────────────────
   Widget _editPhotoCard(String photoUrl) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2027,15 +2201,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Photo area
           Container(
             height: 260,
             width: double.infinity,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(8),
               color: const Color(0xFFEFF4FF),
-              border:
-              Border.all(color: const Color(0xFFDDC1AE), width: 1),
+              border: Border.all(color: const Color(0xFFDDC1AE), width: 1),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
@@ -2043,8 +2215,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   ? Image.network(
                 photoUrl,
                 fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => Icon(Icons.person,
-                    size: 80, color: tc.muted),
+                errorBuilder: (_, __, ___) =>
+                    Icon(Icons.person, size: 80, color: tc.muted),
               )
                   : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -2062,8 +2234,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             ),
           ),
           const SizedBox(height: 16),
-
-          // Profile Identity
           Text(
             'Profile Identity',
             style: TextStyle(
@@ -2082,8 +2252,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             ),
           ),
           const SizedBox(height: 20),
-
-          // Warning info box
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -2120,7 +2288,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── PERSONAL INFORMATION CARD ─────────────────────────────
   Widget _buildEditPersonalInfoCard(String empId) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2177,8 +2344,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       child: _editField('FULL NAME', _editFullNameCtrl)),
                   const SizedBox(width: 16),
                   Expanded(
-                      child:
-                      _editField('EMAIL ADDRESS', _editEmailCtrl)),
+                      child: _editField('EMAIL ADDRESS', _editEmailCtrl)),
                 ]),
                 const SizedBox(height: 14),
                 Row(children: [
@@ -2191,8 +2357,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   Expanded(child: _editDepartmentDropdownField()),
                   const SizedBox(width: 16),
                   Expanded(
-                      child: _editField(
-                          'ROLE / DESIGNATION', _editRoleCtrl)),
+                      child:
+                      _editField('ROLE / DESIGNATION', _editRoleCtrl)),
                 ]),
                 const SizedBox(height: 14),
                 Row(children: [
@@ -2215,7 +2381,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── SINGLE EDIT FIELD (uppercase label + boxed input) ────
   Widget _editField(
       String label,
       TextEditingController controller, {
@@ -2239,8 +2404,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           decoration: BoxDecoration(
             color: readOnly ? tc.surface : tc.card,
             borderRadius: BorderRadius.circular(8),
-            border:
-            Border.all(color: const Color(0xFFDDC1AE), width: 1),
+            border: Border.all(color: const Color(0xFFDDC1AE), width: 1),
           ),
           child: TextField(
             controller: controller,
@@ -2263,7 +2427,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── BIRTHDAY FIELD (tappable, opens date picker) ─────────
   Widget _editBirthdayField() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2310,8 +2473,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             decoration: BoxDecoration(
               color: tc.card,
               borderRadius: BorderRadius.circular(8),
-              border:
-              Border.all(color: const Color(0xFFDDC1AE), width: 1),
+              border: Border.all(color: const Color(0xFFDDC1AE), width: 1),
             ),
             child: Text(
               _editBirthdayCtrl.text.isEmpty
@@ -2319,9 +2481,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   : _editBirthdayCtrl.text,
               style: TextStyle(
                 fontSize: 15,
-                color: _editBirthdayCtrl.text.isEmpty
-                    ? tc.muted
-                    : tc.text,
+                color: _editBirthdayCtrl.text.isEmpty ? tc.muted : tc.text,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -2331,7 +2491,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── DEPARTMENT DROPDOWN FIELD ────────────────────────────
   Widget _editDepartmentDropdownField() {
     final current = _editDeptCtrl.text.trim();
     final options = <String>{..._departmentOptions};
@@ -2362,8 +2521,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           decoration: BoxDecoration(
             color: tc.card,
             borderRadius: BorderRadius.circular(8),
-            border:
-            Border.all(color: const Color(0xFFDDC1AE), width: 1),
+            border: Border.all(color: const Color(0xFFDDC1AE), width: 1),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
@@ -2402,7 +2560,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── BIOMETRIC CREDENTIALS CARD ──────────────────────────
   Widget _buildEditBiometricCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2467,7 +2624,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── KEYFOB FIELD (with RFID icon on right) ───────────────
   Widget _keyfobField() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2486,8 +2642,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           decoration: BoxDecoration(
             color: tc.card,
             borderRadius: BorderRadius.circular(8),
-            border:
-            Border.all(color: const Color(0xFFDDC1AE), width: 1),
+            border: Border.all(color: const Color(0xFFDDC1AE), width: 1),
           ),
           child: Row(
             children: [
@@ -2525,7 +2680,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── BIOMETRIC CHIP ────────────────────────────────────────
   Widget _biometricChip({
     required IconData icon,
     required String label,
@@ -2536,8 +2690,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         color: const Color(0xFFDCE9FF),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
-            color: const Color(0xFFDDC1AE).withValues(alpha: 0.3),
-            width: 1),
+            color: const Color(0xFFDDC1AE).withValues(alpha: 0.3), width: 1),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2558,7 +2711,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── EDIT ACTIONS (Cancel + Done) ──────────────────────────
   Widget _buildEditActions(Map<String, dynamic> emp) {
     return LayoutBuilder(builder: (context, constraints) {
       final narrow = constraints.maxWidth < 500;
@@ -2588,7 +2740,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             : () async {
           setState(() => _editSaving = true);
 
-          // Split Full Name → firstName + lastName
           final fullName = _editFullNameCtrl.text.trim();
           final parts = fullName.split(RegExp(r'\s+'));
           final firstName = parts.isNotEmpty ? parts.first : '';
@@ -2688,7 +2839,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // EMPLOYEE PROFILE PAGE — REAL DATA
+  // EMPLOYEE PROFILE PAGE
   // ══════════════════════════════════════════════════════════════
   Widget _buildEmployeeProfilePage(Map<String, dynamic> emp) {
     final docId = _s(emp['id'], '');
@@ -2723,8 +2874,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 TextButton.icon(
-                  onPressed: () =>
-                      setState(() => _selectedProfileEmp = null),
+                  onPressed: () => setState(() => _selectedProfileEmp = null),
                   icon: Icon(Icons.arrow_back_rounded, color: tc.muted),
                   label: Text('Back to Directory',
                       style: TextStyle(
@@ -3198,7 +3348,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── ATTENDANCE + LEAVE (REAL) ────────────────────────────────
+  // ─── ATTENDANCE + LEAVE ───────────────────────────────────────
   Widget _attendanceAndLeaveSection(String empId) {
     return LayoutBuilder(builder: (context, constraints) {
       final stack = !BsResponsive(constraints.maxWidth).up(BsSize.lg);
@@ -3225,6 +3375,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
+  // ✅ RECENT ATTENDANCE — may TOTAL HOURS WORKED summary
   Widget _recentAttendanceCard(String empId) {
     return Container(
       padding: const EdgeInsets.all(24),
@@ -3257,7 +3408,70 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     fontWeight: FontWeight.w600,
                     color: tc.muted)),
           ]),
+          const SizedBox(height: 16),
+
+          // TOTAL HOURS WORKED SUMMARY
+          StreamBuilder<List<Map<String, dynamic>>>(
+            stream: _attendanceStream(empId),
+            builder: (context, snapshot) {
+              final logs = snapshot.data ?? const [];
+              final rows = _buildAttendanceRows(logs);
+
+              final totalMinutes = _computeTotalMinutes(rows);
+              final thisMonthMinutes = _computeTotalMinutes(rows,
+                  filterMonth: DateTime.now().month,
+                  filterYear: DateTime.now().year);
+              final daysWorked = rows.length;
+
+              return Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      tc.orange.withValues(alpha: 0.12),
+                      tc.orange.withValues(alpha: 0.04),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                  border:
+                  Border.all(color: tc.orange.withValues(alpha: 0.25)),
+                ),
+                child: Row(children: [
+                  Expanded(
+                    child: _hourStat(
+                      icon: Icons.access_time_rounded,
+                      label: 'Total Hours Worked',
+                      value: _formatMinutes(totalMinutes),
+                      color: tc.orange,
+                    ),
+                  ),
+                  Container(width: 1, height: 40, color: tc.border),
+                  Expanded(
+                    child: _hourStat(
+                      icon: Icons.calendar_month_rounded,
+                      label: 'This Month',
+                      value: _formatMinutes(thisMonthMinutes),
+                      color: tc.orange,
+                    ),
+                  ),
+                  Container(width: 1, height: 40, color: tc.border),
+                  Expanded(
+                    child: _hourStat(
+                      icon: Icons.check_circle_rounded,
+                      label: 'Days Worked',
+                      value: '$daysWorked',
+                      color: tc.orange,
+                    ),
+                  ),
+                ]),
+              );
+            },
+          ),
+
           const SizedBox(height: 20),
+
           Container(
             padding: const EdgeInsets.only(bottom: 12),
             decoration: BoxDecoration(
@@ -3286,21 +3500,54 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   ),
                 );
               }
+
+              if (snapshot.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text(
+                      'Error loading attendance: ${snapshot.error}',
+                      style: TextStyle(color: tc.red, fontSize: 12),
+                    ),
+                  ),
+                );
+              }
+
               final logs = snapshot.data ?? const [];
               if (logs.isEmpty) {
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 24),
                   child: Center(
-                    child: Text('No attendance records yet.',
+                    child: Column(
+                      children: [
+                        Icon(Icons.event_busy_outlined,
+                            size: 32, color: tc.muted),
+                        const SizedBox(height: 8),
+                        Text('No attendance records yet.',
+                            style:
+                            TextStyle(color: tc.muted, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              final rows = _buildAttendanceRows(logs).take(5).toList();
+
+              if (rows.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text('No valid attendance data.',
                         style: TextStyle(color: tc.muted, fontSize: 13)),
                   ),
                 );
               }
-              final rows = logs.take(5).toList();
+
               return Column(
                 children: [
                   for (int i = 0; i < rows.length; i++) ...[
-                    _attendanceRowFromDoc(rows[i]),
+                    _attendanceRowFromData(rows[i]),
                     if (i < rows.length - 1)
                       Divider(
                           height: 1,
@@ -3310,6 +3557,45 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               );
             },
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _hourStat({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(label,
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: tc.muted),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: tc.text,
+                  letterSpacing: -0.3),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1),
         ],
       ),
     );
@@ -3327,42 +3613,50 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  Widget _attendanceRowFromDoc(Map<String, dynamic> r) {
-    final ts = r['timestamp'];
-    final timeIn = r['clockIn'] ?? r['timeIn'] ?? ts;
-    final timeOut = r['clockOut'] ?? r['timeOut'];
-    final total = r['totalHours'] ??
-        r['total'] ??
-        (timeOut != null ? _durationBetween(timeIn, timeOut) : '—');
-    final status = _s(
-      r['status'],
-      _s(r['type'], timeOut != null ? 'On Time' : 'Open'),
-    );
-    final isLate = status.toLowerCase().contains('late');
+  Widget _attendanceRowFromData(Map<String, dynamic> row) {
+    final date = row['date'] as DateTime?;
+    final inTs = row['in'] as DateTime?;
+    final outTs = row['out'] as DateTime?;
+    final total = row['total'] as String;
+    final status = row['status'] as String;
+    final isLate = row['isLate'] as bool;
+
     final statusBg =
     isLate ? const Color(0xFFFEF9C3) : const Color(0xFFDCFCE7);
     final statusText =
     isLate ? const Color(0xFF854D0E) : const Color(0xFF166534);
+
+    final isWorking = status == 'Working';
+    final actualStatusBg = isWorking ? const Color(0xFFDBEAFE) : statusBg;
+    final actualStatusText =
+    isWorking ? const Color(0xFF1E40AF) : statusText;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 14),
       child: Row(children: [
         Expanded(
             flex: 4,
-            child: Text(_fmtDate(ts),
+            child: Text(_fmtDate(date),
                 style: TextStyle(fontSize: 14, color: tc.text))),
         Expanded(
             flex: 3,
-            child: Text(_fmtTime(timeIn),
-                style: TextStyle(fontSize: 14, color: tc.text))),
+            child: Text(_fmtTime(inTs),
+                style: TextStyle(
+                    fontSize: 14,
+                    color: inTs != null ? tc.text : tc.muted))),
         Expanded(
             flex: 3,
-            child: Text(_fmtTime(timeOut),
-                style: TextStyle(fontSize: 14, color: tc.text))),
+            child: Text(_fmtTime(outTs),
+                style: TextStyle(
+                    fontSize: 14,
+                    color: outTs != null ? tc.text : tc.muted))),
         Expanded(
             flex: 3,
-            child: Text(total.toString(),
-                style: TextStyle(fontSize: 14, color: tc.text))),
+            child: Text(total,
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: tc.text))),
         Expanded(
           flex: 3,
           child: Align(
@@ -3371,14 +3665,14 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               padding:
               const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
               decoration: BoxDecoration(
-                color: statusBg,
+                color: actualStatusBg,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(status,
                   style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: statusText)),
+                      color: actualStatusText)),
             ),
           ),
         ),
@@ -3386,7 +3680,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ✅ LEAVE BALANCE — 18 ANNUAL + 18 SICK, LIVE FROM FIRESTORE
   Widget _leaveBalanceCard(String empId) {
     return Container(
       padding: const EdgeInsets.all(24),
@@ -3494,8 +3787,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text('Remaining Total',
-                            style: TextStyle(
-                                fontSize: 11, color: tc.muted)),
+                            style:
+                            TextStyle(fontSize: 11, color: tc.muted)),
                         const SizedBox(height: 2),
                         Text('${remainingAnnual + remainingSick} days',
                             style: TextStyle(
@@ -3550,8 +3843,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _leaveTypeLabelAdmin(_s(
-                                    p['leaveType'],
+                                _leaveTypeLabelAdmin(_s(p['leaveType'],
                                     _s(p['type'], 'Leave'))),
                                 style: TextStyle(
                                     fontSize: 14,
@@ -3657,11 +3949,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── DEVICES + LOGIN HISTORY (REAL) ───────────────────────────
+  // ─── DEVICES + LOGIN HISTORY ──────────────────────────────────
   Widget _devicesAndLoginSection(String empId, Map<String, dynamic> emp) {
     return LayoutBuilder(builder: (context, constraints) {
       final stack = !BsResponsive(constraints.maxWidth).up(BsSize.lg);
-      final left = _authorizedDevicesCard(emp);
+      final left = _authorizedDevicesCard(empId, emp);
       final right = _deviceLoginHistoryCard(empId);
       if (stack) {
         return Column(
@@ -3684,30 +3976,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
-  Widget _authorizedDevicesCard(Map<String, dynamic> emp) {
-    final raw = emp['devices'];
-    final devices = <Map<String, dynamic>>[];
-    if (raw is List) {
-      for (final d in raw) {
-        if (d is Map) {
-          devices.add({
-            'name': _s(d['name'], 'Unknown Device'),
-            'sub': _s(d['type'], _s(d['platform'], 'Registered')),
-            'icon': Icons.devices_rounded,
-            'active': d['active'] != false,
-          });
-        }
-      }
-    }
-    if (devices.isEmpty && _s(emp['authUid'], '').isNotEmpty) {
-      devices.add({
-        'name': 'Firebase Auth Session',
-        'sub': 'Authenticated Account',
-        'icon': Icons.vpn_key_outlined,
-        'active': true,
-      });
-    }
-
+  // ✅ AUTHORIZED DEVICES CARD — Kukuha na ng actual data mula sa logs
+  Widget _authorizedDevicesCard(String empId, Map<String, dynamic> emp) {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -3722,43 +3992,147 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Icon(Icons.devices_rounded, size: 22, color: tc.orange),
-            const SizedBox(width: 8),
-            Text('Authorized Devices',
-                style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w600,
-                    color: tc.text)),
-          ]),
-          const SizedBox(height: 20),
-          if (devices.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: tc.surface,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: tc.border),
-              ),
-              child: Text('No devices registered for this employee.',
-                  style: TextStyle(fontSize: 13, color: tc.muted)),
-            )
-          else
-            for (int i = 0; i < devices.length; i++) ...[
-              _deviceItem(
-                name: devices[i]['name'] as String,
-                sub: devices[i]['sub'] as String,
-                icon: devices[i]['icon'] as IconData,
-                active: devices[i]['active'] as bool,
-              ),
-              if (i < devices.length - 1) const SizedBox(height: 12),
+      child: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: _activityStream(empId),
+        builder: (context, snapshot) {
+          List<Map<String, dynamic>> devices = [];
+
+          // 1. Kunin ang actual devices mula sa activity logs
+          if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+            devices = _extractDevicesFromLogs(snapshot.data!);
+          }
+
+          // 2. Fallback: Kung walang logs, check sa employee document
+          if (devices.isEmpty) {
+            final raw = emp['devices'];
+            if (raw is List) {
+              for (final d in raw) {
+                if (d is Map) {
+                  devices.add({
+                    'name': _s(d['name'], 'Unknown Device'),
+                    'sub': _s(d['type'], _s(d['platform'], 'Registered')),
+                    'icon': Icons.devices_rounded,
+                    'active': d['active'] != false,
+                    'lastActive': d['lastActive'] ?? d['updatedAt'],
+                  });
+                } else if (d is String) {
+                  devices.add({
+                    'name': d,
+                    'sub': 'Registered Device',
+                    'icon': Icons.devices_rounded,
+                    'active': true,
+                    'lastActive': null,
+                  });
+                }
+              }
+            }
+          }
+
+          // 3. Fallback: Firebase Auth Session
+          if (devices.isEmpty && _s(emp['authUid'], '').isNotEmpty) {
+            devices.add({
+              'name': 'Firebase Auth Session',
+              'sub': 'Authenticated Account',
+              'icon': Icons.vpn_key_outlined,
+              'active': true,
+              'lastActive': null,
+            });
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.devices_rounded, size: 22, color: tc.orange),
+                const SizedBox(width: 8),
+                Text('Authorized Devices',
+                    style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w600,
+                        color: tc.text)),
+              ]),
+              const SizedBox(height: 20),
+              if (snapshot.connectionState == ConnectionState.waiting && devices.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Center(
+                    child: SizedBox(
+                      width: 20, height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                )
+              else if (devices.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: tc.surface,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: tc.border),
+                  ),
+                  child: Text('No devices registered for this employee.',
+                      style: TextStyle(fontSize: 13, color: tc.muted)),
+                )
+              else
+                for (int i = 0; i < devices.length; i++) ...[
+                  _deviceItem(
+                    name: devices[i]['name'] as String,
+                    sub: devices[i]['sub'] as String,
+                    icon: devices[i]['icon'] as IconData,
+                    active: devices[i]['active'] as bool,
+                    lastActive: devices[i]['lastActive'],
+                  ),
+                  if (i < devices.length - 1) const SizedBox(height: 12),
+                ],
             ],
-        ],
+          );
+        },
       ),
     );
+  }
+
+  // Helper: Kinukuha ang unique devices mula sa activity logs
+  List<Map<String, dynamic>> _extractDevicesFromLogs(
+      List<Map<String, dynamic>> logs) {
+    final Map<String, Map<String, dynamic>> uniqueDevices = {};
+
+    for (final log in logs) {
+      final deviceName = _s(log['device'], '');
+      if (deviceName.isNotEmpty &&
+          deviceName.toLowerCase() != 'unknown device' &&
+          deviceName != '—') {
+        if (!uniqueDevices.containsKey(deviceName)) {
+          final lowerName = deviceName.toLowerCase();
+          IconData icon = Icons.devices_rounded;
+
+          if (lowerName.contains('web') || lowerName.contains('chrome')) {
+            icon = Icons.web_rounded;
+          } else if (lowerName.contains('ios') || lowerName.contains('iphone')) {
+            icon = Icons.phone_iphone_rounded;
+          } else if (lowerName.contains('android')) {
+            icon = Icons.phone_android_rounded;
+          } else if (lowerName.contains('mobile')) {
+            icon = Icons.smartphone_rounded;
+          }
+
+          uniqueDevices[deviceName] = {
+            'name': deviceName,
+            'sub': _s(log['platform'], _s(log['os'], 'Mobile App')),
+            'lastActive': log['timestamp'],
+            'active': true,
+            'icon': icon,
+          };
+        } else {
+          // I-update ang lastActive kung mas bago ang log na ito
+          final currentLast = _toDateTime(uniqueDevices[deviceName]!['lastActive']);
+          final newLast = _toDateTime(log['timestamp']);
+          if (currentLast != null && newLast != null && newLast.isAfter(currentLast)) {
+            uniqueDevices[deviceName]!['lastActive'] = log['timestamp'];
+          }
+        }
+      }
+    }
+    return uniqueDevices.values.toList();
   }
 
   Widget _deviceItem({
@@ -3766,7 +4140,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     required String sub,
     required IconData icon,
     required bool active,
+    dynamic lastActive,
   }) {
+    final lastActiveStr = lastActive != null
+        ? 'Last active: ${_fmtDate(lastActive)} ${_fmtTime(lastActive)}'
+        : 'Active now';
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -3796,6 +4175,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       color: tc.text)),
               const SizedBox(height: 2),
               Text(sub, style: TextStyle(fontSize: 13, color: tc.muted)),
+              const SizedBox(height: 4),
+              Text(lastActiveStr,
+                  style: TextStyle(fontSize: 11, color: tc.muted)),
             ],
           ),
         ),

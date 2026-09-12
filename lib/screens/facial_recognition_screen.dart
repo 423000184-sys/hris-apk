@@ -12,20 +12,14 @@ import '../services/face_matcher.dart';
 import 'main_screen.dart';
 import 'clock_in_success_screen.dart';
 
-// ═══════════════════════════════════════════════════════════════════════════
-// _ThemeColors
-// ═══════════════════════════════════════════════════════════════════════════
 class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
 
   Color get bg => isDark ? const Color(0xFF0A0A0A) : const Color(0xFFF7F7F7);
-  Color get outerCardBg =>
-      isDark ? const Color(0xFF18181B) : const Color(0xFFECEBE8);
-  Color get stepLabelColor =>
-      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF8A8A85);
-  Color get iconBoxBg =>
-      isDark ? const Color(0xFF27272A) : const Color(0xFFFFFFFF);
+  Color get outerCardBg => isDark ? const Color(0xFF18181B) : const Color(0xFFECEBE8);
+  Color get stepLabelColor => isDark ? const Color(0xFFB0B0B0) : const Color(0xFF8A8A85);
+  Color get iconBoxBg => isDark ? const Color(0xFF27272A) : const Color(0xFFFFFFFF);
   Color get cancelBg => isDark ? const Color(0xFF27272A) : const Color(0xFFFFFFFF);
   Color get cancelPressed => isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFF4EE);
   Color get cancelText => const Color(0xFFF05000);
@@ -36,8 +30,7 @@ class FacialRecognitionScreen extends StatefulWidget {
   const FacialRecognitionScreen({super.key, required this.employee});
 
   @override
-  State<FacialRecognitionScreen> createState() =>
-      _FacialRecognitionScreenState();
+  State<FacialRecognitionScreen> createState() => _FacialRecognitionScreenState();
 }
 
 class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
@@ -52,22 +45,17 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   bool _cancelPressed = false;
   bool _isProcessing = false;
   bool _isScanning = false;
+  String? _camError;
 
-  // ✅ Face match fields
   bool _faceMatched = false;
   double _matchScore = 0.0;
 
-  /// ⚙️ Config: kung true, block ang scan kapag walang naka-register na face.
-  /// Kung false, allow ang scan kahit walang embedding (para sa testing).
   static const bool _strictFaceMatch = false;
-
-  /// ⚙️ Similarity threshold (0..1). 0.85 = 85% match needed.
   static const double _matchThreshold = 0.85;
 
   late final FaceDetector _faceDetector;
 
   bool _facePresent = false;
-
   bool _blinkDetected = false;
   bool _eyesWereClosed = false;
   int _closedFrames = 0;
@@ -149,7 +137,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _ringCtrl.repeat();
     _fadeCtrl.forward();
 
-    debugPrint('📷 Facial recognition ready — waiting for user tap');
+    debugPrint('📷 Facial recognition: waiting for user tap (isWeb=$kIsWeb)');
   }
 
   @override
@@ -169,7 +157,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<bool> _ensureCameraPermission() async {
-    if (kIsWeb) return true;
+    if (kIsWeb) return true; // Web: browser handles permission
 
     try {
       final status = await Permission.camera.status;
@@ -188,47 +176,86 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
+  // ✅ IMPROVED camera init — with retry logic for web
   Future<void> _initCamera() async {
     if (_camTried && _camReady) return;
     _camTried = true;
+    _camError = null;
+
     try {
       final granted = await _ensureCameraPermission();
-      if (!granted) return;
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        debugPrint('⚠️ No cameras available');
+      if (!granted) {
+        debugPrint('⚠️ Permission not granted');
+        _camError = 'Camera permission not granted.';
         return;
       }
+
+      // ✅ Web: Try multiple times — browser may need time after permission
+      List<CameraDescription> cameras = await availableCameras();
+
+      if (cameras.isEmpty && kIsWeb) {
+        debugPrint('🌐 Web: no cameras on first try, retrying after 1s...');
+        await Future.delayed(const Duration(seconds: 1));
+        cameras = await availableCameras();
+      }
+
+      if (cameras.isEmpty) {
+        debugPrint('⚠️ No cameras available');
+        _camError = 'No camera detected on this device.';
+        if (mounted) setState(() {});
+        return;
+      }
+
+      debugPrint('📷 Found ${cameras.length} camera(s)');
+
       final front = cameras.firstWhere(
             (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
+
+      debugPrint('📷 Using camera: ${front.name}, lens: ${front.lensDirection}');
+
       final ctrl = CameraController(
         front,
         ResolutionPreset.medium,
         enableAudio: false,
+        // ✅ Web: JPEG format para supported ng browser
         imageFormatGroup: kIsWeb ? ImageFormatGroup.jpeg : ImageFormatGroup.nv21,
       );
+
+      debugPrint('📷 Initializing camera controller...');
       await ctrl.initialize();
-      if (!mounted) return;
+
+      debugPrint('✅ Camera initialized. Preview size: ${ctrl.value.previewSize}');
+
+      if (!mounted) {
+        ctrl.dispose();
+        return;
+      }
+
       setState(() {
         _camCtrl = ctrl;
         _camReady = true;
+        _camError = null;
       });
-      debugPrint('✅ Camera initialized');
     } catch (e) {
       debugPrint('⚠️ Camera init failed: $e');
+      _camError = 'Camera error: ${e.toString()}';
+
+      if (mounted) {
+        setState(() {});
+      }
+
       if (!kIsWeb && mounted) {
         _onFailure('Camera unavailable. Try again.');
       }
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // START SCAN
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _startScan() async {
     if (!mounted || _isScanning) return;
+
+    debugPrint('🎬 Starting scan...');
     _isScanning = true;
     _blinkDetected = false;
     _eyesWereClosed = false;
@@ -244,28 +271,34 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _faceWarning = _FaceWarning.none;
     });
 
-    if (kIsWeb) {
-      debugPrint('🌐 Web detected — trying real camera + mock scan');
-      if (!_camReady) await _initCamera();
-      _scanLineCtrl.repeat(reverse: true);
-      await _runMockWebScan();
-      return;
-    }
-
+    // ✅ BOTH WEB + NATIVE: Initialize camera FIRST
     if (!_camReady) await _initCamera();
-    if (!_camReady || !mounted) {
-      _isScanning = false;
+
+    if (!mounted) return;
+
+    // If camera not ready, show mock fallback
+    if (!_camReady) {
+      debugPrint('🌐 Camera not ready — running mock scan');
+      _scanLineCtrl.repeat(reverse: true);
+      await _runMockScan();
       return;
     }
 
+    // Camera ready — start scan
+    if (kIsWeb) {
+      debugPrint('🌐 Web: camera ready, running mock scan for ML Kit');
+      _scanLineCtrl.repeat(reverse: true);
+      await _runMockScan();
+      return;
+    }
+
+    // Native: use ML Kit
     _scanLineCtrl.repeat(reverse: true);
     await _camCtrl!.startImageStream(_onCameraImage);
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // WEB MOCK SCAN
-  // ═══════════════════════════════════════════════════════════════════════
-  Future<void> _runMockWebScan() async {
+  // ✅ Mock scan — gumagana for both web AND fallback
+  Future<void> _runMockScan() async {
     await Future.delayed(const Duration(milliseconds: 800));
     if (!mounted || !_isScanning) return;
     setState(() => _facePresent = false);
@@ -295,22 +328,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!mounted) return;
     _isScanning = false;
     _scanLineCtrl.stop();
-
-    // ✅ Sa web, mock lang ang match (auto-pass) pero pwede mong subukan
-    // ang real match kung gusto mo — i-uncomment ang block sa baba.
-    // try {
-    //   final picture = await _camCtrl?.takePicture();
-    //   if (picture != null) {
-    //     final bytes = await picture.readAsBytes();
-    //     final result = await FaceMatcher.verify(
-    //       widget.employee.id, bytes, threshold: _matchThreshold,
-    //     );
-    //     _matchScore = result.score;
-    //     _faceMatched = result.matched;
-    //     if (!result.matched) { _onFaceMismatch(); return; }
-    //   }
-    // } catch (e) { debugPrint('Web face verify failed: $e'); }
-
     _faceMatched = true;
     _matchScore = 1.0;
     await _onSuccess();
@@ -380,7 +397,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         } else if (avgOpen > _blinkOpenThreshold &&
             _eyesWereClosed &&
             _closedFrames >= _minClosedFrames) {
-          // ✅ BLINK DETECTED — verify face match na
           _blinkDetected = true;
           _eyesWereClosed = false;
           _closedFrames = 0;
@@ -388,7 +404,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           _isScanning = false;
           _scanLineCtrl.stop();
 
-          // → VERIFY FACE MATCH
           final matched = await _verifyFaceMatch();
           if (matched) {
             await _onSuccess();
@@ -405,9 +420,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         }
 
         if (mounted) {
-          setState(() {
-            _faceWarning = _FaceWarning.none;
-          });
+          setState(() { _faceWarning = _FaceWarning.none; });
         }
       } else {
         _eyesWereClosed = false;
@@ -421,14 +434,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           });
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('⚠️ _onCameraImage error: $e');
+    }
 
     _isProcessing = false;
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // FACE MATCH VERIFICATION
-  // ═══════════════════════════════════════════════════════════════════════
   Future<bool> _verifyFaceMatch() async {
     try {
       if (_camCtrl == null || !_camCtrl!.value.isInitialized) {
@@ -436,11 +448,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         return false;
       }
 
-      // Capture live frame
       final picture = await _camCtrl!.takePicture();
       final bytes = await picture.readAsBytes();
 
-      // Verify laban sa stored embedding
       final result = await FaceMatcher.verify(
         widget.employee.id,
         bytes,
@@ -452,16 +462,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
       debugPrint('📊 Match score: ${(result.score * 100).toStringAsFixed(1)}%');
 
-      // Kung walang embedding sa Firestore, check ang config
       if (!result.hasEmbedding) {
         debugPrint('⚠️ No face embedding registered');
-        if (_strictFaceMatch) {
-          return false;
-        } else {
-          // Non-strict: allow kahit walang embedding (for testing)
-          debugPrint('⚠️ Non-strict mode: allowing without embedding');
-          return true;
-        }
+        if (_strictFaceMatch) return false;
+        debugPrint('⚠️ Non-strict mode: allowing');
+        return true;
       }
 
       return result.matched;
@@ -471,9 +476,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // FACE MISMATCH HANDLER
-  // ═══════════════════════════════════════════════════════════════════════
   void _onFaceMismatch() {
     if (!mounted) return;
     _isScanning = false;
@@ -498,7 +500,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           _facePresent = false;
           _faceMatched = false;
           _matchScore = 0.0;
-          _camTried = false; // para pwede mag-restart ng camera sa susunod na scan
         });
       }
     });
@@ -517,9 +518,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final hasBothEyes = face.landmarks[FaceLandmarkType.leftEye] != null &&
         face.landmarks[FaceLandmarkType.rightEye] != null;
 
-    if (!hasNose && (!hasMouthL || !hasMouthR)) {
-      return _FaceWarning.faceMask;
-    }
+    if (!hasNose && (!hasMouthL || !hasMouthR)) return _FaceWarning.faceMask;
     if (!hasBothEyes && (!hasNose || (!hasMouthL && !hasMouthR))) {
       return _FaceWarning.occluded;
     }
@@ -532,9 +531,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (_sharpnessBuffer.length == _sharpnessWindow) {
       final avgSharpness =
           _sharpnessBuffer.reduce((a, b) => a + b) / _sharpnessBuffer.length;
-      if (avgSharpness < _sharpnessThreshold) {
-        return _FaceWarning.blurry;
-      }
+      if (avgSharpness < _sharpnessThreshold) return _FaceWarning.blurry;
     }
 
     return _FaceWarning.none;
@@ -545,7 +542,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final bytes = image.planes.first.bytes;
       final w = image.width;
       final h = image.height;
-
       const step = 8;
       const count = 32;
       final startX = (w ~/ 2) - (count * step ~/ 2);
@@ -580,17 +576,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final sensorOrientation = _camCtrl!.description.sensorOrientation;
     InputImageRotation rotation;
     switch (sensorOrientation) {
-      case 90:
-        rotation = InputImageRotation.rotation90deg;
-        break;
-      case 180:
-        rotation = InputImageRotation.rotation180deg;
-        break;
-      case 270:
-        rotation = InputImageRotation.rotation270deg;
-        break;
-      default:
-        rotation = InputImageRotation.rotation0deg;
+      case 90: rotation = InputImageRotation.rotation90deg; break;
+      case 180: rotation = InputImageRotation.rotation180deg; break;
+      case 270: rotation = InputImageRotation.rotation270deg; break;
+      default: rotation = InputImageRotation.rotation0deg;
     }
     final plane = image.planes.first;
     return InputImage.fromBytes(
@@ -685,8 +674,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final tc = _ThemeColors(isDark);
 
     return Scaffold(
-      backgroundColor:
-      isDark ? const Color(0xFF0A0A0A) : const Color(0xFF121212),
+      backgroundColor: isDark ? const Color(0xFF0A0A0A) : const Color(0xFF121212),
       body: SafeArea(
         top: false,
         bottom: false,
@@ -700,16 +688,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                 width: contentWidth,
                 height: constraints.maxHeight,
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(
-                    screenWidth <= 420 ? 0 : 40,
-                  ),
+                  borderRadius: BorderRadius.circular(screenWidth <= 420 ? 0 : 40),
                   child: FadeTransition(
                     opacity: _fadeAnim,
                     child: Stack(
                       children: [
-                        Positioned.fill(
-                          child: Container(color: tc.bg),
-                        ),
+                        Positioned.fill(child: Container(color: tc.bg)),
                         _buildHeader(),
                         Positioned(
                           top: 205,
@@ -737,11 +721,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            Color(0xFFFF8A00),
-            Color(0xFFFF6B00),
-            Color(0xFFF54900),
-          ],
+          colors: [Color(0xFFFF8A00), Color(0xFFFF6B00), Color(0xFFF54900)],
           stops: [0.0001, 0.3318, 1.0],
         ),
         borderRadius: BorderRadius.only(
@@ -762,20 +742,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   SizedBox(
                     width: 19.99,
                     height: 19.99,
-                    child: CustomPaint(
-                      painter: _BackArrowPainter(),
-                    ),
+                    child: CustomPaint(painter: _BackArrowPainter()),
                   ),
                   const SizedBox(width: 2),
-                  const Text(
-                    'Back',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.white,
-                      height: 0.9,
-                    ),
-                  ),
+                  const Text('Back',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white,
+                        height: 0.9,
+                      )),
                 ],
               ),
             ),
@@ -783,28 +759,23 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           const Positioned(
             left: 24,
             top: 95.99,
-            child: Text(
-              'Auth & Clock In',
-              style: TextStyle(
-                fontSize: 30,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-                height: 0.9,
-              ),
-            ),
+            child: Text('Auth & Clock In',
+                style: TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  height: 0.9,
+                )),
           ),
           const Positioned(
             left: 24,
             top: 136.99,
-            child: Text(
-              'Select your initial verification method',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.normal,
-                color: Colors.white,
-                height: 0.9,
-              ),
-            ),
+            child: Text('Select your initial verification method',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.white,
+                  height: 0.9,
+                )),
           ),
         ],
       ),
@@ -829,16 +800,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'Step 1: Initial Login',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: tc.stepLabelColor,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.5,
-            ),
-          ),
+          Text('Step 1: Initial Login',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: tc.stepLabelColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.5,
+              )),
           const SizedBox(height: 12),
           _buildModalCard(tc),
         ],
@@ -847,8 +816,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Widget _buildModalCard(_ThemeColors tc) {
-    final isScanning =
-        _faceState == _FaceState.scanning && (kIsWeb || _camReady);
+    final isScanning = _faceState == _FaceState.scanning;
 
     return Container(
       width: double.infinity,
@@ -856,10 +824,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            Color(0xFFFF8C2B),
-            Color(0xFFF05000),
-          ],
+          colors: [Color(0xFFFF8C2B), Color(0xFFF05000)],
         ),
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
@@ -879,6 +844,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             height: _cameraBoxSize,
             child: Center(
               child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
                 onTap: (!isScanning && _faceState != _FaceState.success)
                     ? _startScan
                     : null,
@@ -913,9 +879,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             duration: const Duration(milliseconds: 300),
             child: Text(
               _errorMessage ?? _stateSubtitle.replaceAll('\n', ' '),
-              key: ValueKey(
-                'subtitle_${_errorMessage ?? _faceState.toString()}',
-              ),
+              key: ValueKey('subtitle_${_errorMessage ?? _faceState.toString()}'),
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: _white.withValues(alpha: 0.9),
@@ -924,6 +888,22 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               ),
             ),
           ),
+          // ✅ Show camera error kung meron
+          if (_camError != null && _faceState == _FaceState.idle) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '⚠️ $_camError',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: _warning, fontSize: 10),
+              ),
+            ),
+          ],
           const SizedBox(height: 24),
           _buildCancelButton(tc),
         ],
@@ -936,18 +916,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       width: 75,
       height: 75,
       child: AnimatedBuilder(
-        animation: Listenable.merge([
-          _pulseAnim,
-          _successAnim,
-          _shakeAnim,
-        ]),
+        animation: Listenable.merge([_pulseAnim, _successAnim, _shakeAnim]),
         builder: (_, __) {
           final isSuccess = _faceState == _FaceState.success;
           final isError = _faceState == _FaceState.error;
-
           final shakeX = isError
-              ? _shakeAnim.value *
-              (_shakeCtrl.value * 10 % 2 == 0 ? 1 : -1)
+              ? _shakeAnim.value * (_shakeCtrl.value * 10 % 2 == 0 ? 1 : -1)
               : 0.0;
 
           return Transform.translate(
@@ -960,9 +934,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                 decoration: BoxDecoration(
                   color: isSuccess ? Colors.transparent : _white,
                   borderRadius: BorderRadius.circular(18),
-                  border: isSuccess
-                      ? Border.all(color: _success, width: 2.5)
-                      : null,
+                  border: isSuccess ? Border.all(color: _success, width: 2.5) : null,
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withValues(alpha: 0.08),
@@ -975,11 +947,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   child: isSuccess
                       ? Transform.scale(
                     scale: _successAnim.value,
-                    child: const Icon(
-                      Icons.how_to_reg_rounded,
-                      color: _success,
-                      size: 36,
-                    ),
+                    child: const Icon(Icons.how_to_reg_rounded,
+                        color: _success, size: 36),
                   )
                       : CustomPaint(
                     size: const Size(36, 36),
@@ -1025,27 +994,30 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     );
   }
 
+  // ✅ IMPROVED camera preview — priority sa real camera
   Widget _buildCameraPreview() {
     final faceDetected = _facePresent;
     final hasWarning = _faceWarning != _FaceWarning.none;
-    final borderColor =
-    hasWarning ? _warning : (faceDetected ? _faceGreen : _orange);
+    final borderColor = hasWarning ? _warning : (faceDetected ? _faceGreen : _orange);
 
     double blinkProgress = 0.0;
     if (faceDetected && !hasWarning && _eyesWereClosed) {
       blinkProgress = (_closedFrames / _minClosedFrames).clamp(0.0, 1.0);
     }
 
+    // ✅ Check kung may valid camera
+    final bool hasRealCamera = _camCtrl != null &&
+        _camCtrl!.value.isInitialized &&
+        _camCtrl!.value.previewSize != null;
+
+    debugPrint('🎥 Building preview: hasRealCamera=$hasRealCamera, '
+        'isWeb=$kIsWeb, camReady=$_camReady');
+
     return AnimatedBuilder(
-      animation: Listenable.merge([
-        _ringAnim,
-        _scanLineAnim,
-        _warningAnim,
-      ]),
+      animation: Listenable.merge([_ringAnim, _scanLineAnim, _warningAnim]),
       builder: (_, __) {
         final glowOpacity = faceDetected
-            ? 0.6 +
-            0.35 * (0.5 + 0.5 * math.sin(_ringAnim.value * 2 * math.pi))
+            ? 0.6 + 0.35 * (0.5 + 0.5 * math.sin(_ringAnim.value * 2 * math.pi))
             : 0.3 + 0.30 * (0.5 + 0.5 * math.sin(_ringAnim.value * 2 * math.pi));
 
         return ClipRRect(
@@ -1057,9 +1029,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               alignment: Alignment.center,
               fit: StackFit.expand,
               children: [
-                if (_camCtrl != null &&
-                    _camCtrl!.value.isInitialized &&
-                    _camCtrl!.value.previewSize != null)
+                // ✅ PRIORITY: Real camera preview
+                if (hasRealCamera)
                   FittedBox(
                     fit: BoxFit.cover,
                     child: Transform.scale(
@@ -1074,8 +1045,17 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                 else if (kIsWeb)
                   _buildMockPreviewBackground(faceDetected)
                 else
-                  Container(color: Colors.black),
+                  Container(
+                    color: Colors.black,
+                    child: const Center(
+                      child: CircularProgressIndicator(
+                        color: Colors.orange,
+                        strokeWidth: 2,
+                      ),
+                    ),
+                  ),
 
+                // Scan line
                 Positioned.fill(
                   child: Align(
                     alignment: Alignment(0, (_scanLineAnim.value * 2) - 1),
@@ -1102,10 +1082,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   ),
                 ),
 
-                if (faceDetected &&
-                    !hasWarning &&
-                    _eyesWereClosed &&
-                    _closedFrames > 0)
+                if (faceDetected && !hasWarning && _eyesWereClosed && _closedFrames > 0)
                   Positioned.fill(
                     child: IgnorePointer(
                       child: CustomPaint(
@@ -1124,9 +1101,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
                           color: borderColor.withValues(
-                            alpha: hasWarning
-                                ? _warningAnim.value
-                                : glowOpacity,
+                            alpha: hasWarning ? _warningAnim.value : glowOpacity,
                           ),
                           width: faceDetected ? 2.5 : 2,
                         ),
@@ -1139,8 +1114,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   top: 6,
                   right: 6,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 7, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.55),
                       borderRadius: BorderRadius.circular(20),
@@ -1177,13 +1151,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                       builder: (_, __) => Opacity(
                         opacity: _warningAnim.value,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: Colors.black.withValues(alpha: 0.72),
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                                color: _warning.withValues(alpha: 0.7)),
+                            border: Border.all(color: _warning.withValues(alpha: 0.7)),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
@@ -1191,14 +1163,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                               const Icon(Icons.warning_amber_rounded,
                                   color: _warning, size: 11),
                               const SizedBox(width: 4),
-                              Text(
-                                _warningHintText,
-                                style: const TextStyle(
-                                  color: _warning,
-                                  fontSize: 8,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
+                              Text(_warningHintText,
+                                  style: const TextStyle(
+                                    color: _warning,
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w700,
+                                  )),
                             ],
                           ),
                         ),
@@ -1209,16 +1179,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   Positioned(
                     bottom: 6,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: Colors.black.withValues(alpha: 0.6),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        _blinkDetected
-                            ? 'Blink detected! ✓'
-                            : 'Blink to verify',
+                        _blinkDetected ? 'Blink detected! ✓' : 'Blink to verify',
                         style: TextStyle(
                           color: _blinkDetected ? _success : _faceGreen,
                           fontSize: 8,
@@ -1231,20 +1198,17 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   Positioned(
                     bottom: 6,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: Colors.black.withValues(alpha: 0.55),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: Text(
-                        'Center your face',
-                        style: TextStyle(
-                          color: _white.withValues(alpha: 0.75),
-                          fontSize: 8,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                      child: Text('Center your face',
+                          style: TextStyle(
+                            color: _white.withValues(alpha: 0.75),
+                            fontSize: 8,
+                            fontWeight: FontWeight.w600,
+                          )),
                     ),
                   ),
               ],
@@ -1266,9 +1230,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               center: const Alignment(0, -0.2),
               radius: 0.9 + 0.1 * math.sin(t * 2 * math.pi),
               colors: [
-                faceDetected
-                    ? const Color(0xFF1B4332)
-                    : const Color(0xFF2B1A0F),
+                faceDetected ? const Color(0xFF1B4332) : const Color(0xFF2B1A0F),
                 const Color(0xFF0A0A0A),
               ],
             ),
@@ -1310,6 +1272,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   Widget _buildCancelButton(_ThemeColors tc) {
     return GestureDetector(
       onTap: _onCancelTapped,
+      behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         width: double.infinity,
@@ -1422,16 +1385,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   String get _statusBadgeText {
     if (_blinkDetected) return 'VERIFYING';
     switch (_faceWarning) {
-      case _FaceWarning.blurry:
-        return 'BLURRY';
-      case _FaceWarning.faceMask:
-        return 'MASK ON';
-      case _FaceWarning.occluded:
-        return 'BLOCKED';
-      case _FaceWarning.headAngle:
-        return 'ANGLE';
-      case _FaceWarning.eyesClosed:
-        return 'EYES SHUT';
+      case _FaceWarning.blurry: return 'BLURRY';
+      case _FaceWarning.faceMask: return 'MASK ON';
+      case _FaceWarning.occluded: return 'BLOCKED';
+      case _FaceWarning.headAngle: return 'ANGLE';
+      case _FaceWarning.eyesClosed: return 'EYES SHUT';
       case _FaceWarning.none:
         return _detectedFaceCount > 0 ? 'FACE FOUND' : 'SCANNING';
     }
@@ -1439,25 +1397,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   String get _warningHintText {
     switch (_faceWarning) {
-      case _FaceWarning.blurry:
-        return 'Hold still — too blurry';
-      case _FaceWarning.faceMask:
-        return 'Remove face mask';
-      case _FaceWarning.occluded:
-        return 'Remove obstructions';
-      case _FaceWarning.headAngle:
-        return 'Face the camera directly';
-      case _FaceWarning.eyesClosed:
-        return 'Please open your eyes';
-      case _FaceWarning.none:
-        return '';
+      case _FaceWarning.blurry: return 'Hold still — too blurry';
+      case _FaceWarning.faceMask: return 'Remove face mask';
+      case _FaceWarning.occluded: return 'Remove obstructions';
+      case _FaceWarning.headAngle: return 'Face the camera directly';
+      case _FaceWarning.eyesClosed: return 'Please open your eyes';
+      case _FaceWarning.none: return '';
     }
   }
 
   String get _stateTitle {
     switch (_faceState) {
-      case _FaceState.idle:
-        return 'Facial\nRecognition';
+      case _FaceState.idle: return 'Facial\nRecognition';
       case _FaceState.scanning:
         if (_blinkDetected) return 'Verifying\nIdentity...';
         if (_detectedFaceCount > 0) {
@@ -1466,10 +1417,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               : 'Face\nDetected';
         }
         return 'Scanning\nFace...';
-      case _FaceState.success:
-        return 'Details\nVerified';
-      case _FaceState.error:
-        return 'Try Again';
+      case _FaceState.success: return 'Details\nVerified';
+      case _FaceState.error: return 'Try Again';
     }
   }
 
@@ -1480,11 +1429,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       case _FaceState.scanning:
         if (_blinkDetected) return 'Matching your face\nwith registered photo...';
         if (_detectedFaceCount > 0) {
-          if (_faceWarning != _FaceWarning.none) {
-            return _warningHintText;
-          } else {
-            return 'Blink your eyes to verify\nliveness';
-          }
+          if (_faceWarning != _FaceWarning.none) return _warningHintText;
+          return 'Blink your eyes to verify\nliveness';
         }
         return 'Verifying facial structure & depth...';
       case _FaceState.success:
@@ -1496,12 +1442,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 }
 
 enum _FaceState { idle, scanning, success, error }
-
 enum _FaceWarning { none, blurry, faceMask, occluded, headAngle, eyesClosed }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Painters (unchanged)
-// ═══════════════════════════════════════════════════════════════════════════
 class _BackArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -1544,8 +1486,7 @@ class _FaceScanIconPainter extends CustomPainter {
       Path()
         ..moveTo(p(3, 7).dx, p(3, 7).dy)
         ..lineTo(p(3, 5).dx, p(3, 5).dy)
-        ..arcToPoint(p(5, 3),
-            radius: Radius.circular(2 * s), clockwise: true)
+        ..arcToPoint(p(5, 3), radius: Radius.circular(2 * s), clockwise: true)
         ..lineTo(p(7, 3).dx, p(7, 3).dy),
       strokePaint,
     );
@@ -1553,8 +1494,7 @@ class _FaceScanIconPainter extends CustomPainter {
       Path()
         ..moveTo(p(17, 3).dx, p(17, 3).dy)
         ..lineTo(p(19, 3).dx, p(19, 3).dy)
-        ..arcToPoint(p(21, 5),
-            radius: Radius.circular(2 * s), clockwise: true)
+        ..arcToPoint(p(21, 5), radius: Radius.circular(2 * s), clockwise: true)
         ..lineTo(p(21, 7).dx, p(21, 7).dy),
       strokePaint,
     );
@@ -1562,8 +1502,7 @@ class _FaceScanIconPainter extends CustomPainter {
       Path()
         ..moveTo(p(21, 17).dx, p(21, 17).dy)
         ..lineTo(p(21, 19).dx, p(21, 19).dy)
-        ..arcToPoint(p(19, 21),
-            radius: Radius.circular(2 * s), clockwise: true)
+        ..arcToPoint(p(19, 21), radius: Radius.circular(2 * s), clockwise: true)
         ..lineTo(p(17, 21).dx, p(17, 21).dy),
       strokePaint,
     );
@@ -1571,8 +1510,7 @@ class _FaceScanIconPainter extends CustomPainter {
       Path()
         ..moveTo(p(7, 21).dx, p(7, 21).dy)
         ..lineTo(p(5, 21).dx, p(5, 21).dy)
-        ..arcToPoint(p(3, 19),
-            radius: Radius.circular(2 * s), clockwise: true)
+        ..arcToPoint(p(3, 19), radius: Radius.circular(2 * s), clockwise: true)
         ..lineTo(p(3, 17).dx, p(3, 17).dy),
       strokePaint,
     );
@@ -1620,29 +1558,22 @@ class _FaceBracketPainter extends CustomPainter {
     final r = size.width * 0.08;
     final len = size.width * 0.15;
 
-    canvas.drawLine(Offset(margin + r, margin),
-        Offset(margin + r + len, margin), paint);
-    canvas.drawArc(Rect.fromLTWH(margin, margin, r * 2, r * 2), math.pi,
-        math.pi / 2, false, paint);
-    canvas.drawLine(Offset(margin, margin + r),
-        Offset(margin, margin + r + len), paint);
+    canvas.drawLine(Offset(margin + r, margin), Offset(margin + r + len, margin), paint);
+    canvas.drawArc(Rect.fromLTWH(margin, margin, r * 2, r * 2), math.pi, math.pi / 2, false, paint);
+    canvas.drawLine(Offset(margin, margin + r), Offset(margin, margin + r + len), paint);
 
     final xr = size.width - margin;
     canvas.drawLine(Offset(xr - r, margin), Offset(xr - r - len, margin), paint);
-    canvas.drawArc(Rect.fromLTWH(xr - r * 2, margin, r * 2, r * 2),
-        -math.pi / 2, math.pi / 2, false, paint);
-    canvas.drawLine(
-        Offset(xr, margin + r), Offset(xr, margin + r + len), paint);
+    canvas.drawArc(Rect.fromLTWH(xr - r * 2, margin, r * 2, r * 2), -math.pi / 2, math.pi / 2, false, paint);
+    canvas.drawLine(Offset(xr, margin + r), Offset(xr, margin + r + len), paint);
 
     final yb = size.height - margin;
     canvas.drawLine(Offset(margin + r, yb), Offset(margin + r + len, yb), paint);
-    canvas.drawArc(Rect.fromLTWH(margin, yb - r * 2, r * 2, r * 2), math.pi / 2,
-        math.pi / 2, false, paint);
+    canvas.drawArc(Rect.fromLTWH(margin, yb - r * 2, r * 2, r * 2), math.pi / 2, math.pi / 2, false, paint);
     canvas.drawLine(Offset(margin, yb - r), Offset(margin, yb - r - len), paint);
 
     canvas.drawLine(Offset(xr - r, yb), Offset(xr - r - len, yb), paint);
-    canvas.drawArc(Rect.fromLTWH(xr - r * 2, yb - r * 2, r * 2, r * 2), 0,
-        math.pi / 2, false, paint);
+    canvas.drawArc(Rect.fromLTWH(xr - r * 2, yb - r * 2, r * 2, r * 2), 0, math.pi / 2, false, paint);
     canvas.drawLine(Offset(xr, yb - r), Offset(xr, yb - r - len), paint);
   }
 
@@ -1660,14 +1591,11 @@ class _VerifiedBadgePainter extends CustomPainter {
     Offset p(double x, double y) => Offset(x * s, y * s);
 
     final frameRect = Rect.fromLTRB(
-      p(1.5, 1.5).dx,
-      p(1.5, 1.5).dy,
-      p(110.496, 110.496).dx,
-      p(110.496, 110.496).dy,
+      p(1.5, 1.5).dx, p(1.5, 1.5).dy,
+      p(110.496, 110.496).dx, p(110.496, 110.496).dy,
     );
     final rrect = RRect.fromRectAndRadius(frameRect, Radius.circular(14.5 * s));
-    canvas.drawRRect(
-        rrect, Paint()..color = Colors.white..style = PaintingStyle.fill);
+    canvas.drawRRect(rrect, Paint()..color = Colors.white..style = PaintingStyle.fill);
     canvas.drawRRect(
       rrect,
       Paint()
@@ -1766,8 +1694,7 @@ class _HoldProgressPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     const inset = 4.0;
-    final rect = Rect.fromLTWH(
-        inset, inset, size.width - inset * 2, size.height - inset * 2);
+    final rect = Rect.fromLTWH(inset, inset, size.width - inset * 2, size.height - inset * 2);
     const startAngle = -math.pi / 2;
     final sweepAngle = 2 * math.pi * progress;
 
