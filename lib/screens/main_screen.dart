@@ -6,6 +6,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../theme/app_theme.dart';
 import '../models/employee.dart' as model;
 import '../widgets/employee_notification_bell.dart';
+import '../services/local_notification_service.dart';      // ✅ BAGO
+import '../services/employee_notification_watcher.dart';  // ✅ BAGO
 import 'dashboard_screen.dart';
 import 'clock_screen.dart';
 import 'attendance_history_screen.dart';
@@ -26,6 +28,9 @@ class MainScreenState extends State<MainScreen>
   int _selectedIndex = 0;
   int _previousIndex = 0;
   bool _showClockOverlay = false;
+
+  // ✅ BAGO: Watcher para sa device notifications
+  EmployeeNotificationWatcher? _notifWatcher;
 
   final GlobalKey<DashboardScreenState> _dashboardKey =
   GlobalKey<DashboardScreenState>();
@@ -91,13 +96,30 @@ class MainScreenState extends State<MainScreen>
     _refreshDashboard();
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // ✅ BAGO: INIT + DISPOSE para sa device notifications
+  // ══════════════════════════════════════════════════════════════
   @override
   void initState() {
     super.initState();
+
+    // ✅ Init local notifications (para sa device notification tray)
+    LocalNotificationService.instance.init();
+
+    // ✅ Start ang watcher para sa notifications ng employee
+    final empId = widget.employee?.employeeId ?? '';
+    if (empId.isNotEmpty) {
+      _notifWatcher = EmployeeNotificationWatcher(empId)..start();
+      debugPrint('🔔 [MainScreen] Watcher attached to employee: $empId');
+    } else {
+      debugPrint('⚠️ [MainScreen] employeeId empty — watcher NOT started');
+    }
   }
 
   @override
   void dispose() {
+    _notifWatcher?.stop();
+    debugPrint('🔔 [MainScreen] Watcher stopped');
     super.dispose();
   }
 
@@ -195,7 +217,7 @@ class MainScreenState extends State<MainScreen>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // ✅ BAGONG: Employee Notification Bell
+                        // ✅ Employee Notification Bell
                         if (empId.isNotEmpty)
                           EmployeeNotificationBell(
                             employeeId: empId,
@@ -513,7 +535,6 @@ class MainScreenState extends State<MainScreen>
               ],
             ),
           ),
-          // ✅ BAGONG: Bell icon sa sidebar
           if (emp?.employeeId != null && emp!.employeeId.isNotEmpty)
             EmployeeNotificationBell(
               employeeId: emp!.employeeId,

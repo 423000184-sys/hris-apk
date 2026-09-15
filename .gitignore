@@ -43,3 +43,15 @@ Thumbs.db
 
 # Logs
 *.log
+
+serviceAccount.json
+*.json.key
+**/serviceAccount*.json
+
+serviceAccount.json
+*.json.key
+**/serviceAccount*.json
+
+serviceAccount.json
+*.json.key
+**/serviceAccount*.json
