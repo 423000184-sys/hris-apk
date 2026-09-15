@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'admin_theme.dart';
 import 'admin_create_leave_request_page.dart';
+import '../services/employee_notification_service.dart';
 
 class AdminActivityPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
@@ -158,6 +159,35 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             .doc(empId.toString())
             .update({'leaveRequests': updatedRequests});
       }
+
+      if (!mounted) return;
+
+      // ✅ AUTO-NOTIFY EMPLOYEE — LEAVE APPROVED
+      try {
+        final empId = (request['employeeId'] ??
+            employee['id'] ??
+            employee['employeeId'] ??
+            '')
+            .toString();
+        final leaveType = _leaveTypeDisplay(request['leaveType'] ?? 'Leave');
+        final start = _formatDate(request['dateFrom'] ?? request['startDate']);
+        final end = _formatDate(request['dateTo'] ?? request['endDate']);
+
+        if (empId.isNotEmpty) {
+          await EmployeeNotificationService.instance.send(
+            type: 'reminder',
+            title: '✅ Leave Approved',
+            message:
+            'Approved na ang iyong $leaveType request ($start – $end).',
+            employeeId: empId,
+            priority: 'high',
+          );
+          debugPrint('✅ [ActivityPage] Employee notified of approval');
+        }
+      } catch (e) {
+        debugPrint('⚠️ [ActivityPage] Approval notification failed: $e');
+      }
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -227,6 +257,35 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             .doc(empId.toString())
             .update({'leaveRequests': updatedRequests});
       }
+
+      if (!mounted) return;
+
+      // ✅ AUTO-NOTIFY EMPLOYEE — LEAVE REJECTED
+      try {
+        final empId = (request['employeeId'] ??
+            employee['id'] ??
+            employee['employeeId'] ??
+            '')
+            .toString();
+        final leaveType = _leaveTypeDisplay(request['leaveType'] ?? 'Leave');
+        final start = _formatDate(request['dateFrom'] ?? request['startDate']);
+        final end = _formatDate(request['dateTo'] ?? request['endDate']);
+
+        if (empId.isNotEmpty) {
+          await EmployeeNotificationService.instance.send(
+            type: 'reminder',
+            title: '❌ Leave Rejected',
+            message:
+            'Hindi na-approve ang iyong $leaveType request ($start – $end). Makipag-ugnayan sa HR.',
+            employeeId: empId,
+            priority: 'high',
+          );
+          debugPrint('✅ [ActivityPage] Employee notified of rejection');
+        }
+      } catch (e) {
+        debugPrint('⚠️ [ActivityPage] Rejection notification failed: $e');
+      }
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -448,9 +507,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PAGE HEADER
-  // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeader() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -550,9 +606,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // METRIC GRID — Wrap based, safe sa lahat ng size
-  // ══════════════════════════════════════════════════════════════
   Widget _buildMetricGrid(
       int pendingCount, int onLeaveCount, double attendanceRate) {
     return LayoutBuilder(
@@ -592,9 +645,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PENDING TABLE
-  // ══════════════════════════════════════════════════════════════
   Widget _buildPendingTable(
       List<Map<String, dynamic>> filteredRequests, int totalPending) {
     return LayoutBuilder(
@@ -626,10 +676,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ✅ FIX: Ito ang dati ay bug — ang _pendingTableTitleRow() (isang Row
-  //         na may Flexible child) ay direktang nakalagay sa isa pang Row
-  //         na walang Expanded wrapper. Naging "unbounded width" ang
-  //         constraint ng inner Row → assertion error → blank screen.
   Widget _buildPendingTableHeader(bool isMobile) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
@@ -644,7 +690,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
       )
           : Row(
         children: [
-          // ✅ FIX: I-wrap sa Expanded para mabigyan ng bounded width
           Expanded(child: _pendingTableTitleRow()),
           const SizedBox(width: 12),
           _departmentDropdown(),
@@ -782,7 +827,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             color: tc.muted)),
   );
 
-  // ─── DESKTOP ROW ─────────────────────────────────────────────
   Widget _buildRequestRow(Map<String, dynamic> item) {
     final emp = item['employee'];
     final req = item['request'];
@@ -939,7 +983,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ─── MOBILE CARD ─────────────────────────────────────────────
   Widget _buildRequestMobileCard(Map<String, dynamic> item) {
     final emp = item['employee'];
     final req = item['request'];
@@ -1149,9 +1192,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // RECENT ACTIVITY — simple dots, walang IntrinsicHeight
-  // ══════════════════════════════════════════════════════════════
   Widget _recentActivityCard(List<Map<String, dynamic>> logs) {
     final displayLogs = logs.length > 5 ? logs.sublist(0, 5) : logs;
 
@@ -1290,9 +1330,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // METRIC CARD
-  // ══════════════════════════════════════════════════════════════
   Widget _metricCard(String label, String value, IconData icon,
       {bool isOrange = false}) {
     return Container(
@@ -1340,9 +1377,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // EMPTY STATE
-  // ══════════════════════════════════════════════════════════════
   Widget _emptyState() => Container(
     width: double.infinity,
     padding: const EdgeInsets.all(32),

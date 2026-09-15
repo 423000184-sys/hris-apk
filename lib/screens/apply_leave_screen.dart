@@ -2,10 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import '../services/admin_notification_service.dart';
 
-// ═══════════════════════════════════════════════════════════════════════════
-// THEME COLORS
-// ═══════════════════════════════════════════════════════════════════════════
 class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
@@ -62,7 +60,6 @@ class _T {
 const int kAnnualLeaveTotal = 18;
 const int kSickLeaveTotal = 18;
 
-// Leave type mapping: VL → Annual, SL → Sick, others → separate
 bool _isAnnual(String code) => code.toUpperCase() == 'VL';
 bool _isSick(String code) => code.toUpperCase() == 'SL';
 
@@ -242,11 +239,11 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
     return map[code] ?? code;
   }
 
-  void _openItineraryLeaveForm() {
+  void _openLeaveHistory() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ItineraryLeaveFormScreen(
+        builder: (context) => LeaveHistoryScreen(
           employeeId: widget.employeeId,
           employeeName: widget.employeeName,
           onGoHome: () {
@@ -258,11 +255,11 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
     ).then((_) => refreshData());
   }
 
-  void _openItineraryFormWithStepper() {
+  void _openLeaveForm() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ItineraryScreen(
+        builder: (context) => LeaveFormScreen(
           employeeId: widget.employeeId,
           employeeName: widget.employeeName,
           onGoHome: () {
@@ -284,7 +281,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
       body: SafeArea(
         child: Column(
           children: [
-            // HEADER
             Container(
               padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
               decoration: const BoxDecoration(
@@ -316,7 +312,7 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
                             fontWeight: FontWeight.w500)),
                   ),
                   GestureDetector(
-                    onTap: _openItineraryLeaveForm,
+                    onTap: _openLeaveHistory,
                     behavior: HitTestBehavior.opaque,
                     child: Container(
                       width: 32,
@@ -334,7 +330,7 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
                     ),
                   ),
                   GestureDetector(
-                    onTap: _openItineraryFormWithStepper,
+                    onTap: _openLeaveForm,
                     behavior: HitTestBehavior.opaque,
                     child: Container(
                       width: 32,
@@ -355,7 +351,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
             ),
             const SizedBox(height: 20),
 
-            // STAT CARDS
             if (_loading)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 24),
@@ -397,7 +392,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
               ),
             const SizedBox(height: 20),
 
-            // LEAVE HISTORY header
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Align(
@@ -592,14 +586,14 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  ITINERARY LEAVE FORM (Dashboard with Stats & History)
+//  LEAVE HISTORY FORM (Dashboard with Stats & History)
 // ═══════════════════════════════════════════════════════════════
-class ItineraryLeaveFormScreen extends StatefulWidget {
+class LeaveHistoryScreen extends StatefulWidget {
   final String employeeId;
   final String employeeName;
   final VoidCallback? onGoHome;
 
-  const ItineraryLeaveFormScreen({
+  const LeaveHistoryScreen({
     super.key,
     required this.employeeId,
     required this.employeeName,
@@ -607,11 +601,11 @@ class ItineraryLeaveFormScreen extends StatefulWidget {
   });
 
   @override
-  State<ItineraryLeaveFormScreen> createState() =>
-      _ItineraryLeaveFormScreenState();
+  State<LeaveHistoryScreen> createState() =>
+      _LeaveHistoryScreenState();
 }
 
-class _ItineraryLeaveFormScreenState extends State<ItineraryLeaveFormScreen> {
+class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
   _LeaveStats _stats = _LeaveStats();
   List<Map<String, dynamic>> _leaveHistory = [];
   bool _loading = true;
@@ -930,7 +924,7 @@ class _ItineraryLeaveFormScreenState extends State<ItineraryLeaveFormScreen> {
           ),
           const SizedBox(width: 16),
           const Expanded(
-            child: Text('Itinerary',
+            child: Text('Leave Form',
                 style: TextStyle(
                     color: Colors.white,
                     fontSize: 20,
@@ -998,14 +992,14 @@ class _ItineraryLeaveFormScreenState extends State<ItineraryLeaveFormScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  ITINERARY FORM WITH STEPPER
+//  LEAVE FORM WITH STEPPER
 // ═══════════════════════════════════════════════════════════════
-class ItineraryScreen extends StatefulWidget {
+class LeaveFormScreen extends StatefulWidget {
   final String employeeId;
   final String employeeName;
   final VoidCallback? onGoHome;
 
-  const ItineraryScreen({
+  const LeaveFormScreen({
     super.key,
     required this.employeeId,
     required this.employeeName,
@@ -1013,10 +1007,10 @@ class ItineraryScreen extends StatefulWidget {
   });
 
   @override
-  State<ItineraryScreen> createState() => _ItineraryScreenState();
+  State<LeaveFormScreen> createState() => _LeaveFormScreenState();
 }
 
-class _ItineraryScreenState extends State<ItineraryScreen> {
+class _LeaveFormScreenState extends State<LeaveFormScreen> {
   int _currentStep = 0;
   String? _selectedLeaveType;
   bool _isSubmitting = false;
@@ -1064,7 +1058,28 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
   Future<void> _pickDate(bool isStart) async {
     final now = DateTime.now();
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final tc = _ThemeColors(isDark);
+
+    final ColorScheme pickerScheme = isDark
+        ? const ColorScheme.dark(
+      primary: _T.orange,
+      onPrimary: Colors.white,
+      surface: Color(0xFF1F1F23),
+      onSurface: Colors.white,
+      onSurfaceVariant: Color(0xFFB0B0B0),
+      secondary: _T.orangeLight,
+      onSecondary: Colors.white,
+      tertiary: _T.orange,
+    )
+        : const ColorScheme.light(
+      primary: _T.orange,
+      onPrimary: Colors.white,
+      surface: Colors.white,
+      onSurface: Color(0xFF1F2937),
+      onSurfaceVariant: Color(0xFF6B7280),
+      secondary: _T.orangeLight,
+      onSecondary: Colors.white,
+      tertiary: _T.orange,
+    );
 
     final pick = await showDatePicker(
       context: context,
@@ -1074,8 +1089,55 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
       lastDate: DateTime(now.year + 1),
       builder: (ctx, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: ColorScheme.light(primary: _T.orange, surface: tc.bg),
-          dialogTheme: DialogThemeData(backgroundColor: tc.bg),
+          colorScheme: pickerScheme,
+          dialogBackgroundColor: pickerScheme.surface,
+          dialogTheme: DialogThemeData(
+            backgroundColor: pickerScheme.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+          ),
+          datePickerTheme: DatePickerThemeData(
+            backgroundColor: pickerScheme.surface,
+            surfaceTintColor: Colors.transparent,
+            headerBackgroundColor: _T.orange,
+            headerForegroundColor: Colors.white,
+            dayForegroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return Colors.white;
+              }
+              if (states.contains(WidgetState.disabled)) {
+                return pickerScheme.onSurface.withValues(alpha: 0.35);
+              }
+              return pickerScheme.onSurface;
+            }),
+            dayBackgroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return _T.orange;
+              }
+              return Colors.transparent;
+            }),
+            todayForegroundColor: WidgetStateProperty.all(_T.orange),
+            todayBorder: const BorderSide(color: _T.orange, width: 1.5),
+            yearForegroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return Colors.white;
+              }
+              return pickerScheme.onSurface;
+            }),
+            yearBackgroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return _T.orange;
+              }
+              return Colors.transparent;
+            }),
+            rangeSelectionBackgroundColor:
+            _T.orange.withValues(alpha: 0.2),
+            weekdayStyle: TextStyle(
+              color: pickerScheme.onSurface.withValues(alpha: 0.7),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ),
         child: child!,
       ),
@@ -1126,7 +1188,7 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
       return true;
     } catch (e) {
       debugPrint('Balance check failed: $e');
-      return true; // don't block on network error
+      return true;
     }
   }
 
@@ -1190,7 +1252,6 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
     setState(() => _isSubmitting = true);
 
     try {
-      // Check remaining balance first
       final ok = await _hasEnoughBalance();
       if (!ok) {
         setState(() => _isSubmitting = false);
@@ -1211,6 +1272,19 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
         'certified': _isCertified,
         'createdAt': FieldValue.serverTimestamp(),
       }).timeout(const Duration(seconds: 30));
+
+      // ✅ ADMIN NOTIFICATION
+      try {
+        AdminNotificationService.instance.notifyLeaveRequest(
+          employeeId: widget.employeeId,
+          employeeName: widget.employeeName,
+          leaveType: _selectedLeaveType ?? '—',
+          dateRange: '${_fmt(_startDate)} — ${_fmt(_endDate)}',
+        );
+        debugPrint('✅ [LeaveForm] Admin notified of leave request');
+      } catch (e) {
+        debugPrint('⚠️ Admin leave notification failed: $e');
+      }
 
       if (!mounted) return;
       setState(() => _isSubmitting = false);
@@ -1289,6 +1363,17 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
                   ),
                   onPressed: () {
                     Navigator.of(ctx).pop();
+                    if (mounted) {
+                      setState(() {
+                        _currentStep = 0;
+                        _selectedLeaveType = null;
+                        _startDate = null;
+                        _endDate = null;
+                        _reasonCtrl.clear();
+                        _isCertified = false;
+                        _isSubmitting = false;
+                      });
+                    }
                     widget.onGoHome?.call();
                   },
                   child: const Text('OK',
@@ -1379,7 +1464,7 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Itinerary',
+              Text('Leave Form',
                   style: TextStyle(
                       color: tc.textBlack,
                       fontSize: 18,

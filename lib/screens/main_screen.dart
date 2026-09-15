@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_svg/flutter_svg.dart';
 import '../theme/app_theme.dart';
 import '../models/employee.dart' as model;
+import '../widgets/employee_notification_bell.dart';
 import 'dashboard_screen.dart';
 import 'clock_screen.dart';
 import 'attendance_history_screen.dart';
@@ -23,17 +24,25 @@ class MainScreen extends StatefulWidget {
 class MainScreenState extends State<MainScreen>
     with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
-
-  // ✅ TINATANDAAN ANG PINANGGALINGANG TAB
   int _previousIndex = 0;
-
   bool _showClockOverlay = false;
 
   final GlobalKey<DashboardScreenState> _dashboardKey =
   GlobalKey<DashboardScreenState>();
 
-  // ✅ Regular tab switch – HINDI nagre-record ng previous
-  // Ginagamit ito ng dashboard shortcuts lang
+  Color _navBg(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return isDark ? const Color(0xFF18181B) : const Color(0xFFF8F8F8);
+  }
+
+  Color _navBorder(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
+  }
+
+  static const Color _navActive = Color(0xFFFF8A00);
+  static const Color _navInactive = Color(0xFF71717A);
+
   void switchTab(int index) {
     if (!mounted) return;
     setState(() {
@@ -42,19 +51,16 @@ class MainScreenState extends State<MainScreen>
     });
   }
 
-  // ✅ Switch WITH history tracking – itinatala ang previous
-  // Ginagamit ito ng history button, bottom nav, at web sidebar
   void switchTabWithHistory(int index) {
     if (!mounted) return;
     if (_selectedIndex == index) return;
     setState(() {
-      _previousIndex = _selectedIndex; // i-record ang pinanggalingan
+      _previousIndex = _selectedIndex;
       _selectedIndex = index;
       _showClockOverlay = false;
     });
   }
 
-  // ✅ BACK HANDLER – bumabalik sa pinanggalingang tab
   void goBackToPrevious() {
     if (!mounted) return;
     debugPrint('🔙 Returning to previous tab: $_previousIndex');
@@ -70,8 +76,19 @@ class MainScreenState extends State<MainScreen>
   }
 
   void _refreshDashboard() {
+    debugPrint('🔄 [MainScreen] Refreshing dashboard data...');
     _dashboardKey.currentState?.loadTodayAttendance();
     _dashboardKey.currentState?.loadPayslipAmount();
+  }
+
+  void _closeClockOverlayAndRefresh() {
+    if (!mounted) return;
+    debugPrint('✅ [MainScreen] Clock action done — closing overlay + refreshing dashboard');
+    setState(() {
+      _showClockOverlay = false;
+      _selectedIndex = 0;
+    });
+    _refreshDashboard();
   }
 
   @override
@@ -84,20 +101,19 @@ class MainScreenState extends State<MainScreen>
     super.dispose();
   }
 
-  static const Color _navActive = Color(0xFFFF8A00);
-  static const Color _navInactive = Color(0xFF71717A);
-  static const Color _navBg = Color(0xFFF8F8F8);
-
   static const List<_NavData> _navItems = [
     _NavData(label: 'Home', index: 0, svg: _homeSvg),
     _NavData(label: 'Logs', index: 1, svg: _logsSvg),
-    _NavData(label: 'Itinerary', index: 2, svg: _itinerarySvg),
+    _NavData(label: 'Leave', index: 2, svg: _leaveSvg),
     _NavData(label: 'Profile', index: 3, svg: _profileSvg),
   ];
 
   @override
   Widget build(BuildContext context) {
     final isWeb = kIsWeb && MediaQuery.of(context).size.width >= 768;
+
+    final empId = widget.employee?.employeeId ?? '';
+    final empName = widget.employee?.fullName ?? 'Guest';
 
     return Scaffold(
       backgroundColor: AppColors.primary,
@@ -114,20 +130,17 @@ class MainScreenState extends State<MainScreen>
                     children: [
                       DashboardScreen(
                         key: _dashboardKey,
-                        // ✅ Gamitin ang switchTabWithHistory para alam
-                        // natin kung saan galing ang user
                         onTabSwitch: switchTabWithHistory,
                         onClockAction: _openClockOverlay,
                         initialEmployee: widget.employee,
                       ),
-                      // ✅ Attendance History – babalik sa PINANGGALINGAN
                       AttendanceHistoryScreen(
                         initialEmployee: widget.employee,
-                        onBack: goBackToPrevious, // <-- ITO ANG KRITIKAL
+                        onBack: goBackToPrevious,
                       ),
-                      ItineraryScreen(
-                        employeeId: widget.employee?.employeeId ?? '',
-                        employeeName: widget.employee?.fullName ?? 'Guest',
+                      LeaveFormScreen(
+                        employeeId: empId,
+                        employeeName: empName,
                         onGoHome: goBackToPrevious,
                       ),
                       ProfileScreen(initialEmployee: widget.employee),
@@ -135,19 +148,42 @@ class MainScreenState extends State<MainScreen>
                   ),
                 ),
 
-                if (_showClockOverlay)
+                // ✅ CLOCK SCREEN OVERLAY
+                if (_showClockOverlay && widget.employee != null)
                   Positioned.fill(
                     child: ClockScreen(
                       initialEmployee: widget.employee,
                       onBack: () {
-                        setState(() => _showClockOverlay = false);
+                        if (mounted) {
+                          setState(() => _showClockOverlay = false);
+                        }
                       },
-                      onContinue: () {
-                        setState(() {
-                          _showClockOverlay = false;
-                          _selectedIndex = 0;
-                        });
-                        _refreshDashboard();
+                      onClockIn: _closeClockOverlayAndRefresh,
+                      onClockOut: _closeClockOverlayAndRefresh,
+                      onShortcutHome: _closeClockOverlayAndRefresh,
+                      onShortcutProfile: () {
+                        if (mounted) {
+                          setState(() {
+                            _showClockOverlay = false;
+                            _selectedIndex = 3;
+                          });
+                        }
+                      },
+                      onShortcutLeaves: () {
+                        if (mounted) {
+                          setState(() {
+                            _showClockOverlay = false;
+                            _selectedIndex = 2;
+                          });
+                        }
+                      },
+                      onNavTap: (i) {
+                        if (mounted) {
+                          setState(() {
+                            _showClockOverlay = false;
+                            _selectedIndex = i;
+                          });
+                        }
                       },
                     ),
                   ),
@@ -159,6 +195,14 @@ class MainScreenState extends State<MainScreen>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // ✅ BAGONG: Employee Notification Bell
+                        if (empId.isNotEmpty)
+                          EmployeeNotificationBell(
+                            employeeId: empId,
+                            iconColor: AppColors.orange,
+                            size: 22,
+                          ),
+                        const SizedBox(width: 10),
                         _buildHistoryButton(),
                         const SizedBox(width: 10),
                         _buildReportsButton(),
@@ -172,7 +216,7 @@ class MainScreenState extends State<MainScreen>
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    child: _buildMobileBottomNav(),
+                    child: _buildMobileBottomNav(context),
                   ),
               ],
             ),
@@ -187,7 +231,6 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
-  // ── Clock FAB ──────────────────────────────────────────────────────────
   Widget _buildClockFab(BuildContext context) {
     return FloatingActionButton(
       backgroundColor: _navActive,
@@ -198,8 +241,6 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
-  // ── History quick access ─────────────────────────────────────────────
-  // ✅ Ginagamit ang switchTabWithHistory para maalala kung saan galing
   Widget _buildHistoryButton() {
     return GestureDetector(
       onTap: () => switchTabWithHistory(1),
@@ -225,7 +266,6 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
-  // ── Reports button ──────────────────────────────────────────────────
   Widget _buildReportsButton() {
     return Material(
       color: AppColors.card,
@@ -249,7 +289,6 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
-  // ── Web Sidebar ────────────────────────────────────────────────────────
   Widget _buildWebSidebar() {
     final w = MediaQuery.of(context).size.width;
     final sidebarWidth = w >= 1200 ? 260.0 : 220.0;
@@ -474,6 +513,13 @@ class MainScreenState extends State<MainScreen>
               ],
             ),
           ),
+          // ✅ BAGONG: Bell icon sa sidebar
+          if (emp?.employeeId != null && emp!.employeeId.isNotEmpty)
+            EmployeeNotificationBell(
+              employeeId: emp!.employeeId,
+              iconColor: AppColors.textMuted,
+              size: 20,
+            ),
           IconButton(
             onPressed: () {},
             icon: const Icon(Icons.logout_rounded,
@@ -484,13 +530,15 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
-  // ── Mobile Bottom Nav ──────────────────────────────────────────────────
-  Widget _buildMobileBottomNav() {
+  Widget _buildMobileBottomNav(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        color: _navBg,
+      decoration: BoxDecoration(
+        color: _navBg(context),
         border: Border(
-          top: BorderSide(color: Color(0xFF27272A), width: 1.15),
+          top: BorderSide(
+            color: _navBorder(context),
+            width: 1.15,
+          ),
         ),
       ),
       child: SafeArea(
@@ -514,7 +562,6 @@ class MainScreenState extends State<MainScreen>
     final active = _selectedIndex == item.index;
     final color = active ? _navActive : _navInactive;
     return GestureDetector(
-      // ✅ Gumamit ng switchTabWithHistory
       onTap: () => switchTabWithHistory(item.index),
       behavior: HitTestBehavior.opaque,
       child: SizedBox(
@@ -539,7 +586,6 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
-  // ── SVG icon builders ──────────────────────────────────────────────────
   static String _hex(Color c) =>
       '#${c.value.toRadixString(16).substring(2)}';
 
@@ -565,14 +611,13 @@ class MainScreenState extends State<MainScreen>
 ''';
   }
 
-  static String _itinerarySvg(Color color) {
+  static String _leaveSvg(Color color) {
     final s = _hex(color);
     return '''
 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M7.99951 2V6" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M15.9985 2V6" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M18.9981 4H4.99934C3.89486 4 2.99951 4.89535 2.99951 5.99983V19.9986C2.99951 21.1031 3.89486 21.9984 4.99934 21.9984H18.9981C20.1026 21.9984 20.9979 21.1031 20.9979 19.9986V5.99983C20.9979 4.89535 20.1026 4 18.9981 4Z" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M2.99951 9.99902H20.9979" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" fill="$s" fill-opacity="0.1" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M14 2V8H20" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M9 15L11 17L15 13" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 ''';
   }
@@ -582,7 +627,7 @@ class MainScreenState extends State<MainScreen>
     return '''
 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
   <path d="M18.9983 20.9985V18.9987C18.9983 17.9379 18.5769 16.9206 17.8268 16.1705C17.0767 15.4204 16.0594 14.999 14.9986 14.999H8.99916C7.93839 14.999 6.92106 15.4204 6.17098 16.1705C5.4209 16.9206 4.99951 17.9379 4.99951 18.9987V20.9985" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M11.9995 11C14.2087 11 15.9995 9.20914 15.9995 7C15.9995 4.79086 14.2087 3 11.9995 3C9.79037 3 11.9995 3 11.9995 3Z" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M11.9995 11C14.2087 11 15.9995 9.20914 15.9995 7C15.9995 4.79086 14.2087 3 11.9995 3C9.79037 3 8.00049 4.79086 8.00049 7C8.00049 9.20914 9.79037 11 11.9995 11Z" stroke="$s" stroke-width="1.49987" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 ''';
   }

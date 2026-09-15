@@ -21,16 +21,17 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   final _fKey = GlobalKey<FormState>();
   bool _saving = false;
 
-  Uint8List? _profileImageBytes;
+  // ✅ Role Selection
+  String _selectedRole = 'Employee';
+  final List<String> _roleOptions = ['Employee', 'Driver', 'Admin', 'Manager'];
 
-  late Future<List<Map<String, dynamic>>> _employeesFuture;
+  Uint8List? _profileImageBytes;
 
   AdminColors get tc => AdminTheme.getColors(context);
 
   @override
   void initState() {
     super.initState();
-    _employeesFuture = AdminDatabase.getEmployees();
   }
 
   void _snack(String msg, {bool error = false}) {
@@ -271,15 +272,14 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
           child: Column(
             children: [
               if (!isMobile) _buildTableHeader(),
-              FutureBuilder<List<Map<String, dynamic>>>(
-                future: _employeesFuture,
+              StreamBuilder<List<Map<String, dynamic>>>(
+                stream: AdminDatabase.streamEmployees(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return Padding(
                       padding: const EdgeInsets.all(48.0),
                       child: Center(
-                          child:
-                          CircularProgressIndicator(color: tc.orange)),
+                          child: CircularProgressIndicator(color: tc.orange)),
                     );
                   }
                   if (snapshot.hasError) {
@@ -411,14 +411,17 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     final fullName = '$firstName $lastName'.trim().isEmpty
         ? (emp['name'] ?? 'Unknown Staff')
         : '$firstName $lastName';
-    final empId = emp['nfcTagId'] ?? emp['id'] ?? 'N/A';
-    final displayId = empId.toString().length > 12
-        ? '${empId.toString().substring(0, 12)}...'
+
+    // ✅ PRIORITY: employeeId field muna, tapos id (doc ID)
+    final empId = emp['employeeId'] ?? emp['id'] ?? 'N/A';
+    final displayId = empId.toString().length > 16
+        ? '${empId.toString().substring(0, 16)}...'
         : empId.toString();
     final role = emp['role'] ?? 'Staff';
     final dept = emp['department'] ?? 'General';
     final initials = _getInitials(firstName, lastName);
     final hasFace = emp['faceEmbedding'] != null;
+    final photoUrl = _s(emp['photoUrl'], '');
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
@@ -432,21 +435,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
             flex: 3,
             child: Row(
               children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: tc.orange.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                        color: tc.orange.withValues(alpha: 0.3), width: 1),
-                  ),
-                  child: Center(
-                      child: Text(initials,
-                          style: TextStyle(
-                              color: tc.orangeText,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700))),
+                _buildAvatar(
+                  photoUrl: photoUrl,
+                  initials: initials,
+                  size: 40,
+                  fontSize: 13,
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -506,14 +499,17 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     final fullName = '$firstName $lastName'.trim().isEmpty
         ? (emp['name'] ?? 'Unknown Staff')
         : '$firstName $lastName';
-    final empId = emp['nfcTagId'] ?? emp['id'] ?? 'N/A';
-    final displayId = empId.toString().length > 12
-        ? '${empId.toString().substring(0, 12)}...'
+
+    // ✅ PRIORITY: employeeId field muna
+    final empId = emp['employeeId'] ?? emp['id'] ?? 'N/A';
+    final displayId = empId.toString().length > 16
+        ? '${empId.toString().substring(0, 16)}...'
         : empId.toString();
     final role = emp['role'] ?? 'Staff';
     final dept = emp['department'] ?? 'General';
     final initials = _getInitials(firstName, lastName);
     final hasFace = emp['faceEmbedding'] != null;
+    final photoUrl = _s(emp['photoUrl'], '');
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -524,21 +520,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: tc.orange.withValues(alpha: 0.15),
-              shape: BoxShape.circle,
-              border: Border.all(
-                  color: tc.orange.withValues(alpha: 0.3), width: 1),
-            ),
-            child: Center(
-                child: Text(initials,
-                    style: TextStyle(
-                        color: tc.orangeText,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700))),
+          _buildAvatar(
+            photoUrl: photoUrl,
+            initials: initials,
+            size: 44,
+            fontSize: 14,
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -580,6 +566,90 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         ],
       ),
     );
+  }
+
+  Widget _buildAvatar({
+    required String photoUrl,
+    required String initials,
+    required double size,
+    required double fontSize,
+  }) {
+    if (photoUrl.isNotEmpty && photoUrl != '—') {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+              color: tc.orange.withValues(alpha: 0.3), width: 1.5),
+          color: tc.orange.withValues(alpha: 0.15),
+        ),
+        child: ClipOval(
+          child: Image.network(
+            photoUrl,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            loadingBuilder: (context, child, loadingProgress) {
+              if (loadingProgress == null) return child;
+              return Center(
+                child: SizedBox(
+                  width: size * 0.4,
+                  height: size * 0.4,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: tc.orange,
+                    value: loadingProgress.expectedTotalBytes != null
+                        ? loadingProgress.cumulativeBytesLoaded /
+                        loadingProgress.expectedTotalBytes!
+                        : null,
+                  ),
+                ),
+              );
+            },
+            errorBuilder: (context, error, stackTrace) {
+              return Center(
+                child: Text(
+                  initials,
+                  style: TextStyle(
+                    color: tc.orangeText,
+                    fontSize: fontSize,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.15),
+        shape: BoxShape.circle,
+        border: Border.all(
+            color: tc.orange.withValues(alpha: 0.3), width: 1),
+      ),
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            color: tc.orangeText,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _s(dynamic v, [String fallback = '']) {
+    if (v == null) return fallback;
+    final str = v.toString().trim();
+    return str.isEmpty ? fallback : str;
   }
 
   Widget _buildActionsMenu(String fullName) {
@@ -644,6 +714,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   void _openAddDialog() {
     _profileImageBytes = null;
     _saving = false;
+    _selectedRole = 'Employee';
 
     final nameCtrl = TextEditingController();
     final emailCtrl = TextEditingController();
@@ -653,7 +724,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     final idCtrl = TextEditingController();
     final nfcCtrl = TextEditingController();
     final pinCtrl = TextEditingController();
-    // ✅ BAGONG: salary controller
     final salaryCtrl = TextEditingController();
 
     showDialog(
@@ -713,6 +783,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                 const SizedBox(height: 20),
                                 _buildRightColumn(
                                     ctx,
+                                    setS,
                                     dialogTc,
                                     nameCtrl,
                                     emailCtrl,
@@ -736,6 +807,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                               Expanded(
                                   child: _buildRightColumn(
                                       ctx,
+                                      setS,
                                       dialogTc,
                                       nameCtrl,
                                       emailCtrl,
@@ -781,6 +853,29 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                   !_fKey.currentState!.validate()) {
                                 return;
                               }
+
+                              // ✅ VALIDATE: Employee ID is required
+                              final typedEmployeeId = idCtrl.text.trim();
+                              if (typedEmployeeId.isEmpty) {
+                                _snack(
+                                    'Please enter an Employee ID (e.g., emp-01-2026)',
+                                    error: true);
+                                return;
+                              }
+
+                              // ✅ VALIDATE: No special characters
+                              if (typedEmployeeId.contains('/') ||
+                                  typedEmployeeId.contains('~') ||
+                                  typedEmployeeId.contains('*') ||
+                                  typedEmployeeId.contains('[') ||
+                                  typedEmployeeId.contains(']') ||
+                                  typedEmployeeId.contains('.')) {
+                                _snack(
+                                    'Employee ID cannot contain / ~ * [ ] or .',
+                                    error: true);
+                                return;
+                              }
+
                               if (!ctx.mounted) return;
                               setS(() => _saving = true);
 
@@ -796,11 +891,12 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
 
                                 final err =
                                 await AdminDatabase.addEmployee(
+                                  employeeId: typedEmployeeId, // ✅ Employee ID as doc ID
                                   firstName: firstName,
                                   lastName: lastName,
                                   email: emailCtrl.text.trim(),
                                   password: 'password123',
-                                  role: 'Staff',
+                                  role: _selectedRole,
                                   department: deptCtrl.text.trim(),
                                   nfcTagId: nfcCtrl.text.trim(),
                                   pin: pinCtrl.text.trim(),
@@ -814,7 +910,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                   return;
                                 }
 
-                                // ✅ BAGONG: I-save ang salary + status + phone + birthday
                                 final capturedEmail = emailCtrl.text.trim();
                                 final salaryValue = double.tryParse(
                                     salaryCtrl.text
@@ -822,51 +917,43 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                         .trim()) ??
                                     0.0;
 
+                                // ✅ Save extra fields — Employee ID is now the doc ID
                                 try {
-                                  final q = await FirebaseFirestore.instance
+                                  final docRef = FirebaseFirestore.instance
                                       .collection('employees')
-                                      .where('email',
-                                      isEqualTo: capturedEmail)
-                                      .limit(1)
-                                      .get();
+                                      .doc(typedEmployeeId);
 
-                                  if (q.docs.isNotEmpty) {
-                                    final docRef = q.docs.first.reference;
-                                    final extraData = <String, dynamic>{
-                                      'basicSalary': salaryValue,
-                                      'payrollStatus': 'Processed',
-                                    };
-                                    final phone = phoneCtrl.text.trim();
-                                    final bday = birthdayCtrl.text.trim();
-                                    if (phone.isNotEmpty) {
-                                      extraData['phone'] = phone;
-                                    }
-                                    if (bday.isNotEmpty) {
-                                      extraData['birthday'] = bday;
-                                    }
-                                    await docRef.update(extraData);
-                                    debugPrint(
-                                        '✅ Extra data saved: $extraData');
+                                  final extraData = <String, dynamic>{
+                                    'employeeId': typedEmployeeId,
+                                    'basicSalary': salaryValue,
+                                    'payrollStatus': 'Processed',
+                                  };
+
+                                  final phone = phoneCtrl.text.trim();
+                                  final bday = birthdayCtrl.text.trim();
+                                  if (phone.isNotEmpty) {
+                                    extraData['phone'] = phone;
                                   }
+                                  if (bday.isNotEmpty) {
+                                    extraData['birthday'] = bday;
+                                  }
+
+                                  await docRef.update(extraData);
+                                  debugPrint(
+                                      '✅ Extra data saved to $typedEmployeeId: $extraData');
                                 } catch (e) {
                                   debugPrint('⚠️ Extra data save failed: $e');
                                 }
 
-                                // Close dialog
                                 final capturedBytes = _profileImageBytes;
                                 Navigator.pop(ctx);
                                 if (mounted) {
                                   _snack(capturedBytes != null
-                                      ? 'Employee saved! Processing face in background...'
-                                      : 'Employee saved successfully.');
-                                  setState(() {
-                                    _employeesFuture =
-                                        AdminDatabase.getEmployees();
-                                  });
+                                      ? 'Employee "$typedEmployeeId" saved! Processing photo in background...'
+                                      : 'Employee "$typedEmployeeId" saved successfully.');
                                   widget.onRefreshNeeded();
                                 }
 
-                                // Background face setup
                                 if (capturedBytes != null) {
                                   _processFaceInBackground(
                                       capturedEmail, capturedBytes);
@@ -962,28 +1049,32 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       final empId = empDoc.id;
 
       try {
+        debugPrint('📤 Uploading photo...');
         final photoUrl = await FaceMatcher.uploadEmployeePhoto(
           empId,
           imageBytes,
-        ).timeout(const Duration(seconds: 15));
+        ).timeout(const Duration(seconds: 60));
 
         if (photoUrl != null) {
           await empDoc.reference
               .update({'photoUrl': photoUrl})
               .timeout(const Duration(seconds: 10));
-          debugPrint('✅ Photo uploaded: $photoUrl');
+          debugPrint('✅ Photo uploaded and saved to Firestore: $photoUrl');
+        } else {
+          debugPrint('⚠️ Photo upload returned null — skipping save');
         }
       } catch (e) {
         debugPrint('⚠️ Photo upload failed: $e');
       }
 
       try {
+        debugPrint('🧠 Generating face embedding...');
         final embedding = await FaceMatcher.generateEmbedding(imageBytes)
-            .timeout(const Duration(seconds: 10));
+            .timeout(const Duration(seconds: 20));
 
         if (embedding.isNotEmpty) {
           await FaceMatcher.saveEmbedding(empId, embedding)
-              .timeout(const Duration(seconds: 10));
+              .timeout(const Duration(seconds: 15));
           debugPrint('✅ Face embedding saved for $empId');
         }
       } catch (e) {
@@ -1114,10 +1205,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // RIGHT COLUMN — may Salary field na
+  // RIGHT COLUMN
   // ══════════════════════════════════════════════════════════════
   Widget _buildRightColumn(
       BuildContext ctx,
+      StateSetter setS,
       AdminColors dialogTc,
       TextEditingController nameCtrl,
       TextEditingController emailCtrl,
@@ -1156,8 +1248,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                   if (narrow) {
                     return Column(
                       children: [
-                        _buildInput(
-                            'FULL NAME', nameCtrl, 'Full Name', dialogTc),
+                        _buildInput('FULL NAME', nameCtrl, 'Full Name', dialogTc),
                         const SizedBox(height: 12),
                         _buildInput('EMAIL ADDRESS', emailCtrl,
                             'Email Address', dialogTc),
@@ -1171,10 +1262,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                         _buildInput(
                             'DEPARTMENT', deptCtrl, 'Department', dialogTc),
                         const SizedBox(height: 12),
-                        _buildInput(
-                            'EMPLOYEE ID', idCtrl, 'Employee ID', dialogTc),
+                        _buildInput('EMPLOYEE ID', idCtrl,
+                            'e.g., emp-01-2026', dialogTc),
                         const SizedBox(height: 12),
-                        // ✅ BAGONG field
+                        _buildRoleDropdown(dialogTc, setS),
+                        const SizedBox(height: 12),
                         _buildInput('BASIC SALARY (₱)', salaryCtrl,
                             'e.g. 25000', dialogTc,
                             keyboardType: TextInputType.number),
@@ -1208,15 +1300,19 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                             child: _buildInput('DEPARTMENT', deptCtrl,
                                 'Department', dialogTc)),
                         const SizedBox(width: 12),
-                        Expanded(
-                            child: _buildInput(
-                                'EMPLOYEE ID', idCtrl, 'Employee ID', dialogTc))
+                        Expanded(child: _buildRoleDropdown(dialogTc, setS))
                       ]),
                       const SizedBox(height: 12),
-                      // ✅ BAGONG field — full width
-                      _buildInput('BASIC SALARY (₱)', salaryCtrl,
-                          'e.g. 25000', dialogTc,
-                          keyboardType: TextInputType.number),
+                      Row(children: [
+                        Expanded(
+                            child: _buildInput('EMPLOYEE ID', idCtrl,
+                                'e.g., emp-01-2026', dialogTc)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                            child: _buildInput('BASIC SALARY (₱)', salaryCtrl,
+                                'e.g. 25000', dialogTc,
+                                keyboardType: TextInputType.number))
+                      ]),
                     ],
                   );
                 },
@@ -1285,6 +1381,53 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                 ],
               ),
             ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRoleDropdown(AdminColors dialogTc, StateSetter setS) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('ROLE',
+            style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+                color: dialogTc.muted,
+                letterSpacing: 0.5)),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: dialogTc.surface,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: dialogTc.border),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: _selectedRole,
+              isExpanded: true,
+              dropdownColor: dialogTc.card,
+              style: TextStyle(
+                  fontSize: 12,
+                  color: dialogTc.text,
+                  fontWeight: FontWeight.w500),
+              icon: Icon(Icons.keyboard_arrow_down_rounded,
+                  size: 16, color: dialogTc.muted),
+              items: _roleOptions.map((role) {
+                return DropdownMenuItem<String>(
+                  value: role,
+                  child: Text(role),
+                );
+              }).toList(),
+              onChanged: (val) {
+                if (val != null) {
+                  setS(() => _selectedRole = val);
+                }
+              },
+            ),
           ),
         ),
       ],

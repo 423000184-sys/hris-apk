@@ -1,42 +1,29 @@
 // lib/screens/dashboard_screen.dart
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import '../models/employee.dart';
 import '../services/database_service.dart';
+import '../services/geofence_service.dart';
 
-// ═══════════════════════════════════════════════════════════════════════════
-// _ThemeColors — theme-aware colors
-// ═══════════════════════════════════════════════════════════════════════════
 class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
 
-  // Background
   Color get bg => isDark ? const Color(0xFF0F0F10) : const Color(0xFFFFFFFF);
-
-  // Text
   Color get textBlack => isDark ? Colors.white : const Color(0xFF000000);
   Color get textDark => isDark ? Colors.white : const Color(0xFF1A1A1A);
   Color get textGray => isDark ? const Color(0xFFB0B0B0) : const Color(0xFF71717A);
   Color get textMuted => isDark ? const Color(0xFF888888) : const Color(0xFFA1A1AA);
-
-  // Card fill (light gray surface for cards)
   Color get cardFill => isDark
       ? const Color(0xFF1F1F23)
       : const Color.fromRGBO(131, 131, 131, 0.07);
-
-  // Border
   Color get darkBorder => isDark ? const Color(0xFF3F3F46) : const Color(0xFF27272A);
-
-  // Toggle active tab background
   Color get toggleActiveBg => isDark ? const Color(0xFF27272A) : Colors.white;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Design tokens — brand colors (same in both themes)
-// ─────────────────────────────────────────────────────────────────────────────
 class _T {
   static const List<Color> gradient = [
     Color(0xFFFF8A00),
@@ -46,6 +33,9 @@ class _T {
   static const Color orange = Color(0xFFFF8A00);
   static const Color orangeBorder = Color(0xFFFFA500);
   static const Color lime = Color(0xFFC4FF0A);
+  static const Color green = Color(0xFF22C55E);
+  static const Color greenDeep = Color(0xFF166534);
+  static const Color red = Color(0xFFEF4444);
 
   static const double r18 = 18;
   static const double r20 = 20;
@@ -85,6 +75,33 @@ class DashboardScreenState extends State<DashboardScreen> {
   String _elapsedDuration = '00:00:00';
   DateTime? _rawClockInDateTime;
 
+  String? _photoUrl;
+
+  StreamSubscription<QuerySnapshot>? _attendanceSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
+
+  String? _initError;
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ LOCATION / ROLE / WFH STATE (auto-detected)
+  // ══════════════════════════════════════════════════════════════
+  bool _isInRange = false;
+  bool _wfhAccess = false;
+  bool _isDriver = false;
+  bool _checkingLocation = true;
+  String _role = '';
+  String _department = '';
+  double? _distanceMeters;
+
+  // ✅ Pwedeng mag-clock kung nasa range OR WFH OR Driver
+  bool get _canClock => _isInRange || _wfhAccess || _isDriver;
+
+  // ✅ WFH mode = naka-WFH pero wala sa office zone
+  bool get _isWfhMode => _wfhAccess && !_isInRange;
+
+  // ✅ Driver mode = driver/rider pero wala sa office zone
+  bool get _isDriverMode => _isDriver && !_isInRange && !_wfhAccess;
+
   final DateTime _payslipMonth =
   DateTime(DateTime.now().year, DateTime.now().month - 1);
   double? _payslipAmount;
@@ -98,18 +115,377 @@ class DashboardScreenState extends State<DashboardScreen> {
     return !now.isBefore(firstDayAfterPayslipMonth);
   }
 
+  String? get _employeeId {
+    final id = _employee?.employeeId ?? widget.initialEmployee?.employeeId;
+    if (id != null && id.isNotEmpty) return id;
+
+    final fallback = _employee?.id ?? widget.initialEmployee?.id;
+    if (fallback != null && fallback.isNotEmpty) return fallback;
+
+    return null;
+  }
+
+  String? get _employeeDocId {
+    final id = _employee?.id ?? widget.initialEmployee?.id;
+    if (id != null && id.isNotEmpty) return id;
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
-    _employee = widget.initialEmployee;
-    _loadTodayAttendance();
-    _loadPayslipAmount();
+    try {
+      _employee = widget.initialEmployee;
+      _photoUrl = _employee?.photoUrl ?? widget.initialEmployee?.photoUrl;
+
+      // ✅ Seed initial values mula sa Employee model
+      _role = _employee?.position ?? '';
+      _department = _employee?.department ?? '';
+      _wfhAccess = _readWfhFromEmployee();
+      _isDriver = _isDriverRole(_role, _department);
+
+      _safeInit();
+    } catch (e, st) {
+      debugPrint('❌ Dashboard initState error: $e\n$st');
+      _initError = e.toString();
+      _isLoadingAttendance = false;
+      _checkingLocation = false;
+    }
+  }
+
+  bool _readWfhFromEmployee() {
+    final emp = _employee ?? widget.initialEmployee;
+    if (emp == null) return false;
+    try {
+      final dynamic v = (emp as dynamic).wfhAccess;
+      if (v is bool) return v;
+      if (v != null) return v.toString().toLowerCase() == 'true';
+    } catch (_) {}
+    return false;
+  }
+
+  bool _isDriverRole(String role, String dept) {
+    final r = role.toLowerCase().trim();
+    final d = dept.toLowerCase().trim();
+    return r.contains('driver') ||
+        r.contains('rider') ||
+        d.contains('driver') ||
+        d.contains('rider');
+  }
+
+  Future<void> _safeInit() async {
+    try {
+      await _loadTodayAttendance().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          debugPrint('⚠️ Attendance load timeout');
+          if (mounted) setState(() => _isLoadingAttendance = false);
+        },
+      );
+    } catch (e) {
+      debugPrint('❌ _loadTodayAttendance: $e');
+      if (mounted) setState(() => _isLoadingAttendance = false);
+    }
+
+    _startAttendanceStream();
+    _startEmployeeListener();
+    _refreshLocation();
+
+    try {
+      await _loadPayslipAmount();
+    } catch (e) {
+      debugPrint('❌ _loadPayslipAmount: $e');
+    }
+
+    try {
+      await _loadEmployeePhoto();
+    } catch (e) {
+      debugPrint('❌ _loadEmployeePhoto: $e');
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ REALTIME EMPLOYEE LISTENER
+  // ══════════════════════════════════════════════════════════════
+  void _startEmployeeListener() {
+    final docId = _employeeDocId;
+    if (docId == null || docId.isEmpty) {
+      debugPrint('⚠️ [Dashboard] Walang employee doc ID — skip listener');
+      return;
+    }
+
+    _employeeSub?.cancel();
+    _employeeSub = FirebaseFirestore.instance
+        .collection('employees')
+        .doc(docId)
+        .snapshots()
+        .listen(
+          (snap) {
+        if (!mounted) return;
+        final data = snap.data();
+        if (data == null) return;
+
+        final rawWfh = data['wfhAccess'];
+        final wfh = rawWfh is bool
+            ? rawWfh
+            : (rawWfh?.toString().toLowerCase() == 'true');
+
+        final newRole = (data['role'] ?? data['position'] ?? _role).toString();
+        final newDept = (data['department'] ?? _department).toString();
+        final newIsDriver = _isDriverRole(newRole, newDept);
+
+        debugPrint('🏠 [Dashboard] Live: wfh=$wfh, role="$newRole", '
+            'dept="$newDept", isDriver=$newIsDriver');
+
+        final changed =
+            wfh != _wfhAccess || newIsDriver != _isDriver || newRole != _role;
+
+        if (changed) {
+          setState(() {
+            _wfhAccess = wfh;
+            _role = newRole;
+            _department = newDept;
+            _isDriver = newIsDriver;
+          });
+        }
+      },
+      onError: (e) => debugPrint('❌ [Dashboard] Employee listener error: $e'),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ AUTO LOCATION CHECK
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _refreshLocation() async {
+    if (mounted) setState(() => _checkingLocation = true);
+
+    try {
+      debugPrint('📍 [Dashboard] Checking geofence...');
+      final result = await GeofenceService.instance
+          .checkGeofence()
+          .timeout(const Duration(seconds: 12));
+
+      if (!mounted) return;
+
+      debugPrint('📍 [Dashboard] inside=${result.isInside}, '
+          'distance=${result.distanceMeters}m');
+
+      setState(() {
+        _isInRange = result.isInside;
+        _distanceMeters = result.distanceMeters;
+        _checkingLocation = false;
+      });
+    } catch (e) {
+      debugPrint('❌ [Dashboard] Geofence error: $e');
+      if (!mounted) return;
+      setState(() => _checkingLocation = false);
+    }
+  }
+
+  void _startAttendanceStream() {
+    final employeeId = _employeeId;
+    if (employeeId == null) {
+      debugPrint('⚠️ Dashboard: No employee ID — skipping attendance stream');
+      return;
+    }
+
+    final todayStr = DateTime.now().toIso8601String().substring(0, 10);
+    debugPrint(
+        '📡 [Dashboard] Querying -> employee_id: $employeeId, date: $todayStr');
+
+    _attendanceSub?.cancel();
+    _attendanceSub = FirebaseFirestore.instance
+        .collection('attendance_logs')
+        .where('employee_id', isEqualTo: employeeId)
+        .where('date', isEqualTo: todayStr)
+        .snapshots()
+        .listen(
+          (snapshot) {
+        if (!mounted) return;
+        debugPrint(
+            '📡 [Dashboard] Live update — ${snapshot.docs.length} logs found');
+        _processAttendanceDocs(snapshot.docs);
+      },
+      onError: (e) {
+        debugPrint('📡 [Dashboard] Stream error: $e');
+      },
+    );
+  }
+
+  String? _extractTimeString(Map<String, dynamic> data) {
+    final rawTime = data['time'];
+    if (rawTime is String && rawTime.trim().isNotEmpty) {
+      return rawTime.trim();
+    }
+
+    final rawTs = data['timestamp'];
+    DateTime? dt;
+
+    if (rawTs is Timestamp) {
+      dt = rawTs.toDate().toLocal();
+    } else if (rawTs is String && rawTs.trim().isNotEmpty) {
+      dt = DateTime.tryParse(rawTs.trim())?.toLocal();
+    } else if (rawTs is int) {
+      dt = DateTime.fromMillisecondsSinceEpoch(rawTs);
+    }
+
+    if (dt != null) {
+      final h = dt.hour.toString().padLeft(2, '0');
+      final m = dt.minute.toString().padLeft(2, '0');
+      final s = dt.second.toString().padLeft(2, '0');
+      return '$h:$m:$s';
+    }
+
+    return null;
+  }
+
+  DateTime? _extractDateTime(Map<String, dynamic> data) {
+    final rawTime = data['time'];
+    if (rawTime is String && rawTime.trim().isNotEmpty) {
+      final parts = rawTime.trim().split(':');
+      if (parts.length >= 2) {
+        try {
+          final now = DateTime.now();
+          return DateTime(
+            now.year,
+            now.month,
+            now.day,
+            int.parse(parts[0]),
+            int.parse(parts[1]),
+            parts.length > 2 ? int.parse(parts[2].substring(0, 2)) : 0,
+          );
+        } catch (_) {}
+      }
+    }
+
+    final rawTs = data['timestamp'];
+    if (rawTs is Timestamp) return rawTs.toDate().toLocal();
+    if (rawTs is String && rawTs.trim().isNotEmpty) {
+      final parsed = DateTime.tryParse(rawTs.trim());
+      if (parsed != null) return parsed.toLocal();
+    }
+    if (rawTs is int) return DateTime.fromMillisecondsSinceEpoch(rawTs);
+
+    return null;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ PROCESS ATTENDANCE DOCS
+  // Iterate through sorted docs (ascending). Ang PINAKAHULING event
+  // ang mag-dedetermine ng current state:
+  //   • Pinakahuling event = IN  → clocked in, _clockOutTime = '--:--'
+  //   • Pinakahuling event = OUT → clocked out
+  // ══════════════════════════════════════════════════════════════
+  void _processAttendanceDocs(List<QueryDocumentSnapshot> docs) {
+    if (!mounted) return;
+
+    String? latestInTime;
+    String? latestOutTime;
+    bool clockedInState = false;
+    DateTime? parsedInDateTime;
+
+    if (docs.isNotEmpty) {
+      final sortedDocs = [...docs];
+      sortedDocs.sort((a, b) {
+        final aData = a.data() as Map<String, dynamic>;
+        final bData = b.data() as Map<String, dynamic>;
+        final aTime = _extractDateTime(aData) ?? DateTime(2000);
+        final bTime = _extractDateTime(bData) ?? DateTime(2000);
+        return aTime.compareTo(bTime);
+      });
+
+      for (final doc in sortedDocs) {
+        final data = doc.data() as Map<String, dynamic>;
+        final type = data['type']?.toString().toUpperCase();
+        final timeVal = _extractTimeString(data) ?? '--:--';
+
+        if (type == 'IN' || type == 'CLOCK_IN') {
+          latestInTime = _formatTimeTo12Hour(timeVal);
+          // ✅ FIX: reset ang lumang clock-out. Kapag naka-clock in
+          // ulit, hindi na valid yung dating OUT time — bagong session na.
+          latestOutTime = null;
+          clockedInState = true;
+          try {
+            final parts = timeVal.split(':');
+            if (parts.length >= 2) {
+              final now = DateTime.now();
+              parsedInDateTime = DateTime(
+                now.year,
+                now.month,
+                now.day,
+                int.parse(parts[0]),
+                int.parse(parts[1]),
+                parts.length > 2 ? int.parse(parts[2].substring(0, 2)) : 0,
+              );
+            }
+          } catch (_) {}
+        } else if (type == 'OUT' || type == 'CLOCK_OUT') {
+          latestOutTime = _formatTimeTo12Hour(timeVal);
+          clockedInState = false;
+          parsedInDateTime = null;
+        }
+      }
+    }
+
+    setState(() {
+      _isClockedIn = clockedInState;
+      _clockInTime = latestInTime ?? '--:--';
+      _clockOutTime = latestOutTime ?? '--:--';
+      _rawClockInDateTime = parsedInDateTime;
+      _isLoadingAttendance = false;
+    });
+
+    if (_isClockedIn) {
+      if (_durationTimer == null || !_durationTimer!.isActive) {
+        _startElapsedTimer();
+      }
+    } else {
+      _durationTimer?.cancel();
+      _durationTimer = null;
+    }
   }
 
   @override
   void dispose() {
     _durationTimer?.cancel();
+    _attendanceSub?.cancel();
+    _employeeSub?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadEmployeePhoto() async {
+    try {
+      final empId = _employee?.id ?? widget.initialEmployee?.id;
+      if (empId == null || empId.isEmpty) {
+        debugPrint('⚠️ No employee ID for photo load');
+        return;
+      }
+
+      debugPrint('📸 Loading photo for employee: $empId');
+      final doc = await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(empId)
+          .get()
+          .timeout(const Duration(seconds: 10));
+
+      if (!doc.exists) {
+        debugPrint('⚠️ Employee document not found');
+        return;
+      }
+
+      final data = doc.data();
+      if (data == null) return;
+
+      final url = data['photoUrl']?.toString();
+      if (mounted && url != null && url.isNotEmpty && url != '—') {
+        setState(() => _photoUrl = url);
+        debugPrint('✅ Photo loaded (${url.length} chars)');
+      } else {
+        debugPrint('⚠️ No photoUrl in document');
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading photo: $e');
+    }
   }
 
   void _startElapsedTimer() {
@@ -133,83 +509,38 @@ class DashboardScreenState extends State<DashboardScreen> {
   Future<void> loadTodayAttendance() async => _loadTodayAttendance();
   Future<void> loadPayslipAmount() async => _loadPayslipAmount();
 
+  /// Public method para sa manual refresh mula sa MainScreen.
+  Future<void> refreshAll() async {
+    await _loadTodayAttendance();
+    await _loadEmployeePhoto();
+    await _refreshLocation();
+  }
+
   Future<void> _loadTodayAttendance() async {
+    if (!mounted) return;
     setState(() => _isLoadingAttendance = true);
     try {
-      final employeeId = _employee?.employeeId ??
-          widget.initialEmployee?.employeeId ??
-          _employee?.id ??
-          widget.initialEmployee?.id;
+      final employeeId = _employeeId;
       if (employeeId == null) {
-        throw Exception('Walang nahanap na employee ID.');
+        debugPrint('⚠️ Walang employee ID — skipping attendance load');
+        if (mounted) setState(() => _isLoadingAttendance = false);
+        return;
       }
 
       final todayStr = DateTime.now().toIso8601String().substring(0, 10);
+      debugPrint(
+          '🔄 [Dashboard] Manual load -> employee_id: $employeeId, date: $todayStr');
+
       final snapshot = await FirebaseFirestore.instance
           .collection('attendance_logs')
           .where('employee_id', isEqualTo: employeeId)
           .where('date', isEqualTo: todayStr)
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 10));
 
-      String? latestInTime;
-      String? latestOutTime;
-      bool clockedInState = false;
-      DateTime? parsedInDateTime;
-
-      if (snapshot.docs.isNotEmpty) {
-        var docs = snapshot.docs;
-        docs.sort((a, b) {
-          var aTime = a.data()['timestamp'] ?? a.data()['time'] ?? '';
-          var bTime = b.data()['timestamp'] ?? b.data()['time'] ?? '';
-          return aTime.toString().compareTo(bTime.toString());
-        });
-
-        for (var doc in docs) {
-          final data = doc.data();
-          final type = data['type']?.toString().toUpperCase();
-          final timeVal = data['time']?.toString() ?? '--:--';
-
-          if (type == 'IN' || type == 'CLOCK_IN') {
-            latestInTime = _formatTimeTo12Hour(timeVal);
-            clockedInState = true;
-            try {
-              final parts = timeVal.split(':');
-              if (parts.length >= 2) {
-                final now = DateTime.now();
-                parsedInDateTime = DateTime(
-                  now.year,
-                  now.month,
-                  now.day,
-                  int.parse(parts[0]),
-                  int.parse(parts[1]),
-                  parts.length > 2
-                      ? int.parse(parts[2].substring(0, 2))
-                      : 0,
-                );
-              }
-            } catch (_) {}
-          } else if (type == 'OUT' || type == 'CLOCK_OUT') {
-            latestOutTime = _formatTimeTo12Hour(timeVal);
-            clockedInState = false;
-            parsedInDateTime = null;
-          }
-        }
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _isClockedIn = clockedInState;
-        _clockInTime = latestInTime ?? '--:--';
-        _clockOutTime = latestOutTime ?? '--:--';
-        _rawClockInDateTime = parsedInDateTime;
-        _isLoadingAttendance = false;
-      });
-
-      if (_isClockedIn) {
-        _startElapsedTimer();
-      } else {
-        _durationTimer?.cancel();
-      }
+      debugPrint(
+          '🔄 [Dashboard] Manual load found ${snapshot.docs.length} logs');
+      _processAttendanceDocs(snapshot.docs);
     } catch (e) {
       debugPrint('Error loading today attendance: $e');
       if (mounted) setState(() => _isLoadingAttendance = false);
@@ -233,15 +564,21 @@ class DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadPayslipAmount() async {
+    if (!mounted) return;
     setState(() {
       _payslipLoading = true;
       _payslipError = false;
     });
     try {
-      final employeeId =
-          _employee?.employeeId ?? widget.initialEmployee?.employeeId;
+      final employeeId = _employeeId;
       if (employeeId == null) {
-        throw Exception('Walang naka-load na employee.');
+        if (mounted) {
+          setState(() {
+            _payslipAmount = null;
+            _payslipLoading = false;
+          });
+        }
+        return;
       }
       final double? amount =
       await _fetchPayslipFromBackend(employeeId, _payslipMonth);
@@ -288,6 +625,39 @@ class DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_initError != null) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                const SizedBox(height: 16),
+                const Text('May error sa dashboard',
+                    style: TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Text(_initError!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() => _initError = null);
+                    _safeInit();
+                  },
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
 
@@ -296,7 +666,7 @@ class DashboardScreenState extends State<DashboardScreen> {
       body: SafeArea(
         child: RefreshIndicator(
           color: _T.orange,
-          onRefresh: _loadTodayAttendance,
+          onRefresh: refreshAll,
           child: Stack(
             children: [
               Padding(
@@ -352,12 +722,13 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ─── HEADER ──────────────────────────────────────────────────────────
   Widget _buildHeader(_ThemeColors tc) {
     final name =
         _employee?.firstName ?? widget.initialEmployee?.firstName ?? 'Employee';
     final lastName =
         _employee?.lastName ?? widget.initialEmployee?.lastName ?? '';
+    final photo =
+        _photoUrl ?? _employee?.photoUrl ?? widget.initialEmployee?.photoUrl;
 
     return Row(
       children: [
@@ -369,47 +740,220 @@ class DashboardScreenState extends State<DashboardScreen> {
             border: Border.all(color: tc.darkBorder, width: 1.15),
           ),
           child: ClipOval(
-            child: Container(
-              color: _T.orange,
-              alignment: Alignment.center,
-              child: Text(
-                name.isNotEmpty ? name[0].toUpperCase() : 'U',
-                style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w700),
-              ),
-            ),
+            child: _buildAvatarContent(photo, name),
           ),
         ),
         const SizedBox(width: 12),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'HI, ${name.toUpperCase()} ${lastName.toUpperCase()}',
-              style: TextStyle(
-                fontSize: 10,
-                color: tc.textGray,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.5,
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'HI, ${name.toUpperCase()} ${lastName.toUpperCase()}',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: tc.textGray,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              'Employee Dashboard',
-              style: TextStyle(
-                fontSize: 14,
-                color: tc.textBlack,
-                fontWeight: FontWeight.w500,
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  Text(
+                    'Employee Dashboard',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: tc.textBlack,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (_wfhAccess) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDCFCE7),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: _T.green),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.home_work_rounded,
+                              size: 10, color: _T.greenDeep),
+                          SizedBox(width: 4),
+                          Text(
+                            'WFH',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: _T.greenDeep,
+                              letterSpacing: 0.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (_isDriver && !_wfhAccess) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDBEAFE),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: const Color(0xFF3B82F6)),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.local_shipping_rounded,
+                              size: 10, color: Color(0xFF1E40AF)),
+                          SizedBox(width: 4),
+                          Text(
+                            'DRIVER',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1E40AF),
+                              letterSpacing: 0.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
               ),
+            ],
+          ),
+        ),
+        GestureDetector(
+          onTap: refreshAll,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: tc.cardFill,
+              border: Border.all(color: _T.orangeBorder, width: 1.15),
             ),
-          ],
+            child: const Icon(Icons.refresh_rounded,
+                color: _T.orange, size: 20),
+          ),
         ),
       ],
     );
   }
 
-  // ─── STATUS BANNER (always dark - hero card) ──────────────────────
+  Widget _buildAvatarContent(String? photo, String name) {
+    final hasPhoto = photo != null && photo.isNotEmpty && photo != '—';
+
+    if (!hasPhoto) return _avatarFallback(name);
+
+    if (photo!.startsWith('data:image')) {
+      try {
+        final b64 = photo.split(',').last;
+        final bytes = base64Decode(b64);
+        return Image.memory(
+          bytes,
+          width: 45,
+          height: 45,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => _avatarFallback(name),
+        );
+      } catch (e) {
+        debugPrint('❌ base64 decode error: $e');
+        return _avatarFallback(name);
+      }
+    }
+
+    if (photo.startsWith('http')) {
+      return Image.network(
+        photo,
+        width: 45,
+        height: 45,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return Container(
+            color: _T.orange,
+            alignment: Alignment.center,
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+                value: progress.expectedTotalBytes != null
+                    ? progress.cumulativeBytesLoaded /
+                    progress.expectedTotalBytes!
+                    : null,
+              ),
+            ),
+          );
+        },
+        errorBuilder: (_, __, ___) => _avatarFallback(name),
+      );
+    }
+
+    return _avatarFallback(name);
+  }
+
+  Widget _avatarFallback(String name) {
+    return Container(
+      color: _T.orange,
+      alignment: Alignment.center,
+      child: Text(
+        name.isNotEmpty ? name[0].toUpperCase() : 'U',
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+
   Widget _buildStatusBanner() {
+    final String statusText;
+    final String subtitle;
+    final Color accentColor;
+
+    if (_isClockedIn) {
+      statusText = 'clocked in.';
+      subtitle =
+      'Our system verified your location. You are ready to go.';
+      accentColor = _T.orange;
+    } else if (_checkingLocation) {
+      statusText = 'verifying...';
+      subtitle = 'Kinukuha ang iyong lokasyon. Maghintay lang.';
+      accentColor = _T.orange;
+    } else if (_isWfhMode) {
+      statusText = 'on WFH mode.';
+      subtitle =
+      'Work-from-home access is active. You can clock in anytime.';
+      accentColor = _T.green;
+    } else if (_isDriverMode) {
+      statusText = 'on field duty.';
+      subtitle = 'Driver/Rider mode — you can clock in from anywhere.';
+      accentColor = const Color(0xFF3B82F6);
+    } else if (_isInRange) {
+      statusText = 'clocked out.';
+      subtitle = 'You are inside the authorized zone. Ready to clock in.';
+      accentColor = _T.orange;
+    } else {
+      statusText = 'out of range.';
+      subtitle =
+      'Clock in from the authorized zone or ask admin for WFH access.';
+      accentColor = _T.red;
+    }
+
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -443,9 +987,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                 ),
               ),
             ),
-            Positioned.fill(
-              child: CustomPaint(painter: _SilkPainter()),
-            ),
+            Positioned.fill(child: CustomPaint(painter: _SilkPainter())),
             Padding(
               padding:
               const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -463,18 +1005,15 @@ class DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         const TextSpan(text: 'You are currently\n'),
                         TextSpan(
-                          text:
-                          _isClockedIn ? 'clocked in.' : 'clocked out.',
-                          style: const TextStyle(color: _T.orange),
+                          text: statusText,
+                          style: TextStyle(color: accentColor),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    _isClockedIn
-                        ? 'Our system verified your location. You are ready to go.'
-                        : 'Clock in from the authorized zone to start your shift.',
+                    subtitle,
                     style: const TextStyle(
                         fontSize: 13,
                         color: Color(0xFFA1A1AA),
@@ -489,11 +1028,11 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ─── TOGGLE ─────────────────────────────────────────────────────────
   Widget _buildToggle(_ThemeColors tc) {
     final clocked = _isClockedIn;
     final timeIn = _clockInTime;
     final timeOut = _clockOutTime;
+    final canAction = _canClock;
 
     return Container(
       padding: const EdgeInsets.all(6),
@@ -506,7 +1045,7 @@ class DashboardScreenState extends State<DashboardScreen> {
         children: [
           Expanded(
             child: GestureDetector(
-              onTap: clocked ? null : widget.onClockAction,
+              onTap: (clocked || !canAction) ? null : widget.onClockAction,
               behavior: HitTestBehavior.opaque,
               child: _toggleTab(
                 tc: tc,
@@ -515,12 +1054,13 @@ class DashboardScreenState extends State<DashboardScreen> {
                 active: true,
                 inactiveTimeColor: Colors.white,
                 inactiveLabelColor: Colors.white,
+                locked: !canAction,
               ),
             ),
           ),
           Expanded(
             child: GestureDetector(
-              onTap: clocked ? widget.onClockAction : null,
+              onTap: (!clocked || !canAction) ? null : widget.onClockAction,
               behavior: HitTestBehavior.opaque,
               child: _toggleTab(
                 tc: tc,
@@ -529,6 +1069,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                 active: false,
                 inactiveTimeColor: Colors.white,
                 inactiveLabelColor: Colors.white,
+                locked: !canAction,
               ),
             ),
           ),
@@ -544,47 +1085,53 @@ class DashboardScreenState extends State<DashboardScreen> {
     required bool active,
     required Color inactiveLabelColor,
     required Color inactiveTimeColor,
+    bool locked = false,
   }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(
-        color: active ? tc.toggleActiveBg : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        border: active ? Border.all(color: _T.orangeBorder, width: 1) : null,
-        boxShadow: active
-            ? [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 2,
-            offset: const Offset(0, 1),
-          ),
-        ]
-            : null,
-      ),
-      child: Column(
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: active ? tc.textBlack : inactiveLabelColor,
+    return Opacity(
+      opacity: locked ? 0.55 : 1.0,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: active ? tc.toggleActiveBg : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: active ? Border.all(color: _T.orangeBorder, width: 1) : null,
+          boxShadow: active
+              ? [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 2,
+              offset: const Offset(0, 1),
             ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            time,
-            style: TextStyle(
-              fontSize: 11,
-              color: active ? tc.textMuted : inactiveTimeColor,
+          ]
+              : null,
+        ),
+        child: Column(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: active ? tc.textBlack : inactiveLabelColor,
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 2),
+            Text(
+              locked ? 'Locked' : time,
+              style: TextStyle(
+                fontSize: 11,
+                color: locked
+                    ? _T.red
+                    : (active ? tc.textMuted : inactiveTimeColor),
+                fontWeight: locked ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  // ─── SECTION TITLE ──────────────────────────────────────────────────
   Widget _buildSectionTitle(
       String title, {
         required _ThemeColors tc,
@@ -625,12 +1172,25 @@ class DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildGpsTag(_ThemeColors tc) {
+    final label = _checkingLocation
+        ? 'Verifying'
+        : (_isWfhMode
+        ? 'Remote GPS'
+        : (_isDriverMode ? 'Field GPS' : 'Live GPS'));
+    final icon = _checkingLocation
+        ? Icons.gps_fixed_rounded
+        : (_isWfhMode
+        ? Icons.home_work_rounded
+        : (_isDriverMode
+        ? Icons.local_shipping_rounded
+        : Icons.near_me_rounded));
+
     return Row(
       children: [
-        Icon(Icons.near_me_rounded, size: 12, color: tc.textBlack),
+        Icon(icon, size: 12, color: tc.textBlack),
         const SizedBox(width: 4),
         Text(
-          'Live GPS',
+          label,
           style: TextStyle(
             fontSize: 12,
             color: tc.textBlack,
@@ -641,14 +1201,71 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ─── LOCATION CARD ──────────────────────────────────────────────────
   Widget _buildLocationCard(_ThemeColors tc) {
+    final Color dotColor;
+    final Color borderColor;
+    final Color gradientStart;
+    final Color gradientEnd;
+    final IconData leadingIcon;
+    final String title;
+    final String subtitle;
+    final Color subtitleColor;
+
+    if (_checkingLocation) {
+      dotColor = tc.textMuted;
+      borderColor = _T.orangeBorder;
+      gradientStart = _T.orange;
+      gradientEnd = _T.orange;
+      leadingIcon = Icons.gps_fixed_rounded;
+      title = 'Verifying location...';
+      subtitle = 'Kinukuha ang GPS position';
+      subtitleColor = _T.orange;
+    } else if (_isWfhMode) {
+      dotColor = _T.green;
+      borderColor = _T.green;
+      gradientStart = _T.green;
+      gradientEnd = const Color(0xFF16A34A);
+      leadingIcon = Icons.home_work_rounded;
+      title = 'Work From Home';
+      subtitle = 'Allowed — clock in from anywhere';
+      subtitleColor = _T.green;
+    } else if (_isDriverMode) {
+      dotColor = const Color(0xFF3B82F6);
+      borderColor = const Color(0xFF3B82F6);
+      gradientStart = const Color(0xFF3B82F6);
+      gradientEnd = const Color(0xFF1E40AF);
+      leadingIcon = Icons.local_shipping_rounded;
+      title = 'Field Duty';
+      subtitle = 'Driver/Rider — clock in allowed';
+      subtitleColor = const Color(0xFF3B82F6);
+    } else if (_isInRange) {
+      dotColor = _T.lime;
+      borderColor = _T.orangeBorder;
+      gradientStart = _T.orange;
+      gradientEnd = _T.orange;
+      leadingIcon = Icons.location_on_rounded;
+      title = 'HQ Main Office';
+      subtitle = 'Inside Authorized Zone';
+      subtitleColor = _T.lime;
+    } else {
+      dotColor = _T.red;
+      borderColor = _T.red;
+      gradientStart = _T.red;
+      gradientEnd = const Color(0xFFB91C1C);
+      leadingIcon = Icons.location_off_rounded;
+      title = 'Outside Authorized Zone';
+      subtitle = _distanceMeters != null
+          ? '${_distanceMeters!.toStringAsFixed(0)}m from office'
+          : 'Hindi ka nasa work zone';
+      subtitleColor = _T.red;
+    }
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: tc.cardFill,
         borderRadius: BorderRadius.circular(_T.r20),
-        border: Border.all(color: _T.orangeBorder, width: 1.15),
+        border: Border.all(color: borderColor, width: 1.15),
       ),
       child: Row(
         children: [
@@ -657,57 +1274,74 @@ class DashboardScreenState extends State<DashboardScreen> {
               Container(
                 width: 45,
                 height: 45,
-                decoration: const BoxDecoration(
-                  gradient: _T.brandGradient,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [gradientStart, gradientEnd],
+                  ),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.location_on_rounded,
-                    color: Colors.white, size: 22),
+                child: _checkingLocation
+                    ? const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
+                )
+                    : Icon(leadingIcon, color: Colors.white, size: 22),
               ),
-              Positioned(
-                top: 2,
-                right: 2,
-                child: Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: _T.lime,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 1.5),
+              if (!_checkingLocation)
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
           const SizedBox(width: 15),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'HQ Main Office',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: tc.textBlack,
-                  fontWeight: FontWeight.w500,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: tc.textBlack,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
-              ),
-              const SizedBox(height: 2),
-              const Text(
-                'Inside Authorized Zone',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _T.lime,
-                  fontWeight: FontWeight.w400,
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: subtitleColor,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  // ─── SHORTCUTS GRID ─────────────────────────────────────────────────
   Widget _buildShortcutsGrid(_ThemeColors tc) {
     final items = [
       (Icons.history_rounded, 'Logs', _T.orange,
@@ -766,7 +1400,6 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ─── PAYSLIP CARD ───────────────────────────────────────────────────
   Widget _buildPayslipCard(_ThemeColors tc) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -854,7 +1487,6 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ─── FLOATING ACTION BAR ────────────────────────────────────────────
   Widget _buildFloatingAction() {
     if (!_isClockedIn) return const SizedBox.shrink();
 
@@ -928,9 +1560,6 @@ class DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Custom painter para sa silk texture
-// ─────────────────────────────────────────────────────────────────────────────
 class _SilkPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {

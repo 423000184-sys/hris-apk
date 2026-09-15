@@ -589,38 +589,41 @@ class _AdminAttendanceVerificationPageState
                     ],
                   );
                 }
-                return IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        width: 420,
-                        child: _buildLeftColumn(
-                          tc,
-                          name: name,
-                          role: role,
-                          department: department,
-                          manager: manager,
-                          photoUrl: photoUrl,
-                          employeeId: employeeId,
-                          timeline: timeline,
-                        ),
+
+                // ✅ FIX: Tinanggal ang IntrinsicHeight — hindi ito
+                // compatible sa LayoutBuilder sa loob ng mga card.
+                // Ito ang sanhi ng "Cannot hit test a render box
+                // with no size" at white screen.
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 420,
+                      child: _buildLeftColumn(
+                        tc,
+                        name: name,
+                        role: role,
+                        department: department,
+                        manager: manager,
+                        photoUrl: photoUrl,
+                        employeeId: employeeId,
+                        timeline: timeline,
                       ),
-                      const SizedBox(width: 24),
-                      Expanded(
-                        child: _buildVerificationCard(
-                          context,
-                          tc,
-                          client: client,
-                          deviceInfo: deviceInfo,
-                          locationName: locationName,
-                          coordsStr: coordsStr,
-                          verificationNote: verificationNote,
-                          dateStr: dateStr,
-                        ),
+                    ),
+                    const SizedBox(width: 24),
+                    Expanded(
+                      child: _buildVerificationCard(
+                        context,
+                        tc,
+                        client: client,
+                        deviceInfo: deviceInfo,
+                        locationName: locationName,
+                        coordsStr: coordsStr,
+                        verificationNote: verificationNote,
+                        dateStr: dateStr,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 );
               }),
             ],

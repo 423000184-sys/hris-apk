@@ -1,19 +1,28 @@
-// lib/screens/admin_employees_page.dart
+//lib/screens/admin_employees_page.dart
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show File;
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'admin_database.dart';
 import 'admin_theme.dart';
 import '../widgets/bootstrap_grid.dart';
+import '../services/face_matcher.dart';
+import '../services/admin_notification_service.dart';
 
-// ─── LEAVE CREDIT POLICY (TUGMA SA APP) ────────────────────────
+// ─── LEAVE CREDIT POLICY ───────────────────────────────────────
 const int kAdminAnnualLeaveTotal = 18;
 const int kAdminSickLeaveTotal = 18;
+const int kCurrentFaceVersion = 4;
 
 // ══════════════════════════════════════════════════════════════
 // CUSTOM SCROLL BEHAVIOR
@@ -65,11 +74,20 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   final _editKeyfobCtrl = TextEditingController();
   final _editPinCtrl = TextEditingController();
   final _editBirthdayCtrl = TextEditingController();
+  final _editEmployeeIdCtrl = TextEditingController();
   DateTime? _editBirthday;
   String? _editDepartmentDropdown;
   bool _editSaving = false;
   bool _editPassVis = false;
   bool _isEditingEmployee = false;
+  bool _editWfhAccess = false;
+  String _editOriginalEmployeeId = '';
+
+  // ✅ Edit Photo state
+  XFile? _editPhotoXFile;
+  Uint8List? _editPhotoBytes;
+  bool _editPhotoUploading = false;
+  String? _editPhotoUrl;
 
   static const List<String> _departmentOptions = [
     'Information Tech Department',
@@ -92,6 +110,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   final _addPassCtrl = TextEditingController();
   final _addPinCtrl = TextEditingController();
   final _addKeyfobCtrl = TextEditingController();
+  final _addIdCtrl = TextEditingController();
   bool _addSaving = false;
   bool _addPassVis = false;
   bool _isAddingEmployee = false;
@@ -105,6 +124,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   static const int _pageSize = 6;
 
   Map<String, dynamic>? _selectedProfileEmp;
+  bool _migratingFaces = false;
 
   @override
   void initState() {
@@ -128,6 +148,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _editKeyfobCtrl.dispose();
     _editPinCtrl.dispose();
     _editBirthdayCtrl.dispose();
+    _editEmployeeIdCtrl.dispose();
     _addFirstCtrl.dispose();
     _addLastCtrl.dispose();
     _addEmailCtrl.dispose();
@@ -137,6 +158,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _addPassCtrl.dispose();
     _addPinCtrl.dispose();
     _addKeyfobCtrl.dispose();
+    _addIdCtrl.dispose();
     _filterCtrl.dispose();
     super.dispose();
   }
@@ -204,7 +226,87 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     return v == 'active' || v == 'online' || v == 'true';
   }
 
-  // ─── DATE / TIME HELPERS ─────────────────────────────────────
+  bool _isWfhEnabled(Map<String, dynamic> e) {
+    final v = e['wfhAccess'];
+    if (v is bool) return v;
+    return _s(v).toLowerCase() == 'true';
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ WFH ACCESS TOGGLE — may ADMIN NOTIFICATION
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _setWfhAccess(Map<String, dynamic> emp, bool enabled) async {
+    final docId = _s(emp['id'], '');
+    if (docId.isEmpty) {
+      _snack('Employee document ID not found.', error: true);
+      return;
+    }
+    try {
+      await AdminDatabase.employees.doc(docId).update({
+        'wfhAccess': enabled,
+        'wfhUpdatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // ✅ ADMIN NOTIFICATION
+      try {
+        AdminNotificationService.instance.notifyWfhToggle(
+          employeeId: docId,
+          employeeName: _nameOf(emp),
+          enabled: enabled,
+        );
+        debugPrint('✅ [AdminEmployees] WFH toggle notification sent');
+      } catch (e) {
+        debugPrint('⚠️ Admin WFH notification failed: $e');
+      }
+
+      try {
+        await FirebaseFirestore.instance.collection('activity logs').add({
+          'type': 'wfh_access_toggled',
+          'employeeId': docId,
+          'employee_name': _nameOf(emp),
+          'enabled': enabled,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        debugPrint('WFH activity log warning: $e');
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        emp['wfhAccess'] = enabled;
+        if (_selectedProfileEmp != null &&
+            _s(_selectedProfileEmp!['id'], '') == docId) {
+          _selectedProfileEmp!['wfhAccess'] = enabled;
+        }
+      });
+
+      _snack(enabled
+          ? '🏠 WFH access ENABLED for ${_nameOf(emp)}'
+          : '🏢 WFH access DISABLED for ${_nameOf(emp)}');
+      widget.onRefreshNeeded();
+    } catch (e) {
+      if (!mounted) return;
+      _snack('Failed to update WFH access: $e', error: true);
+    }
+  }
+
+  bool _hasCurrentFaceVersion(Map<String, dynamic> e) {
+    final v = e['faceEmbeddingVersion'] ?? 1;
+    return _safeInt(v, 1) == kCurrentFaceVersion;
+  }
+
+  int _faceVersionOf(Map<String, dynamic> e) =>
+      _safeInt(e['faceEmbeddingVersion'], 1);
+
+  int _faceCountOf(Map<String, dynamic> e) =>
+      _safeInt(e['faceEmbeddingsCount'], 0);
+
+  bool _hasProfilePhoto(Map<String, dynamic> e) {
+    final url = _s(e['photoUrl'], '');
+    return url.isNotEmpty && url != '—';
+  }
+
   DateTime? _toDateTime(dynamic v) {
     if (v == null) return null;
     if (v is Timestamp) return v.toDate();
@@ -242,16 +344,562 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // REAL FIRESTORE STREAMS
+  // ✅ PICK EDIT PHOTO (Camera / Gallery)
   // ══════════════════════════════════════════════════════════════
+  Future<void> _pickEditPhoto() async {
+    try {
+      final source = await showModalBottomSheet<ImageSource>(
+        context: context,
+        backgroundColor: tc.card,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (_) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: tc.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(Icons.photo_library_rounded,
+                    color: Color(0xFFFF8C00)),
+                title: Text('Choose from Gallery',
+                    style: TextStyle(color: tc.text)),
+                onTap: () => Navigator.pop(context, ImageSource.gallery),
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt_rounded,
+                    color: Color(0xFFFF8C00)),
+                title: Text('Take a Photo',
+                    style: TextStyle(color: tc.text)),
+                onTap: () => Navigator.pop(context, ImageSource.camera),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      );
+
+      if (source == null) return;
+
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+        source: source,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      if (!mounted) return;
+
+      Uint8List? bytes;
+      if (kIsWeb) {
+        bytes = await picked.readAsBytes();
+      }
+
+      setState(() {
+        _editPhotoXFile = picked;
+        _editPhotoBytes = bytes;
+      });
+
+      debugPrint('📸 Picked: ${picked.name}');
+    } catch (e) {
+      if (!mounted) return;
+      _snack('Failed to pick image: $e', error: true);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ UPLOAD EDIT PHOTO — Base64 sa Firestore (walang Firebase Storage)
+  // ══════════════════════════════════════════════════════════════
+  Future<String?> _uploadEditPhoto(String employeeDocId) async {
+    if (_editPhotoXFile == null) return _editPhotoUrl;
+
+    setState(() => _editPhotoUploading = true);
+    try {
+      debugPrint('📤 Preparing photo for Firestore...');
+      final rawBytes =
+          _editPhotoBytes ?? await _editPhotoXFile!.readAsBytes();
+      debugPrint(
+          '📤 Original: ${(rawBytes.length / 1024).toStringAsFixed(1)} KB');
+
+      final compressed = _compressForFirestore(rawBytes);
+      if (compressed == null) {
+        _snack('Failed to compress image.', error: true);
+        return null;
+      }
+      debugPrint(
+          '📤 Compressed: ${(compressed.length / 1024).toStringAsFixed(1)} KB');
+
+      final b64 = base64Encode(compressed);
+      debugPrint(
+          '📤 Base64 length: ${(b64.length / 1024).toStringAsFixed(1)} KB');
+
+      if (b64.length > 900 * 1024) {
+        _snack(
+            'Photo too large even after compression. Try a smaller image.',
+            error: true);
+        return null;
+      }
+
+      final dataUri = 'data:image/jpeg;base64,$b64';
+      debugPrint('✅ Photo ready as base64 data URI');
+      return dataUri;
+    } catch (e) {
+      debugPrint('❌ Photo processing error: $e');
+      if (mounted) _snack('Photo failed: $e', error: true);
+      return null;
+    } finally {
+      if (mounted) setState(() => _editPhotoUploading = false);
+    }
+  }
+
+  Uint8List? _compressForFirestore(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+
+      const maxDim = 600;
+      img.Image resized = decoded;
+      if (decoded.width > maxDim || decoded.height > maxDim) {
+        resized = img.copyResize(
+          decoded,
+          width: decoded.width >= decoded.height ? maxDim : null,
+          height: decoded.height > decoded.width ? maxDim : null,
+          interpolation: img.Interpolation.average,
+        );
+      }
+
+      var out = Uint8List.fromList(img.encodeJpg(resized, quality: 70));
+      if (out.length < 400 * 1024) return out;
+
+      out = Uint8List.fromList(img.encodeJpg(resized, quality: 50));
+      if (out.length < 400 * 1024) return out;
+
+      out = Uint8List.fromList(img.encodeJpg(resized, quality: 35));
+      return out;
+    } catch (e) {
+      debugPrint('Compress error: $e');
+      return bytes;
+    }
+  }
+
+  Widget _buildPhotoWidget(
+      String url, {
+        BoxFit fit = BoxFit.cover,
+        double? width,
+        double? height,
+        Widget? errorWidget,
+      }) {
+    if (url.startsWith('data:image')) {
+      try {
+        final b64 = url.split(',').last;
+        return Image.memory(
+          base64Decode(b64),
+          fit: fit,
+          width: width,
+          height: height,
+          errorBuilder: (_, __, ___) =>
+          errorWidget ?? const Icon(Icons.broken_image),
+        );
+      } catch (_) {
+        return errorWidget ?? const Icon(Icons.broken_image);
+      }
+    }
+    return Image.network(
+      url,
+      fit: fit,
+      width: width,
+      height: height,
+      errorBuilder: (_, __, ___) =>
+      errorWidget ?? const Icon(Icons.broken_image),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PHOTO SUITABILITY CHECK
+  // ══════════════════════════════════════════════════════════════
+  Future<Map<String, dynamic>> _checkPhotoSuitability(String url) async {
+    final completer = Completer<Map<String, dynamic>>();
+
+    if (url.isEmpty || url == '—') {
+      completer.complete({
+        'ok': false,
+        'severity': 'error',
+        'title': 'Walang Photo',
+        'message': 'Hindi ka pa nag-upload ng photo.',
+        'suggestion': 'I-upload ang ID-style close-up photo.',
+      });
+      return completer.future;
+    }
+
+    if (url.startsWith('data:image')) {
+      try {
+        final b64 = url.split(',').last;
+        final bytes = base64Decode(b64);
+        final decoded = img.decodeImage(bytes);
+        if (decoded == null) {
+          completer.complete({
+            'ok': false,
+            'severity': 'error',
+            'title': 'Invalid Photo',
+            'message': 'Hindi ma-decode ang photo.',
+            'suggestion': 'I-upload ulit.',
+          });
+          return completer.future;
+        }
+        final w = decoded.width;
+        final h = decoded.height;
+        final ratio = w / h;
+
+        String severity;
+        String title;
+        String message;
+        String suggestion;
+
+        if (w < 200 || h < 200) {
+          severity = 'error';
+          title = 'Resolution masyadong maliit';
+          message =
+          'Ang photo ($w×$h) ay masyadong maliit para sa reliable face recognition.';
+          suggestion = 'Kumuha ng bagong photo na at least 400×400 pixels.';
+        } else if (ratio > 1.2) {
+          severity = 'warning';
+          title = 'Landscape / Full-body Shot';
+          message =
+          'Ang photo ($w×$h) ay landscape. Hindi ito angkop para sa face recognition.';
+          suggestion = 'Mag-upload ng PORTRAIT na close-up (ID-style).';
+        } else if (ratio < 0.6) {
+          severity = 'warning';
+          title = 'Masyadong Habang Portrait';
+          message = 'Ang photo ($w×$h) ay masyadong mahaba (vertical).';
+          suggestion = 'Gumamit ng standard portrait (3:4 o 4:5 ratio).';
+        } else {
+          severity = 'ok';
+          title = 'Photo OK';
+          message =
+          'Ang photo ($w×$h, ratio ${ratio.toStringAsFixed(2)}) ay maayos.';
+          suggestion = 'Pwede itong gamitin.';
+        }
+
+        completer.complete({
+          'ok': severity == 'ok',
+          'severity': severity,
+          'title': title,
+          'message': message,
+          'suggestion': suggestion,
+          'width': w,
+          'height': h,
+          'ratio': ratio,
+        });
+      } catch (e) {
+        completer.complete({
+          'ok': false,
+          'severity': 'error',
+          'title': 'Error',
+          'message': 'Error: $e',
+          'suggestion': 'I-try ulit.',
+        });
+      }
+      return completer.future;
+    }
+
+    try {
+      final image = NetworkImage(url);
+      final stream = image.resolve(ImageConfiguration.empty);
+
+      final listener = ImageStreamListener(
+            (info, _) {
+          final w = info.image.width;
+          final h = info.image.height;
+          final ratio = w / h;
+
+          String severity;
+          String title;
+          String message;
+          String suggestion;
+
+          if (w < 200 || h < 200) {
+            severity = 'error';
+            title = 'Resolution masyadong maliit';
+            message =
+            'Ang photo ($w×$h) ay masyadong maliit para sa reliable face recognition.';
+            suggestion = 'Kumuha ng bagong photo na at least 400×400 pixels.';
+          } else if (ratio > 1.2) {
+            severity = 'warning';
+            title = 'Landscape / Full-body Shot';
+            message =
+            'Ang photo ($w×$h, ratio ${ratio.toStringAsFixed(2)}) ay landscape.';
+            suggestion = 'Mag-upload ng PORTRAIT na close-up (ID-style).';
+          } else if (ratio < 0.6) {
+            severity = 'warning';
+            title = 'Masyadong Habang Portrait';
+            message = 'Ang photo ($w×$h) ay masyadong mahaba.';
+            suggestion = 'Gumamit ng standard portrait (3:4 o 4:5 ratio).';
+          } else {
+            severity = 'ok';
+            title = 'Photo OK';
+            message =
+            'Ang photo ($w×$h, ratio ${ratio.toStringAsFixed(2)}) ay maayos.';
+            suggestion = 'Pwede itong gamitin.';
+          }
+
+          completer.complete({
+            'ok': severity == 'ok',
+            'severity': severity,
+            'title': title,
+            'message': message,
+            'suggestion': suggestion,
+            'width': w,
+            'height': h,
+            'ratio': ratio,
+          });
+        },
+        onError: (_, __) {
+          completer.complete({
+            'ok': false,
+            'severity': 'error',
+            'title': 'Hindi Ma-load',
+            'message': 'Hindi ma-load ang photo URL.',
+            'suggestion': 'I-check kung valid ang photo URL.',
+          });
+        },
+      );
+
+      stream.addListener(listener);
+
+      Future.delayed(const Duration(seconds: 10), () {
+        if (!completer.isCompleted) {
+          completer.complete({
+            'ok': false,
+            'severity': 'error',
+            'title': 'Timeout',
+            'message': 'Hindi nag-load ang photo sa loob ng 10 seconds.',
+            'suggestion': 'I-check ang internet connection.',
+          });
+        }
+      });
+    } catch (e) {
+      completer.complete({
+        'ok': false,
+        'severity': 'error',
+        'title': 'Error',
+        'message': 'Error: $e',
+        'suggestion': 'I-try ulit.',
+      });
+    }
+
+    return completer.future;
+  }
+
+  Future<void> _showVerifyPhotoDialog(Map<String, dynamic> emp) async {
+    final photoUrl = _s(emp['photoUrl'], _s(emp['photo'], ''));
+    final name = _nameOf(emp);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: tc.card,
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: tc.orange),
+            const SizedBox(width: 20),
+            Expanded(
+              child: Text('Vine-verify ang photo ni $name...',
+                  style: TextStyle(color: tc.text)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final result = await _checkPhotoSuitability(photoUrl);
+
+    if (!mounted) return;
+    Navigator.pop(context);
+
+    final severity = result['severity'] as String;
+    Color headerColor;
+    IconData headerIcon;
+    switch (severity) {
+      case 'ok':
+        headerColor = const Color(0xFF16A34A);
+        headerIcon = Icons.check_circle_rounded;
+        break;
+      case 'warning':
+        headerColor = const Color(0xFFF59E0B);
+        headerIcon = Icons.warning_amber_rounded;
+        break;
+      default:
+        headerColor = tc.red;
+        headerIcon = Icons.error_rounded;
+    }
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: tc.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Row(
+          children: [
+            Icon(headerIcon, color: headerColor, size: 24),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                result['title'] as String,
+                style: TextStyle(
+                    color: tc.text,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 17),
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (photoUrl.isNotEmpty && photoUrl != '—')
+                Container(
+                  height: 180,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: tc.surface,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: tc.border),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: _buildPhotoWidget(
+                      photoUrl,
+                      fit: BoxFit.contain,
+                      errorWidget: Center(
+                        child: Icon(Icons.broken_image,
+                            color: tc.muted, size: 40),
+                      ),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: headerColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: headerColor.withValues(alpha: 0.3)),
+                ),
+                child: Text(
+                  result['message'] as String,
+                  style: TextStyle(color: tc.text, fontSize: 13, height: 1.4),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text('💡 Rekomendasyon:',
+                  style: TextStyle(
+                      color: tc.text,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12)),
+              const SizedBox(height: 6),
+              Text(
+                result['suggestion'] as String,
+                style: TextStyle(color: tc.muted, fontSize: 12, height: 1.4),
+              ),
+              if (severity != 'ok') ...[
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEFF4FF),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: tc.border),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline_rounded,
+                          size: 16, color: tc.orange),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Para sa 100% reliable na face enrollment, '
+                              'ipa-live scan ang employee sa MOBILE APP.',
+                          style: TextStyle(
+                              color: tc.text, fontSize: 11.5, height: 1.4),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Close', style: TextStyle(color: tc.orange)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<String?> _checkEmailUnique(String email) async {
+    try {
+      final snap = await AdminDatabase.employees.get();
+      final normalized = email.trim().toLowerCase();
+      for (final doc in snap.docs) {
+        final raw = doc.data();
+        final data = raw is Map
+            ? Map<String, dynamic>.from(raw)
+            : <String, dynamic>{};
+        final existing = _s(data['email'], '').toLowerCase();
+        if (existing == normalized) {
+          return 'Email already registered to: ${_s(data['name'], doc.id)}';
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Email check error: $e');
+      return null;
+    }
+  }
+
+  Future<String?> _checkEmployeeIdUnique(String empId) async {
+    try {
+      final doc = await AdminDatabase.employees.doc(empId).get();
+      if (doc.exists) {
+        return 'Employee ID "$empId" already exists.';
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Employee ID check error: $e');
+      return null;
+    }
+  }
+
   Stream<List<Map<String, dynamic>>> _attendanceStream(String empId) {
     return AdminDatabase.fs
         .collection('attendance_logs')
         .snapshots()
         .map((s) {
-      final list = s.docs
-          .map((d) => <String, dynamic>{...d.data(), 'id': d.id})
-          .where((log) {
+      final list = s.docs.map((d) {
+        final raw = d.data();
+        final map = raw is Map
+            ? Map<String, dynamic>.from(raw)
+            : <String, dynamic>{};
+        return <String, dynamic>{...map, 'id': d.id};
+      }).where((log) {
         final eid = (log['employee_id'] ??
             log['employeeId'] ??
             log['employeeID'] ??
@@ -280,9 +928,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         .collection('leave_applications')
         .where('employeeId', isEqualTo: empId)
         .snapshots()
-        .map((s) => s.docs
-        .map((d) => <String, dynamic>{...d.data(), 'id': d.id})
-        .toList())
+        .map((s) => s.docs.map((d) {
+      final raw = d.data();
+      final map = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : <String, dynamic>{};
+      return <String, dynamic>{...map, 'id': d.id};
+    }).toList())
         .handleError((e) {
       debugPrint('leaveStream($empId): $e');
       return <Map<String, dynamic>>[];
@@ -295,9 +947,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         .where('employeeId', isEqualTo: empId)
         .snapshots()
         .map((s) {
-      final list = s.docs
-          .map((d) => <String, dynamic>{...d.data(), 'id': d.id})
-          .toList();
+      final list = s.docs.map((d) {
+        final raw = d.data();
+        final map = raw is Map
+            ? Map<String, dynamic>.from(raw)
+            : <String, dynamic>{};
+        return <String, dynamic>{...map, 'id': d.id};
+      }).toList();
       list.sort((a, b) {
         final da = _toDateTime(a['timestamp']);
         final db = _toDateTime(b['timestamp']);
@@ -313,9 +969,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ATTENDANCE ROW HELPERS — combine IN/OUT per day
-  // ══════════════════════════════════════════════════════════════
   DateTime? _logTimestamp(Map<String, dynamic> log) {
     final raw = log['timestamp'] ??
         log['createdAt'] ??
@@ -329,7 +982,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     return _s(log['type'], _s(log['status'], '')).toUpperCase();
   }
 
-  /// Builds attendance rows per day. Computes actual hours worked.
   List<Map<String, dynamic>> _buildAttendanceRows(
       List<Map<String, dynamic>> logs) {
     final Map<String, List<Map<String, dynamic>>> byDay = {};
@@ -357,7 +1009,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       DateTime? inTs;
       DateTime? outTs;
 
-      // 1. Check if a single document contains both timeIn and timeOut
       for (final log in dayLogs) {
         final rawIn = log['timeIn'] ??
             log['clockIn'] ??
@@ -378,7 +1029,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         }
       }
 
-      // 2. If not found, look for separate IN/OUT logs
       if (inTs == null || outTs == null) {
         for (final l in dayLogs) {
           final t = _logType(l);
@@ -404,7 +1054,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         }
       }
 
-      // 3. Fallback if no type found
       if (inTs == null && dayLogs.isNotEmpty) {
         inLog = dayLogs.first;
         inTs = _logTimestamp(inLog);
@@ -417,7 +1066,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       String total = '—';
       int totalMinutes = 0;
 
-      // Compute actual hours worked
       if (inTs != null && outTs != null) {
         if (outTs.isAfter(inTs) || outTs.isAtSameMomentAs(inTs)) {
           final d = outTs.difference(inTs);
@@ -461,7 +1109,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     return rows;
   }
 
-  // ─── TOTAL MINUTES HELPERS ────────────────────────────────────
   int _computeTotalMinutes(
       List<Map<String, dynamic>> rows, {
         int? filterMonth,
@@ -472,7 +1119,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       final inTs = row['in'] as DateTime?;
       final outTs = row['out'] as DateTime?;
       if (inTs == null || outTs == null) continue;
-      // Allow equal timestamps (0 duration) but skip invalid out < in
       if (outTs.isBefore(inTs)) continue;
 
       if (filterMonth != null && inTs.month != filterMonth) continue;
@@ -490,9 +1136,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     return '${h}h ${m}m';
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // LEAVE CREDIT COMPUTATION
-  // ══════════════════════════════════════════════════════════════
   Map<String, int> _computeLeaveStats(List<Map<String, dynamic>> leaves) {
     int usedAnnual = 0;
     int usedSick = 0;
@@ -535,9 +1178,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     };
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PDF GENERATION
-  // ══════════════════════════════════════════════════════════════
   Future<void> _generateAndDownloadPdf(Map<String, dynamic> emp) async {
     final pdf = pw.Document();
     final name = _nameOf(emp);
@@ -552,6 +1192,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
     final nfcId = _s(emp['nfcTagId'], _s(emp['nfcId'], 'NOT ASSIGNED'));
     final activeStatus = _s(emp['status'], 'ACTIVE').toUpperCase();
+    final wfhStatus = _isWfhEnabled(emp) ? 'ENABLED' : 'DISABLED';
+    final faceStatus = _hasCurrentFaceVersion(emp)
+        ? 'ENROLLED (v$kCurrentFaceVersion)'
+        : 'NOT ENROLLED';
+    final photoStatus = _hasProfilePhoto(emp) ? 'UPLOADED' : 'NO PHOTO';
 
     pdf.addPage(
       pw.Page(
@@ -647,9 +1292,27 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 pw.Divider(),
                 pw.SizedBox(height: 10),
                 pw.Row(children: [
+                  pw.Text('Profile Photo: ',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                  pw.Text(photoStatus)
+                ]),
+                pw.SizedBox(height: 5),
+                pw.Row(children: [
+                  pw.Text('Face Biometric: ',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                  pw.Text(faceStatus)
+                ]),
+                pw.SizedBox(height: 5),
+                pw.Row(children: [
                   pw.Text('NFC/KEYFOB ID: ',
                       style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                   pw.Text(nfcId)
+                ]),
+                pw.SizedBox(height: 5),
+                pw.Row(children: [
+                  pw.Text('WFH Access: ',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                  pw.Text(wfhStatus)
                 ]),
               ],
             ),
@@ -664,9 +1327,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // AVATAR
-  // ══════════════════════════════════════════════════════════════
   Widget _avatarContent(Map<String, dynamic> emp, String initial,
       {required double size,
         required double fontSize,
@@ -678,13 +1338,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     if (photoUrl.isNotEmpty && photoUrl != '—') {
       return ClipRRect(
         borderRadius: BorderRadius.circular(size / 2),
-        child: Image.network(
+        child: _buildPhotoWidget(
           photoUrl,
           width: size,
           height: size,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) =>
-              _avatarFallback(initial, fontSize, textColor),
+          errorWidget: _avatarFallback(initial, fontSize, textColor),
         ),
       );
     }
@@ -702,9 +1361,153 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         ),
       );
 
-  // ══════════════════════════════════════════════════════════════
-  // MAIN BUILD
-  // ══════════════════════════════════════════════════════════════
+  Widget _wfhAccessToggle({
+    required bool enabled,
+    required ValueChanged<bool> onChanged,
+    bool compact = false,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 10 : 12,
+        vertical: compact ? 4 : 6,
+      ),
+      decoration: BoxDecoration(
+        color: enabled ? const Color(0xFFDCFCE7) : tc.surface,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: enabled ? const Color(0xFF22C55E) : tc.border,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            enabled ? Icons.home_work_rounded : Icons.home_outlined,
+            size: compact ? 14 : 15,
+            color: enabled ? const Color(0xFF166534) : tc.muted,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            enabled ? 'WFH Access: ON' : 'WFH Access: OFF',
+            style: TextStyle(
+              fontSize: compact ? 11 : 12,
+              fontWeight: FontWeight.w700,
+              color: enabled ? const Color(0xFF166534) : tc.muted,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Transform.scale(
+            scale: compact ? 0.65 : 0.72,
+            child: Switch(
+              value: enabled,
+              onChanged: onChanged,
+              activeColor: const Color(0xFF22C55E),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _photoFaceBadges(Map<String, dynamic> emp, {bool compact = false}) {
+    final hasPhoto = _hasProfilePhoto(emp);
+    final version = _faceVersionOf(emp);
+    final count = _faceCountOf(emp);
+    final hasFace = count > 0;
+    final isCurrent = version == kCurrentFaceVersion;
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: compact ? 8 : 10, vertical: 4),
+          decoration: BoxDecoration(
+            color:
+            hasPhoto ? const Color(0xFFDBEAFE) : const Color(0xFFE0E3E6),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: hasPhoto ? const Color(0xFF3B82F6) : tc.border,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                hasPhoto ? Icons.photo_camera_rounded : Icons.no_photography,
+                size: compact ? 11 : 12,
+                color: hasPhoto ? const Color(0xFF1E40AF) : tc.muted,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                hasPhoto ? 'Photo ✓' : 'No Photo',
+                style: TextStyle(
+                  fontSize: compact ? 10 : 11,
+                  fontWeight: FontWeight.w700,
+                  color: hasPhoto ? const Color(0xFF1E40AF) : tc.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: compact ? 8 : 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: hasFace
+                ? (isCurrent
+                ? const Color(0xFFDCFCE7)
+                : const Color(0xFFFEF3C7))
+                : const Color(0xFFF3E8FF),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: hasFace
+                  ? (isCurrent
+                  ? const Color(0xFF22C55E)
+                  : const Color(0xFFF59E0B))
+                  : const Color(0xFFA855F7),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                hasFace
+                    ? (isCurrent
+                    ? Icons.verified_rounded
+                    : Icons.warning_amber_rounded)
+                    : Icons.face_retouching_off,
+                size: compact ? 11 : 12,
+                color: hasFace
+                    ? (isCurrent
+                    ? const Color(0xFF166534)
+                    : const Color(0xFF92400E))
+                    : const Color(0xFF7C3AED),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                hasFace
+                    ? (isCurrent ? 'Face v$version ✓' : 'Face v$version ⚠')
+                    : 'No Face',
+                style: TextStyle(
+                  fontSize: compact ? 10 : 11,
+                  fontWeight: FontWeight.w700,
+                  color: hasFace
+                      ? (isCurrent
+                      ? const Color(0xFF166534)
+                      : const Color(0xFF92400E))
+                      : const Color(0xFF7C3AED),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isEditingEmployee && _selectedProfileEmp != null) {
@@ -792,14 +1595,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // HEADER
-  // ══════════════════════════════════════════════════════════════
   Widget _header() {
     return LayoutBuilder(
       builder: (_, c) {
         final r = BsResponsive(c.maxWidth);
-        final narrow = !r.up(BsSize.sm);
+        final narrow = !r.up(BsSize.md);
 
         final title = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -821,7 +1621,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ],
         );
 
-        final button = ElevatedButton.icon(
+        final addButton = ElevatedButton.icon(
           onPressed: () {
             if (widget.onAddEmployee != null) {
               widget.onAddEmployee!();
@@ -832,14 +1632,37 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           style: ElevatedButton.styleFrom(
             backgroundColor: tc.orange,
             foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
             shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             elevation: 0,
           ),
           icon: const Icon(Icons.person_add_alt_1_rounded, size: 20),
           label: const Text('Add New Employee',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+        );
+
+        final migrateButton = ElevatedButton.icon(
+          onPressed: _migratingFaces ? null : () => _confirmMigrateFaces(),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF7C3AED),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            elevation: 0,
+          ),
+          icon: _migratingFaces
+              ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                  color: Colors.white, strokeWidth: 2))
+              : const Icon(Icons.auto_fix_high_rounded, size: 18),
+          label: Text(
+            _migratingFaces ? 'Migrating...' : 'Migrate Faces',
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+          ),
         );
 
         final wipeButton = OutlinedButton.icon(
@@ -847,14 +1670,14 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           style: OutlinedButton.styleFrom(
             backgroundColor: Colors.transparent,
             foregroundColor: tc.red,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
             side: BorderSide(color: tc.red.withValues(alpha: 0.3)),
             shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
           icon: const Icon(Icons.delete_sweep_rounded, size: 18),
           label: const Text('Clear All Logs',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
         );
 
         if (narrow) {
@@ -863,9 +1686,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             children: [
               title,
               const SizedBox(height: 14),
+              migrateButton,
+              const SizedBox(height: 10),
               wipeButton,
               const SizedBox(height: 10),
-              button,
+              addButton,
             ],
           );
         }
@@ -873,18 +1698,17 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Expanded(child: title),
+            migrateButton,
+            const SizedBox(width: 8),
             wipeButton,
-            const SizedBox(width: 12),
-            button,
+            const SizedBox(width: 8),
+            addButton,
           ],
         );
       },
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FILTER BAR
-  // ══════════════════════════════════════════════════════════════
   Widget _filterBar(List<String> departments) {
     return LayoutBuilder(
       builder: (_, c) {
@@ -1011,9 +1835,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // DIRECTORY GRID
-  // ══════════════════════════════════════════════════════════════
   Widget _directoryGrid(List<Map<String, dynamic>> items) {
     return LayoutBuilder(
       builder: (_, c) {
@@ -1038,14 +1859,14 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               : (cols == 2 ? colWidth * 2 + gap : colWidth);
           widgets.add(SizedBox(
             width: featuredWidth,
-            height: 340,
+            height: 400,
             child: _featuredEmployeeCard(items[0]),
           ));
 
           for (int i = 1; i < items.length; i++) {
             widgets.add(SizedBox(
               width: colWidth,
-              height: 340,
+              height: 400,
               child: _regularEmployeeCard(items[i]),
             ));
           }
@@ -1053,7 +1874,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
         widgets.add(SizedBox(
           width: colWidth,
-          height: 340,
+          height: 400,
           child: _quickInviteCard(),
         ));
 
@@ -1066,9 +1887,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FEATURED EMPLOYEE CARD
-  // ══════════════════════════════════════════════════════════════
   Widget _featuredEmployeeCard(Map<String, dynamic> emp) {
     final name = _nameOf(emp);
     final initials = _initialsOf(name);
@@ -1077,6 +1895,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final id = _s(emp['employeeId'], _s(emp['id'], 'N/A'));
     final isPro = _isPro(emp);
     final isActive = _isActive(emp);
+    final wfhEnabled = _isWfhEnabled(emp);
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -1173,7 +1992,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1222,6 +2041,16 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 14),
+                _photoFaceBadges(emp),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: _wfhAccessToggle(
+                    enabled: wfhEnabled,
+                    onChanged: (v) => _setWfhAccess(emp, v),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1258,8 +2087,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     setState(() => _selectedProfileEmp = emp);
                   } else if (v == 'edit') {
                     _openEditDialog(emp);
+                  } else if (v == 'verifyPhoto') {
+                    _showVerifyPhotoDialog(emp);
                   } else if (v == 'delete') {
                     _confirmDelete(_s(emp['id']), name);
+                  } else if (v == 'resetFace') {
+                    _confirmResetFace(emp);
                   }
                 },
                 itemBuilder: (_) => [
@@ -1280,6 +2113,28 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       const SizedBox(width: 8),
                       Text('Edit Details',
                           style: TextStyle(color: tc.text, fontSize: 13)),
+                    ]),
+                  ),
+                  PopupMenuItem(
+                    value: 'verifyPhoto',
+                    child: Row(children: [
+                      const Icon(Icons.verified_outlined,
+                          size: 16, color: Color(0xFF16A34A)),
+                      const SizedBox(width: 8),
+                      Text('Verify Photo',
+                          style: TextStyle(
+                              color: const Color(0xFF16A34A), fontSize: 13)),
+                    ]),
+                  ),
+                  PopupMenuItem(
+                    value: 'resetFace',
+                    child: Row(children: [
+                      const Icon(Icons.face_retouching_off,
+                          size: 16, color: Color(0xFF7C3AED)),
+                      const SizedBox(width: 8),
+                      Text('Reset Face Data',
+                          style: TextStyle(
+                              color: const Color(0xFF7C3AED), fontSize: 13)),
                     ]),
                   ),
                   PopupMenuItem(
@@ -1328,9 +2183,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // REGULAR EMPLOYEE CARD
-  // ══════════════════════════════════════════════════════════════
   Widget _regularEmployeeCard(Map<String, dynamic> emp) {
     final name = _nameOf(emp);
     final initials = _initialsOf(name);
@@ -1338,6 +2190,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final dept = _s(emp['department'], 'General');
     final email = _s(emp['email'], '—');
     final isActive = _isActive(emp);
+    final wfhEnabled = _isWfhEnabled(emp);
 
     return Container(
       decoration: BoxDecoration(
@@ -1390,13 +2243,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   Text(
                     isActive ? 'Active' : 'Offline',
                     style: TextStyle(
-                      fontSize: 12,
-                      fontWeight:
-                      isActive ? FontWeight.w700 : FontWeight.w600,
-                      color: isActive
-                          ? const Color(0xFF006E05)
-                          : const Color(0xFF564334),
-                    ),
+                        fontSize: 12,
+                        fontWeight:
+                        isActive ? FontWeight.w700 : FontWeight.w600,
+                        color: isActive
+                            ? const Color(0xFF006E05)
+                            : const Color(0xFF564334)),
                   ),
                 ],
               ),
@@ -1405,9 +2257,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           const SizedBox(height: 14),
           Text(name,
               style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: tc.text),
+                  fontSize: 16, fontWeight: FontWeight.w700, color: tc.text),
               overflow: TextOverflow.ellipsis,
               maxLines: 1),
           const SizedBox(height: 2),
@@ -1421,6 +2271,17 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           _infoRow(icon: Icons.business_outlined, text: dept),
           const SizedBox(height: 8),
           _infoRow(icon: Icons.email_outlined, text: email),
+          const SizedBox(height: 12),
+          _photoFaceBadges(emp, compact: true),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _wfhAccessToggle(
+              enabled: wfhEnabled,
+              onChanged: (v) => _setWfhAccess(emp, v),
+              compact: true,
+            ),
+          ),
           const Spacer(),
           SizedBox(
             width: double.infinity,
@@ -1463,9 +2324,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // QUICK INVITE CARD
-  // ══════════════════════════════════════════════════════════════
   Widget _quickInviteCard() {
     return Container(
       decoration: BoxDecoration(
@@ -1504,8 +2362,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 Text(
                   'Send joining link to new staff\nmembers via email.',
                   textAlign: TextAlign.center,
-                  style:
-                  TextStyle(fontSize: 13, color: tc.muted, height: 1.5),
+                  style: TextStyle(fontSize: 13, color: tc.muted, height: 1.5),
                 ),
               ],
             ),
@@ -1515,9 +2372,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PAGINATION
-  // ══════════════════════════════════════════════════════════════
   Widget _pagination(int start, int end, int total, int totalPages) {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -1532,10 +2386,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           _pageArrow(Icons.chevron_left_rounded, _page > 0,
                   () => setState(() => _page--)),
           const SizedBox(width: 6),
-          ...List.generate(totalPages, (i) => Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: _pageNumber(i),
-          )),
+          ...List.generate(
+              totalPages,
+                  (i) => Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: _pageNumber(i),
+              )),
           _pageArrow(Icons.chevron_right_rounded, _page < totalPages - 1,
                   () => setState(() => _page++)),
         ],
@@ -1543,8 +2399,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
       return Container(
         padding: const EdgeInsets.only(top: 20),
-        decoration: BoxDecoration(
-            border: Border(top: BorderSide(color: tc.border))),
+        decoration:
+        BoxDecoration(border: Border(top: BorderSide(color: tc.border))),
         child: narrow
             ? Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1602,9 +2458,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ADD EMPLOYEE PAGE
-  // ══════════════════════════════════════════════════════════════
   Widget _buildAddEmployeePage() {
     return Container(
       color: tc.background,
@@ -1717,7 +2570,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   color: tc.text)),
           const SizedBox(height: 8),
           Text(
-            'This photo will be used for digital identification across the portal.',
+            'Profile photo lang ito para sa display. Ang FACE ENROLLMENT ay gagawin ng employee sa mobile app.',
             style: TextStyle(fontSize: 13, color: tc.muted, height: 1.5),
           ),
         ],
@@ -1763,6 +2616,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   const SizedBox(height: 16),
                   _buildInputField('Department', _addDeptCtrl),
                   const SizedBox(height: 16),
+                  _buildInputField(
+                      'Employee ID (e.g. emp-01-2026)', _addIdCtrl),
+                  const SizedBox(height: 16),
                   _buildPasswordField('Account Password', _addPassCtrl,
                       _addPassVis, () {
                         setState(() => _addPassVis = !_addPassVis);
@@ -1773,7 +2629,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             return Column(
               children: [
                 Row(children: [
-                  Expanded(child: _buildInputField('First Name', _addFirstCtrl)),
+                  Expanded(
+                      child: _buildInputField('First Name', _addFirstCtrl)),
                   const SizedBox(width: 16),
                   Expanded(child: _buildInputField('Last Name', _addLastCtrl)),
                 ]),
@@ -1782,7 +2639,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   Expanded(
                       child: _buildInputField('Email Address', _addEmailCtrl)),
                   const SizedBox(width: 16),
-                  Expanded(child: _buildInputField('Phone No.', _addPhoneCtrl)),
+                  Expanded(
+                      child: _buildInputField('Phone No.', _addPhoneCtrl)),
                 ]),
                 const SizedBox(height: 16),
                 Row(children: [
@@ -1790,7 +2648,17 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       child: _buildInputField(
                           'Role / Designation', _addRoleCtrl)),
                   const SizedBox(width: 16),
-                  Expanded(child: _buildInputField('Department', _addDeptCtrl)),
+                  Expanded(
+                      child: _buildInputField('Department', _addDeptCtrl)),
+                ]),
+                const SizedBox(height: 16),
+                Row(children: [
+                  Expanded(
+                    child: _buildInputField(
+                        'Employee ID (e.g. emp-01-2026)', _addIdCtrl),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(child: Container()),
                 ]),
                 const SizedBox(height: 16),
                 _buildPasswordField('Account Password', _addPassCtrl,
@@ -1843,8 +2711,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     child:
                     _buildInputField('Keyfob Serial (NFC)', _addKeyfobCtrl)),
                 const SizedBox(width: 16),
-                Expanded(
-                    child: _buildInputField('4-Digit PIN', _addPinCtrl)),
+                Expanded(child: _buildInputField('4-Digit PIN', _addPinCtrl)),
               ],
             );
           }),
@@ -1882,8 +2749,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         style: OutlinedButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           side: BorderSide(color: tc.border),
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
         child: Text('Cancel', style: TextStyle(color: tc.text)),
       );
@@ -1892,8 +2758,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           backgroundColor: tc.orange,
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           elevation: 0,
         ),
         onPressed: _addSaving
@@ -1909,20 +2774,56 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             return;
           }
 
+          final typedEmployeeId = _addIdCtrl.text.trim();
+          if (typedEmployeeId.isEmpty) {
+            _snack('Please enter an Employee ID (e.g., emp-01-2026)',
+                error: true);
+            return;
+          }
+
+          if (typedEmployeeId.contains('/') ||
+              typedEmployeeId.contains('~') ||
+              typedEmployeeId.contains('*') ||
+              typedEmployeeId.contains('[') ||
+              typedEmployeeId.contains(']') ||
+              typedEmployeeId.contains('.')) {
+            _snack('Employee ID cannot contain / ~ * [ ] or .',
+                error: true);
+            return;
+          }
+
           final pinText = _addPinCtrl.text.trim();
           if (pinText.isNotEmpty && pinText.length != 4) {
             _snack('PIN must be exactly 4 digits.', error: true);
             return;
           }
 
-          final keyfob = _addKeyfobCtrl.text.trim().isNotEmpty
-              ? _addKeyfobCtrl.text.trim().toUpperCase()
-              : 'NFC-${DateTime.now().millisecondsSinceEpoch.toString().substring(5, 13)}';
-          final pin = pinText.isNotEmpty ? pinText : '1234';
-
           setState(() => _addSaving = true);
+
           try {
+            final emailErr = await _checkEmailUnique(email);
+            if (emailErr != null) {
+              if (!mounted) return;
+              _snack('❌ $emailErr', error: true);
+              setState(() => _addSaving = false);
+              return;
+            }
+
+            final idErr = await _checkEmployeeIdUnique(typedEmployeeId);
+            if (idErr != null) {
+              if (!mounted) return;
+              _snack('❌ $idErr', error: true);
+              setState(() => _addSaving = false);
+              return;
+            }
+
+            final keyfob = _addKeyfobCtrl.text.trim().isNotEmpty
+                ? _addKeyfobCtrl.text.trim().toUpperCase()
+                : 'NFC-${DateTime.now().millisecondsSinceEpoch.toString().substring(5, 13)}';
+            final pin = pinText.isNotEmpty ? pinText : '1234';
+
             final err = await AdminDatabase.addEmployee(
+              employeeId: typedEmployeeId,
               firstName: firstName,
               lastName: lastName,
               email: email,
@@ -1937,23 +2838,21 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             if (err != null) {
               _snack('Failed to add employee: $err', error: true);
             } else {
+              final extra = <String, dynamic>{
+                'wfhAccess': false,
+              };
               if (_addPhoneCtrl.text.trim().isNotEmpty) {
-                try {
-                  final snap = await AdminDatabase.employees
-                      .where('email', isEqualTo: email)
-                      .limit(1)
-                      .get();
-                  if (snap.docs.isNotEmpty) {
-                    await snap.docs.first.reference.update({
-                      'phone': _addPhoneCtrl.text.trim(),
-                    });
-                  }
-                } catch (e) {
-                  debugPrint('Phone save warning: $e');
-                }
+                extra['phone'] = _addPhoneCtrl.text.trim();
+              }
+              try {
+                await AdminDatabase.employees
+                    .doc(typedEmployeeId)
+                    .update(extra);
+              } catch (e) {
+                debugPrint('Phone/wfh init warning: $e');
               }
 
-              _snack('Employee successfully added!');
+              _snack('Employee "$typedEmployeeId" added successfully!');
               _addFirstCtrl.clear();
               _addLastCtrl.clear();
               _addEmailCtrl.clear();
@@ -1963,6 +2862,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               _addPassCtrl.clear();
               _addPinCtrl.clear();
               _addKeyfobCtrl.clear();
+              _addIdCtrl.clear();
               setState(() => _isAddingEmployee = false);
               widget.onRefreshNeeded();
             }
@@ -2004,9 +2904,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // INPUT FIELD WIDGETS
-  // ══════════════════════════════════════════════════════════════
   Widget _buildInputField(String label, TextEditingController controller,
       {bool readOnly = false}) {
     return TextField(
@@ -2027,8 +2924,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         ),
         filled: true,
         fillColor: readOnly ? tc.surface : tc.card,
-        contentPadding:
-        const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: BorderSide(color: tc.border),
@@ -2065,8 +2961,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         ),
         filled: true,
         fillColor: tc.card,
-        contentPadding:
-        const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: BorderSide(color: tc.border),
@@ -2088,14 +2983,15 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // EDIT EMPLOYEE PAGE
-  // ══════════════════════════════════════════════════════════════
   Widget _buildEditEmployeePage(Map<String, dynamic> emp) {
     final photoUrl = _s(emp['photoUrl'], '').isNotEmpty
         ? _s(emp['photoUrl'], '')
         : _s(emp['photo'], '');
-    final empId = _s(emp['employeeId'], _s(emp['id'], 'EMP-2024-024'));
+    final empId = _s(emp['employeeId'], _s(emp['id'], ''));
+
+    _editPhotoUrl = photoUrl.isNotEmpty && photoUrl != '—'
+        ? photoUrl
+        : null;
 
     final fullName =
     '${_s(emp['firstName'], '')} ${_s(emp['lastName'], '')}'.trim();
@@ -2106,6 +3002,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _editDeptCtrl.text = _s(emp['department'], '');
     _editKeyfobCtrl.text = _s(emp['nfcTagId'], _s(emp['nfcId'], ''));
     _editPinCtrl.text = _s(emp['pin'], '');
+    _editEmployeeIdCtrl.text = empId;
+    _editOriginalEmployeeId = empId;
 
     final bd = _toDateTime(emp['birthday'] ?? emp['birthDate']);
     _editBirthday = bd;
@@ -2128,10 +3026,14 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 GestureDetector(
-                  onTap: () => setState(() => _isEditingEmployee = false),
+                  onTap: () => setState(() {
+                    _isEditingEmployee = false;
+                    _editPhotoXFile = null;
+                    _editPhotoBytes = null;
+                  }),
                   behavior: HitTestBehavior.opaque,
                   child: const Text(
-                    'Add New Employee',
+                    'Back to Profile',
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -2156,7 +3058,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   final photoCard = _editPhotoCard(photoUrl);
                   final formColumn = Column(
                     children: [
-                      _buildEditPersonalInfoCard(empId),
+                      _buildEditPersonalInfoCard(),
                       const SizedBox(height: 16),
                       _buildEditBiometricCard(),
                       const SizedBox(height: 16),
@@ -2191,6 +3093,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   Widget _editPhotoCard(String photoUrl) {
+    final hasNewPhoto = _editPhotoXFile != null;
+    final displayUrl =
+        _editPhotoUrl ?? (photoUrl.isNotEmpty ? photoUrl : null);
+    final hasUrl = displayUrl != null && displayUrl != '—';
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2211,12 +3118,50 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: photoUrl.isNotEmpty && photoUrl != '—'
-                  ? Image.network(
-                photoUrl,
+              child: _editPhotoUploading
+                  ? const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(
+                        color: Color(0xFFFF8C00)),
+                    SizedBox(height: 12),
+                    Text(
+                      'Processing photo...',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFFFF8C00)),
+                    ),
+                  ],
+                ),
+              )
+                  : hasNewPhoto
+                  ? (kIsWeb && _editPhotoBytes != null
+                  ? Image.memory(
+                _editPhotoBytes!,
                 fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) =>
-                    Icon(Icons.person, size: 80, color: tc.muted),
+                width: double.infinity,
+              )
+                  : (!kIsWeb
+                  ? Image.file(
+                File(_editPhotoXFile!.path),
+                fit: BoxFit.cover,
+                width: double.infinity,
+              )
+                  : Container(
+                color: Colors.black12,
+                child: const Center(
+                  child: CircularProgressIndicator(),
+                ),
+              )))
+                  : (hasUrl
+                  ? _buildPhotoWidget(
+                displayUrl!,
+                fit: BoxFit.cover,
+                width: double.infinity,
+                errorWidget:
+                Icon(Icons.person, size: 80, color: tc.muted),
               )
                   : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -2224,18 +3169,18 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   Icon(Icons.person_outline_rounded,
                       size: 64, color: tc.muted),
                   const SizedBox(height: 8),
-                  Text('Upload Photo',
+                  Text('No Photo',
                       style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: tc.muted)),
                 ],
-              ),
+              )),
             ),
           ),
           const SizedBox(height: 16),
           Text(
-            'Profile Identity',
+            'Profile Photo',
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.w600,
@@ -2244,51 +3189,93 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ),
           const SizedBox(height: 6),
           Text(
-            'This photo will be used for digital identification across the portal.',
+            'Ito ay profile photo lang — hindi ito ginagamit para sa facial recognition.',
             style: TextStyle(
               fontSize: 14,
               color: tc.muted,
               height: 1.5,
             ),
           ),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFF8C00).withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                  color: const Color(0xFFFF8C00).withValues(alpha: 0.20)),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.only(top: 1),
-                  child: Icon(Icons.info_outline_rounded,
-                      size: 18, color: Color(0xFFFF8C00)),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed:
+                  _editPhotoUploading ? null : _pickEditPhoto,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFFF8C00),
+                    side: const BorderSide(color: Color(0xFFFF8C00)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                  icon: const Icon(Icons.photo_library_rounded, size: 16),
+                  label: Text(
+                    hasNewPhoto ? 'Change Photo' : 'Edit Photo',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
                 ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    "Ensure the employee's name matches their government-issued ID for biometric verification compliance.",
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF6E3900),
-                      height: 1.45,
-                    ),
+              ),
+              if (hasNewPhoto) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: _editPhotoUploading
+                      ? null
+                      : () {
+                    setState(() {
+                      _editPhotoXFile = null;
+                      _editPhotoBytes = null;
+                    });
+                  },
+                  icon: const Icon(Icons.close_rounded,
+                      color: Color(0xFFEF4444), size: 20),
+                  tooltip: 'Cancel new photo',
+                  style: IconButton.styleFrom(
+                    backgroundColor:
+                    const Color(0xFFEF4444).withValues(alpha: 0.1),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
                   ),
                 ),
               ],
-            ),
+            ],
           ),
+          if (hasNewPhoto) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFDCFCE7),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF22C55E)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.check_circle_rounded,
+                      color: Color(0xFF166534), size: 14),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'New photo selected — i-save para ma-apply',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF166534)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildEditPersonalInfoCard(String empId) {
+  Widget _buildEditPersonalInfoCard() {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2330,10 +3317,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   const SizedBox(height: 14),
                   _editField('ROLE / DESIGNATION', _editRoleCtrl),
                   const SizedBox(height: 14),
-                  _editField('EMPLOYEE ID',
-                      TextEditingController(text: empId),
-                      readOnly: true,
-                      muted: true),
+                  _editField('EMPLOYEE ID', _editEmployeeIdCtrl),
                 ],
               );
             }
@@ -2357,19 +3341,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   Expanded(child: _editDepartmentDropdownField()),
                   const SizedBox(width: 16),
                   Expanded(
-                      child:
-                      _editField('ROLE / DESIGNATION', _editRoleCtrl)),
+                      child: _editField('ROLE / DESIGNATION', _editRoleCtrl)),
                 ]),
                 const SizedBox(height: 14),
                 Row(children: [
                   Expanded(
-                    child: _editField(
-                      'EMPLOYEE ID',
-                      TextEditingController(text: empId),
-                      readOnly: true,
-                      muted: true,
-                    ),
-                  ),
+                      child: _editField('EMPLOYEE ID', _editEmployeeIdCtrl)),
                   const SizedBox(width: 16),
                   Expanded(child: Container()),
                 ]),
@@ -2468,8 +3445,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           },
           child: Container(
             width: double.infinity,
-            padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
               color: tc.card,
               borderRadius: BorderRadius.circular(8),
@@ -2619,6 +3595,73 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: _editWfhAccess ? const Color(0xFFDCFCE7) : tc.surface,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: _editWfhAccess ? const Color(0xFF22C55E) : tc.border,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _editWfhAccess
+                        ? const Color(0xFF22C55E)
+                        : tc.muted.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _editWfhAccess
+                        ? Icons.home_work_rounded
+                        : Icons.home_outlined,
+                    color: _editWfhAccess ? Colors.white : tc.muted,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Work From Home Access',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: tc.text,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _editWfhAccess
+                            ? 'ON — Puwedeng mag-clock in kahit wala sa office location.'
+                            : 'OFF — Kailangan nasa loob ng office geofence.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _editWfhAccess
+                              ? const Color(0xFF166534)
+                              : tc.muted,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Switch(
+                  value: _editWfhAccess,
+                  onChanged: (v) => setState(() => _editWfhAccess = v),
+                  activeColor: const Color(0xFF22C55E),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -2662,8 +3705,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                         fontSize: 15,
                         color: Color(0xFFB0B0B0),
                         fontWeight: FontWeight.w400),
-                    contentPadding: EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 14),
+                    contentPadding:
+                    EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                     border: InputBorder.none,
                   ),
                 ),
@@ -2715,12 +3758,15 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     return LayoutBuilder(builder: (context, constraints) {
       final narrow = constraints.maxWidth < 500;
       final cancel = OutlinedButton(
-        onPressed: () => setState(() => _isEditingEmployee = false),
+        onPressed: () => setState(() {
+          _isEditingEmployee = false;
+          _editPhotoXFile = null;
+          _editPhotoBytes = null;
+        }),
         style: OutlinedButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
           side: const BorderSide(color: Color(0xFF897362)),
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           foregroundColor: const Color(0xFF564334),
         ),
         child: const Text('Cancel',
@@ -2731,8 +3777,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           backgroundColor: const Color(0xFFFF8C00),
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           elevation: 0,
         ),
         onPressed: _editSaving
@@ -2746,18 +3791,61 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           final lastName =
           parts.length > 1 ? parts.sublist(1).join(' ') : '';
 
+          final newEmployeeId = _editEmployeeIdCtrl.text.trim();
+          final email = _editEmailCtrl.text.trim();
+
+          if (newEmployeeId.isEmpty) {
+            _snack('Employee ID cannot be empty.', error: true);
+            setState(() => _editSaving = false);
+            return;
+          }
+
+          if (newEmployeeId != _editOriginalEmployeeId) {
+            final idErr = await _checkEmployeeIdUnique(newEmployeeId);
+            if (idErr != null) {
+              if (!mounted) return;
+              _snack('❌ $idErr', error: true);
+              setState(() => _editSaving = false);
+              return;
+            }
+          }
+
+          final emailErr = await _checkEmailUnique(email);
+          if (emailErr != null && !emailErr.contains(_nameOf(emp))) {
+            final existingEmail = _s(emp['email'], '').toLowerCase();
+            if (email.toLowerCase() != existingEmail) {
+              if (!mounted) return;
+              _snack('❌ $emailErr', error: true);
+              setState(() => _editSaving = false);
+              return;
+            }
+          }
+
+          String? uploadedPhotoUrl;
+          if (_editPhotoXFile != null) {
+            uploadedPhotoUrl = await _uploadEditPhoto(_s(emp['id']));
+            if (uploadedPhotoUrl == null) {
+              if (!mounted) return;
+              setState(() => _editSaving = false);
+              return;
+            }
+          }
+
           final data = <String, dynamic>{
             'firstName': firstName,
             'lastName': lastName,
             'name': fullName,
-            'email': _editEmailCtrl.text.trim(),
+            'employeeId': newEmployeeId,
+            'email': email,
             'phone': _editPhoneCtrl.text.trim(),
             'role': _editRoleCtrl.text.trim(),
             'department': _editDeptCtrl.text.trim(),
             'nfcTagId': _editKeyfobCtrl.text.trim().toUpperCase(),
             'pin': _editPinCtrl.text.trim(),
+            'wfhAccess': _editWfhAccess,
             if (_editBirthday != null)
               'birthday': Timestamp.fromDate(_editBirthday!),
+            if (uploadedPhotoUrl != null) 'photoUrl': uploadedPhotoUrl,
           };
 
           final err =
@@ -2771,6 +3859,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             setState(() {
               _isEditingEmployee = false;
               _selectedProfileEmp = {...emp, ...data};
+              _editPhotoXFile = null;
+              _editPhotoBytes = null;
             });
             widget.onRefreshNeeded();
           }
@@ -2782,8 +3872,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             child: CircularProgressIndicator(
                 color: Colors.white, strokeWidth: 2))
             : const Text('Done',
-            style:
-            TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
       );
 
       if (narrow) {
@@ -2815,32 +3904,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
-  Widget _buildChip(IconData icon, String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: tc.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: tc.border),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 14),
-          const SizedBox(width: 4),
-          Text(label,
-              style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: tc.muted)),
-        ],
-      ),
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // EMPLOYEE PROFILE PAGE
-  // ══════════════════════════════════════════════════════════════
   Widget _buildEmployeeProfilePage(Map<String, dynamic> emp) {
     final docId = _s(emp['id'], '');
     final name = _nameOf(emp);
@@ -2857,9 +3920,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final activeStatus = statusRaw.toUpperCase();
     final nfcId = _s(emp['nfcTagId'], _s(emp['nfcId'], 'NOT ASSIGNED'));
     final pin = _s(emp['pin'], '');
-    final hasBiometric = emp['biometric'] == true ||
-        _s(emp['faceId'], '').isNotEmpty ||
-        _s(emp['thumbId'], '').isNotEmpty;
+    final hasBiometric = _hasCurrentFaceVersion(emp);
 
     return Container(
       color: tc.background,
@@ -2949,6 +4010,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         nfcId: nfcId,
         pin: pin,
         hasBiometric: hasBiometric,
+        emp: emp,
       );
       if (stack) {
         return Column(
@@ -2983,6 +4045,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     required bool isActive,
     required Map<String, dynamic> emp,
   }) {
+    final initials = _initialsOf(name);
     return Container(
       padding: const EdgeInsets.all(32),
       decoration: BoxDecoration(
@@ -3000,44 +4063,90 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: isActive
-                    ? const Color(0xFFFFDCC3)
-                    : const Color(0xFFE0E3E6),
-                borderRadius: BorderRadius.circular(20),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Stack(
+                children: [
+                  Container(
+                    width: 96,
+                    height: 96,
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      color: tc.orange.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: tc.orange, width: 2.5),
+                    ),
+                    child: _avatarContent(emp, initials,
+                        size: 96, fontSize: 32, textColor: tc.orangeText),
+                  ),
+                  Positioned(
+                    bottom: 2,
+                    right: 2,
+                    child: Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? const Color(0xFF006E05)
+                            : const Color(0xFF857365),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: tc.card, width: 3.5),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              child: Text(
-                activeStatus,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: isActive
-                      ? const Color(0xFF6E3900)
-                      : const Color(0xFF44474A),
-                  letterSpacing: 0.5,
+              const SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? const Color(0xFFFFDCC3)
+                            : const Color(0xFFE0E3E6),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        activeStatus,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: isActive
+                              ? const Color(0xFF6E3900)
+                              : const Color(0xFF44474A),
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(name,
+                        style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w700,
+                            color: tc.text,
+                            letterSpacing: -0.5),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 2),
+                    const SizedBox(height: 4),
+                    Text(role,
+                        style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF904D00))),
+                    const SizedBox(height: 6),
+                    Text('ID: $id',
+                        style: TextStyle(fontSize: 13, color: tc.muted)),
+                  ],
                 ),
               ),
-            ),
-            const Spacer(),
-            Text('ID: $id',
-                style: TextStyle(fontSize: 14, color: tc.muted)),
-          ]),
-          const SizedBox(height: 16),
-          Text(name,
-              style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w700,
-                  color: tc.text,
-                  letterSpacing: -0.5)),
-          const SizedBox(height: 4),
-          Text(role,
-              style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF904D00))),
+            ],
+          ),
           const SizedBox(height: 32),
           LayoutBuilder(builder: (context, c) {
             final narrow = c.maxWidth < 500;
@@ -3051,9 +4160,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   label: 'Work Email',
                   value: email),
               _profileIconDetail(
-                  icon: Icons.phone_outlined,
-                  label: 'Phone',
-                  value: phone),
+                  icon: Icons.phone_outlined, label: 'Phone', value: phone),
               _profileIconDetail(
                   icon: Icons.calendar_today_outlined,
                   label: 'Joining Date',
@@ -3086,7 +4193,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               ],
             );
           }),
-          const SizedBox(height: 32),
+          const SizedBox(height: 24),
+          _enrollmentGuideBanner(emp),
+          const SizedBox(height: 24),
           Wrap(
             spacing: 12,
             runSpacing: 12,
@@ -3122,10 +4231,180 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     style:
                     TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
               ),
+              OutlinedButton.icon(
+                onPressed: () => _showVerifyPhotoDialog(emp),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF16A34A),
+                  backgroundColor: tc.card,
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  side: const BorderSide(color: Color(0xFF16A34A)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                icon: const Icon(Icons.verified_outlined, size: 16),
+                label: const Text('Verify Photo',
+                    style:
+                    TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _confirmResetFace(emp),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF7C3AED),
+                  backgroundColor: tc.card,
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  side: const BorderSide(color: Color(0xFF7C3AED)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                icon: const Icon(Icons.face_retouching_off, size: 16),
+                label: const Text('Reset Face Data',
+                    style:
+                    TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              ),
             ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _enrollmentGuideBanner(Map<String, dynamic> emp) {
+    final hasPhoto = _hasProfilePhoto(emp);
+    final version = _faceVersionOf(emp);
+    final count = _faceCountOf(emp);
+    final hasFace = count > 0;
+    final isCurrent = version == kCurrentFaceVersion;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.info_outline_rounded, size: 18, color: tc.orange),
+              const SizedBox(width: 8),
+              Text(
+                'Enrollment Status',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: tc.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _statusRow(
+            icon: hasPhoto ? Icons.check_circle_rounded : Icons.info_outline,
+            iconColor: hasPhoto
+                ? const Color(0xFF16A34A)
+                : const Color(0xFFF59E0B),
+            title: 'Profile Photo',
+            subtitle: hasPhoto
+                ? '✅ Uploaded — makikita sa directory at profile'
+                : '📷 Hindi pa na-upload — pwede i-add sa Edit Details',
+          ),
+          const SizedBox(height: 10),
+          _statusRow(
+            icon: hasFace && isCurrent
+                ? Icons.verified_rounded
+                : (hasFace
+                ? Icons.warning_amber_rounded
+                : Icons.info_outline),
+            iconColor: hasFace
+                ? (isCurrent
+                ? const Color(0xFF16A34A)
+                : const Color(0xFFF59E0B))
+                : const Color(0xFFA855F7),
+            title: 'Face Biometric',
+            subtitle: hasFace && isCurrent
+                ? '✅ Enrolled (v$version) — makakapag-login na sa face scan'
+                : (hasFace
+                ? '⚠️ Old version v$version — kailangan i-reset at i-enroll ulit'
+                : '📱 Hindi pa na-enroll — kailangan mag-scan ng mukha sa MOBILE APP'),
+          ),
+          if (!hasFace) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3E8FF),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFA855F7)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '📱 Paano Mag-Enroll ng Face:',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF6B21A8)),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '1. Buksan ang mobile app\n'
+                        '2. Login gamit ang email + password\n'
+                        '3. Pumunta sa "Face Enrollment" screen\n'
+                        '4. I-scan ang mukha (blink + smile)',
+                    style: TextStyle(
+                        fontSize: 12, color: tc.text, height: 1.55),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '⚠️ Hindi pwedeng i-enroll mula sa profile photo — kailangan ng LIVE face scan.',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF6B21A8),
+                        height: 1.4),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _statusRow({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: iconColor),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: tc.text)),
+              const SizedBox(height: 2),
+              Text(subtitle,
+                  style:
+                  TextStyle(fontSize: 12, color: tc.muted, height: 1.4)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -3171,11 +4450,18 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     required String nfcId,
     required String pin,
     required bool hasBiometric,
+    required Map<String, dynamic> emp,
   }) {
     final nfcAssigned = nfcId.isNotEmpty && nfcId != 'NOT ASSIGNED';
     final pinMasked = pin.isEmpty
         ? 'NOT SET'
         : '${'•' * pin.length}  (${pin.length} digits)';
+    final wfhEnabled = _isWfhEnabled(emp);
+    final hasPhoto = _hasProfilePhoto(emp);
+    final version = _faceVersionOf(emp);
+    final count = _faceCountOf(emp);
+    final faceIsCurrent = version == kCurrentFaceVersion && count > 0;
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -3223,6 +4509,65 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
+              color: wfhEnabled
+                  ? const Color(0xFFDCFCE7)
+                  : const Color(0xFFEFF4FF),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: wfhEnabled ? const Color(0xFF22C55E) : tc.border,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      wfhEnabled
+                          ? Icons.home_work_rounded
+                          : Icons.home_outlined,
+                      size: 18,
+                      color:
+                      wfhEnabled ? const Color(0xFF166534) : tc.muted,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'WFH ACCESS',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color:
+                          wfhEnabled ? const Color(0xFF166534) : tc.muted,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    Switch(
+                      value: wfhEnabled,
+                      onChanged: (v) => _setWfhAccess(emp, v),
+                      activeColor: const Color(0xFF22C55E),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  wfhEnabled
+                      ? 'Puwedeng mag-clock in kahit wala sa office geofence.'
+                      : 'Kailangan nasa loob ng office geofence para makapasok.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: wfhEnabled ? const Color(0xFF166534) : tc.muted,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
               color: const Color(0xFFEFF4FF),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: tc.border),
@@ -3240,19 +4585,35 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 Row(children: [
                   Expanded(
                     child: _biometricItem(
-                      icon: Icons.face,
-                      label: 'Face',
-                      enabled: hasBiometric,
+                      icon: Icons.photo_camera_rounded,
+                      label: 'Photo',
+                      enabled: hasPhoto,
+                      enabledText: 'Uploaded',
+                      disabledText: 'No Photo',
                     ),
                   ),
                   Expanded(
                     child: _biometricItem(
-                      icon: Icons.fingerprint,
-                      label: 'Thumb',
-                      enabled: hasBiometric,
+                      icon: Icons.face,
+                      label: 'Face',
+                      enabled: faceIsCurrent,
+                      enabledText: 'Enrolled',
+                      disabledText: count > 0 ? 'Outdated' : 'Not Enrolled',
                     ),
                   ),
                 ]),
+                const SizedBox(height: 12),
+                Text(
+                  count > 0
+                      ? 'Face version: v$version  •  Templates: $count'
+                      : 'Hindi pa nag-e-enroll ng face biometric.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: faceIsCurrent ? const Color(0xFF166534) : tc.muted,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
+                  ),
+                ),
               ],
             ),
           ),
@@ -3324,6 +4685,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     required IconData icon,
     required String label,
     required bool enabled,
+    String enabledText = 'Enrolled',
+    String disabledText = 'Not Enrolled',
   }) {
     return Column(
       children: [
@@ -3339,7 +4702,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 fontWeight: FontWeight.w500,
                 color: enabled ? tc.text : tc.muted)),
         const SizedBox(height: 2),
-        Text(enabled ? 'Enrolled' : 'Not Enrolled',
+        Text(enabled ? enabledText : disabledText,
             style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
@@ -3348,7 +4711,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── ATTENDANCE + LEAVE ───────────────────────────────────────
   Widget _attendanceAndLeaveSection(String empId) {
     return LayoutBuilder(builder: (context, constraints) {
       final stack = !BsResponsive(constraints.maxWidth).up(BsSize.lg);
@@ -3375,7 +4737,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
-  // ✅ RECENT ATTENDANCE — may TOTAL HOURS WORKED summary
   Widget _recentAttendanceCard(String empId) {
     return Container(
       padding: const EdgeInsets.all(24),
@@ -3409,8 +4770,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     color: tc.muted)),
           ]),
           const SizedBox(height: 16),
-
-          // TOTAL HOURS WORKED SUMMARY
           StreamBuilder<List<Map<String, dynamic>>>(
             stream: _attendanceStream(empId),
             builder: (context, snapshot) {
@@ -3435,8 +4794,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     ],
                   ),
                   borderRadius: BorderRadius.circular(10),
-                  border:
-                  Border.all(color: tc.orange.withValues(alpha: 0.25)),
+                  border: Border.all(color: tc.orange.withValues(alpha: 0.25)),
                 ),
                 child: Row(children: [
                   Expanded(
@@ -3469,9 +4827,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               );
             },
           ),
-
           const SizedBox(height: 20),
-
           Container(
             padding: const EdgeInsets.only(bottom: 12),
             decoration: BoxDecoration(
@@ -3621,15 +4977,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final status = row['status'] as String;
     final isLate = row['isLate'] as bool;
 
-    final statusBg =
-    isLate ? const Color(0xFFFEF9C3) : const Color(0xFFDCFCE7);
+    final statusBg = isLate ? const Color(0xFFFEF9C3) : const Color(0xFFDCFCE7);
     final statusText =
     isLate ? const Color(0xFF854D0E) : const Color(0xFF166534);
 
     final isWorking = status == 'Working';
     final actualStatusBg = isWorking ? const Color(0xFFDBEAFE) : statusBg;
-    final actualStatusText =
-    isWorking ? const Color(0xFF1E40AF) : statusText;
+    final actualStatusText = isWorking ? const Color(0xFF1E40AF) : statusText;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 14),
@@ -3662,8 +5016,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           child: Align(
             alignment: Alignment.centerLeft,
             child: Container(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
               decoration: BoxDecoration(
                 color: actualStatusBg,
                 borderRadius: BorderRadius.circular(20),
@@ -3711,8 +5064,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               stats['remainingSick'] ?? kAdminSickLeaveTotal;
 
           final pending = leaves
-              .where((l) =>
-          _s(l['status'], 'pending').toLowerCase() == 'pending')
+              .where(
+                  (l) => _s(l['status'], 'pending').toLowerCase() == 'pending')
               .toList();
 
           return Column(
@@ -3728,10 +5081,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 ),
                 if (snapshot.connectionState == ConnectionState.waiting)
                   const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
                 else
                   Text('Live',
                       style: TextStyle(
@@ -3843,8 +5195,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _leaveTypeLabelAdmin(_s(p['leaveType'],
-                                    _s(p['type'], 'Leave'))),
+                                _leaveTypeLabelAdmin(
+                                    _s(p['leaveType'], _s(p['type'], 'Leave'))),
                                 style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w600,
@@ -3897,8 +5249,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       children: [
         Row(children: [
           Container(
-            padding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: pillBg,
               borderRadius: BorderRadius.circular(20),
@@ -3949,7 +5300,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ─── DEVICES + LOGIN HISTORY ──────────────────────────────────
   Widget _devicesAndLoginSection(String empId, Map<String, dynamic> emp) {
     return LayoutBuilder(builder: (context, constraints) {
       final stack = !BsResponsive(constraints.maxWidth).up(BsSize.lg);
@@ -3976,7 +5326,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
-  // ✅ AUTHORIZED DEVICES CARD — Kukuha na ng actual data mula sa logs
   Widget _authorizedDevicesCard(String empId, Map<String, dynamic> emp) {
     return Container(
       padding: const EdgeInsets.all(24),
@@ -3997,12 +5346,10 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         builder: (context, snapshot) {
           List<Map<String, dynamic>> devices = [];
 
-          // 1. Kunin ang actual devices mula sa activity logs
           if (snapshot.hasData && snapshot.data!.isNotEmpty) {
             devices = _extractDevicesFromLogs(snapshot.data!);
           }
 
-          // 2. Fallback: Kung walang logs, check sa employee document
           if (devices.isEmpty) {
             final raw = emp['devices'];
             if (raw is List) {
@@ -4028,7 +5375,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             }
           }
 
-          // 3. Fallback: Firebase Auth Session
           if (devices.isEmpty && _s(emp['authUid'], '').isNotEmpty) {
             devices.add({
               'name': 'Firebase Auth Session',
@@ -4052,12 +5398,14 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                         color: tc.text)),
               ]),
               const SizedBox(height: 20),
-              if (snapshot.connectionState == ConnectionState.waiting && devices.isEmpty)
+              if (snapshot.connectionState == ConnectionState.waiting &&
+                  devices.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
                   child: Center(
                     child: SizedBox(
-                      width: 20, height: 20,
+                      width: 20,
+                      height: 20,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ),
@@ -4091,7 +5439,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // Helper: Kinukuha ang unique devices mula sa activity logs
   List<Map<String, dynamic>> _extractDevicesFromLogs(
       List<Map<String, dynamic>> logs) {
     final Map<String, Map<String, dynamic>> uniqueDevices = {};
@@ -4107,7 +5454,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
           if (lowerName.contains('web') || lowerName.contains('chrome')) {
             icon = Icons.web_rounded;
-          } else if (lowerName.contains('ios') || lowerName.contains('iphone')) {
+          } else if (lowerName.contains('ios') ||
+              lowerName.contains('iphone')) {
             icon = Icons.phone_iphone_rounded;
           } else if (lowerName.contains('android')) {
             icon = Icons.phone_android_rounded;
@@ -4123,10 +5471,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             'icon': icon,
           };
         } else {
-          // I-update ang lastActive kung mas bago ang log na ito
-          final currentLast = _toDateTime(uniqueDevices[deviceName]!['lastActive']);
+          final currentLast =
+          _toDateTime(uniqueDevices[deviceName]!['lastActive']);
           final newLast = _toDateTime(log['timestamp']);
-          if (currentLast != null && newLast != null && newLast.isAfter(currentLast)) {
+          if (currentLast != null &&
+              newLast != null &&
+              newLast.isAfter(currentLast)) {
             uniqueDevices[deviceName]!['lastActive'] = log['timestamp'];
           }
         }
@@ -4213,9 +5563,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         children: [
           Text('Activity History',
               style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w600,
-                  color: tc.text)),
+                  fontSize: 22, fontWeight: FontWeight.w600, color: tc.text)),
           const SizedBox(height: 24),
           StreamBuilder<List<Map<String, dynamic>>>(
             stream: _activityStream(empId),
@@ -4272,6 +5620,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final t = _s(type, '').toLowerCase();
     if (t.contains('login') || t.contains('auth')) {
       return Icons.vpn_key_outlined;
+    }
+    if (t.contains('wfh')) {
+      return Icons.home_work_rounded;
+    }
+    if (t.contains('face_reset') || t.contains('migrate')) {
+      return Icons.face_retouching_off;
     }
     if (t.contains('error') || t.contains('fail')) {
       return Icons.error_outline;
@@ -4337,8 +5691,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 8),
                       decoration: BoxDecoration(
-                        color:
-                        const Color(0xFFFFDAD6).withValues(alpha: 0.2),
+                        color: const Color(0xFFFFDAD6).withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(6),
                         border: Border.all(
                             color: const Color(0xFFBA1A1A)
@@ -4360,14 +5713,339 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // DIALOGS
-  // ══════════════════════════════════════════════════════════════
   void _openEditDialog(Map<String, dynamic> emp) {
     setState(() {
       _selectedProfileEmp = emp;
       _isEditingEmployee = true;
+      _editWfhAccess = _isWfhEnabled(emp);
+      _editPhotoXFile = null;
+      _editPhotoBytes = null;
+      _editPhotoUrl = null;
     });
+  }
+
+  void _confirmResetFace(Map<String, dynamic> emp) => showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      backgroundColor: tc.card,
+      shape:
+      RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      title: Row(
+        children: [
+          const Icon(Icons.face_retouching_off,
+              color: Color(0xFF7C3AED), size: 24),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Reset Face Data?',
+              style: TextStyle(
+                color: tc.text,
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
+            ),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Burahin ang dating face embedding ni ${_nameOf(emp)}?',
+            style: TextStyle(
+                color: tc.text,
+                fontWeight: FontWeight.w600,
+                fontSize: 14),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF3C7),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFF59E0B)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Current version: v${_faceVersionOf(emp)}',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF92400E)),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Required version: v$kCurrentFaceVersion',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF92400E)),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Pagkatapos i-reset, kailangan mag-register ulit ng face '
+                      'data gamit ang bagong algorithm.',
+                  style:
+                  TextStyle(fontSize: 12, color: tc.text, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('Cancel', style: TextStyle(color: tc.muted)),
+        ),
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF7C3AED),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8)),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          ),
+          onPressed: () async {
+            Navigator.pop(context);
+            await _resetFaceData(emp);
+          },
+          icon: const Icon(Icons.face_retouching_off, size: 18),
+          label: const Text(
+            'Reset Face',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _resetFaceData(Map<String, dynamic> emp) async {
+    final docId = _s(emp['id'], '');
+    if (docId.isEmpty) {
+      _snack('Employee document ID not found.', error: true);
+      return;
+    }
+
+    try {
+      await FaceMatcher.clearAllEmbeddings(docId);
+
+      try {
+        await FirebaseFirestore.instance.collection('activity logs').add({
+          'type': 'face_reset',
+          'employeeId': docId,
+          'employee_name': _nameOf(emp),
+          'oldVersion': _faceVersionOf(emp),
+          'newVersion': kCurrentFaceVersion,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        debugPrint('Face reset log warning: $e');
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        emp.remove('faceEmbeddingsJson');
+        emp.remove('faceEmbeddingsCount');
+        emp.remove('faceEmbeddingSize');
+        emp.remove('faceEmbeddingVersion');
+        emp['faceEmbeddingVersion'] = kCurrentFaceVersion;
+        emp['faceEmbeddingsCount'] = 0;
+      });
+
+      _snack(
+          '✅ Face data cleared. I-register ulit ang face ng employee gamit ang registration screen.');
+      widget.onRefreshNeeded();
+    } catch (e) {
+      if (!mounted) return;
+      _snack('Failed to reset face data: $e', error: true);
+    }
+  }
+
+  void _confirmMigrateFaces() {
+    final outdated = widget.employees.where((e) {
+      final version = _faceVersionOf(e);
+      final count = _faceCountOf(e);
+      return count > 0 && version != kCurrentFaceVersion;
+    }).toList();
+
+    if (outdated.isEmpty) {
+      _snack('✅ Walang outdated face data. Lahat ay v$kCurrentFaceVersion na.');
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: tc.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Row(
+          children: [
+            const Icon(Icons.auto_fix_high_rounded,
+                color: Color(0xFF7C3AED), size: 24),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Migrate Old Face Data?',
+                style: TextStyle(
+                  color: tc.text,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'May ${outdated.length} employee(s) na may LUMANG face data (v1-v3):',
+                style: TextStyle(
+                    color: tc.text,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFF59E0B)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final e in outdated.take(8))
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.warning_amber_rounded,
+                                size: 14, color: Color(0xFF92400E)),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${_nameOf(e)}  (v${_faceVersionOf(e)})',
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF92400E)),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (outdated.length > 8)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          '+${outdated.length - 8} more...',
+                          style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF92400E)),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Lahat ng outdated face data ay buburahin. '
+                    'Kailangan ng bawat employee na mag-register ulit ng face.',
+                style: TextStyle(fontSize: 12.5, color: tc.text, height: 1.45),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: tc.muted)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF7C3AED),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            ),
+            onPressed: () {
+              Navigator.pop(context);
+              _migrateAllFaces(outdated);
+            },
+            icon: const Icon(Icons.auto_fix_high_rounded, size: 18),
+            label: const Text(
+              'Migrate Now',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _migrateAllFaces(List<Map<String, dynamic>> outdated) async {
+    setState(() => _migratingFaces = true);
+
+    int cleared = 0;
+    int failed = 0;
+
+    for (final emp in outdated) {
+      final docId = _s(emp['id'], '');
+      if (docId.isEmpty) {
+        failed++;
+        continue;
+      }
+      try {
+        await FaceMatcher.clearAllEmbeddings(docId);
+
+        setState(() {
+          emp.remove('faceEmbeddingsJson');
+          emp.remove('faceEmbeddingsCount');
+          emp.remove('faceEmbeddingSize');
+          emp.remove('faceEmbeddingVersion');
+          emp['faceEmbeddingVersion'] = kCurrentFaceVersion;
+          emp['faceEmbeddingsCount'] = 0;
+        });
+
+        try {
+          await FirebaseFirestore.instance.collection('activity logs').add({
+            'type': 'face_migrated',
+            'employeeId': docId,
+            'employee_name': _nameOf(emp),
+            'oldVersion': 1,
+            'newVersion': kCurrentFaceVersion,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+        } catch (_) {}
+
+        cleared++;
+      } catch (e) {
+        debugPrint('Migrate error for $docId: $e');
+        failed++;
+      }
+    }
+
+    if (!mounted) return;
+    setState(() => _migratingFaces = false);
+
+    _snack(
+      '✅ Migration complete: $cleared cleared${failed > 0 ? ', $failed failed' : ''}.',
+      error: failed > 0,
+    );
+    widget.onRefreshNeeded();
   }
 
   void _confirmDelete(String docId, String name) => showDialog(
@@ -4376,11 +6054,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       backgroundColor: tc.card,
       shape:
       RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: Text('Confirm Record Deletion',
-          style: TextStyle(color: tc.text)),
+      title:
+      Text('Confirm Record Deletion', style: TextStyle(color: tc.text)),
       content: Text(
-          'Are you sure you want to completely erase the database file for $name? This action cannot be undone.',
-          style: TextStyle(color: tc.text)),
+        'Are you sure you want to completely erase the database file for $name? This action cannot be undone.',
+        style: TextStyle(color: tc.text),
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
@@ -4416,38 +6095,170 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       backgroundColor: tc.card,
       shape:
       RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: Text('Wipe Everything?', style: TextStyle(color: tc.text)),
-      content: Text(
-        'This will permanently delete ALL activity, attendance, clock-in/out, leave, and location records. This cannot be undone.',
-        style: TextStyle(color: tc.text),
+      title: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, color: tc.red, size: 24),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'DELETE EVERYTHING?',
+              style: TextStyle(
+                color: tc.red,
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
+            ),
+          ),
+        ],
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'This will PERMANENTLY DELETE ALL DATA from the entire database:',
+              style: TextStyle(
+                color: tc.text,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: tc.red.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: tc.red.withValues(alpha: 0.25)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _wipeListItem('👥', 'All Employees'),
+                  _wipeListItem('📋', 'All Activity Logs'),
+                  _wipeListItem('⏰', 'All Attendance Records'),
+                  _wipeListItem('📍', 'All Location Tracking Data'),
+                  _wipeListItem('🏖️', 'All Leave Applications'),
+                  _wipeListItem('📄', 'All PDF Exports'),
+                  _wipeListItem('⚙️', 'All Settings & Configs'),
+                  _wipeListItem('📊', 'All Task Records'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: tc.red.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.error_outline, color: tc.red, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This action CANNOT be undone!',
+                      style: TextStyle(
+                        color: tc.red,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: Text('Cancel', style: TextStyle(color: tc.muted)),
         ),
-        ElevatedButton(
+        ElevatedButton.icon(
           style: ElevatedButton.styleFrom(
             backgroundColor: tc.red,
             foregroundColor: Colors.white,
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8)),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           ),
           onPressed: () async {
             Navigator.pop(context);
+
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (_) => AlertDialog(
+                backgroundColor: tc.card,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                content: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Row(
+                    children: [
+                      CircularProgressIndicator(color: tc.orange),
+                      const SizedBox(width: 20),
+                      Expanded(
+                        child: Text(
+                          'Deleting all data...\nPlease wait.',
+                          style: TextStyle(color: tc.text),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+
             final err = await AdminDatabase.wipeEverything();
-            if (err != null) {
-              _snack('Wipe failed: $err', error: true);
-            } else {
-              _snack('All logs cleared.');
-              widget.onRefreshNeeded();
+
+            if (mounted) {
+              Navigator.pop(context);
+
+              if (err != null) {
+                _snack('Wipe failed: $err', error: true);
+              } else {
+                _snack('✅ All database data has been cleared.');
+                widget.onRefreshNeeded();
+              }
             }
           },
-          child: const Text('Delete Everything'),
+          icon: const Icon(Icons.delete_forever_rounded, size: 18),
+          label: const Text(
+            'Delete Everything',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
         ),
       ],
     ),
   );
+
+  Widget _wipeListItem(String emoji, String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 14)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: tc.red,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _emptyState() => Container(
     width: double.infinity,

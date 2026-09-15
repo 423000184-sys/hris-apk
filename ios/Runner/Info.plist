@@ -46,9 +46,13 @@
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
 
-    <!-- ─── PERMISSIONS (Katumbas ng mga uses-permission sa Android) ─── -->
+    <!-- ─── PERMISSIONS ─── -->
     <key>NSCameraUsageDescription</key>
     <string>This app requires camera access for facial recognition attendance.</string>
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Optional: for video recording with the camera.</string>
+
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>This app needs location access for geofencing shifts verification.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -57,18 +61,23 @@
     <string>This app requires Face ID / Biometrics for secure authentication.</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>This app needs photo library access to upload documents and images.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>This app needs photo library access to save captured images.</string>
+
     <key>NFCReaderUsageDescription</key>
     <string>This app uses NFC to scan employee ID cards for attendance.</string>
 
-    <!-- ─── BACKGROUND MODES (Katumbas ng FOREGROUND_SERVICE sa Android) ─── -->
+    <!-- ─── BACKGROUND MODES ─── -->
+    <!-- ✅ remote-notification: para sa FCM push notifications -->
     <key>UIBackgroundModes</key>
     <array>
         <string>location</string>
         <string>fetch</string>
         <string>processing</string>
+        <string>remote-notification</string>
     </array>
 
-    <!-- ─── QUERIES / SCHEMES (Katumbas ng <queries> para sa url_launcher) ─── -->
+    <!-- ─── QUERIES / SCHEMES ─── -->
     <key>LSApplicationQueriesSchemes</key>
     <array>
         <string>tel</string>
@@ -77,7 +86,7 @@
         <string>http</string>
     </array>
 
-    <!-- ─── EXPORT COMPLIANCE (para sa `crypto` package; iwas prompt sa App Store Connect) ─── -->
+    <!-- ─── EXPORT COMPLIANCE ─── -->
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
 </dict>

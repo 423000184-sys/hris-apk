@@ -1,9 +1,9 @@
 {
     "name": "HRIS Biometrics",
     "short_name": "HRIS",
-    "start_url": ".",
+    "start_url": "/app/",
     "display": "standalone",
-    "background_color": "#FFFFFF",
+    "background_color": "#0A0F2E",
     "theme_color": "#FF8C00",
     "description": "A next-gen HRIS Biometrics application with smart innovation.",
     "orientation": "portrait-primary",

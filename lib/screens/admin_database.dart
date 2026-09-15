@@ -1,3 +1,4 @@
+// lib/screens/admin_database.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
@@ -10,7 +11,23 @@ class AdminDatabase {
   static CollectionReference get locations => fs.collection('user locations');
   static CollectionReference get attendanceLogs => fs.collection('attendance_logs');
 
+  // ✅ LAHAT ng collections na ide-delete sa "Clear All Logs"
+  static const List<String> allCollections = [
+    'activity logs',
+    'activity_logs',
+    'attendance_logs',
+    'clock_ins',
+    'clock_outs',
+    'employees',
+    'leave_applications',
+    'pdf_exports',
+    'settings',
+    'tasks',
+    'user_locations',
+  ];
+
   static const List<String> employeeLinkedCollections = [
+    'activity logs',
     'activity_logs',
     'attendance_logs',
     'clock_ins',
@@ -19,18 +36,30 @@ class AdminDatabase {
     'user_locations',
   ];
 
-  static String _msg(Object e) => e is FirebaseException ? (e.message ?? e.toString()) : e.toString();
+  static String _msg(Object e) =>
+      e is FirebaseException ? (e.message ?? e.toString()) : e.toString();
 
-  // ─── SORT HELPER (client-side, safe kahit walang createdAt) ──
+  // ─── SORT HELPER ────────────────────────────────────────────
 
   static void _sortByCreatedAtDesc(List<Map<String, dynamic>> list) {
     list.sort((a, b) {
       final ca = a['createdAt'];
       final cb = b['createdAt'];
       if (ca is Timestamp && cb is Timestamp) return cb.compareTo(ca);
-      if (ca is Timestamp) return -1; // may createdAt muna sa taas
+      if (ca is Timestamp) return -1;
       if (cb is Timestamp) return 1;
-      return 0; // pareho walang createdAt, huwag baguhin ang order
+      return 0;
+    });
+  }
+
+  static void _sortByTimestampDesc(List<Map<String, dynamic>> list) {
+    list.sort((a, b) {
+      final ca = a['timestamp'];
+      final cb = b['timestamp'];
+      if (ca is Timestamp && cb is Timestamp) return cb.compareTo(ca);
+      if (ca is Timestamp) return -1;
+      if (cb is Timestamp) return 1;
+      return 0;
     });
   }
 
@@ -40,7 +69,10 @@ class AdminDatabase {
     try {
       return employees.snapshots().map((s) {
         final list = s.docs
-            .map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id})
+            .map((d) => <String, dynamic>{
+          ...(d.data() as Map<String, dynamic>),
+          'id': d.id
+        })
             .toList();
         _sortByCreatedAtDesc(list);
         debugPrint('📡 streamEmployees: ${list.length} docs from Firestore');
@@ -56,9 +88,12 @@ class AdminDatabase {
 
   static Future<List<Map<String, dynamic>>> getEmployees() async {
     try {
-      final s = await employees.get(); // walang orderBy sa query mismo — kinukuha LAHAT
+      final s = await employees.get();
       final list = s.docs
-          .map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id})
+          .map((d) => <String, dynamic>{
+        ...(d.data() as Map<String, dynamic>),
+        'id': d.id
+      })
           .toList();
       _sortByCreatedAtDesc(list);
       debugPrint('📥 getEmployees: ${list.length} docs from Firestore');
@@ -75,11 +110,19 @@ class AdminDatabase {
     try {
       return activityLogs
           .where('type', isEqualTo: type)
-          .orderBy('timestamp', descending: true)
           .snapshots()
-          .map((s) => s.docs.map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id}).toList())
-          .handleError((e) {
+          .map((s) {
+        final list = s.docs
+            .map((d) => <String, dynamic>{
+          ...(d.data() as Map<String, dynamic>),
+          'id': d.id
+        })
+            .toList();
+        _sortByTimestampDesc(list);
+        return list;
+      }).handleError((e) {
         debugPrint('streamLogs ($type): ${_msg(e)}');
+        return <Map<String, dynamic>>[];
       });
     } catch (e) {
       debugPrint('streamLogs setup ($type): ${_msg(e)}');
@@ -89,8 +132,16 @@ class AdminDatabase {
 
   static Future<List<Map<String, dynamic>>> getLogs(String type) async {
     try {
-      final s = await activityLogs.where('type', isEqualTo: type).orderBy('timestamp', descending: true).get();
-      return s.docs.map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id}).toList();
+      final s = await activityLogs.where('type', isEqualTo: type).get();
+      final list = s.docs
+          .map((d) => <String, dynamic>{
+        ...(d.data() as Map<String, dynamic>),
+        'id': d.id
+      })
+          .toList();
+      _sortByTimestampDesc(list);
+      debugPrint('📥 getLogs ($type): ${list.length} docs');
+      return list;
     } catch (e) {
       debugPrint('getLogs ($type): ${_msg(e)}');
       return [];
@@ -99,8 +150,17 @@ class AdminDatabase {
 
   static Future<List<Map<String, dynamic>>> getUserLogs(String empId) async {
     try {
-      final s = await activityLogs.where('employeeId', isEqualTo: empId).orderBy('timestamp', descending: true).get();
-      return s.docs.map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id}).toList();
+      final s = await activityLogs
+          .where('employeeId', isEqualTo: empId)
+          .get();
+      final list = s.docs
+          .map((d) => <String, dynamic>{
+        ...(d.data() as Map<String, dynamic>),
+        'id': d.id
+      })
+          .toList();
+      _sortByTimestampDesc(list);
+      return list;
     } catch (e) {
       debugPrint('getUserLogs: ${_msg(e)}');
       return [];
@@ -139,12 +199,18 @@ class AdminDatabase {
 
   static Stream<List<Map<String, dynamic>>> streamAttendanceLogs() {
     try {
-      return attendanceLogs
-          .orderBy('timestamp', descending: true)
-          .snapshots()
-          .map((s) => s.docs.map(_convertAttendanceDoc).toList())
-          .handleError((e) {
+      return attendanceLogs.snapshots().map((s) {
+        final list = s.docs.map(_convertAttendanceDoc).toList();
+        list.sort((a, b) {
+          final ta = a['timestamp'] as DateTime?;
+          final tb = b['timestamp'] as DateTime?;
+          if (ta != null && tb != null) return tb.compareTo(ta);
+          return 0;
+        });
+        return list;
+      }).handleError((e) {
         debugPrint('streamAttendanceLogs: ${_msg(e)}');
+        return <Map<String, dynamic>>[];
       });
     } catch (e) {
       debugPrint('streamAttendanceLogs setup: ${_msg(e)}');
@@ -154,8 +220,15 @@ class AdminDatabase {
 
   static Future<List<Map<String, dynamic>>> getAttendanceLogs() async {
     try {
-      final s = await attendanceLogs.orderBy('timestamp', descending: true).get();
-      return s.docs.map(_convertAttendanceDoc).toList();
+      final s = await attendanceLogs.get();
+      final list = s.docs.map(_convertAttendanceDoc).toList();
+      list.sort((a, b) {
+        final ta = a['timestamp'] as DateTime?;
+        final tb = b['timestamp'] as DateTime?;
+        if (ta != null && tb != null) return tb.compareTo(ta);
+        return 0;
+      });
+      return list;
     } catch (e) {
       debugPrint('getAttendanceLogs: ${_msg(e)}');
       return [];
@@ -167,7 +240,12 @@ class AdminDatabase {
   static Stream<List<Map<String, dynamic>>> streamLocations() {
     try {
       return locations.snapshots().map(
-            (s) => s.docs.map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id}).toList(),
+            (s) => s.docs
+            .map((d) => <String, dynamic>{
+          ...(d.data() as Map<String, dynamic>),
+          'id': d.id
+        })
+            .toList(),
       ).handleError((e) {
         debugPrint('streamLocations: ${_msg(e)}');
       });
@@ -180,7 +258,12 @@ class AdminDatabase {
   static Future<List<Map<String, dynamic>>> getLocations() async {
     try {
       final s = await locations.get();
-      return s.docs.map((d) => <String, dynamic>{...(d.data() as Map<String, dynamic>), 'id': d.id}).toList();
+      return s.docs
+          .map((d) => <String, dynamic>{
+        ...(d.data() as Map<String, dynamic>),
+        'id': d.id
+      })
+          .toList();
     } catch (e) {
       debugPrint('getLocations: ${_msg(e)}');
       return [];
@@ -189,7 +272,9 @@ class AdminDatabase {
 
   // ─── CRUD OPERATIONS ────────────────────────────────────────
 
+  /// ✅ ADD EMPLOYEE — Gamitin yung typed Employee ID as Firestore doc ID
   static Future<String?> addEmployee({
+    required String employeeId, // ✅ BAGONG PARAMETER — ito yung Firestore doc ID
     required String firstName,
     required String lastName,
     required String email,
@@ -199,63 +284,197 @@ class AdminDatabase {
     required String nfcTagId,
     required String pin,
   }) async {
+    debugPrint('═══════════════════════════════════════════');
+    debugPrint('🔵 [addEmployee] START');
+    debugPrint('   Employee ID: $employeeId');
+    debugPrint('   Name: $firstName $lastName');
+    debugPrint('   Email: $email');
+    debugPrint('   Role: $role');
+    debugPrint('   PIN: $pin');
+    debugPrint('   NFC: $nfcTagId');
+    debugPrint('═══════════════════════════════════════════');
+
     try {
-      final nfcCheck = await employees.where('nfcTagId', isEqualTo: nfcTagId.toUpperCase()).get();
-      if (nfcCheck.docs.isNotEmpty) return 'A keyfob with serial "$nfcTagId" is already registered.';
+      // ─── VALIDATE: Employee ID ───────────────────────────────
+      final cleanId = employeeId.trim();
 
-      final pinCheck = await employees.where('pin', isEqualTo: pin).get();
-      if (pinCheck.docs.isNotEmpty) return 'PIN "$pin" is already in use.';
-
-      String authUid = '';
-      if (email.isNotEmpty && password.isNotEmpty) {
-        try {
-          final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(email: email, password: password);
-          authUid = cred.user?.uid ?? '';
-        } catch (authErr) {
-          if (authErr is FirebaseAuthException && authErr.code == 'email-already-in-use') {
-            debugPrint('Auth account already exists for $email; continuing.');
-          } else {
-            return 'Firebase Auth error: $authErr';
-          }
-        }
+      if (cleanId.isEmpty) {
+        const msg = 'Employee ID is required.';
+        debugPrint('❌ $msg');
+        return msg;
       }
 
-      final docRef = await employees.add({
+      // ✅ Firestore document ID validation — bawal ang / ~ * [ ] .
+      if (cleanId.contains('/') ||
+          cleanId.contains('~') ||
+          cleanId.contains('*') ||
+          cleanId.contains('[') ||
+          cleanId.contains(']') ||
+          cleanId.contains('.')) {
+        const msg =
+            'Employee ID cannot contain / ~ * [ ] or . characters.';
+        debugPrint('❌ $msg');
+        return msg;
+      }
+
+      if (cleanId.length > 100) {
+        const msg = 'Employee ID is too long (max 100 characters).';
+        debugPrint('❌ $msg');
+        return msg;
+      }
+
+      debugPrint('✅ Employee ID is valid: "$cleanId"');
+
+      // ─── CHECK 1: Duplicate Employee ID ──────────────────────
+      debugPrint('🔍 [1/6] Checking duplicate Employee ID...');
+      final idCheck = await employees.doc(cleanId).get();
+      if (idCheck.exists) {
+        final msg = 'Employee ID "$cleanId" is already registered.';
+        debugPrint('❌ $msg');
+        return msg;
+      }
+      debugPrint('✅ Employee ID is unique');
+
+      // ─── CHECK 2: Duplicate NFC ──────────────────────────────
+      debugPrint('🔍 [2/6] Checking duplicate NFC...');
+      if (nfcTagId.isNotEmpty) {
+        final nfcCheck = await employees
+            .where('nfcTagId', isEqualTo: nfcTagId.toUpperCase())
+            .get();
+        if (nfcCheck.docs.isNotEmpty) {
+          final msg =
+              'A keyfob with serial "$nfcTagId" is already registered.';
+          debugPrint('❌ $msg');
+          return msg;
+        }
+        debugPrint('✅ NFC is unique');
+      }
+
+      // ─── CHECK 3: Duplicate PIN ──────────────────────────────
+      debugPrint('🔍 [3/6] Checking duplicate PIN...');
+      if (pin.isNotEmpty) {
+        final pinCheck =
+        await employees.where('pin', isEqualTo: pin).get();
+        if (pinCheck.docs.isNotEmpty) {
+          final msg =
+              'PIN "$pin" is already in use. Please choose another.';
+          debugPrint('❌ $msg');
+          return msg;
+        }
+        debugPrint('✅ PIN is unique');
+      }
+
+      // ─── CHECK 4: Duplicate Email ────────────────────────────
+      if (email.isNotEmpty) {
+        debugPrint('🔍 [4/6] Checking duplicate email...');
+        final emailCheck = await employees
+            .where('email', isEqualTo: email.toLowerCase())
+            .get();
+        if (emailCheck.docs.isNotEmpty) {
+          final msg = 'Email "$email" is already registered.';
+          debugPrint('❌ $msg');
+          return msg;
+        }
+        debugPrint('✅ Email is unique');
+      }
+
+      // ─── FIREBASE AUTH (NON-BLOCKING) ────────────────────────
+      String authUid = '';
+      if (email.isNotEmpty && password.isNotEmpty) {
+        debugPrint('🔐 [5/6] Creating Firebase Auth account...');
+        try {
+          final cred = await FirebaseAuth.instance
+              .createUserWithEmailAndPassword(email: email, password: password)
+              .timeout(const Duration(seconds: 10));
+          authUid = cred.user?.uid ?? '';
+          debugPrint('✅ Auth created: $authUid');
+        } on FirebaseAuthException catch (authErr) {
+          if (authErr.code == 'email-already-in-use') {
+            debugPrint(
+                '⚠️ Auth account already exists — trying to sign in...');
+            try {
+              final cred = await FirebaseAuth.instance
+                  .signInWithEmailAndPassword(
+                  email: email, password: password);
+              authUid = cred.user?.uid ?? '';
+              debugPrint('✅ Signed in existing Auth: $authUid');
+            } catch (e) {
+              debugPrint('⚠️ Could not sign in: $e');
+            }
+          } else {
+            debugPrint(
+                '⚠️ Auth error (NON-BLOCKING): ${authErr.code} — ${authErr.message}');
+          }
+        } catch (e) {
+          debugPrint('⚠️ Auth outer error (NON-BLOCKING): $e');
+        }
+      } else {
+        debugPrint('⚠️ Skipping Auth — no email/password provided');
+      }
+
+      // ─── FIRESTORE SAVE (GAMITIN YUNG EMPLOYEE ID AS DOC ID) ──
+      debugPrint(
+          '💾 [6/6] Saving to Firestore with doc ID: "$cleanId"...');
+
+      // ✅ CRITICAL: Gamitin ang .doc(cleanId).set() imbes na .add()
+      final docRef = employees.doc(cleanId);
+
+      await docRef.set({
+        // ✅ Employee ID as field (para sa PDF password at reference)
+        'employeeId': cleanId,
         'firstName': firstName,
         'lastName': lastName,
         'name': '$firstName $lastName',
-        'email': email,
+        'fullName': '$firstName $lastName',
+        'email': email.toLowerCase(),
         'password': password,
         'authUid': authUid,
         'role': role,
+        'position': role,
         'department': department,
         'nfcTagId': nfcTagId.toUpperCase(),
         'pin': pin,
         'status': 'active',
+        'photoUrl': null,
+        'faceEmbedding': null,
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      await activityLogs.add({
-        'type': 'registration',
-        'employeeId': docRef.id,
-        'employee_name': '$firstName $lastName',
-        'email': email,
-        'role': role,
-        'department': department,
-        'timestamp': FieldValue.serverTimestamp(),
-        'device': 'Admin Panel',
-      });
+      debugPrint('✅ Firestore save SUCCESS! Doc ID: $cleanId');
 
-      return null;
+      // ─── ACTIVITY LOG ────────────────────────────────────────
+      try {
+        await activityLogs.add({
+          'type': 'registration',
+          'employeeId': cleanId,
+          'employee_name': '$firstName $lastName',
+          'email': email,
+          'role': role,
+          'department': department,
+          'timestamp': FieldValue.serverTimestamp(),
+          'device': 'Admin Panel',
+        });
+        debugPrint('✅ Activity log saved');
+      } catch (logErr) {
+        debugPrint('⚠️ Activity log failed (non-critical): $logErr');
+      }
+
+      debugPrint('🎉 [addEmployee] COMPLETE — Doc ID: $cleanId');
+      return null; // ✅ SUCCESS
     } catch (e) {
-      return _msg(e);
+      final msg = _msg(e);
+      debugPrint('❌ [addEmployee] FAILED: $msg');
+      return msg;
     }
   }
 
-  static Future<String?> updateEmployee(String docId, Map<String, dynamic> data) async {
+  static Future<String?> updateEmployee(
+      String docId, Map<String, dynamic> data) async {
     try {
-      await employees.doc(docId).update({...data, 'updatedAt': FieldValue.serverTimestamp()});
+      await employees
+          .doc(docId)
+          .update({...data, 'updatedAt': FieldValue.serverTimestamp()});
       return null;
     } catch (e) {
       return _msg(e);
@@ -283,11 +502,15 @@ class AdminDatabase {
     }
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // ✅ WIPE ALL LOGS
+  // ══════════════════════════════════════════════════════════════
   static Future<String?> wipeAllLogs({
-    List<String> collections = employeeLinkedCollections,
+    List<String>? collections,
   }) async {
+    final targets = collections ?? employeeLinkedCollections;
     try {
-      for (final collection in collections) {
+      for (final collection in targets) {
         await _deleteAll(collection);
       }
       return null;
@@ -296,26 +519,45 @@ class AdminDatabase {
     }
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // ✅ WIPE EVERYTHING
+  // ══════════════════════════════════════════════════════════════
   static Future<String?> wipeEverything() async {
+    debugPrint('🗑️ [wipeEverything] START — deleting ALL collections');
     try {
-      for (final collection in employeeLinkedCollections) {
+      for (final collection in allCollections) {
+        debugPrint('   Deleting collection: "$collection"...');
         await _deleteAll(collection);
+        debugPrint('   ✅ Deleted: "$collection"');
       }
-      await _deleteAll('employees');
+      debugPrint('🎉 [wipeEverything] COMPLETE — all collections deleted');
       return null;
     } catch (e) {
-      return _msg(e);
+      final msg = _msg(e);
+      debugPrint('❌ [wipeEverything] FAILED: $msg');
+      return msg;
     }
   }
 
-  static Future<void> _deleteWhere(String collection, String field, String value) async {
-    final query = fs.collection(collection).where(field, isEqualTo: value);
-    await _deleteQueryInBatches(query);
+  // ─── HELPER: Delete operations ──────────────────────────────
+
+  static Future<void> _deleteWhere(
+      String collection, String field, String value) async {
+    try {
+      final query = fs.collection(collection).where(field, isEqualTo: value);
+      await _deleteQueryInBatches(query);
+    } catch (e) {
+      debugPrint('⚠️ _deleteWhere($collection, $field=$value): $e');
+    }
   }
 
   static Future<void> _deleteAll(String collection) async {
-    final query = fs.collection(collection);
-    await _deleteQueryInBatches(query);
+    try {
+      final query = fs.collection(collection);
+      await _deleteQueryInBatches(query);
+    } catch (e) {
+      debugPrint('⚠️ _deleteAll($collection): $e');
+    }
   }
 
   static Future<void> _deleteQueryInBatches(Query query) async {
@@ -334,7 +576,8 @@ class AdminDatabase {
     }
   }
 
-  static Future<String?> backfillPasswords(Map<String, String> emailToPassword) async {
+  static Future<String?> backfillPasswords(
+      Map<String, String> emailToPassword) async {
     try {
       final snap = await employees.get();
       int count = 0;
@@ -352,7 +595,9 @@ class AdminDatabase {
 
         if (authUid.isEmpty && email.isNotEmpty) {
           try {
-            final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(email: email, password: password);
+            final cred = await FirebaseAuth.instance
+                .createUserWithEmailAndPassword(
+                email: email, password: password);
             authUid = cred.user?.uid ?? '';
             await doc.reference.update({'authUid': authUid});
           } catch (authErr) {

@@ -2,41 +2,56 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- ═══ BIOMETRIC ═══ -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 
+    <!-- ═══ CAMERA ═══ -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera"       android:required="false" />
-    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.camera"           android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front"     android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
+    <!-- ═══ LOCATION ═══ -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
+    <!-- ═══ BACKGROUND SERVICE ═══ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- ✅ NOTIFICATIONS ──────────────────────────────────── -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- ═══ NETWORK ═══ -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- ═══ STORAGE — para sa PDF download sa Downloads folder ═══ -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29" />
+        android:maxSdkVersion="32"
+        tools:ignore="ScopedStorage" />
 
-    <!-- Idinagdag: kailangan ng image_picker / file_picker para sa gallery access sa Android 13+ -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
-    <uses-permission android:name="android.permission.VIBRATE" />
-
+    <!-- ═══ NFC ═══ -->
     <uses-permission android:name="android.permission.NFC" />
     <uses-feature
         android:name="android.hardware.nfc"
         android:required="false" />
-
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:label="(R.A.C.O.M.A) Real-time Attendance Capture and Online Monitoring Application"
@@ -46,7 +61,8 @@
         android:usesCleartextTraffic="false"
         android:hardwareAccelerated="true"
         android:requestLegacyExternalStorage="true"
-        tools:targetApi="31">
+        android:preserveLegacyExternalStorage="true"
+        tools:targetApi="34">
 
         <meta-data
             android:name="android.window.SPLASH_SCREEN_BACKGROUND_COLOR"
@@ -55,12 +71,19 @@
             android:name="android.window.SPLASH_SCREEN_ICON"
             android:resource="@mipmap/ic_launcher" />
 
-        <!-- Idinagdag: kailangan ng google_maps_flutter -->
-        <!-- PALITAN ang YOUR_GOOGLE_MAPS_API_KEY ng aktwal na API key mula sa Google Cloud Console -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="YOUR_GOOGLE_MAPS_API_KEY" />
 
+        <!-- ✅ NOTIFICATION DEFAULTS — para sa FCM/local notifications -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="employee_notifications_channel" />
+
+        <!-- ✅ Background service para sa location tracking -->
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="location" />
@@ -68,6 +91,21 @@
         <uses-library
             android:name="org.apache.http.legacy"
             android:required="false" />
+
+        <!-- ✅ flutter_local_notifications receivers ──────────── -->
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".MainActivity"
@@ -116,7 +154,6 @@
     </application>
 
     <queries>
-        <!-- Web Links -->
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
@@ -126,16 +163,19 @@
             <data android:scheme="http" />
         </intent>
 
-        <!-- Idinagdag para sa Email (mailto:) -->
         <intent>
             <action android:name="android.intent.action.SENDTO" />
             <data android:scheme="mailto" />
         </intent>
 
-        <!-- Idinagdag para sa Phone Dialer (tel:) -->
         <intent>
             <action android:name="android.intent.action.DIAL" />
             <data android:scheme="tel" />
+        </intent>
+
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/pdf" />
         </intent>
     </queries>
 

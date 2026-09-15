@@ -2,18 +2,29 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/gestures.dart'; // ✅ Kailangan para sa PointerDeviceKind
+import 'package:flutter/gestures.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'screens/splash_screen.dart';
 import 'firebase_options.dart';
 import 'services/database_service.dart';
+import 'services/network_guard.dart';
+import 'widgets/network_gate.dart';
 import 'theme/theme_notifier.dart';
 import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ✅ Start global network monitoring
+  try {
+    await NetworkGuard.instance.start();
+    debugPrint(
+        '🌐 NetworkGuard started (online=${NetworkGuard.instance.isOnline})');
+  } catch (e) {
+    debugPrint('⚠️ NetworkGuard start failed: $e');
+  }
 
   try {
     await Firebase.initializeApp(
@@ -34,10 +45,6 @@ void main() async {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // TEMPORARY: i-force reset sa system default.
-  // ALISIN ITO pagkatapos ng unang test.
-  // ─────────────────────────────────────────────────────────────
   try {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('theme_mode');
@@ -45,7 +52,6 @@ void main() async {
   } catch (e) {
     debugPrint('🌗 Reset error: $e');
   }
-  // ─────────────────────────────────────────────────────────────
 
   const String startPage =
   String.fromEnvironment('page', defaultValue: 'landing');
@@ -64,6 +70,9 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // ✅ Kung admin, WALANG NetworkGate — exempt
+    final bool isAdmin = startPage == 'admin';
+
     return Consumer<ThemeNotifier>(
       builder: (context, themeNotifier, child) {
         return MaterialApp(
@@ -72,7 +81,6 @@ class MyApp extends StatelessWidget {
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
           themeMode: themeNotifier.themeMode,
-          // ✅ Ito ang nag-aalis ng scrollbars sa web at nagpapagana ng drag scrolling
           scrollBehavior: const MaterialScrollBehavior().copyWith(
             dragDevices: {
               PointerDeviceKind.touch,
@@ -81,6 +89,19 @@ class MyApp extends StatelessWidget {
             },
             scrollbars: false,
           ),
+
+          // ✅ NetworkGate ONLY for employee side
+          builder: (context, child) {
+            if (isAdmin) {
+              // Admin: walang blocking overlay
+              return child ?? const SizedBox.shrink();
+            }
+            // Employee: full network guard
+            return NetworkGate(
+              child: child ?? const SizedBox.shrink(),
+            );
+          },
+
           home: SplashScreen(startPage: startPage),
         );
       },

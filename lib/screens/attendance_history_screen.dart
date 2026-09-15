@@ -1,7 +1,7 @@
 // lib/screens/attendance_history_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import '../theme/app_theme.dart';
@@ -24,22 +24,17 @@ class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
 
-  // Page background
   Color get bg => isDark ? const Color(0xFF0F0F10) : const Color(0xFFF7F7F7);
-
-  // Card surface
   Color get card => isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
   Color get cardBorder =>
       isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
 
-  // Stats card
   Color get statBg => isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
   Color get statBorder =>
       isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
   Color get statLabel =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF666666);
 
-  // Mobile card
   Color get mobileCardBg =>
       isDark ? const Color(0xFF1A1A1D) : const Color(0xFFF8F8F8);
   Color get mobileCardBorder =>
@@ -47,19 +42,17 @@ class _ThemeColors {
   Color get mobileRowDivider =>
       isDark ? const Color(0xFF2A2A2E) : const Color(0xFFE0E0E0);
 
-  // Text
   Color get textPrimary => isDark ? Colors.white : Colors.black;
   Color get textSecondary =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF71717A);
 
-  // Empty state
-  Color get emptyIcon => isDark ? const Color(0x33FFFFFF) : const Color(0xFFD1D5DB);
+  Color get emptyIcon =>
+      isDark ? const Color(0x33FFFFFF) : const Color(0xFFD1D5DB);
   Color get emptyTitle =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
   Color get emptySubtitle =>
       isDark ? const Color(0xFF888888) : const Color(0xFF9CA3AF);
 
-  // Refresh indicator
   Color get refreshBg => isDark ? const Color(0xFF18181B) : Colors.white;
 }
 
@@ -96,6 +89,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
   StreamSubscription? _connectSub;
   StreamSubscription? _attendanceSub;
 
+  // ✅ Live Firestore stream — para auto-refresh kapag may bagong clock in/out
+  StreamSubscription<QuerySnapshot>? _remoteAttendanceSub;
+
   late TabController _tabController;
 
   @override
@@ -122,6 +118,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
           DatabaseService.instance.onAttendanceChanged.listen((_) {
             if (mounted) _loadData();
           });
+
+      // ✅ Listen sa Firestore para live-update kapag may bagong clock in/out
+      _startRemoteAttendanceListener();
     }
 
     _loadData();
@@ -134,7 +133,45 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     _syncSub?.cancel();
     _connectSub?.cancel();
     _attendanceSub?.cancel();
+    _remoteAttendanceSub?.cancel();
     super.dispose();
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ LIVE FIRESTORE LISTENER
+  // ══════════════════════════════════════════════════════════════
+  void _startRemoteAttendanceListener() {
+    _resolveEmployeeId().then((empId) {
+      if (empId == null || empId.isEmpty) return;
+      if (!mounted) return;
+
+      _remoteAttendanceSub?.cancel();
+      _remoteAttendanceSub = FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .where('employee_id', isEqualTo: empId)
+          .snapshots()
+          .listen(
+            (snap) {
+          if (!mounted) return;
+          debugPrint(
+              '📡 [AttendanceHistory] Live update: ${snap.docs.length} docs');
+          _loadData();
+        },
+        onError: (e) => debugPrint(
+            '❌ [AttendanceHistory] Remote listener error: $e'),
+      );
+    });
+  }
+
+  // ✅ Helper: resolve employee ID kahit saan mang source
+  Future<String?> _resolveEmployeeId() async {
+    final initId = widget.initialEmployee?.employeeId ??
+        widget.initialEmployee?.id;
+    if (initId != null && initId.isNotEmpty) return initId;
+
+    final secId = await SecurityService.instance.getCurrentEmployeeId();
+    if (secId != null && secId.isNotEmpty) return secId;
+    return null;
   }
 
   Future<void> _loadData() async {
@@ -261,27 +298,186 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     }
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // ✅ MOBILE DATA — Local DB + Firestore MERGED
+  // ══════════════════════════════════════════════════════════════
   Future<void> _loadMobileData() async {
-    final empId = await SecurityService.instance.getCurrentEmployeeId();
+    final empId = await _resolveEmployeeId();
     Employee? emp = widget.initialEmployee;
-    List<Attendance> records = [];
+    List<Attendance> localRecords = [];
+    List<Attendance> remoteRecords = [];
     int pending = 0;
 
     if (empId != null) {
-      emp = await DatabaseService.instance.getEmployeeById(empId);
-      records = await DatabaseService.instance
-          .getAttendanceByEmployee(empId, limit: 90);
-      pending = await SyncService.instance.getPendingCount();
+      // Local DB
+      try {
+        emp = await DatabaseService.instance.getEmployeeById(empId);
+        localRecords = await DatabaseService.instance
+            .getAttendanceByEmployee(empId, limit: 90);
+        pending = await SyncService.instance.getPendingCount();
+      } catch (e) {
+        debugPrint('⚠️ [AttendanceHistory] Local DB read failed: $e');
+      }
+
+      // Remote Firestore
+      remoteRecords = await _fetchRemoteAttendance(empId);
     }
+
+    // Merge — Firestore wins
+    final merged = _mergeAttendance(localRecords, remoteRecords);
+
+    debugPrint('📊 [AttendanceHistory] Merged: '
+        '${localRecords.length} local + '
+        '${remoteRecords.length} remote = '
+        '${merged.length} total');
 
     if (mounted) {
       setState(() {
-        _employee = emp;
-        _localRecords = records;
+        _employee = emp ?? widget.initialEmployee;
+        _localRecords = merged;
         _pendingCount = pending;
         _loading = false;
       });
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ FETCH REMOTE ATTENDANCE FROM FIRESTORE
+  // Pinagsama-sama ang IN/OUT per date para bumuo ng Attendance.
+  // ══════════════════════════════════════════════════════════════
+  Future<List<Attendance>> _fetchRemoteAttendance(String empId) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .where('employee_id', isEqualTo: empId)
+          .get();
+
+      // Group logs by date
+      final Map<String, List<Map<String, dynamic>>> byDate = {};
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        final date = (d['date'] ?? '').toString();
+        if (date.isEmpty) continue;
+        byDate.putIfAbsent(date, () => []).add({...d, '_docId': doc.id});
+      }
+
+      final records = <Attendance>[];
+      for (final entry in byDate.entries) {
+        final date = entry.key;
+        final logs = entry.value;
+
+        // Sort by time ascending
+        logs.sort((a, b) {
+          final ta = (a['time'] ?? '').toString();
+          final tb = (b['time'] ?? '').toString();
+          return ta.compareTo(tb);
+        });
+
+        String? timeIn;
+        String? timeOut;
+        for (final log in logs) {
+          final type = (log['type'] ?? '').toString().toUpperCase();
+          final time = (log['time'] ?? '').toString();
+          if (type == 'IN' || type == 'CLOCK_IN') {
+            timeIn = time;
+            timeOut = null; // reset out bago magbagong IN
+          } else if (type == 'OUT' || type == 'CLOCK_OUT') {
+            if (timeIn != null) timeOut = time;
+          }
+        }
+
+        if (timeIn == null && timeOut == null) continue;
+
+        // Compute status (Late kung pagkatapos ng 9:15 AM)
+        AttendanceStatus status = AttendanceStatus.present;
+        if (timeIn != null) {
+          try {
+            final parts = timeIn.split(':');
+            final hour = int.parse(parts[0]);
+            final min = int.parse(parts.length > 1 ? parts[1] : '0');
+            if (hour > 9 || (hour == 9 && min > 15)) {
+              status = AttendanceStatus.late;
+            }
+          } catch (_) {}
+        }
+
+        // ✅ Resolve method mula sa logs (default: face)
+        AttendanceMethod method = AttendanceMethod.face;
+        for (final log in logs) {
+          final m = (log['verification_method'] ?? log['method'] ?? '')
+              .toString()
+              .toLowerCase();
+          if (m.isEmpty) continue;
+          if (m.contains('face')) {
+            method = AttendanceMethod.face;
+            break;
+          } else if (m.contains('finger')) {
+            method = AttendanceMethod.fingerprint;
+            break;
+          } else if (m.contains('pin')) {
+            method = AttendanceMethod.pin;
+            break;
+          } else if (m.contains('qr')) {
+            method = AttendanceMethod.qrCode;
+            break;
+          } else if (m.contains('nfc')) {
+            method = AttendanceMethod.nfc;
+            break;
+          } else if (m.contains('manual')) {
+            method = AttendanceMethod.manual;
+            break;
+          }
+        }
+
+        // ✅ Parse createdAt mula sa first log's timestamp/created_at
+        DateTime createdAt = DateTime.now();
+        final rawTs = logs.first['timestamp'];
+        final rawCreated = logs.first['created_at'];
+        if (rawTs is Timestamp) {
+          createdAt = rawTs.toDate();
+        } else if (rawCreated is String && rawCreated.isNotEmpty) {
+          createdAt = DateTime.tryParse(rawCreated) ?? DateTime.now();
+        }
+
+        records.add(Attendance(
+          id: logs.first['_docId']?.toString() ?? 'remote_$date',
+          employeeId: empId,
+          date: date,
+          timeIn: timeIn,
+          timeOut: timeOut,
+          status: status,
+          method: method,
+          createdAt: createdAt,
+        ));
+      }
+
+      records.sort((a, b) => b.date.compareTo(a.date));
+      debugPrint(
+          '✅ [AttendanceHistory] Loaded ${records.length} remote records');
+      return records;
+    } catch (e) {
+      debugPrint('⚠️ [AttendanceHistory] _fetchRemoteAttendance failed: $e');
+      return [];
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ MERGE — Firestore wins, local fills gaps
+  // ══════════════════════════════════════════════════════════════
+  List<Attendance> _mergeAttendance(
+      List<Attendance> local, List<Attendance> remote) {
+    final Map<String, Attendance> byDate = {};
+
+    for (final r in local) {
+      byDate[r.date] = r;
+    }
+    for (final r in remote) {
+      byDate[r.date] = r;
+    }
+
+    final result = byDate.values.toList()
+      ..sort((a, b) => b.date.compareTo(a.date));
+    return result;
   }
 
   Future<void> _sync() async {
@@ -562,8 +758,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
         decoration: BoxDecoration(
           color: AppColors.error.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-              color: AppColors.error.withValues(alpha: 0.3)),
+          border:
+          Border.all(color: AppColors.error.withValues(alpha: 0.3)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -688,8 +884,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
 
   Widget _buildCombinedList(_ThemeColors tc) {
     if (_combined.isEmpty) {
-      return _buildEmptyState(tc,
-          'No attendance records found',
+      return _buildEmptyState(tc, 'No attendance records found',
           subtitle: 'Login and logout activity will appear here.');
     }
     return ListView(
@@ -761,8 +956,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
                     dt != null ? DateFormat('EEE').format(dt) : '--',
                     style: TextStyle(
                       fontSize: 9,
-                      color:
-                      isToday ? AppColors.orange : tc.textSecondary,
+                      color: isToday ? AppColors.orange : tc.textSecondary,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -778,8 +972,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
                     dt != null ? DateFormat('MMM').format(dt) : '--',
                     style: TextStyle(
                       fontSize: 9,
-                      color:
-                      isToday ? AppColors.orange : tc.textSecondary,
+                      color: isToday ? AppColors.orange : tc.textSecondary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1040,7 +1233,20 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
 
   Widget _buildMobileContent(_ThemeColors tc) {
     if (_localRecords.isEmpty) {
-      return _buildEmptyState(tc, 'No attendance records yet');
+      return RefreshIndicator(
+        color: AppColors.orange,
+        backgroundColor: tc.refreshBg,
+        onRefresh: _sync,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.6,
+              child: _buildEmptyState(tc, 'No attendance records yet'),
+            ),
+          ],
+        ),
+      );
     }
 
     final present = _localRecords
@@ -1064,7 +1270,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
                     child: _statCard(
                         tc, '$present', 'Present Days', AppColors.orange)),
                 const SizedBox(width: 15),
-                Expanded(child: _statCard(tc, '$late', 'Late Days', _Extra.lime)),
+                Expanded(
+                    child: _statCard(tc, '$late', 'Late Days', _Extra.lime)),
               ],
             ),
           ),
@@ -1079,7 +1286,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
               ),
             ),
           ),
-          ..._localRecords.take(10).map((r) => _buildMobileCard(tc, r)),
+          ..._localRecords.take(30).map((r) => _buildMobileCard(tc, r)),
           const SizedBox(height: 16),
         ],
       ),

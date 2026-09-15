@@ -17,6 +17,10 @@ import 'admin_payroll_page.dart';
 import 'admin_payroll_management_page.dart';
 import 'admin_create_leave_request_page.dart';
 
+// widgets notification
+import '../widgets/admin_notification_bell.dart';
+import '../services/employee_notification_service.dart';
+
 class _AdminNavItem {
   final int index;
   final String label;
@@ -144,13 +148,11 @@ class AdminDashboardState extends State<AdminDashboard>
     });
   }
 
-  // ✅ Open Payroll Detail
   void openPayrollManagement(Map<String, dynamic> employeeData) {
     debugPrint('🟢 openPayrollManagement: ${employeeData['name']}');
     setState(() => _selectedPayrollEmployee = employeeData);
   }
 
-  // ✅ Close Payroll Detail — BABALIK SA PAYROLL LIST
   void closePayrollManagement() {
     debugPrint('🔵 closePayrollManagement: back to payroll list');
     setState(() {
@@ -170,6 +172,298 @@ class AdminDashboardState extends State<AdminDashboard>
 
   void _openDrawer() {
     _scaffoldKey.currentState?.openDrawer();
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ SEND UPDATE DIALOG (FIXED - text visible in all modes)
+  // ══════════════════════════════════════════════════════════════
+  void _openSendUpdateDialog(BuildContext context, AdminColors c) {
+    final titleCtrl = TextEditingController();
+    final messageCtrl = TextEditingController();
+    String selectedType = 'announcement';
+    String selectedRecipient = 'ALL';
+    String selectedPriority = 'normal';
+
+    // ✅ Common dropdown decoration
+    InputDecoration dropDeco(String hint) => InputDecoration(
+      filled: true,
+      fillColor: c.surface,
+      hintText: hint,
+      hintStyle: TextStyle(color: c.muted),
+      contentPadding:
+      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.orange, width: 1.5),
+      ),
+    );
+
+    // ✅ Common text style for dropdown items
+    TextStyle itemStyle() => TextStyle(color: c.text, fontSize: 14);
+
+    // ✅ Common text field decoration
+    InputDecoration fieldDeco(String hint, {int? maxLines}) => InputDecoration(
+      filled: true,
+      fillColor: c.surface,
+      hintText: hint,
+      hintStyle: TextStyle(color: c.muted),
+      contentPadding: const EdgeInsets.all(12),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.orange, width: 1.5),
+      ),
+    );
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: c.card,
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              Icon(Icons.campaign_rounded, color: c.orange, size: 22),
+              const SizedBox(width: 10),
+              Text(
+                'Send Update',
+                style: TextStyle(
+                  color: c.text,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 18,
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── TYPE ──
+                  Text('Type',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: c.muted)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String>(
+                    value: selectedType,
+                    dropdownColor: c.card,
+                    iconEnabledColor: c.text,
+                    style: itemStyle(),
+                    decoration: dropDeco('Select type'),
+                    items: [
+                      DropdownMenuItem(
+                          value: 'announcement',
+                          child: Text('📢 Announcement',
+                              style: itemStyle())),
+                      DropdownMenuItem(
+                          value: 'payroll',
+                          child: Text('💰 Payroll', style: itemStyle())),
+                      DropdownMenuItem(
+                          value: 'reminder',
+                          child: Text('⏰ Reminder', style: itemStyle())),
+                      DropdownMenuItem(
+                          value: 'general',
+                          child: Text('📋 General', style: itemStyle())),
+                    ],
+                    onChanged: (v) =>
+                        setDlgState(() => selectedType = v ?? 'announcement'),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // ── RECIPIENT ──
+                  Text('Recipient',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: c.muted)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String>(
+                    value: selectedRecipient,
+                    dropdownColor: c.card,
+                    isExpanded: true,
+                    iconEnabledColor: c.text,
+                    style: itemStyle(),
+                    decoration: dropDeco('Select recipient'),
+                    items: [
+                      DropdownMenuItem(
+                          value: 'ALL',
+                          child: Text('🌐 All Employees',
+                              style: itemStyle())),
+                      ..._employees.map((e) {
+                        final id =
+                        (e['id'] ?? e['employeeId'] ?? '').toString();
+                        final name = (e['name'] ??
+                            '${e['firstName'] ?? ''} ${e['lastName'] ?? ''}')
+                            .toString()
+                            .trim();
+                        return DropdownMenuItem(
+                          value: id,
+                          child: Text(
+                            '${name.isEmpty ? "Unknown" : name} ($id)',
+                            overflow: TextOverflow.ellipsis,
+                            style: itemStyle(),
+                          ),
+                        );
+                      }).toList(),
+                    ],
+                    onChanged: (v) =>
+                        setDlgState(() => selectedRecipient = v ?? 'ALL'),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // ── PRIORITY ──
+                  Text('Priority',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: c.muted)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String>(
+                    value: selectedPriority,
+                    dropdownColor: c.card,
+                    iconEnabledColor: c.text,
+                    style: itemStyle(),
+                    decoration: dropDeco('Select priority'),
+                    items: [
+                      DropdownMenuItem(
+                          value: 'low',
+                          child: Text('Low', style: itemStyle())),
+                      DropdownMenuItem(
+                          value: 'normal',
+                          child: Text('Normal', style: itemStyle())),
+                      DropdownMenuItem(
+                          value: 'high',
+                          child: Text('High', style: itemStyle())),
+                    ],
+                    onChanged: (v) => setDlgState(
+                            () => selectedPriority = v ?? 'normal'),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // ── TITLE ──
+                  Text('Title',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: c.muted)),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: titleCtrl,
+                    style: TextStyle(color: c.text),
+                    cursorColor: c.orange,
+                    decoration: fieldDeco('e.g. Team Meeting Tomorrow'),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // ── MESSAGE ──
+                  Text('Message',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: c.muted)),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: messageCtrl,
+                    maxLines: 4,
+                    style: TextStyle(color: c.text),
+                    cursorColor: c.orange,
+                    decoration: fieldDeco(
+                        'Isulat ang mensahe para sa employee(s)...'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel', style: TextStyle(color: c.muted)),
+            ),
+            ElevatedButton.icon(
+              onPressed: () async {
+                final title = titleCtrl.text.trim();
+                final message = messageCtrl.text.trim();
+                if (title.isEmpty || message.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content:
+                      Text('Please fill in both title and message.'),
+                      backgroundColor: Color(0xFFEF4444),
+                    ),
+                  );
+                  return;
+                }
+
+                try {
+                  await EmployeeNotificationService.instance.send(
+                    type: selectedType,
+                    title: title,
+                    message: message,
+                    employeeId: selectedRecipient,
+                    priority: selectedPriority,
+                  );
+
+                  if (!ctx.mounted) return;
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        selectedRecipient == 'ALL'
+                            ? '✅ Sent to ALL employees'
+                            : '✅ Sent to 1 employee',
+                      ),
+                      backgroundColor: const Color(0xFF16A34A),
+                    ),
+                  );
+                } catch (e) {
+                  if (!ctx.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed: $e'),
+                      backgroundColor: const Color(0xFFEF4444),
+                    ),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: c.orange,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 20, vertical: 12),
+              ),
+              icon: const Icon(Icons.send_rounded, size: 16),
+              label: const Text(
+                'Send',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -454,12 +748,17 @@ class AdminDashboardState extends State<AdminDashboard>
             ),
           ),
         ),
+
+        // ✅ ADMIN NOTIFICATION BELL
+        AdminNotificationBell(iconColor: c.accent),
+
+        // ✅ Send Update button
         IconButton(
-          icon: Icon(Icons.notifications_none_rounded,
-              size: 21, color: c.accent),
-          onPressed: () {},
-          tooltip: 'Notifications',
+          tooltip: 'Send Update to Employees',
+          onPressed: () => _openSendUpdateDialog(context, c),
+          icon: Icon(Icons.campaign_rounded, size: 21, color: c.accent),
         ),
+
         IconButton(
           icon: Icon(Icons.help_outline_rounded, size: 21, color: c.accent),
           onPressed: () {},
@@ -799,9 +1098,6 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PAGE ROUTER
-  // ══════════════════════════════════════════════════════════════
   Widget buildPage() {
     if (_showCreateLeave) {
       return AdminCreateLeaveRequestPage(
@@ -876,7 +1172,6 @@ class AdminDashboardState extends State<AdminDashboard>
           return AdminPayrollManagementPage(
             key: ValueKey('payroll_$empId'),
             employeeData: _selectedPayrollEmployee!,
-            // ✅ Back button wiring
             onBack: closePayrollManagement,
           );
         }

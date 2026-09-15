@@ -1,10 +1,10 @@
 name: hris_biometrics
 description: A next-gen HRIS Biometrics application with smart innovation.
 publish_to: 'none'
-version: 1.0.2+3                  # ✅ In-update para sa v1.0.2 release
+version: 1.0.2+3
 
 environment:
-  sdk: '>=3.6.0 <4.0.0'           # ✅ Updated — required ng flutter_map >=8.0.0
+  sdk: '>=3.6.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -14,7 +14,7 @@ dependencies:
   firebase_core: ^3.10.1
   firebase_auth: ^5.4.1
   cloud_firestore: ^5.6.2
-  firebase_storage: ^12.3.7       # ✅ Para sa employee photo upload
+  firebase_storage: ^12.3.7
 
   # ─── Maps & Location ──────────────────────────────────────────────
   google_maps_flutter: ^2.10.0
@@ -47,18 +47,19 @@ dependencies:
   flutter_secure_storage: ^9.2.2
   crypto: ^3.0.3
 
-  # ─── Face Detection ───────────────────────────────────────────────
+  # ─── Face Detection & Recognition ─────────────────────────────────
   google_mlkit_face_detection: ^0.11.0
-
-  # ─── Camera & Image ───────────────────────────────────────────────
-  camera: ^0.10.5+9
-  camera_web: ^0.3.3              # ✅ Para sa camera support sa web
-  image_picker: ^1.1.2
-  file_picker: ^8.1.2
+  flutter_litert: ^2.8.3
   image: ^4.2.0
 
+  # ─── Camera ───────────────────────────────────────────────────────
+  camera: ^0.10.5+9
+  camera_web: ^0.3.3
+  image_picker: ^1.1.2
+  file_picker: ^8.1.2
+
   # ─── HTTP & Networking ────────────────────────────────────────────
-  http: ^1.2.2
+  http: ^1.6.0
   dio: ^5.7.0
 
   # ─── State Management ─────────────────────────────────────────────
@@ -75,6 +76,7 @@ dependencies:
   # ─── Exporting (PDF, Excel, CSV) ──────────────────────────────────
   pdf: ^3.10.8
   printing: ^5.13.1
+  syncfusion_flutter_pdf: ^25.2.7   # ✅ Tugma sa datepicker version
   excel: ^4.0.6
   csv: ^5.0.0
 
@@ -89,7 +91,7 @@ dependencies:
 
   # ─── Video & Map ──────────────────────────────────────────────────
   video_player: ^2.8.6
-  flutter_map: ^8.3.2             # ⚠️ Requires SDK >=3.6.0 (this is why naka-lock sa 3.6.0)
+  flutter_map: ^8.3.2
   latlong2: ^0.10.1
 
   # ─── Additional UI Enhancements ───────────────────────────────────
@@ -107,5 +109,6 @@ flutter:
     - assets/
     - assets/images/
     - assets/icons/
+    - assets/models/mobilefacenet.tflite
     - assets/videos/hris.mp4
     - assets/images/logo1.png

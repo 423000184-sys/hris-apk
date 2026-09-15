@@ -2,19 +2,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import '../services/geofence_service.dart';
 import 'login_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // _T — colors that are the same for both themes (brand, status, accent)
 // ═══════════════════════════════════════════════════════════════════════════
 class _T {
-  // Header / brand (same in both themes)
   static const Color headerStart = Color(0xFFF54900);
   static const Color headerMid   = Color(0xFFFF6B00);
   static const Color headerEnd   = Color(0xFFFF8A00);
 
-  // Radar / zone circle
   static const Color circleGradTop    = Color.fromRGBO(255, 138, 0, 0.62);
   static const Color circleGradMid    = Color.fromRGBO(250, 106, 0, 0.62);
   static const Color circleGradBottom = Color.fromRGBO(245, 73, 0, 0.62);
@@ -31,7 +28,6 @@ class _T {
   static const Color workZoneIcon      = Color(0xFFEA580C);
 
   static const Color ctaSolid = Color(0xFFFF6900);
-  static const Color deny     = Color(0xFFFF2244);
 
   // Dashboard preview (always dark - it's a mock)
   static const Color dashCardBg   = Color(0xFF111115);
@@ -54,18 +50,14 @@ class _ThemeColors {
 
   const _ThemeColors(this.isDark);
 
-  // Hero section background
   Color get heroBgStart => isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
   Color get heroBgEnd   => isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
 
-  // Title & description
   Color get heroTitle => isDark ? Colors.white : const Color(0xFF000000);
   Color get heroDesc  => isDark ? const Color(0xFFB0B0B0) : const Color(0xFF3F3F46);
 
-  // Scaffold background (behind the hero container)
   Color get scaffoldBg => isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
 
-  // Watermark opacity
   double get watermarkOpacity => isDark ? 0.15 : 0.80;
 }
 
@@ -82,9 +74,6 @@ class _LandingScreenState extends State<LandingScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
-
-  GeofenceResult? _geoResult;
-  bool _geoChecking = true;
 
   static const String _logoAsset = 'assets/images/logo.png';
 
@@ -107,49 +96,11 @@ class _LandingScreenState extends State<LandingScreen>
         statusBarIconBrightness: Brightness.light,
       ));
     }
-
-    _runGeoCheck();
   }
 
-  Future<void> _runGeoCheck() async {
-    if (mounted) setState(() => _geoChecking = true);
-    final result = await GeofenceService.instance.checkGeofence();
-    if (mounted) {
-      setState(() {
-        _geoResult = result;
-        _geoChecking = false;
-      });
-    }
-  }
-
-  void _onGetStarted() {
-    if (_geoChecking) {
-      _snack('Verifying your location…');
-      return;
-    }
-    if (!(_geoResult?.isInside ?? false)) {
-      final dist = _geoResult?.distanceMeters;
-      _snack(dist != null
-          ? 'You are ${dist.toStringAsFixed(0)} m from the office zone.'
-          : _geoResult?.message ?? 'Outside work zone');
-      return;
-    }
+  void _goToLogin() {
     Navigator.push(
         context, MaterialPageRoute(builder: (_) => const LoginScreen()));
-  }
-
-  void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg,
-          style: const TextStyle(
-              color: _T.white, fontWeight: FontWeight.w600)),
-      backgroundColor: const Color(0xFF1F2128),
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      margin: const EdgeInsets.all(16),
-      action: SnackBarAction(
-          label: 'RETRY', textColor: _T.ctaSolid, onPressed: _runGeoCheck),
-    ));
   }
 
   @override
@@ -160,7 +111,6 @@ class _LandingScreenState extends State<LandingScreen>
 
   @override
   Widget build(BuildContext context) {
-    // ✅ Resolve theme-aware colors from current Theme
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
 
@@ -185,7 +135,6 @@ class _LandingScreenState extends State<LandingScreen>
                   child: Stack(
                     clipBehavior: Clip.hardEdge,
                     children: [
-                      // Background watermark
                       Positioned(
                         bottom: -130,
                         left: -150,
@@ -214,8 +163,6 @@ class _LandingScreenState extends State<LandingScreen>
                           ),
                         ),
                       ),
-
-                      // Foreground content
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -240,8 +187,6 @@ class _LandingScreenState extends State<LandingScreen>
 
   // ── NAVBAR ──────────────────────────────────────────────────────────────
   Widget _buildNavbar() {
-    final bool isBlocked = _geoChecking || !(_geoResult?.isInside ?? false);
-
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -280,26 +225,18 @@ class _LandingScreenState extends State<LandingScreen>
               ),
               const Spacer(),
               GestureDetector(
-                onTap: isBlocked
-                    ? null
-                    : () => Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen())),
+                onTap: _goToLogin, // ✅ Diretso sa Login, walang blocking
                 child: Container(
                   padding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: Colors.white
-                          .withValues(alpha: isBlocked ? 0.3 : 1),
-                      width: 1,
-                    ),
+                    border: Border.all(color: Colors.white, width: 1),
                   ),
-                  child: Text(
+                  child: const Text(
                     'Log In',
                     style: TextStyle(
-                      color: Colors.white
-                          .withValues(alpha: isBlocked ? 0.5 : 1),
+                      color: Colors.white,
                       fontWeight: FontWeight.w700,
                       fontSize: 13,
                     ),
@@ -315,21 +252,11 @@ class _LandingScreenState extends State<LandingScreen>
 
   // ── HERO SECTION ────────────────────────────────────────────────────────
   Widget _buildHeroSection(_ThemeColors tc) {
-    final isInside = _geoResult?.isInside ?? false;
-    final isChecking = _geoChecking;
-    final circleBorder = isChecking
-        ? _T.circleBorder
-        : isInside
-        ? _T.circleBorder
-        : _T.deny;
-    final labelColor = isInside || isChecking ? _T.labelLime : _T.deny;
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Geofence circle
           Container(
             width: 256,
             height: 256,
@@ -344,7 +271,7 @@ class _LandingScreenState extends State<LandingScreen>
                   _T.circleGradBottom
                 ],
               ),
-              border: Border.all(color: circleBorder, width: 2),
+              border: Border.all(color: _T.circleBorder, width: 2),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.15),
@@ -359,36 +286,28 @@ class _LandingScreenState extends State<LandingScreen>
                 Container(
                   width: 48,
                   height: 48,
-                  decoration: BoxDecoration(
+                  decoration: const BoxDecoration(
                     shape: BoxShape.circle,
                     color: _T.buildingBg,
-                    boxShadow: const [
+                    boxShadow: [
                       BoxShadow(
                         color: Color.fromRGBO(255, 140, 0, 0.8),
                         blurRadius: 15,
                       ),
                     ],
                   ),
-                  child: Icon(
-                    isChecking
-                        ? Icons.gps_fixed_rounded
-                        : isInside
-                        ? Icons.business_rounded
-                        : Icons.location_off_rounded,
+                  child: const Icon(
+                    Icons.business_rounded,
                     color: Colors.black,
                     size: 24,
                   ),
                 ),
-                Positioned(
+                const Positioned(
                   bottom: 40,
                   child: Text(
-                    isChecking
-                        ? 'Locating…'
-                        : isInside
-                        ? 'Inside Authorized Zone'
-                        : 'Outside Work Zone',
+                    'Authorized Zone',
                     style: TextStyle(
-                      color: labelColor,
+                      color: _T.labelLime,
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.3,
@@ -398,10 +317,7 @@ class _LandingScreenState extends State<LandingScreen>
               ],
             ),
           ),
-
           const SizedBox(height: 20),
-
-          // Verified badge
           Container(
             padding:
             const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
@@ -427,10 +343,7 @@ class _LandingScreenState extends State<LandingScreen>
               ],
             ),
           ),
-
           const SizedBox(height: 20),
-
-          // Headline
           Align(
             alignment: Alignment.centerLeft,
             child: Column(
@@ -462,9 +375,7 @@ class _LandingScreenState extends State<LandingScreen>
               ],
             ),
           ),
-
           const SizedBox(height: 16),
-
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
@@ -478,11 +389,8 @@ class _LandingScreenState extends State<LandingScreen>
               ),
             ),
           ),
-
           const SizedBox(height: 20),
-
           _buildCTAButton(),
-
           const SizedBox(height: 16),
         ],
       ),
@@ -491,67 +399,40 @@ class _LandingScreenState extends State<LandingScreen>
 
   // ── CTA BUTTON ──────────────────────────────────────────────────────────
   Widget _buildCTAButton() {
-    final isChecking = _geoChecking;
-    final isAllowed = _geoResult?.isInside ?? false;
-    final blocked = !isAllowed || isChecking;
-
     return SizedBox(
       width: double.infinity,
-      child: AbsorbPointer(
-        absorbing: blocked,
-        child: GestureDetector(
-          onTap: _onGetStarted,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            decoration: BoxDecoration(
-              color: blocked ? const Color(0xFFE5E5E5) : _T.ctaSolid,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: blocked
-                  ? []
-                  : [
-                BoxShadow(
-                  color: _T.ctaSolid.withValues(alpha: 0.4),
-                  blurRadius: 40,
-                  offset: const Offset(0, 10),
+      child: GestureDetector(
+        onTap: _goToLogin, // ✅ Laging enabled, diretso sa Login
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: _T.ctaSolid,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: _T.ctaSolid.withValues(alpha: 0.4),
+                blurRadius: 40,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              SizedBox(width: 8),
+              Text(
+                'LOGIN',
+                style: TextStyle(
+                  color: Colors.black,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
                 ),
-              ],
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (isChecking)
-                  const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                        color: Colors.black, strokeWidth: 2.5),
-                  )
-                else if (blocked)
-                  const Icon(Icons.location_off_rounded,
-                      color: Color(0xFF888888), size: 18)
-                else
-                  const SizedBox.shrink(),
-                const SizedBox(width: 8),
-                Text(
-                  isChecking
-                      ? 'Checking Location…'
-                      : blocked
-                      ? 'Outside Work Zone'
-                      : 'Get Started',
-                  style: TextStyle(
-                    color: blocked ? const Color(0xFF888888) : Colors.black,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                  ),
-                ),
-                if (!isChecking && !blocked) ...[
-                  const SizedBox(width: 8),
-                  const Icon(Icons.arrow_forward_rounded,
-                      color: Colors.black, size: 18),
-                ],
-              ],
-            ),
+              ),
+              SizedBox(width: 8),
+              Icon(Icons.arrow_forward_rounded,
+                  color: Colors.black, size: 18),
+            ],
           ),
         ),
       ),
@@ -610,7 +491,6 @@ class _LandingScreenState extends State<LandingScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               children: [
                 Container(
@@ -658,10 +538,7 @@ class _LandingScreenState extends State<LandingScreen>
                 ),
               ],
             ),
-
             const SizedBox(height: 16),
-
-            // Status card
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(16),
@@ -704,10 +581,7 @@ class _LandingScreenState extends State<LandingScreen>
                 ],
               ),
             ),
-
             const SizedBox(height: 16),
-
-            // Toggle
             Container(
               padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
@@ -753,10 +627,7 @@ class _LandingScreenState extends State<LandingScreen>
                 ],
               ),
             ),
-
             const SizedBox(height: 20),
-
-            // Location status header
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -787,10 +658,7 @@ class _LandingScreenState extends State<LandingScreen>
                 ),
               ],
             ),
-
             const SizedBox(height: 12),
-
-            // HQ office info box
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -838,10 +706,7 @@ class _LandingScreenState extends State<LandingScreen>
                 ],
               ),
             ),
-
             const SizedBox(height: 16),
-
-            // Clock in button
             Container(
               width: double.infinity,
               padding:

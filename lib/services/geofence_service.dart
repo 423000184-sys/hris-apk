@@ -51,9 +51,10 @@ class GeofenceService {
   GeofenceService._();
   static final GeofenceService instance = GeofenceService._();
 
-  static const double _officeLat           = 14.6021393;
-  static const double _officeLng           = 120.9993248;
-  static const String _officeAddress       = '256 Lacson Ave, Sampaloc Manila 1008';
+  // ✅ BAGONG OFFICE COORDINATES — 629 J. Nepomuceno St., Quiapo, Manila
+  static const double _officeLat           = 14.59805;
+  static const double _officeLng           = 120.98917;
+  static const String _officeAddress       = '629 J. Nepomuceno St., Quiapo, Manila 1001';
   static const double _allowedRadiusMeters = 100.0;
 
   final _statusController = StreamController<GeofenceResult>.broadcast();
@@ -69,16 +70,35 @@ class GeofenceService {
   static double get officeLat     => _officeLat;
   static double get officeLng     => _officeLng;
 
+  /// ✅ Check geofence — WEB + NATIVE compatible
   Future<GeofenceResult> checkGeofence() async {
+    debugPrint('🌍 [Geofence] Starting check (isWeb=$kIsWeb)');
+
+    // ─── WEB HANDLING ───────────────────────────────────────────────
+    if (kIsWeb) {
+      return _checkGeofenceWeb();
+    }
+
+    // ─── NATIVE HANDLING (Android / iOS) ────────────────────────────
+    return _checkGeofenceNative();
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // NATIVE FLOW (Android / iOS app)
+  // ══════════════════════════════════════════════════════════════════
+  Future<GeofenceResult> _checkGeofenceNative() async {
+    // 1. Check kung bukas ang location services (GPS)
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       return _emit(const GeofenceResult(
         isAllowed: false,
         status: GeofenceStatus.serviceDisabled,
-        message: 'Location services are disabled.\nPlease enable GPS to clock in/out.',
+        message: 'Location services are disabled.\n'
+            'Please enable GPS to clock in/out.',
       ));
     }
 
+    // 2. Check at request permission
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
@@ -86,7 +106,8 @@ class GeofenceService {
         return _emit(const GeofenceResult(
           isAllowed: false,
           status: GeofenceStatus.permissionDenied,
-          message: 'Location permission denied.\nGrant permission to record attendance.',
+          message: 'Location permission denied.\n'
+              'Grant permission to record attendance.',
         ));
       }
     }
@@ -94,16 +115,19 @@ class GeofenceService {
       return _emit(const GeofenceResult(
         isAllowed: false,
         status: GeofenceStatus.permissionPermanentlyDenied,
-        message: 'Location permission permanently denied.\nOpen App Settings → Permissions → Location.',
+        message: 'Location permission permanently denied.\n'
+            'Open App Settings → Permissions → Location.',
       ));
     }
 
+    // 3. Show loading state
     _emit(const GeofenceResult(
       isAllowed: false,
       status: GeofenceStatus.loading,
       message: 'Fetching current location...',
     ));
 
+    // 4. Get current position
     try {
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
@@ -116,9 +140,11 @@ class GeofenceService {
       return _emit(const GeofenceResult(
         isAllowed: false,
         status: GeofenceStatus.error,
-        message: 'Location request timed out.\nMake sure GPS signal is strong and try again.',
+        message: 'Location request timed out.\n'
+            'Make sure GPS signal is strong and try again.',
       ));
     } catch (e) {
+      debugPrint('❌ [Geofence] Native error: $e');
       return _emit(GeofenceResult(
         isAllowed: false,
         status: GeofenceStatus.error,
@@ -127,6 +153,87 @@ class GeofenceService {
     }
   }
 
+  // ══════════════════════════════════════════════════════════════════
+  // WEB FLOW (Chrome / Safari / Edge)
+  // ══════════════════════════════════════════════════════════════════
+  Future<GeofenceResult> _checkGeofenceWeb() async {
+    // 1. Sa web, hindi natin kailangan check ang "serviceEnabled" nang madalas
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        debugPrint('⚠️ [Geofence Web] Location service disabled');
+        return _emit(const GeofenceResult(
+          isAllowed: false,
+          status: GeofenceStatus.serviceDisabled,
+          message: 'Location services are disabled.\n'
+              'Please enable location in your device settings.',
+        ));
+      }
+    } catch (e) {
+      debugPrint('⚠️ [Geofence Web] serviceEnabled check failed: $e');
+    }
+
+    // 2. Check at request permission (browser prompt)
+    LocationPermission permission;
+    try {
+      permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+    } catch (e) {
+      debugPrint('⚠️ [Geofence Web] Permission check failed: $e');
+      permission = LocationPermission.denied;
+    }
+
+    if (permission == LocationPermission.denied) {
+      return _emit(const GeofenceResult(
+        isAllowed: false,
+        status: GeofenceStatus.permissionDenied,
+        message: 'Location permission denied.\n'
+            'Please allow location access in your browser to clock in.',
+      ));
+    }
+    if (permission == LocationPermission.deniedForever) {
+      return _emit(const GeofenceResult(
+        isAllowed: false,
+        status: GeofenceStatus.permissionPermanentlyDenied,
+        message: 'Location permission blocked.\n'
+            'Reset it in your browser settings (🔒 icon in address bar).',
+      ));
+    }
+
+    // 3. Loading state
+    _emit(const GeofenceResult(
+      isAllowed: false,
+      status: GeofenceStatus.loading,
+      message: 'Fetching your location...',
+    ));
+
+    // 4. Get current position
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 15),
+      );
+      return _evaluate(position);
+    } on TimeoutException {
+      return _emit(const GeofenceResult(
+        isAllowed: false,
+        status: GeofenceStatus.error,
+        message: 'Location request timed out.\n'
+            'Please check your GPS signal and try again.',
+      ));
+    } catch (e) {
+      debugPrint('❌ [Geofence Web] Error: $e');
+      return _emit(GeofenceResult(
+        isAllowed: false,
+        status: GeofenceStatus.error,
+        message: 'Location error: ${e.toString()}',
+      ));
+    }
+  }
+
+  // ─── MONITORING ─────────────────────────────────────────────────
   Future<void> startMonitoring() async {
     await stopMonitoring();
     final permission = await Geolocator.checkPermission();
@@ -155,7 +262,19 @@ class GeofenceService {
     _statusController.close();
   }
 
+  // ══════════════════════════════════════════════════════════════════
+  // ✅ LOCATION SETTINGS — web-aware na ngayon
+  // ══════════════════════════════════════════════════════════════════
   LocationSettings _buildLocationSettings({int distanceFilter = 0}) {
+    // ✅ WEB: Palaging gamitin ang base LocationSettings
+    if (kIsWeb) {
+      return LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: distanceFilter,
+      );
+    }
+
+    // ✅ NATIVE ANDROID
     if (defaultTargetPlatform == TargetPlatform.android) {
       return AndroidSettings(
         accuracy: LocationAccuracy.high,
@@ -163,7 +282,10 @@ class GeofenceService {
         forceLocationManager: false,
         intervalDuration: const Duration(seconds: 5),
       );
-    } else if (defaultTargetPlatform == TargetPlatform.iOS ||
+    }
+
+    // ✅ NATIVE iOS / macOS
+    if (defaultTargetPlatform == TargetPlatform.iOS ||
         defaultTargetPlatform == TargetPlatform.macOS) {
       return AppleSettings(
         accuracy: LocationAccuracy.high,
@@ -173,12 +295,15 @@ class GeofenceService {
         showBackgroundLocationIndicator: false,
       );
     }
+
+    // ✅ Fallback (Windows, Linux, etc.)
     return LocationSettings(
       accuracy: LocationAccuracy.high,
       distanceFilter: distanceFilter,
     );
   }
 
+  // ─── DISTANCE EVALUATION ────────────────────────────────────────
   GeofenceResult _evaluate(Position position) {
     final distance = _haversineDistance(
       lat1: position.latitude,
@@ -189,8 +314,10 @@ class GeofenceService {
     final inside    = distance <= _allowedRadiusMeters;
     final remaining = _allowedRadiusMeters - distance;
 
-    // ✅ Debug print to verify distance
-    debugPrint('🔍 Distance: ${distance.toStringAsFixed(0)}m | isInside: $inside | accuracy: ${position.accuracy.toStringAsFixed(0)}m');
+    debugPrint('🔍 [Geofence] Distance: ${distance.toStringAsFixed(0)}m | '
+        'isInside: $inside | '
+        'accuracy: ${position.accuracy.toStringAsFixed(0)}m | '
+        'platform: ${kIsWeb ? "WEB" : defaultTargetPlatform.name}');
 
     final String message;
     if (inside) {

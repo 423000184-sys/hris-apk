@@ -1,616 +1,1189 @@
 // lib/screens/clock_screen.dart
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/services.dart';
-import 'package:uuid/uuid.dart';
-import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../theme/app_theme.dart';
-import '../services/database_service.dart';
-import '../services/security_service.dart';
-import '../services/geofence_service.dart';
-import '../models/attendance.dart';
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import '../models/employee.dart';
+import '../services/geofence_service.dart';
+import 'clock_in_success_screen.dart';
 
-// Additional brand colors
-class _MockColors {
-  static const Color darkBorder = Color(0xFF27272A);
-  static const Color orangeBorder = Color(0xFFFFA500);
-  static const Color lime = Color(0xFFC4FF0A);
-  static const Color red = Color(0xFFFF0000);
-  static const Color translucentGray = Color.fromRGBO(131, 131, 131, 0.28);
-}
+// admin notifications
+import '../services/admin_notification_service.dart';
 
-// ═══════════════════════════════════════════════════════════════════════════
-// _ThemeColors — theme-aware colors for clock screen
-// ═══════════════════════════════════════════════════════════════════════════
+// ✅ BAGONG: employee notification bell
+import '../widgets/employee_notification_bell.dart';
+
 class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
 
-  Color get bg => isDark ? const Color(0xFF0F0F10) : const Color(0xFFFFFFFF);
-
-  // Text colors
+  Color get bg => isDark ? const Color(0xFF0F0F10) : Colors.white;
+  Color get navBg => isDark ? const Color(0xFF18181B) : const Color(0xFFF8F8F8);
+  Color get navBorder =>
+      isDark ? const Color(0xFF27272A) : const Color(0xFF27272A);
   Color get textPrimary => isDark ? Colors.white : Colors.black;
   Color get textSecondary =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF71717A);
   Color get textMuted =>
       isDark ? const Color(0xFF888888) : const Color(0xFFA1A1AA);
-
-  // Location card — text ON the orange card is always white
-  // (that card is always orange, both themes)
-
-  // Clock out button bg (normal state = white-ish, dark mode = dark)
-  Color get clockButtonBg =>
-      isDark ? const Color(0xFF1F1F23) : Colors.white.withValues(alpha: 0.2);
-
-  // Disabled clock button
-  Color get clockButtonDisabledBg => isDark
-      ? const Color(0xFF27272A).withValues(alpha: 0.5)
-      : Colors.grey.withValues(alpha: 0.3);
-
-  // Success overlay card
-  Color get successCardBg =>
-      isDark ? const Color(0xFF18181B) : Colors.white;
-
-  // Dialog bg
-  Color get dialogBg => isDark ? const Color(0xFF18181B) : Colors.white;
-
-  // Splash progress track
-  Color get progressTrack =>
+  Color get textOnDark => Colors.white;
+  Color get cardFill =>
+      isDark ? const Color(0xFF1F1F23) : Colors.white.withValues(alpha: 0.5);
+  Color get cardBorder => const Color(0xFFFFA500);
+  Color get avatarBg =>
       isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
+  Color get avatarBorder =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFF27272A);
+  Color get checkingBg =>
+      isDark ? const Color(0xFF1F1F23) : const Color(0xFFF3F4F6);
 }
 
 class ClockScreen extends StatefulWidget {
   final Employee? initialEmployee;
   final VoidCallback? onBack;
   final VoidCallback? onContinue;
+  final VoidCallback? onRefresh;
+  final VoidCallback? onClockIn;
+  final VoidCallback? onClockOut;
+  final VoidCallback? onShortcutHome;
+  final VoidCallback? onShortcutProfile;
+  final VoidCallback? onShortcutLeaves;
+  final ValueChanged<int>? onNavTap;
+
+  final bool initialInRange;
+  final bool initialWfhAccess;
 
   const ClockScreen({
     super.key,
     this.initialEmployee,
     this.onBack,
     this.onContinue,
+    this.onRefresh,
+    this.onClockIn,
+    this.onClockOut,
+    this.onShortcutHome,
+    this.onShortcutProfile,
+    this.onShortcutLeaves,
+    this.onNavTap,
+    this.initialInRange = false,
+    this.initialWfhAccess = false,
   });
 
   @override
   State<ClockScreen> createState() => _ClockScreenState();
 }
 
-class _ClockScreenState extends State<ClockScreen>
-    with TickerProviderStateMixin {
-  late AnimationController _fadeCtrl;
-  late AnimationController _successCtrl;
-  late AnimationController _glowCtrl;
-  late Animation<double> _fadeAnim;
-  late Animation<double> _successAnim;
-  late Animation<double> _glowAnim;
+class _ClockScreenState extends State<ClockScreen> {
+  static const _orange = Color(0xFFFF8A00);
+  static const _orangeMid = Color(0xFFFA6A00);
+  static const _orangeDeep = Color(0xFFF54900);
+  static const _orangeBorder = Color(0xFFFFA500);
+  static const _green = Color(0xFFC4FF0A);
+  static const _greenDeep = Color(0xFF166534);
+  static const _red = Color(0xFFFF0000);
 
-  Employee? _employee;
-  Attendance? _lastRecord;
+  static const _orangeGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [_orange, _orangeMid, _orangeDeep],
+    stops: [0.0, 0.5, 1.0],
+  );
 
-  String? _webTimeIn;
-  String? _webTimeOut;
-  String? _webDate;
-  bool _webClockedIn = false;
+  late bool _isInRange;
+  late bool _wfhAccess;
+  bool _checkingGeofence = false;
+  int _activeNavIndex = 0;
 
-  String? _mobileTimeInOverride;
-  String? _mobileTimeOutOverride;
-  bool? _mobileClockedInOverride;
-
-  Timer? _durationTimer;
-  String _elapsedDuration = '00:00:00';
-  DateTime? _rawClockInDateTime;
-
-  bool _loading = true;
-  bool _processing = false;
-  bool _showSuccess = false;
-  bool _hasClockedOutToday = false;
-  String _successMsg = '';
-  String _successSubMsg = '';
-
-  GeofenceResult? _geofenceResult;
-  bool _gpsLoading = true;
-
-  late Timer _timer;
+  Timer? _clockTimer;
   DateTime _now = DateTime.now();
 
-  final _uuid = const Uuid();
-  StreamSubscription? _firestoreSub;
+  DateTime? _clockInTime;
+  DateTime? _clockOutTime;
+  bool _saving = false;
 
-  bool get _isClockedIn => kIsWeb
-      ? _webClockedIn
-      : (_mobileClockedInOverride ?? _lastRecord?.isClockedIn ?? false);
+  Employee? _liveEmployee;
 
-  String? get _displayTimeIn =>
-      kIsWeb ? _webTimeIn : (_mobileTimeInOverride ?? _lastRecord?.timeIn);
+  StreamSubscription<QuerySnapshot>? _attendanceSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
 
-  String? get _displayTimeOut =>
-      kIsWeb ? _webTimeOut : (_mobileTimeOutOverride ?? _lastRecord?.timeOut);
+  Employee? get _employee => _liveEmployee ?? widget.initialEmployee;
 
-  bool get _isInsideZone => _geofenceResult?.isInside ?? false;
-
-  bool get _isAlreadyClockedOutToday {
-    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    if (_lastRecord != null && _lastRecord!.date == today) {
-      return _lastRecord!.timeOut != null;
-    }
-    if (kIsWeb && _webDate == today) {
-      return _webTimeOut != null;
-    }
-    return false;
+  String? get _employeeId {
+    final id = _employee?.employeeId;
+    if (id != null && id.isNotEmpty) return id;
+    final fallback = _employee?.id;
+    if (fallback != null && fallback.isNotEmpty) return fallback;
+    return null;
   }
+
+  String? get _employeeDocId {
+    final id = _employee?.id;
+    if (id != null && id.isNotEmpty) return id;
+    return null;
+  }
+
+  bool get _canClock => _isInRange || _wfhAccess;
+  bool get _isWfhMode => _wfhAccess && !_isInRange;
 
   @override
   void initState() {
     super.initState();
+    _isInRange = widget.initialInRange;
+    _wfhAccess = widget.initialWfhAccess || _readWfhFromEmployee();
+    _startClock();
+    _startAttendanceStream();
+    _startEmployeeListener();
 
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-    ));
-
-    _fadeCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 700))
-      ..forward();
-    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
-
-    _successCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 600));
-    _successAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(parent: _successCtrl, curve: Curves.elasticOut));
-
-    _glowCtrl = AnimationController(
-        vsync: this, duration: const Duration(seconds: 3))
-      ..repeat(reverse: true);
-    _glowAnim = Tween<double>(begin: 0.2, end: 0.8)
-        .animate(CurvedAnimation(parent: _glowCtrl, curve: Curves.easeInOut));
-
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _now = DateTime.now());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshGeofence(silent: true);
     });
+  }
 
-    _loadData();
-    _checkGeofence();
+  bool _readWfhFromEmployee() {
+    final emp = _employee;
+    if (emp == null) return false;
+    try {
+      final dynamic v = (emp as dynamic).wfhAccess;
+      if (v is bool) return v;
+      if (v != null) return v.toString().toLowerCase() == 'true';
+    } catch (_) {}
+    return false;
   }
 
   @override
   void dispose() {
-    _timer.cancel();
-    _durationTimer?.cancel();
-    _fadeCtrl.dispose();
-    _successCtrl.dispose();
-    _glowCtrl.dispose();
-    _firestoreSub?.cancel();
+    _clockTimer?.cancel();
+    _attendanceSub?.cancel();
+    _employeeSub?.cancel();
     super.dispose();
   }
 
-  void _startElapsedTimer() {
-    _durationTimer?.cancel();
-    if (_rawClockInDateTime == null) return;
-    _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_rawClockInDateTime != null && _isClockedIn) {
-        final now = DateTime.now();
-        final difference = now.difference(_rawClockInDateTime!);
-        final hours = difference.inHours.toString().padLeft(2, '0');
-        final minutes = (difference.inMinutes % 60).toString().padLeft(2, '0');
-        final seconds = (difference.inSeconds % 60).toString().padLeft(2, '0');
-        if (mounted) {
-          setState(() {
-            _elapsedDuration = '$hours:$minutes:$seconds';
-          });
-        }
-      }
+  void _startClock() {
+    _clockTimer?.cancel();
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _now = DateTime.now());
     });
   }
 
-  Future<void> _loadData() async {
-    final empId = await SecurityService.instance.getCurrentEmployeeId();
-    Employee? emp;
-    Attendance? att;
+  String _formatTime(DateTime t) {
+    final h24 = t.hour;
+    final h12 = h24 == 0 ? 12 : (h24 > 12 ? h24 - 12 : h24);
+    final m = t.minute.toString().padLeft(2, '0');
+    final period = h24 >= 12 ? 'PM' : 'AM';
+    return '${h12.toString().padLeft(2, '0')}:$m $period';
+  }
 
-    if (empId != null && !kIsWeb) {
-      emp = await DatabaseService.instance.getEmployeeById(empId);
-      att = await DatabaseService.instance.getTodayAttendance(empId);
+  String get _liveTime => _formatTime(_now);
+  String get _clockInDisplay =>
+      _clockInTime != null ? _formatTime(_clockInTime!) : '--:--';
+  String get _clockOutDisplay =>
+      _clockOutTime != null ? _formatTime(_clockOutTime!) : '--:--';
 
-      if (att != null && att.timeIn != null && att.timeOut == null) {
-        try {
-          final parts = att.timeIn!.split(':');
-          if (parts.length >= 2) {
-            final now = DateTime.now();
-            _rawClockInDateTime = DateTime(
-              now.year,
-              now.month,
-              now.day,
-              int.parse(parts[0]),
-              int.parse(parts[1]),
-              parts.length > 2 ? int.parse(parts[2].substring(0, 2)) : 0,
-            );
-          }
-        } catch (_) {}
-      }
-    }
-    emp ??= widget.initialEmployee;
+  String get _todayStr {
+    final n = DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2, '0')}-'
+        '${n.day.toString().padLeft(2, '0')}';
+  }
 
-    if (kIsWeb && emp != null) {
-      final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      try {
-        final snap = await FirebaseFirestore.instance
-            .collection('attendance_logs')
-            .where('employee_id', isEqualTo: emp.employeeId)
-            .where('date', isEqualTo: today)
-            .orderBy('timestamp', descending: false)
-            .get();
-        String? lastIn, lastOut;
-        for (final doc in snap.docs) {
-          final d = doc.data();
-          if (d['type'] == 'IN') {
-            lastIn = d['time']?.toString();
-            if (lastIn != null) {
-              try {
-                final parts = lastIn.split(':');
-                if (parts.length >= 2) {
-                  final now = DateTime.now();
-                  _rawClockInDateTime = DateTime(
-                    now.year,
-                    now.month,
-                    now.day,
-                    int.parse(parts[0]),
-                    int.parse(parts[1]),
-                    parts.length > 2
-                        ? int.parse(parts[2].substring(0, 2))
-                        : 0,
-                  );
-                }
-              } catch (_) {}
-            }
-          }
-          if (d['type'] == 'OUT') lastOut = d['time']?.toString();
-        }
-        if (mounted) {
-          setState(() {
-            _webTimeIn = lastIn;
-            _webTimeOut = lastOut;
-            _webDate = today;
-            _webClockedIn = lastIn != null && lastOut == null;
-          });
-        }
+  String _deviceName() {
+    if (kIsWeb) return 'Web Browser';
+    try {
+      if (Platform.isAndroid) return 'Android App';
+      if (Platform.isIOS) return 'iOS App';
+      if (Platform.isWindows) return 'Windows App';
+      if (Platform.isMacOS) return 'macOS App';
+      if (Platform.isLinux) return 'Linux App';
+    } catch (_) {}
+    return defaultTargetPlatform.name;
+  }
 
-        _firestoreSub?.cancel();
-        _firestoreSub = FirebaseFirestore.instance
-            .collection('attendance_logs')
-            .where('employee_id', isEqualTo: emp.employeeId)
-            .where('date', isEqualTo: today)
-            .orderBy('timestamp', descending: false)
-            .snapshots()
-            .listen((s) {
-          if (!mounted) return;
-          String? li, lo;
-          for (final doc in s.docs) {
-            final d = doc.data();
-            if (d['type'] == 'IN') li = d['time']?.toString();
-            if (d['type'] == 'OUT') lo = d['time']?.toString();
-          }
-          setState(() {
-            _webTimeIn = li;
-            _webTimeOut = lo;
-            _webDate = today;
-            _webClockedIn = li != null && lo == null;
-          });
-        });
-      } catch (e) {
-        debugPrint('Firestore web load: $e');
-      }
-    }
+  Future<void> _refreshGeofence({bool silent = false}) async {
+    if (_checkingGeofence) return;
+    if (mounted) setState(() => _checkingGeofence = true);
 
-    if (mounted) {
+    try {
+      debugPrint('📍 [ClockScreen] Checking geofence...');
+      final result = await GeofenceService.instance
+          .checkGeofence()
+          .timeout(const Duration(seconds: 12));
+
+      final inside = result.isInside;
+      final distance = result.distanceMeters;
+
+      debugPrint('📍 [ClockScreen] inside=$inside, distance=${distance}m');
+
+      if (!mounted) return;
+      final changed = inside != _isInRange;
+
       setState(() {
-        _employee = emp;
-        _lastRecord = att;
-        _loading = false;
+        _isInRange = inside;
+        _checkingGeofence = false;
       });
-      if (_isClockedIn && _rawClockInDateTime != null) {
-        _startElapsedTimer();
-      }
-    }
-  }
 
-  Future<void> _checkGeofence() async {
-    if (mounted) setState(() => _gpsLoading = true);
-    try {
-      final res = await GeofenceService.instance.checkGeofence();
-      if (mounted) setState(() => _geofenceResult = res);
-    } catch (_) {} finally {
-      if (mounted) setState(() => _gpsLoading = false);
-    }
-  }
-
-  void _handleClockTap() async {
-    if (_processing) return;
-
-    if (_isAlreadyClockedOutToday) {
-      _showSnack('You have already clocked out today.', AppColors.warning);
-      return;
-    }
-
-    await _checkGeofence();
-    if (!mounted) return;
-
-    if (!_isInsideZone) {
-      _showGeofenceDialog();
-      return;
-    }
-
-    setState(() => _processing = true);
-    final success = await _recordClockOut();
-    if (!mounted) return;
-    setState(() => _processing = false);
-
-    if (success) {
-      await Future.delayed(const Duration(milliseconds: 1600));
-      if (mounted) widget.onContinue?.call();
-    }
-  }
-
-  Future<bool> _recordClockOut() async {
-    final now = DateTime.now();
-    final today = DateFormat('yyyy-MM-dd').format(now);
-    final timeStr = DateFormat('HH:mm:ss').format(now);
-    final emp = _employee ?? widget.initialEmployee;
-    if (emp == null) return false;
-
-    final record = _lastRecord;
-
-    try {
-      if (kIsWeb) {
-        await FirebaseFirestore.instance.collection('attendance_logs').add({
-          'employee_id': emp.employeeId,
-          'employee_name': emp.fullName,
-          'date': today,
-          'time': timeStr,
-          'type': 'OUT',
-          'method': 'Manual',
-          'platform': 'Web',
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-        if (mounted) {
-          setState(() {
-            _webTimeOut = timeStr;
-            _webClockedIn = false;
-            _rawClockInDateTime = null;
-            _elapsedDuration = '00:00:00';
-            _durationTimer?.cancel();
-          });
-        }
-        _showSuccessOverlay(
-          'Clock Out Success',
-          '${emp.fullName}\n${DateFormat("hh:mm a").format(now)}\n(Logged to Cloud)',
+      if (changed && !silent) {
+        _showSnack(
+          inside
+              ? '✅ Nasa authorized zone ka na.'
+              : '📍 Wala ka sa authorized zone. '
+              'Kung remote ka, pakiusapan ang admin na i-enable ang WFH.',
         );
-      } else {
-        if (record != null) {
-          await DatabaseService.instance.updateTimeOut(record.id, timeStr);
-          await FirebaseFirestore.instance.collection('attendance_logs').add({
-            'employee_id': emp.employeeId,
-            'employee_name': emp.fullName,
-            'date': today,
-            'time': timeStr,
-            'type': 'OUT',
-            'method': 'Manual',
-            'platform': 'Mobile',
-            'timestamp': FieldValue.serverTimestamp(),
-          });
-          if (mounted) {
-            setState(() {
-              _mobileTimeOutOverride = timeStr;
-              _mobileClockedInOverride = false;
-              _rawClockInDateTime = null;
-              _elapsedDuration = '00:00:00';
-            });
-          }
-          _durationTimer?.cancel();
-          _showSuccessOverlay('Clock Out Success',
-              '${emp.fullName}\n${DateFormat("hh:mm a").format(now)}');
-        } else {
-          _showSnack('No active clock-in record found.', AppColors.error);
-          return false;
-        }
-        await _loadData();
       }
-      setState(() {
-        _hasClockedOutToday = true;
+    } catch (e) {
+      debugPrint('❌ [ClockScreen] Geofence error: $e');
+      if (!mounted) return;
+      setState(() => _checkingGeofence = false);
+      if (!silent) {
+        _showSnack(
+          '⚠️ Hindi ma-verify ang location. Paki-check ang GPS at internet.',
+        );
+      }
+    }
+  }
+
+  Future<void> _handlePullRefresh() async {
+    debugPrint('🔄 [ClockScreen] Pull-to-refresh triggered');
+    await Future.wait([
+      _refreshGeofence(silent: true),
+      _reloadAttendanceOnce(),
+      _reloadEmployeeOnce(),
+    ]);
+  }
+
+  Future<void> _reloadAttendanceOnce() async {
+    final empId = _employeeId;
+    if (empId == null || empId.isEmpty) return;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .where('employee_id', isEqualTo: empId)
+          .where('date', isEqualTo: _todayStr)
+          .get()
+          .timeout(const Duration(seconds: 10));
+      if (!mounted) return;
+      debugPrint('🔄 [ClockScreen] Reloaded ${snap.docs.length} attendance logs');
+      _processAttendance(snap.docs);
+    } catch (e) {
+      debugPrint('⚠️ [ClockScreen] _reloadAttendanceOnce error: $e');
+    }
+  }
+
+  Future<void> _reloadEmployeeOnce() async {
+    final docId = _employeeDocId;
+    if (docId == null || docId.isEmpty) return;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(docId)
+          .get()
+          .timeout(const Duration(seconds: 10));
+      if (!snap.exists) return;
+      final data = snap.data();
+      if (data == null || !mounted) return;
+      final updated = Employee.fromFirestore(data, docId);
+      setState(() => _liveEmployee = updated);
+      debugPrint('🔄 [ClockScreen] Reloaded employee: ${updated.fullName}');
+    } catch (e) {
+      debugPrint('⚠️ [ClockScreen] _reloadEmployeeOnce error: $e');
+    }
+  }
+
+  void _startAttendanceStream() {
+    final empId = _employeeId;
+    if (empId == null) {
+      debugPrint('⚠️ ClockScreen: walang employee ID — skip attendance stream');
+      return;
+    }
+    _attendanceSub?.cancel();
+    _attendanceSub = FirebaseFirestore.instance
+        .collection('attendance_logs')
+        .where('employee_id', isEqualTo: empId)
+        .where('date', isEqualTo: _todayStr)
+        .snapshots()
+        .listen(
+          (snap) {
+        if (!mounted) return;
+        debugPrint('📡 [ClockScreen] Stream update: ${snap.docs.length} docs');
+        _processAttendance(snap.docs);
+      },
+      onError: (e) => debugPrint('❌ ClockScreen stream error: $e'),
+    );
+  }
+
+  void _startEmployeeListener() {
+    final empDocId = _employeeDocId;
+    if (empDocId == null || empDocId.isEmpty) {
+      debugPrint(
+          '⚠️ [ClockScreen] Walang employee doc ID — skip employee listener');
+      return;
+    }
+    _employeeSub?.cancel();
+    _employeeSub = FirebaseFirestore.instance
+        .collection('employees')
+        .doc(empDocId)
+        .snapshots()
+        .listen(
+          (snap) {
+        if (!mounted) return;
+        final data = snap.data();
+        if (data == null) return;
+
+        Employee? updated;
+        try {
+          updated = Employee.fromFirestore(data, empDocId);
+        } catch (e) {
+          debugPrint('⚠️ [ClockScreen] Employee parse error: $e');
+        }
+        if (updated != null) {
+          setState(() => _liveEmployee = updated);
+          debugPrint('👤 [ClockScreen] Profile live: '
+              'name="${updated.fullName}", role="${updated.position}"');
+        }
+
+        final raw = data['wfhAccess'];
+        final enabled = raw is bool
+            ? raw
+            : (raw?.toString().toLowerCase() == 'true');
+
+        if (enabled != _wfhAccess) {
+          setState(() => _wfhAccess = enabled);
+          _showSnack(
+            enabled
+                ? '🏠 WFH access ENABLED — pwede ka nang mag-clock in/out kahit saan.'
+                : '🏢 WFH access DISABLED — kailangan nasa office zone na.',
+          );
+        }
+      },
+      onError: (e) =>
+          debugPrint('❌ [ClockScreen] Employee listener error: $e'),
+    );
+  }
+
+  DateTime? _extractDateTime(Map<String, dynamic> data) {
+    final rawTime = data['time'];
+    if (rawTime is String && rawTime.trim().isNotEmpty) {
+      final parsed = _parseTimeString(rawTime.trim());
+      if (parsed != null) return parsed;
+    }
+    final rawTs = data['timestamp'];
+    if (rawTs is Timestamp) return rawTs.toDate().toLocal();
+    if (rawTs is String && rawTs.trim().isNotEmpty) {
+      final parsed = DateTime.tryParse(rawTs.trim());
+      if (parsed != null) return parsed.toLocal();
+    }
+    if (rawTs is int) return DateTime.fromMillisecondsSinceEpoch(rawTs);
+    return null;
+  }
+
+  void _processAttendance(List<QueryDocumentSnapshot> docs) {
+    DateTime? inTime;
+    DateTime? outTime;
+
+    final sorted = [...docs]..sort((a, b) {
+      final aData = a.data() as Map<String, dynamic>;
+      final bData = b.data() as Map<String, dynamic>;
+      final aTime = _extractDateTime(aData) ?? DateTime(2000);
+      final bTime = _extractDateTime(bData) ?? DateTime(2000);
+      return aTime.compareTo(bTime);
+    });
+
+    for (final doc in sorted) {
+      final data = doc.data() as Map<String, dynamic>;
+      final type = data['type']?.toString().toUpperCase();
+      final parsed = _extractDateTime(data);
+      if (parsed == null) continue;
+
+      if (type == 'IN' || type == 'CLOCK_IN') {
+        inTime = parsed;
+        outTime = null;
+      } else if (type == 'OUT' || type == 'CLOCK_OUT') {
+        if (inTime != null && parsed.isAfter(inTime)) {
+          outTime = parsed;
+        }
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _clockInTime = inTime;
+      _clockOutTime = outTime;
+    });
+  }
+
+  DateTime? _parseTimeString(String t) {
+    try {
+      final parts = t.split(':');
+      if (parts.length < 2) return null;
+      final now = DateTime.now();
+      return DateTime(
+        now.year,
+        now.month,
+        now.day,
+        int.parse(parts[0]),
+        int.parse(parts[1]),
+        parts.length > 2 ? int.parse(parts[2].substring(0, 2)) : 0,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _saveAttendance({
+    required String type,
+    required DateTime time,
+  }) async {
+    final empId = _employeeId;
+    if (empId == null || empId.isEmpty) {
+      debugPrint('❌ ERROR: employee_id is null or empty!');
+      _showSnack('Hindi makuha ang employee ID. Pakisuri ang login.');
+      return false;
+    }
+
+    final timeStr = '${time.hour.toString().padLeft(2, '0')}:'
+        '${time.minute.toString().padLeft(2, '0')}:'
+        '${time.second.toString().padLeft(2, '0')}';
+
+    final employeeName = _employee?.fullName ?? 'Unknown';
+    final deviceName = _deviceName();
+    final isClockIn = type == 'IN';
+
+    final attendancePayload = <String, dynamic>{
+      'employee_id': empId,
+      'employee_name': employeeName,
+      'date': _todayStr,
+      'type': type,
+      'time': timeStr,
+      'timestamp': FieldValue.serverTimestamp(),
+      'created_at': DateTime.now().toIso8601String(),
+      'wfh': _wfhAccess,
+      'in_range': _isInRange,
+      'wfh_mode': _isWfhMode,
+      'device': deviceName,
+    };
+
+    final activityLogPayload = <String, dynamic>{
+      'type': isClockIn ? 'clock_in' : 'clock_out',
+      'action': isClockIn ? 'Clocked In' : 'Clocked Out',
+      'employeeId': empId,
+      'employee_id': empId,
+      'employee_name': employeeName,
+      'time': timeStr,
+      'date': _todayStr,
+      'wfh': _wfhAccess,
+      'in_range': _isInRange,
+      'device': deviceName,
+      'platform': deviceName,
+      'timestamp': FieldValue.serverTimestamp(),
+    };
+
+    final historyLogPayload = <String, dynamic>{
+      'type': isClockIn ? 'login' : 'logout',
+      'employee_id': empId,
+      'employee_name': employeeName,
+      'device': deviceName,
+      'wfh': _wfhAccess,
+      'in_range': _isInRange,
+      'timestamp': FieldValue.serverTimestamp(),
+    };
+
+    debugPrint('═══════════════════════════════════════════');
+    debugPrint('💾 [ClockScreen] Saving $type for $empId');
+    debugPrint('═══════════════════════════════════════════');
+
+    try {
+      await FirebaseFirestore.instance.enableNetwork();
+      final docRef = await FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .add(attendancePayload);
+      debugPrint('✅ [ClockScreen] attendance_logs written: ${docRef.id}');
+
+      Future.wait([
+        FirebaseFirestore.instance
+            .collection('activity logs')
+            .add(activityLogPayload)
+            .then((ref) =>
+            debugPrint('✅ [ClockScreen] activity logs written: ${ref.id}'))
+            .catchError((e) {
+          debugPrint('⚠️ activity logs FAILED: $e');
+        }),
+        FirebaseFirestore.instance
+            .collection('activity_logs')
+            .add(historyLogPayload)
+            .then((ref) =>
+            debugPrint('✅ [ClockScreen] activity_logs written: ${ref.id}'))
+            .catchError((e) {
+          debugPrint('⚠️ activity_logs FAILED: $e');
+        }),
+      ]).whenComplete(() {
+        debugPrint('🎉 [ClockScreen] All secondary writes settled');
       });
+
+      await FirebaseFirestore.instance.waitForPendingWrites();
+      debugPrint('✅ [ClockScreen] Server sync confirmed!');
+
+      // ✅ ADMIN NOTIFICATION
+      try {
+        if (isClockIn) {
+          AdminNotificationService.instance.notifyClockIn(
+            employeeId: empId,
+            employeeName: employeeName,
+            timeStr: timeStr,
+            wfh: _wfhAccess,
+            inRange: _isInRange,
+          );
+        } else {
+          AdminNotificationService.instance.notifyClockOut(
+            employeeId: empId,
+            employeeName: employeeName,
+            timeStr: timeStr,
+            wfh: _wfhAccess,
+          );
+        }
+      } catch (e) {
+        debugPrint('⚠️ Admin notification failed: $e');
+      }
+
       return true;
     } catch (e) {
-      _showSnack('Record failed: $e', AppColors.error);
+      debugPrint('❌ [ClockScreen] Save attendance error: $e');
+      _showSnack('Error saving: $e');
       return false;
-    } finally {
-      if (mounted) setState(() => _processing = false);
     }
+  }
+
+  void _handleBack() {
+    if (widget.onBack != null) {
+      widget.onBack!();
+    } else {
+      Navigator.of(context).maybePop();
+    }
+  }
+
+  void _handleContinue() {
+    if (widget.onContinue != null) {
+      widget.onContinue!();
+    } else {
+      _handleBack();
+    }
+  }
+
+  Future<void> _handleClockIn() async {
+    if (_saving) return;
+    if (!_canClock) {
+      _showSnack(
+        'Wala ka sa authorized location. Hindi ka makakapag-clock in. '
+            'Pakisuyo sa admin na i-enable ang WFH access kung remote ka.',
+      );
+      return;
+    }
+    if (_clockInTime != null) {
+      _showSnack('Naka-clock in ka na ng ${_formatTime(_clockInTime!)}.');
+      return;
+    }
+
+    setState(() => _saving = true);
+    final now = DateTime.now();
+    final ok = await _saveAttendance(type: 'IN', time: now);
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      if (ok) _clockInTime = now;
+    });
+    if (!ok) return;
+
+    _showSuccessOverlay(
+      type: 'IN',
+      time: now,
+      onDone: () => widget.onClockIn?.call(),
+    );
+  }
+
+  Future<void> _handleClockOut() async {
+    if (_saving) return;
+    if (!_canClock) {
+      _showSnack(
+        'Wala ka sa authorized location. Hindi ka makakapag-clock out. '
+            'Pakisuyo sa admin na i-enable ang WFH access kung remote ka.',
+      );
+      return;
+    }
+    if (_clockInTime == null) {
+      _showSnack('Mag-clock in ka muna bago mag-clock out.');
+      return;
+    }
+    if (_clockOutTime != null) {
+      _showSnack('Naka-clock out ka na ng ${_formatTime(_clockOutTime!)}.');
+      return;
+    }
+
+    setState(() => _saving = true);
+    final now = DateTime.now();
+    final ok = await _saveAttendance(type: 'OUT', time: now);
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      if (ok) _clockOutTime = now;
+    });
+    if (!ok) return;
+
+    _showSuccessOverlay(
+      type: 'OUT',
+      time: now,
+      onDone: () => widget.onClockOut?.call(),
+    );
+  }
+
+  void _showSuccessOverlay({
+    required String type,
+    required DateTime time,
+    required VoidCallback onDone,
+  }) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: false,
+      barrierLabel: 'ClockSuccess',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (dialogCtx, _, __) {
+        return ClockInSuccessScreen(
+          employee: _employee,
+          arrivalTime: time,
+          type: type,
+          onContinue: () {
+            Navigator.of(dialogCtx).pop();
+            onDone();
+          },
+        );
+      },
+    );
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
+    final empName = _employee?.fullName ?? 'JOHN HOWARD';
 
-    if (_loading) return _buildSplash(tc);
     return Scaffold(
       backgroundColor: tc.bg,
-      body: Stack(children: [
-        FadeTransition(
-          opacity: _fadeAnim,
-          child: SafeArea(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildHeader(tc),
-                    const SizedBox(height: 20),
-                    _buildStatusBanner(),
-                    const SizedBox(height: 16),
-                    _buildLocationCard(tc),
-                    const SizedBox(height: 16),
-                    _buildTimeRow(tc),
-                    const SizedBox(height: 28),
-                    _buildClockOutButton(tc),
-                  ]),
-            ),
-          ),
-        ),
-        if (_showSuccess) _buildSuccessOverlay(tc),
-      ]),
-    );
-  }
-
-  // ── HEADER ──────────────────────────────────────────────────────────
-  Widget _buildHeader(_ThemeColors tc) {
-    final name = _employee?.firstName ??
-        _employee?.fullName.split(' ').first ??
-        'Employee';
-
-    return SizedBox(
-      height: 72,
-      child: Row(children: [
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: AppColors.gradientOrange,
-            border: Border.all(color: _MockColors.darkBorder, width: 1.15),
-          ),
-          child: Center(
-            child: Text(
-              name.isNotEmpty ? name[0].toUpperCase() : 'U',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 18),
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('HI, ${name.toUpperCase()}',
-                  style: TextStyle(
-                      color: tc.textSecondary,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.0)),
-              Text('Employee Dashboard',
-                  style: TextStyle(
-                      color: tc.textPrimary,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700)),
-            ]),
-        const Spacer(),
-        GestureDetector(
-          onTap: () => widget.onBack?.call(),
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              gradient: AppColors.gradientOrange,
-              shape: BoxShape.circle,
-              border: Border.all(color: _MockColors.orangeBorder, width: 1.15),
-            ),
-            child: const Icon(Icons.arrow_back_ios_new_rounded,
-                color: Colors.white, size: 20),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  // ── STATUS BANNER (always dark hero) ───────────────────────────────
-  Widget _buildStatusBanner() {
-    final inRange = _isInsideZone;
-    final loading = _gpsLoading;
-    final statusText =
-    loading ? 'Detecting...' : (inRange ? 'In Range.' : 'Out of Range.');
-    final statusColor = loading ? Colors.white70 : AppColors.orange;
-    final subText = inRange || loading
-        ? 'Our system verified your location. You are\nready to go.'
-        : 'You are outside the authorized zone.\nMove closer to clock out.';
-
-    return Container(
-      width: double.infinity,
-      height: 175,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF3A3A3A), Color(0xFF1A1A1A), Color(0xFF0D0D0D)],
-        ),
-        border: Border.all(color: _MockColors.orangeBorder, width: 1.15),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.3),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Stack(
+      body: Column(
         children: [
-          Positioned.fill(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.white.withValues(alpha: 0.08),
-                      Colors.transparent,
-                      Colors.black.withValues(alpha: 0.4),
+          Expanded(
+            child: SafeArea(
+              bottom: false,
+              child: RefreshIndicator(
+                color: _orange,
+                backgroundColor: tc.bg,
+                onRefresh: _handlePullRefresh,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(
+                    parent: BouncingScrollPhysics(),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 8),
+                      _buildHeader(tc, empName),
+                      const SizedBox(height: 24),
+                      _buildHeroCard(),
+                      const SizedBox(height: 21),
+                      _buildLocationStatusSection(tc),
+                      const SizedBox(height: 21),
+                      _buildClockInOutSection(),
+                      const SizedBox(height: 23),
+                      _buildClockOutSection(tc),
+                      const SizedBox(height: 21),
+                      _buildShortcutsSection(tc),
+                      const SizedBox(height: 40),
                     ],
                   ),
                 ),
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(24),
+          _buildBottomNav(tc),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ HEADER — may Employee Notification Bell
+  // ═══════════════════════════════════════════════════════════════
+  Widget _buildHeader(_ThemeColors tc, String name) {
+    final initials = name.trim().isEmpty
+        ? '?'
+        : name.trim().split(' ').map((w) => w[0]).take(2).join().toUpperCase();
+    final empId = _employeeId ?? '';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: _handleBack,
+            child: _buildHeaderAvatar(tc, initials),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                RichText(
-                  text: TextSpan(
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.white,
-                      height: 1.25,
+                Text(
+                  'HI, $name'.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: tc.textSecondary,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    const Icon(Icons.access_time_rounded,
+                        size: 12, color: _orange),
+                    const SizedBox(width: 4),
+                    Text(
+                      _liveTime,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: tc.textPrimary,
+                        letterSpacing: 0.2,
+                      ),
                     ),
+                    if (_wfhAccess) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: isDarkSafe(tc)
+                              ? const Color(0xFF14371F)
+                              : const Color(0xFFDCFCE7),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: const Color(0xFF22C55E)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.home_work_rounded,
+                                size: 10,
+                                color: isDarkSafe(tc)
+                                    ? const Color(0xFF86EFAC)
+                                    : _greenDeep),
+                            const SizedBox(width: 4),
+                            Text(
+                              'WFH',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: isDarkSafe(tc)
+                                    ? const Color(0xFF86EFAC)
+                                    : _greenDeep,
+                                letterSpacing: 0.4,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // ✅ BAGONG: Employee Notification Bell
+          if (empId.isNotEmpty)
+            EmployeeNotificationBell(
+              employeeId: empId,
+              iconColor: tc.textPrimary,
+              size: 22,
+            ),
+
+          // Geofence checking indicator
+          if (_checkingGeofence)
+            const Padding(
+              padding: EdgeInsets.only(left: 4),
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  color: _orange,
+                  strokeWidth: 2,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  bool isDarkSafe(_ThemeColors tc) => tc.isDark;
+
+  Widget _buildHeaderAvatar(_ThemeColors tc, String initials) {
+    final photoUrl = _employee?.photoUrl;
+    final hasPhoto =
+        photoUrl != null && photoUrl.isNotEmpty && photoUrl != '—';
+
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: tc.avatarBg,
+        border: Border.all(color: tc.avatarBorder, width: 1.15),
+      ),
+      clipBehavior: Clip.antiAlias,
+      alignment: Alignment.center,
+      child: hasPhoto
+          ? _buildPhotoContent(tc, photoUrl, initials)
+          : Text(
+        initials,
+        style: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPhotoContent(_ThemeColors tc, String url, String initials) {
+    if (url.startsWith('data:image')) {
+      try {
+        final b64 = url.split(',').last;
+        return Image.memory(
+          base64Decode(b64),
+          fit: BoxFit.cover,
+          width: 40,
+          height: 40,
+          errorBuilder: (_, __, ___) => _avatarFallbackText(tc, initials),
+        );
+      } catch (_) {
+        return _avatarFallbackText(tc, initials);
+      }
+    }
+    if (url.startsWith('http')) {
+      return Image.network(
+        url,
+        fit: BoxFit.cover,
+        width: 40,
+        height: 40,
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return Container(
+            color: _orange,
+            alignment: Alignment.center,
+            child: const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2,
+              ),
+            ),
+          );
+        },
+        errorBuilder: (_, __, ___) => _avatarFallbackText(tc, initials),
+      );
+    }
+    return _avatarFallbackText(tc, initials);
+  }
+
+  Widget _avatarFallbackText(_ThemeColors tc, String initials) {
+    return Container(
+      color: _orange,
+      alignment: Alignment.center,
+      child: Text(
+        initials,
+        style: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeroCard() {
+    final Color accent;
+    final String statusText;
+    final String subtitle;
+
+    if (_checkingGeofence && !_wfhAccess) {
+      accent = const Color(0xFFA1A1AA);
+      statusText = 'Checking...';
+      subtitle = 'Vine-verify ang iyong lokasyon. Maghintay lang.';
+    } else if (_isWfhMode) {
+      accent = const Color(0xFF4ADE80);
+      statusText = 'WFH Mode.';
+      subtitle =
+      'Work-from-home access is active. You can clock in/out anywhere.';
+    } else if (_isInRange) {
+      accent = _green;
+      statusText = 'In Range.';
+      subtitle = 'Our system verified your location. You are ready to go.';
+    } else {
+      accent = _orange;
+      statusText = 'Out of Range.';
+      subtitle =
+      'You are outside the authorized zone. Clock in/out is disabled.';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: GestureDetector(
+        onTap: _handleContinue,
+        child: Container(
+          height: 200,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: _orangeBorder, width: 1.15),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 50,
+                offset: const Offset(0, 25),
+                spreadRadius: -12,
+              ),
+            ],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color(0xFF3A2A1A),
+                      Color(0xFF1A1A1A),
+                      Color(0xFF09090B),
+                    ],
+                    stops: [0.0, 0.55, 1.0],
+                  ),
+                ),
+              ),
+              Positioned(
+                top: -40,
+                right: -40,
+                child: Container(
+                  width: 180,
+                  height: 180,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        _orange.withValues(alpha: 0.45),
+                        _orange.withValues(alpha: 0.0),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Color(0xE609090B),
+                      Color(0x6609090B),
+                      Colors.transparent,
+                    ],
+                    stops: [0.0, 0.45, 1.0],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(25, 32, 25, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    RichText(
+                      text: TextSpan(
+                        style: const TextStyle(
+                          fontSize: 34,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white,
+                          height: 1.15,
+                        ),
+                        children: [
+                          const TextSpan(text: 'You are currently\n'),
+                          TextSpan(
+                            text: statusText,
+                            style: TextStyle(
+                              color: accent,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFFA1A1AA),
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLocationStatusSection(_ThemeColors tc) {
+    final Color accent;
+    final String label;
+    final String subLabel;
+    final IconData trailingIcon;
+    final String trailingLabel;
+
+    if (_checkingGeofence) {
+      accent = const Color(0xFFA1A1AA);
+      label = 'Checking location...';
+      subLabel = 'Kinukuha ang GPS position';
+      trailingIcon = Icons.gps_fixed_rounded;
+      trailingLabel = 'Verifying';
+    } else if (_isWfhMode) {
+      accent = const Color(0xFF4ADE80);
+      label = 'Work From Home — Allowed';
+      subLabel = 'Remote Zone (Outside Geofence)';
+      trailingIcon = Icons.home_work_rounded;
+      trailingLabel = 'Remote GPS';
+    } else if (_isInRange) {
+      accent = _green;
+      label = 'Inside Authorized Zone';
+      subLabel = 'HQ Main Office';
+      trailingIcon = Icons.send_rounded;
+      trailingLabel = 'Live GPS';
+    } else {
+      accent = _red;
+      label = 'Outside Authorized Zone';
+      subLabel = 'HQ Main Office';
+      trailingIcon = Icons.send_rounded;
+      trailingLabel = 'Live GPS';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Location Status',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: tc.textPrimary,
+                ),
+              ),
+              Row(
+                children: [
+                  Icon(trailingIcon, size: 12, color: tc.textPrimary),
+                  const SizedBox(width: 4),
+                  Text(
+                    trailingLabel,
+                    style: TextStyle(fontSize: 12, color: tc.textPrimary),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            height: 117,
+            decoration: BoxDecoration(
+              gradient: _orangeGradient,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _orangeBorder, width: 1.15),
+            ),
+            child: Stack(
+              children: [
+                Positioned(
+                  left: 17,
+                  top: 17,
+                  child: _GpsPinIcon(accent: accent),
+                ),
+                Positioned(
+                  left: 81,
+                  top: 13,
+                  right: 20,
+                  bottom: 13,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const TextSpan(text: 'You are currently\n'),
-                      TextSpan(
-                        text: statusText,
-                        style: TextStyle(color: statusColor),
+                      Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: accent,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      const Text(
+                        'HQ Main Office',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        _isWfhMode
+                            ? 'WFH access is enabled by admin.\nYou can clock in/out from anywhere.'
+                            : '1245 Paz Street, 1007 Manila,\nMetro Manila - Philippines',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white,
+                          height: 1.25,
+                        ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  subText,
-                  style: const TextStyle(
-                    color: Color(0xFFB0B0B0),
-                    fontSize: 12,
-                    height: 1.5,
-                  ),
-                ),
               ],
             ),
           ),
@@ -619,462 +1192,323 @@ class _ClockScreenState extends State<ClockScreen>
     );
   }
 
-  // ── LOCATION CARD ──────────────────────────────────────────────────
-  Widget _buildLocationCard(_ThemeColors tc) {
-    final inRange = _isInsideZone;
-    final loading = _gpsLoading;
-    final zoneText = loading
-        ? 'Checking your zone…'
-        : (inRange ? 'Inside Authorized Zone' : 'Outside Authorized Zone');
-    final dist = _geofenceResult?.distanceMeters;
-    final accentColor = loading
-        ? AppColors.orange
-        : (inRange ? _MockColors.lime : _MockColors.red);
-    final cardBorderColor = loading
-        ? _MockColors.orangeBorder
-        : (inRange ? _MockColors.orangeBorder : _MockColors.red);
-    final cardBg = loading || inRange ? null : _MockColors.translucentGray;
-    final cardGradient = loading || inRange ? AppColors.gradientOrange : null;
+  Widget _buildClockInOutSection() {
+    final clockedIn = _clockInTime != null;
+    final canClock = _canClock;
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Text('Location Status',
-            style: TextStyle(
-                color: tc.textPrimary,
-                fontSize: 15,
-                fontWeight: FontWeight.w700)),
-        const Spacer(),
-        Icon(Icons.navigation_rounded, color: tc.textPrimary, size: 13),
-        const SizedBox(width: 4),
-        GestureDetector(
-          onTap: _checkGeofence,
-          behavior: HitTestBehavior.opaque,
-          child: Text('Live GPS',
-              style: TextStyle(
-                  color: tc.textPrimary,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500)),
-        ),
-      ]),
-      const SizedBox(height: 10),
-      Container(
-        padding: const EdgeInsets.all(16),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Container(
+        height: 72,
+        padding: const EdgeInsets.all(7),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          color: cardBg,
-          gradient: cardGradient,
-          border: Border.all(color: cardBorderColor, width: 1.15),
+          gradient: _orangeGradient,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _orangeBorder, width: 1.15),
         ),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: const BoxDecoration(
-                color: Colors.white, shape: BoxShape.circle),
-            child: loading
-                ? const Padding(
-              padding: EdgeInsets.all(8),
-              child: CircularProgressIndicator(
-                  strokeWidth: 2, color: AppColors.orange),
-            )
-                : Icon(Icons.location_on_rounded, color: accentColor, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child:
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(zoneText,
-                  style: TextStyle(
-                    color: accentColor,
-                    fontSize: 12,
-                    fontWeight: (!loading && !inRange)
-                        ? FontWeight.w700
-                        : FontWeight.w400,
-                  )),
-              const SizedBox(height: 4),
-              const Text('HQ Main Office',
-                  style: TextStyle(
+        child: Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: (_saving || !canClock) ? null : _handleClockIn,
+                behavior: HitTestBehavior.opaque,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 150),
+                  opacity: canClock ? 1.0 : 0.5,
+                  child: Container(
+                    decoration: BoxDecoration(
                       color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500)),
-              const SizedBox(height: 4),
-              Text(GeofenceService.officeAddress,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      height: 1.3)),
-              if (dist != null) ...[
-                const SizedBox(height: 4),
-                Text('${dist.toStringAsFixed(0)} m from office',
-                    style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600)),
-              ],
-            ]),
-          ),
-        ]),
-      ),
-    ]);
-  }
-
-  // ── TIME ROW ──────────────────────────────────────────────────────
-  Widget _buildTimeRow(_ThemeColors tc) {
-    final clocked = _isClockedIn;
-    final timeIn = _fmt12(_displayTimeIn);
-    final timeOut = _fmt12(_displayTimeOut);
-
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        gradient: AppColors.gradientOrange,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.orange, width: 1.15),
-      ),
-      child: Row(children: [
-        Expanded(
-          child: _toggleSegment(tc, 'Clock In', timeIn, active: !clocked),
-        ),
-        const SizedBox(width: 4),
-        Expanded(
-          child: _toggleSegment(tc, 'Clock Out', timeOut, active: clocked),
-        ),
-      ]),
-    );
-  }
-
-  Widget _toggleSegment(_ThemeColors tc, String title, String time,
-      {required bool active}) {
-    // Segment na active = white bg (para kitang-kita sa orange gradient)
-    // Segment na hindi active = transparent (orange gradient ang nakikita)
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(
-        color: active ? Colors.white : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-        border:
-        active ? Border.all(color: _MockColors.orangeBorder, width: 1) : null,
-        boxShadow: active
-            ? [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 6,
-              offset: const Offset(0, 2))
-        ]
-            : null,
-      ),
-      child: Column(children: [
-        Text(title,
-            style: TextStyle(
-                color: active ? Colors.black : Colors.white,
-                fontSize: 13,
-                fontWeight: FontWeight.w500)),
-        const SizedBox(height: 2),
-        Text(time,
-            style: TextStyle(
-                color:
-                active ? const Color(0xFFA1A1AA) : Colors.white,
-                fontSize: 11)),
-      ]),
-    );
-  }
-
-  // ── CLOCK OUT BUTTON ────────────────────────────────────────────────
-  Widget _buildClockOutButton(_ThemeColors tc) {
-    final canAct = _isInsideZone;
-    final isAlreadyClockedOut = _isAlreadyClockedOutToday;
-    final isEnabled = canAct && !isAlreadyClockedOut;
-
-    return Column(children: [
-      Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          isAlreadyClockedOut ? 'Already Clocked Out' : 'Clock Out',
-          style: TextStyle(
-            color: isAlreadyClockedOut ? tc.textMuted : tc.textPrimary,
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ),
-      const SizedBox(height: 12),
-      Center(
-        child: GestureDetector(
-          onTap: isEnabled ? _handleClockTap : null,
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            width: 105,
-            height: 112,
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: isEnabled ? _MockColors.orangeBorder : tc.textMuted,
-                width: 1.15,
-              ),
-              borderRadius: BorderRadius.circular(20),
-              color: isEnabled
-                  ? tc.clockButtonBg
-                  : tc.clockButtonDisabledBg,
-            ),
-            child: _processing
-                ? const Center(
-                child: CircularProgressIndicator(
-                    color: AppColors.orange, strokeWidth: 2))
-                : Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    gradient:
-                    isEnabled ? AppColors.gradientOrange : null,
-                    color: isEnabled ? null : tc.textMuted,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: isEnabled
-                          ? _MockColors.orangeBorder
-                          : tc.textMuted,
-                      width: 1.15,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _orangeBorder, width: 1),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 2,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text(
+                          'Clock In',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _saving && !clockedIn
+                              ? 'Saving...'
+                              : (canClock ? _clockInDisplay : 'Locked'),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: !canClock
+                                ? _red
+                                : (clockedIn
+                                ? _orange
+                                : const Color(0xFFA1A1AA)),
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  child: Icon(
-                    isAlreadyClockedOut
-                        ? Icons.check_circle_rounded
-                        : Icons.timer_off_rounded,
-                    color: Colors.white,
-                    size: 20,
+                ),
+              ),
+            ),
+            const SizedBox(width: 2),
+            Expanded(
+              child: GestureDetector(
+                onTap: (_saving || !canClock) ? null : _handleClockOut,
+                behavior: HitTestBehavior.opaque,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 150),
+                  opacity: canClock ? 1.0 : 0.5,
+                  child: Container(
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text(
+                          'Clock Out',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          canClock ? _clockOutDisplay : 'Locked',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  isAlreadyClockedOut ? 'Done' : 'Clock Out',
-                  style: TextStyle(
-                    color: isEnabled ? tc.textPrimary : tc.textMuted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
-        ),
-      ),
-      if (isAlreadyClockedOut) ...[
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.green.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: const [
-              Icon(Icons.check_circle_rounded, size: 16, color: Colors.green),
-              SizedBox(width: 8),
-              Text(
-                'You have already clocked out today',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.green,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-      if (_isClockedIn && !isAlreadyClockedOut) ...[
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppColors.orange.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(12),
-            border:
-            Border.all(color: AppColors.orange.withValues(alpha: 0.3)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.timer_rounded,
-                  size: 16, color: AppColors.orange),
-              const SizedBox(width: 8),
-              Text(
-                'Duty Time: $_elapsedDuration',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.orange,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-      const SizedBox(height: 14),
-      Center(
-          child: Text(DateFormat('hh:mm a').format(_now),
-              style: TextStyle(
-                  color: tc.textSecondary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5))),
-      const SizedBox(height: 2),
-      Center(
-          child: Text(DateFormat('EEEE, MMMM d yyyy').format(_now),
-              style: TextStyle(color: tc.textSecondary, fontSize: 11))),
-    ]);
-  }
-
-  // ── SUCCESS OVERLAY ────────────────────────────────────────────────
-  Widget _buildSuccessOverlay(_ThemeColors tc) {
-    return Positioned.fill(
-      child: Container(
-        color: Colors.black.withValues(alpha: 0.8),
-        child: Center(
-          child: ScaleTransition(
-            scale: _successAnim,
-            child: Container(
-              margin: const EdgeInsets.all(24),
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
-              constraints: const BoxConstraints(maxWidth: 380),
-              decoration: BoxDecoration(
-                color: tc.successCardBg,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(
-                    color: AppColors.success.withValues(alpha: 0.4)),
-                boxShadow: [
-                  BoxShadow(
-                      color: AppColors.success.withValues(alpha: 0.12),
-                      blurRadius: 40,
-                      spreadRadius: 4)
-                ],
-              ),
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                      color: AppColors.success.withValues(alpha: 0.12),
-                      shape: BoxShape.circle),
-                  child: const Icon(Icons.check_circle_rounded,
-                      color: AppColors.success, size: 44),
-                ),
-                const SizedBox(height: 16),
-                Text(_successMsg,
-                    style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: tc.textPrimary,
-                        letterSpacing: 0.3)),
-                const SizedBox(height: 10),
-                Text(_successSubMsg,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: tc.textSecondary, height: 1.7, fontSize: 14)),
-              ]),
-            ),
-          ),
+          ],
         ),
       ),
     );
   }
 
-  // ── GEOFENCE DIALOG ────────────────────────────────────────────────
-  void _showGeofenceDialog() {
-    final dist = _geofenceResult?.distanceMeters?.toStringAsFixed(0) ?? '?';
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final tc = _ThemeColors(isDark);
+  Widget _buildClockOutSection(_ThemeColors tc) {
+    final isInRangeOrWfh = _isInRange || _isWfhMode;
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: tc.dialogBg,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-                color: AppColors.error.withValues(alpha: 0.15),
-                shape: BoxShape.circle),
-            child: const Icon(Icons.location_off_rounded,
-                color: AppColors.error, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text('Outside Work Zone',
+    final cardBg = _isInRange
+        ? (tc.isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : Colors.white.withValues(alpha: 0.2))
+        : (_isWfhMode
+        ? const Color(0xFF22C55E).withValues(alpha: tc.isDark ? 0.2 : 0.15)
+        : (tc.isDark
+        ? const Color(0xFF1F1F23)
+        : const Color(0xFF838383).withValues(alpha: 0.28)));
+
+    final cardBorder = _isInRange
+        ? _orangeBorder
+        : (_isWfhMode ? const Color(0xFF22C55E) : _red);
+
+    final labelColor = isInRangeOrWfh ? tc.textPrimary : tc.textOnDark;
+    final hasClockedOut = _clockOutTime != null;
+    final canClock = _canClock;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Clock Out',
                 style: TextStyle(
-                    color: tc.textPrimary,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15)),
-          ),
-        ]),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppColors.error.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(12),
-              border:
-              Border.all(color: AppColors.error.withValues(alpha: 0.3)),
-            ),
-            child: Column(children: [
-              const Icon(Icons.gps_off_rounded,
-                  color: AppColors.error, size: 32),
-              const SizedBox(height: 10),
-              Text('You are ${dist}m away from the office.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      color: tc.textSecondary, fontSize: 13, height: 1.5)),
-              const SizedBox(height: 8),
-              const Text('Move inside the authorized zone to clock out.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      color: AppColors.error,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      height: 1.4)),
-            ]),
-          ),
-        ]),
-        actions: [
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.info.withValues(alpha: 0.15),
-                foregroundColor: AppColors.info,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    side: BorderSide(
-                        color: AppColors.info.withValues(alpha: 0.3))),
-                padding: const EdgeInsets.symmetric(vertical: 12),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: tc.textPrimary,
+                ),
               ),
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                _checkGeofence();
-              },
-              icon: const Icon(Icons.refresh_rounded, size: 16),
-              label: const Text('Retry Location Check',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
+              if (hasClockedOut)
+                Text(
+                  _clockOutDisplay,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _orange,
+                  ),
+                )
+              else if (!canClock)
+                const Text(
+                  'Locked',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: _red,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: GestureDetector(
+              onTap: (_saving || !canClock) ? null : _handleClockOut,
+              behavior: HitTestBehavior.opaque,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 150),
+                opacity: canClock ? 1.0 : 0.5,
+                child: Container(
+                  width: 105,
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: cardBg,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: cardBorder, width: 1.15),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: _orangeGradient,
+                          border:
+                          Border.all(color: _orangeBorder, width: 1.15),
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(
+                          !canClock
+                              ? Icons.lock_outline_rounded
+                              : (hasClockedOut
+                              ? Icons.check_rounded
+                              : Icons.access_time_rounded),
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        !canClock
+                            ? 'Locked'
+                            : (hasClockedOut ? 'Done' : 'Clock Out'),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: labelColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 4),
-          SizedBox(
-            width: double.infinity,
-            child: TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: Text('Dismiss',
-                  style:
-                  TextStyle(color: tc.textSecondary, fontSize: 13)),
+          if (_isWfhMode) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: tc.isDark
+                    ? const Color(0xFF14371F)
+                    : const Color(0xFFDCFCE7),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF22C55E)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.home_work_rounded,
+                    size: 16,
+                    color:
+                    tc.isDark ? const Color(0xFF86EFAC) : _greenDeep,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'WFH mode active — pinapayagan ang clock in/out kahit wala sa office zone.',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color:
+                        tc.isDark ? const Color(0xFF86EFAC) : _greenDeep,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildShortcutsSection(_ThemeColors tc) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Short Cuts',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: tc.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: _ShortcutCard(
+                    tc: tc,
+                    icon: Icons.home_rounded,
+                    label: 'Home',
+                    onTap: widget.onShortcutHome ?? _handleBack,
+                  ),
+                ),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: _ShortcutCard(
+                    tc: tc,
+                    icon: Icons.person_rounded,
+                    label: 'Profile',
+                    onTap: widget.onShortcutProfile,
+                  ),
+                ),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: _ShortcutCard(
+                    tc: tc,
+                    icon: Icons.calendar_month_rounded,
+                    label: 'Leaves',
+                    onTap: widget.onShortcutLeaves,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1082,75 +1516,168 @@ class _ClockScreenState extends State<ClockScreen>
     );
   }
 
-  // ── SPLASH ──────────────────────────────────────────────────────────
-  Widget _buildSplash(_ThemeColors tc) {
-    return Scaffold(
-      backgroundColor: tc.bg,
-      body: Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              gradient: AppColors.gradientOrange,
-            ),
-            child: const Icon(Icons.fingerprint,
-                color: Colors.white, size: 34),
-          ),
-          const SizedBox(height: 16),
-          Text('Loading attendance terminal…',
-              style: TextStyle(color: tc.textSecondary, fontSize: 13)),
-          const SizedBox(height: 24),
-          SizedBox(
-            width: 160,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                backgroundColor: tc.progressTrack,
-                valueColor:
-                const AlwaysStoppedAnimation(AppColors.orange),
-                minHeight: 4,
+  Widget _buildBottomNav(_ThemeColors tc) {
+    const items = <_NavItem>[
+      _NavItem(icon: Icons.grid_view_rounded, label: 'Home'),
+      _NavItem(icon: Icons.access_time_rounded, label: 'Logs'),
+      _NavItem(icon: Icons.calendar_today_rounded, label: 'Itinerary'),
+      _NavItem(icon: Icons.person_outline_rounded, label: 'Profile'),
+    ];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+      decoration: BoxDecoration(
+        color: tc.navBg,
+        border: Border(top: BorderSide(color: tc.navBorder, width: 1.15)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: List.generate(items.length, (i) {
+            final item = items[i];
+            final active = i == _activeNavIndex;
+            final color = active ? _orange : tc.textSecondary;
+            return GestureDetector(
+              onTap: () {
+                setState(() => _activeNavIndex = i);
+                widget.onNavTap?.call(i);
+              },
+              behavior: HitTestBehavior.opaque,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(item.icon, size: 24, color: color),
+                  const SizedBox(height: 4),
+                  Text(
+                    item.label,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                      color: color,
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ),
-        ]),
+            );
+          }),
+        ),
       ),
     );
   }
+}
 
-  // ── HELPERS ────────────────────────────────────────────────────────
-  String _fmt12(String? t) {
-    if (t == null) return '--:--';
-    try {
-      return DateFormat('hh:mm a').format(DateFormat('HH:mm:ss').parse(t));
-    } catch (_) {
-      return t;
-    }
+class _NavItem {
+  final IconData icon;
+  final String label;
+  const _NavItem({required this.icon, required this.label});
+}
+
+class _ShortcutCard extends StatelessWidget {
+  final _ThemeColors tc;
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  const _ShortcutCard({
+    required this.tc,
+    required this.icon,
+    required this.label,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+        decoration: BoxDecoration(
+          color: tc.cardFill,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: _ClockScreenState._orangeBorder,
+            width: 1.15,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: _ClockScreenState._orangeGradient,
+                border: Border.all(
+                  color: _ClockScreenState._orangeBorder,
+                  width: 1.15,
+                ),
+              ),
+              alignment: Alignment.center,
+              child: Icon(icon, color: Colors.white, size: 22),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: tc.textPrimary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
+}
 
-  void _showSuccessOverlay(String title, String message) {
-    setState(() {
-      _showSuccess = true;
-      _successMsg = title;
-      _successSubMsg = message;
-    });
-    _successCtrl.forward(from: 0);
-    Future.delayed(const Duration(seconds: 4), () {
-      if (mounted) setState(() => _showSuccess = false);
-    });
-  }
+class _GpsPinIcon extends StatelessWidget {
+  final Color accent;
+  const _GpsPinIcon({required this.accent});
 
-  void _showSnack(String msg, Color color) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg,
-          style:
-          const TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
-      backgroundColor: color,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(16),
-    ));
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 48,
+      height: 48,
+      child: Stack(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const Center(
+            child: Icon(
+              Icons.location_on_rounded,
+              color: _ClockScreenState._orange,
+              size: 26,
+            ),
+          ),
+          Positioned(
+            right: 4,
+            top: 4,
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: accent,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1.5),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

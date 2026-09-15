@@ -9,6 +9,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/employee.dart';
 import '../services/face_matcher.dart';
+import '../services/clock_status_service.dart';
+import '../services/geofence_service.dart';
+import '../services/admin_notification_service.dart';
 import 'main_screen.dart';
 import 'clock_in_success_screen.dart';
 
@@ -17,20 +20,30 @@ class _ThemeColors {
   const _ThemeColors(this.isDark);
 
   Color get bg => isDark ? const Color(0xFF0A0A0A) : const Color(0xFFF7F7F7);
-  Color get outerCardBg => isDark ? const Color(0xFF18181B) : const Color(0xFFECEBE8);
-  Color get stepLabelColor => isDark ? const Color(0xFFB0B0B0) : const Color(0xFF8A8A85);
-  Color get iconBoxBg => isDark ? const Color(0xFF27272A) : const Color(0xFFFFFFFF);
-  Color get cancelBg => isDark ? const Color(0xFF27272A) : const Color(0xFFFFFFFF);
-  Color get cancelPressed => isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFF4EE);
+  Color get outerCardBg =>
+      isDark ? const Color(0xFF18181B) : const Color(0xFFECEBE8);
+  Color get stepLabelColor =>
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF8A8A85);
+  Color get cancelBg =>
+      isDark ? const Color(0xFF27272A) : const Color(0xFFFFFFFF);
+  Color get cancelPressed =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFF4EE);
   Color get cancelText => const Color(0xFFF05000);
 }
 
 class FacialRecognitionScreen extends StatefulWidget {
   final Employee employee;
-  const FacialRecognitionScreen({super.key, required this.employee});
+  final DateTime? arrivalTime;
+
+  const FacialRecognitionScreen({
+    super.key,
+    required this.employee,
+    this.arrivalTime,
+  });
 
   @override
-  State<FacialRecognitionScreen> createState() => _FacialRecognitionScreenState();
+  State<FacialRecognitionScreen> createState() =>
+      _FacialRecognitionScreenState();
 }
 
 class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
@@ -49,26 +62,50 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   bool _faceMatched = false;
   double _matchScore = 0.0;
+  double _matchPercent = 0.0;
+  bool _isCheckingGeofence = false;
+  bool _isCheckingTemplate = false;
 
-  static const bool _strictFaceMatch = false;
-  static const double _matchThreshold = 0.85;
+  bool _isEnrollmentMode = false;
+  int _enrollCaptureCount = 0;
+  String _enrollHint = 'Tumingin ng direkta sa camera.';
+  static const int _requiredEnrollCaptures = 3;
+  static const List<String> _enrollHints = [
+    'Tumingin ng DIREKTA sa camera.',
+    'Igalaw ang ulo pakanan (tingin sa kanan).',
+    'Igalaw ang ulo pakaliwa (tingin sa kaliwa).',
+  ];
+
+  bool _isCapturing = false;
+  DateTime? _stableStartTime;
+  double _autoCaptureProgress = 0.0;
+  static const int _stableDurationMs = 1500;
+  bool _justCaptured = false;
+  String? _captureFlashMessage;
+
+  static const bool _strictFaceMatch = true;
+  static const double _matchThreshold = 0.55;
 
   late final FaceDetector _faceDetector;
 
+  _LivenessStep _livenessStep = _LivenessStep.waitingForFace;
+  bool _blinkDone = false;
+  bool _smileDone = false;
+
   bool _facePresent = false;
-  bool _blinkDetected = false;
   bool _eyesWereClosed = false;
   int _closedFrames = 0;
   static const int _minClosedFrames = 2;
   static const double _blinkClosedThreshold = 0.3;
   static const double _blinkOpenThreshold = 0.6;
+  static const double _smileThreshold = 0.7;
   static const int _maxClosedFramesBeforeStuck = 45;
 
   final List<double> _sharpnessBuffer = [];
   static const _sharpnessWindow = 6;
-  static const _sharpnessThreshold = 0.18;
-  static const _maxHeadTiltDeg = 30.0;
-  static const _minFaceCoverage = 0.20;
+  static const _sharpnessThreshold = 0.15;
+  static const _maxHeadTiltDeg = 25.0;
+  static const _minFaceCoverage = 0.18;
 
   static const double _cameraBoxSize = 300.0;
 
@@ -79,6 +116,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   late AnimationController _successCtrl;
   late AnimationController _scanLineCtrl;
   late AnimationController _warningCtrl;
+  late AnimationController _flashCtrl;
+  late AnimationController _matchCountCtrl;
 
   late Animation<double> _pulseAnim;
   late Animation<double> _ringAnim;
@@ -87,6 +126,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   late Animation<double> _successAnim;
   late Animation<double> _scanLineAnim;
   late Animation<double> _warningAnim;
+  late Animation<double> _flashAnim;
+  late Animation<double> _matchCountAnim;
 
   static const _white = Color(0xFFFFFFFF);
   static const _orange = Color(0xFFF05000);
@@ -95,31 +136,42 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   static const _faceGreen = Color(0xFF00E676);
   static const _warning = Color(0xFFFFCC00);
   static const _verifiedGreen = Color(0xFF51FF00);
+  static const _enrollBlue = Color(0xFF3B82F6);
 
   @override
   void initState() {
     super.initState();
-
     _faceDetector = FaceDetector(
       options: FaceDetectorOptions(
         performanceMode: FaceDetectorMode.fast,
         enableClassification: true,
         enableLandmarks: true,
-        enableContours: true,
+        enableContours: false,
         minFaceSize: _minFaceCoverage,
       ),
     );
 
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2));
-    _ringCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 3));
-    _fadeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
-    _shakeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
-    _successCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
-    _scanLineCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800));
-    _warningCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+    _pulseCtrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2));
+    _ringCtrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 3));
+    _fadeCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 700));
+    _shakeCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 500));
+    _successCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 700));
+    _scanLineCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1800));
+    _warningCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900));
+    _flashCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 500));
+    _matchCountCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1200));
 
-    _pulseAnim = Tween<double>(begin: 0.93, end: 1.07).animate(
-        CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
+    _pulseAnim = Tween<double>(begin: 0.93, end: 1.07)
+        .animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
     _ringAnim = Tween<double>(begin: 0.0, end: 1.0)
         .animate(CurvedAnimation(parent: _ringCtrl, curve: Curves.linear));
     _fadeAnim = Tween<double>(begin: 0.0, end: 1.0)
@@ -128,16 +180,20 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         .animate(CurvedAnimation(parent: _shakeCtrl, curve: Curves.elasticIn));
     _successAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
         CurvedAnimation(parent: _successCtrl, curve: Curves.elasticOut));
-    _scanLineAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(parent: _scanLineCtrl, curve: Curves.easeInOut));
-    _warningAnim = Tween<double>(begin: 0.7, end: 1.0).animate(
-        CurvedAnimation(parent: _warningCtrl, curve: Curves.easeInOut));
+    _scanLineAnim = Tween<double>(begin: 0.0, end: 1.0)
+        .animate(CurvedAnimation(parent: _scanLineCtrl, curve: Curves.easeInOut));
+    _warningAnim = Tween<double>(begin: 0.7, end: 1.0)
+        .animate(CurvedAnimation(parent: _warningCtrl, curve: Curves.easeInOut));
+    _flashAnim = Tween<double>(begin: 0.0, end: 1.0)
+        .animate(CurvedAnimation(parent: _flashCtrl, curve: Curves.easeOut));
+    _matchCountAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
+        CurvedAnimation(parent: _matchCountCtrl, curve: Curves.easeOutCubic));
 
     _pulseCtrl.repeat(reverse: true);
     _ringCtrl.repeat();
     _fadeCtrl.forward();
 
-    debugPrint('📷 Facial recognition: waiting for user tap (isWeb=$kIsWeb)');
+    debugPrint('📷 Facial recognition ready — AUTO-CAPTURE mode');
   }
 
   @override
@@ -150,120 +206,136 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _successCtrl.dispose();
     _scanLineCtrl.dispose();
     _warningCtrl.dispose();
-    _camCtrl?.stopImageStream();
+    _flashCtrl.dispose();
+    _matchCountCtrl.dispose();
+
+    try {
+      _camCtrl?.stopImageStream();
+    } catch (e) {
+      debugPrint('⚠️ Error stopping image stream on dispose: $e');
+    }
+
     _camCtrl?.dispose();
     _faceDetector.close();
     super.dispose();
   }
 
-  Future<bool> _ensureCameraPermission() async {
-    if (kIsWeb) return true; // Web: browser handles permission
+  Future<bool> _hasFaceTemplate() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(widget.employee.id)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      final data = doc.data();
+      if (data == null) {
+        debugPrint('🔍 Face template check: doc not found → NO TEMPLATE');
+        return false;
+      }
+      final version = data['faceEmbeddingVersion'] ?? 1;
+      final count = data['faceEmbeddingsCount'] ?? 0;
+      final hasV4 = version >= 4 && count > 0;
+      debugPrint(
+          '🔍 Face template check: v=$version, count=$count, hasV4=$hasV4');
+      return hasV4;
+    } catch (e) {
+      debugPrint('⚠️ Face template check error: $e');
+      return false;
+    }
+  }
 
+  Future<bool> _ensureCameraPermission() async {
+    if (kIsWeb) return true;
     try {
       final status = await Permission.camera.status;
       if (status.isGranted) return true;
       final result = await Permission.camera.request();
       if (result.isGranted) return true;
-      if (result.isPermanentlyDenied) {
-        _onFailure('Camera access denied.\nEnable it in Settings to continue.');
-      } else {
-        _onFailure('Camera permission is required\nfor facial recognition.');
-      }
+      _onFailure(result.isPermanentlyDenied
+          ? 'Camera access denied.\nEnable in Settings.'
+          : 'Camera permission required.');
       return false;
     } catch (e) {
-      debugPrint('⚠️ Permission check failed: $e');
       return false;
     }
   }
 
-  // ✅ IMPROVED camera init — with retry logic for web
   Future<void> _initCamera() async {
     if (_camTried && _camReady) return;
     _camTried = true;
     _camError = null;
-
     try {
       final granted = await _ensureCameraPermission();
       if (!granted) {
-        debugPrint('⚠️ Permission not granted');
         _camError = 'Camera permission not granted.';
         return;
       }
-
-      // ✅ Web: Try multiple times — browser may need time after permission
       List<CameraDescription> cameras = await availableCameras();
-
       if (cameras.isEmpty && kIsWeb) {
-        debugPrint('🌐 Web: no cameras on first try, retrying after 1s...');
         await Future.delayed(const Duration(seconds: 1));
         cameras = await availableCameras();
       }
-
       if (cameras.isEmpty) {
-        debugPrint('⚠️ No cameras available');
-        _camError = 'No camera detected on this device.';
+        _camError = 'No camera detected.';
         if (mounted) setState(() {});
         return;
       }
-
-      debugPrint('📷 Found ${cameras.length} camera(s)');
-
       final front = cameras.firstWhere(
             (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
-
-      debugPrint('📷 Using camera: ${front.name}, lens: ${front.lensDirection}');
-
       final ctrl = CameraController(
         front,
         ResolutionPreset.medium,
         enableAudio: false,
-        // ✅ Web: JPEG format para supported ng browser
-        imageFormatGroup: kIsWeb ? ImageFormatGroup.jpeg : ImageFormatGroup.nv21,
+        imageFormatGroup:
+        kIsWeb ? ImageFormatGroup.jpeg : ImageFormatGroup.nv21,
       );
-
-      debugPrint('📷 Initializing camera controller...');
       await ctrl.initialize();
-
-      debugPrint('✅ Camera initialized. Preview size: ${ctrl.value.previewSize}');
-
       if (!mounted) {
         ctrl.dispose();
         return;
       }
-
       setState(() {
         _camCtrl = ctrl;
         _camReady = true;
-        _camError = null;
       });
+      debugPrint('✅ Camera ready');
     } catch (e) {
       debugPrint('⚠️ Camera init failed: $e');
-      _camError = 'Camera error: ${e.toString()}';
-
-      if (mounted) {
-        setState(() {});
-      }
-
-      if (!kIsWeb && mounted) {
-        _onFailure('Camera unavailable. Try again.');
-      }
+      _camError = 'Camera error';
+      if (mounted) setState(() {});
     }
   }
 
   Future<void> _startScan() async {
-    if (!mounted || _isScanning) return;
+    if (!mounted || _isScanning || _isCheckingTemplate) return;
 
-    debugPrint('🎬 Starting scan...');
+    setState(() => _isCheckingTemplate = true);
+
+    final hasFace = await _hasFaceTemplate();
+    if (!mounted) return;
+    setState(() => _isCheckingTemplate = false);
+
+    if (!hasFace) {
+      debugPrint('🎓 No face template → ENTER ENROLLMENT MODE');
+      await _startEnrollment();
+      return;
+    }
+
+    debugPrint('✅ Face template found → VERIFICATION MODE');
+    _isEnrollmentMode = false;
     _isScanning = true;
-    _blinkDetected = false;
+    _blinkDone = false;
+    _smileDone = false;
     _eyesWereClosed = false;
     _closedFrames = 0;
     _sharpnessBuffer.clear();
     _facePresent = false;
     _faceMatched = false;
     _matchScore = 0.0;
+    _matchPercent = 0.0;
+    _livenessStep = _LivenessStep.waitingForFace;
 
     setState(() {
       _faceState = _FaceState.scanning;
@@ -271,85 +343,283 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _faceWarning = _FaceWarning.none;
     });
 
-    // ✅ BOTH WEB + NATIVE: Initialize camera FIRST
     if (!_camReady) await _initCamera();
-
     if (!mounted) return;
 
-    // If camera not ready, show mock fallback
-    if (!_camReady) {
-      debugPrint('🌐 Camera not ready — running mock scan');
+    if (!_camReady || kIsWeb) {
       _scanLineCtrl.repeat(reverse: true);
       await _runMockScan();
       return;
     }
 
-    // Camera ready — start scan
-    if (kIsWeb) {
-      debugPrint('🌐 Web: camera ready, running mock scan for ML Kit');
-      _scanLineCtrl.repeat(reverse: true);
-      await _runMockScan();
-      return;
-    }
-
-    // Native: use ML Kit
     _scanLineCtrl.repeat(reverse: true);
     await _camCtrl!.startImageStream(_onCameraImage);
   }
 
-  // ✅ Mock scan — gumagana for both web AND fallback
-  Future<void> _runMockScan() async {
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (!mounted || !_isScanning) return;
-    setState(() => _facePresent = false);
+  Future<void> _startEnrollment() async {
+    if (!mounted) return;
 
-    await Future.delayed(const Duration(milliseconds: 1200));
-    if (!mounted || !_isScanning) return;
+    _isEnrollmentMode = true;
+    _enrollCaptureCount = 0;
+    _enrollHint = _enrollHints[0];
+    _isScanning = false;
+    _blinkDone = false;
+    _smileDone = false;
+    _facePresent = false;
+    _faceMatched = false;
+    _matchScore = 0.0;
+    _matchPercent = 0.0;
+    _stableStartTime = null;
+    _autoCaptureProgress = 0.0;
+    _justCaptured = false;
+    _captureFlashMessage = null;
+
     setState(() {
-      _facePresent = true;
+      _faceState = _FaceState.enrolling;
+      _errorMessage = null;
       _faceWarning = _FaceWarning.none;
     });
 
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted || !_isScanning) return;
-    setState(() {
-      _eyesWereClosed = true;
-      _closedFrames = _minClosedFrames;
-    });
-
-    await Future.delayed(const Duration(milliseconds: 400));
-    if (!mounted || !_isScanning) return;
-    setState(() {
-      _blinkDetected = true;
-      _eyesWereClosed = false;
-    });
-
-    await Future.delayed(const Duration(milliseconds: 600));
+    if (!_camReady) await _initCamera();
     if (!mounted) return;
-    _isScanning = false;
-    _scanLineCtrl.stop();
-    _faceMatched = true;
-    _matchScore = 1.0;
-    await _onSuccess();
+
+    if (!_camReady || kIsWeb) {
+      _scanLineCtrl.repeat(reverse: true);
+      return;
+    }
+
+    _scanLineCtrl.repeat(reverse: true);
+    try {
+      await _camCtrl!.startImageStream(_onEnrollmentCameraImage);
+    } catch (e) {
+      debugPrint('⚠️ Enrollment stream error: $e');
+    }
   }
 
-  Future<void> _onCameraImage(CameraImage image) async {
-    if (!_isScanning || _isProcessing || !mounted) return;
+  Future<void> _onEnrollmentCameraImage(CameraImage image) async {
+    if (!_isEnrollmentMode || _isProcessing || _isCapturing || !mounted) {
+      return;
+    }
     _isProcessing = true;
-
     try {
       final inputImage = _buildInputImage(image);
       if (inputImage == null) {
         _isProcessing = false;
         return;
       }
+      final faces = await _faceDetector.processImage(inputImage);
+      if (!mounted || !_isEnrollmentMode) {
+        _isProcessing = false;
+        return;
+      }
 
+      final hasFace = faces.isNotEmpty;
+      if (_facePresent != hasFace) {
+        setState(() => _facePresent = hasFace);
+      }
+
+      if (!hasFace) {
+        _resetStability();
+        _isProcessing = false;
+        return;
+      }
+
+      final face = faces.first;
+      final quality = _assessFaceQuality(face, image);
+
+      if (_faceWarning != quality) {
+        setState(() => _faceWarning = quality);
+      }
+
+      if (quality != _FaceWarning.none) {
+        _resetStability();
+        _isProcessing = false;
+        return;
+      }
+
+      if (_stableStartTime == null) {
+        _stableStartTime = DateTime.now();
+        debugPrint('🎯 Stability tracking started');
+      }
+
+      final elapsedMs =
+          DateTime.now().difference(_stableStartTime!).inMilliseconds;
+      final progress = (elapsedMs / _stableDurationMs).clamp(0.0, 1.0);
+
+      if (mounted) {
+        setState(() => _autoCaptureProgress = progress);
+      }
+
+      if (elapsedMs >= _stableDurationMs && !_isCapturing) {
+        debugPrint(
+            '⚡ Auto-capturing angle ${_enrollCaptureCount + 1}/$_requiredEnrollCaptures');
+        _isProcessing = false;
+        await _autoCaptureAngle();
+        return;
+      }
+    } catch (e) {
+      debugPrint('⚠️ Enrollment image error: $e');
+    }
+    _isProcessing = false;
+  }
+
+  void _resetStability() {
+    if (_stableStartTime != null || _autoCaptureProgress > 0) {
+      debugPrint('↩️ Stability reset');
+    }
+    _stableStartTime = null;
+    if (mounted) {
+      setState(() => _autoCaptureProgress = 0.0);
+    }
+  }
+
+  Future<void> _autoCaptureAngle() async {
+    if (!_isEnrollmentMode || _isCapturing) return;
+    if (_camCtrl == null || !_camCtrl!.value.isInitialized) return;
+
+    setState(() => _isCapturing = true);
+
+    try {
+      debugPrint('🎬 [AutoCapture] Stopping stream...');
+      try {
+        if (_camCtrl!.value.isStreamingImages) {
+          await _camCtrl!.stopImageStream();
+        }
+      } catch (e) {
+        debugPrint('🎬 stopImageStream warning: $e');
+      }
+
+      await Future.delayed(const Duration(milliseconds: 250));
+
+      debugPrint('🎬 [AutoCapture] Taking picture...');
+      final shot = await _camCtrl!
+          .takePicture()
+          .timeout(const Duration(seconds: 10));
+      final bytes = await shot.readAsBytes();
+      debugPrint('🎬 [AutoCapture] Got ${bytes.length} bytes');
+
+      debugPrint('🎬 [AutoCapture] Generating embedding...');
+      final embedding = await FaceMatcher.generateEmbedding(
+        bytes,
+        enableAlignment: true,
+      ).timeout(const Duration(seconds: 15));
+
+      debugPrint('🎬 [AutoCapture] Embedding dims: ${embedding.length}');
+
+      if (embedding.isEmpty || embedding.length != 192) {
+        if (!mounted) return;
+        setState(() {
+          _errorMessage =
+          '⚠️ Face not detected. Ilapit ang mukha sa camera.';
+        });
+        _resetStability();
+        _restartEnrollmentStream();
+        return;
+      }
+
+      debugPrint('🎬 [AutoCapture] Saving embedding...');
+      await FaceMatcher.saveEmbedding(
+        widget.employee.id,
+        embedding,
+        source: 'mobile_enrollment',
+      );
+
+      _enrollCaptureCount++;
+      debugPrint(
+          '✅ [AutoCapture] Saved template $_enrollCaptureCount/$_requiredEnrollCaptures');
+
+      if (!mounted) return;
+
+      _captureFlashMessage =
+      '✅ Angle $_enrollCaptureCount/$_requiredEnrollCaptures captured!';
+      _justCaptured = true;
+      _flashCtrl.forward(from: 0);
+
+      _resetStability();
+
+      if (_enrollCaptureCount >= _requiredEnrollCaptures) {
+        await Future.delayed(const Duration(milliseconds: 700));
+        if (!mounted) return;
+        _scanLineCtrl.stop();
+        _faceMatched = true;
+        _matchScore = 1.0;
+        _matchPercent = 100.0;
+        await _onSuccess();
+      } else {
+        await Future.delayed(const Duration(milliseconds: 900));
+        if (!mounted) return;
+        setState(() {
+          _enrollHint = _enrollHints[_enrollCaptureCount];
+          _errorMessage = null;
+          _justCaptured = false;
+          _captureFlashMessage = null;
+        });
+        _restartEnrollmentStream();
+      }
+    } catch (e) {
+      debugPrint('❌ [AutoCapture] Error: $e');
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Capture failed: $e';
+      });
+      _resetStability();
+      _restartEnrollmentStream();
+    } finally {
+      if (mounted) {
+        setState(() => _isCapturing = false);
+      }
+    }
+  }
+
+  Future<void> _restartEnrollmentStream() async {
+    if (!mounted || !_isEnrollmentMode) return;
+    if (_isCapturing) return;
+    try {
+      if (!_camCtrl!.value.isStreamingImages) {
+        await _camCtrl!.startImageStream(_onEnrollmentCameraImage);
+        debugPrint('🔄 [AutoCapture] Stream restarted');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Restart stream error: $e');
+    }
+  }
+
+  Future<void> _runMockScan() async {
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (!mounted || !_isScanning) return;
+    setState(() => _facePresent = true);
+    _livenessStep = _LivenessStep.blink;
+    await Future.delayed(const Duration(milliseconds: 1500));
+    if (!mounted || !_isScanning) return;
+    setState(() => _blinkDone = true);
+    _livenessStep = _LivenessStep.smile;
+    await Future.delayed(const Duration(milliseconds: 1500));
+    if (!mounted || !_isScanning) return;
+    setState(() => _smileDone = true);
+    await Future.delayed(const Duration(milliseconds: 600));
+    if (!mounted) return;
+    _isScanning = false;
+    _scanLineCtrl.stop();
+    _faceMatched = true;
+    _matchScore = 1.0;
+    _matchPercent = 100.0;
+    await _onSuccess();
+  }
+
+  Future<void> _onCameraImage(CameraImage image) async {
+    if (!_isScanning || _isProcessing || !mounted) return;
+    _isProcessing = true;
+    try {
+      final inputImage = _buildInputImage(image);
+      if (inputImage == null) {
+        _isProcessing = false;
+        return;
+      }
       final faces = await _faceDetector.processImage(inputImage);
       if (!mounted || !_isScanning) {
         _isProcessing = false;
         return;
       }
-
       _facePresent = faces.isNotEmpty;
 
       if (faces.isNotEmpty) {
@@ -362,7 +632,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           if (mounted) {
             setState(() {
               _faceWarning = quality;
-              _blinkDetected = false;
             });
           }
           _warningCtrl.repeat(reverse: true);
@@ -376,51 +645,69 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         final leftOpen = face.leftEyeOpenProbability ?? 1.0;
         final rightOpen = face.rightEyeOpenProbability ?? 1.0;
         final avgOpen = (leftOpen + rightOpen) / 2;
+        final smile = face.smilingProbability ?? 0.0;
 
-        if (avgOpen < _blinkClosedThreshold) {
-          _closedFrames++;
-          _eyesWereClosed = true;
+        if (_livenessStep == _LivenessStep.waitingForFace) {
+          _livenessStep = _LivenessStep.blink;
+          if (mounted) {
+            setState(() {
+              _faceWarning = _FaceWarning.none;
+            });
+          }
+        }
 
-          if (_closedFrames > _maxClosedFramesBeforeStuck) {
+        if (_livenessStep == _LivenessStep.blink && !_blinkDone) {
+          if (avgOpen < _blinkClosedThreshold) {
+            _closedFrames++;
+            _eyesWereClosed = true;
+            if (_closedFrames > _maxClosedFramesBeforeStuck) {
+              _eyesWereClosed = false;
+              _closedFrames = 0;
+              if (mounted) {
+                setState(() {
+                  _faceWarning = _FaceWarning.eyesClosed;
+                });
+              }
+              _warningCtrl.repeat(reverse: true);
+              _isProcessing = false;
+              return;
+            }
+          } else if (avgOpen > _blinkOpenThreshold &&
+              _eyesWereClosed &&
+              _closedFrames >= _minClosedFrames) {
+            _blinkDone = true;
             _eyesWereClosed = false;
             _closedFrames = 0;
-            if (mounted) {
-              setState(() {
-                _faceWarning = _FaceWarning.eyesClosed;
-                _blinkDetected = false;
-              });
+            _livenessStep = _LivenessStep.smile;
+            debugPrint('✅ Blink detected — now smile');
+          } else {
+            if (_eyesWereClosed && _closedFrames < _minClosedFrames) {
+              _eyesWereClosed = false;
+              _closedFrames = 0;
             }
-            _warningCtrl.repeat(reverse: true);
+          }
+        } else if (_livenessStep == _LivenessStep.smile && !_smileDone) {
+          if (smile > _smileThreshold) {
+            _smileDone = true;
+            debugPrint('✅ Smile detected — verifying...');
+            await _camCtrl!.stopImageStream();
+            _isScanning = false;
+            _scanLineCtrl.stop();
+            final matched = await _verifyFaceMatch();
+            if (matched) {
+              await _onSuccess();
+            } else {
+              _onFaceMismatch();
+            }
             _isProcessing = false;
             return;
-          }
-        } else if (avgOpen > _blinkOpenThreshold &&
-            _eyesWereClosed &&
-            _closedFrames >= _minClosedFrames) {
-          _blinkDetected = true;
-          _eyesWereClosed = false;
-          _closedFrames = 0;
-          await _camCtrl!.stopImageStream();
-          _isScanning = false;
-          _scanLineCtrl.stop();
-
-          final matched = await _verifyFaceMatch();
-          if (matched) {
-            await _onSuccess();
-          } else {
-            _onFaceMismatch();
-          }
-          _isProcessing = false;
-          return;
-        } else {
-          if (_eyesWereClosed && _closedFrames < _minClosedFrames) {
-            _eyesWereClosed = false;
-            _closedFrames = 0;
           }
         }
 
         if (mounted) {
-          setState(() { _faceWarning = _FaceWarning.none; });
+          setState(() {
+            _faceWarning = _FaceWarning.none;
+          });
         }
       } else {
         _eyesWereClosed = false;
@@ -430,24 +717,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         if (mounted) {
           setState(() {
             _faceWarning = _FaceWarning.none;
-            _blinkDetected = false;
           });
         }
       }
     } catch (e) {
       debugPrint('⚠️ _onCameraImage error: $e');
     }
-
     _isProcessing = false;
   }
 
   Future<bool> _verifyFaceMatch() async {
     try {
-      if (_camCtrl == null || !_camCtrl!.value.isInitialized) {
-        debugPrint('⚠️ Camera not ready for verification');
-        return false;
-      }
-
+      if (_camCtrl == null || !_camCtrl!.value.isInitialized) return false;
       final picture = await _camCtrl!.takePicture();
       final bytes = await picture.readAsBytes();
 
@@ -458,15 +739,21 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       );
 
       _matchScore = result.score;
+      _matchPercent = result.score * 100.0;
       _faceMatched = result.matched;
 
-      debugPrint('📊 Match score: ${(result.score * 100).toStringAsFixed(1)}%');
+      debugPrint('📊 Match score: ${_matchPercent.toStringAsFixed(1)}%');
 
       if (!result.hasEmbedding) {
-        debugPrint('⚠️ No face embedding registered');
-        if (_strictFaceMatch) return false;
-        debugPrint('⚠️ Non-strict mode: allowing');
+        if (_strictFaceMatch) {
+          _errorMessage = result.error ?? 'No face registered.';
+          return false;
+        }
         return true;
+      }
+
+      if (!result.matched && result.error != null) {
+        _errorMessage = result.error;
       }
 
       return result.matched;
@@ -480,26 +767,27 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!mounted) return;
     _isScanning = false;
     _scanLineCtrl.stop();
-
     setState(() {
       _faceState = _FaceState.error;
-      _errorMessage = 'Face does not match the registered employee.\n\n'
-          'Similarity: ${(_matchScore * 100).toStringAsFixed(1)}%\n'
-          'Required: ${(_matchThreshold * 100).toStringAsFixed(0)}%\n\n'
-          'Please try again or contact HR.';
+      _errorMessage = _errorMessage ??
+          'Face does not match the registered employee.\n\n'
+              'Similarity: ${_matchPercent.toStringAsFixed(1)}%\n'
+              'Required: ${(_matchThreshold * 100).toStringAsFixed(0)}%\n\n'
+              'Please try again or contact HR.';
     });
-
     _shakeCtrl.forward(from: 0);
-
     Future.delayed(const Duration(seconds: 5), () {
       if (mounted) {
         setState(() {
           _faceState = _FaceState.idle;
           _errorMessage = null;
-          _blinkDetected = false;
           _facePresent = false;
           _faceMatched = false;
           _matchScore = 0.0;
+          _matchPercent = 0.0;
+          _blinkDone = false;
+          _smileDone = false;
+          _livenessStep = _LivenessStep.waitingForFace;
         });
       }
     });
@@ -525,15 +813,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     final sharpness = _estimateSharpness(image);
     _sharpnessBuffer.add(sharpness);
-    if (_sharpnessBuffer.length > _sharpnessWindow) {
-      _sharpnessBuffer.removeAt(0);
-    }
+    if (_sharpnessBuffer.length > _sharpnessWindow) _sharpnessBuffer.removeAt(0);
     if (_sharpnessBuffer.length == _sharpnessWindow) {
-      final avgSharpness =
+      final avg =
           _sharpnessBuffer.reduce((a, b) => a + b) / _sharpnessBuffer.length;
-      if (avgSharpness < _sharpnessThreshold) return _FaceWarning.blurry;
+      if (avg < _sharpnessThreshold) return _FaceWarning.blurry;
     }
-
     return _FaceWarning.none;
   }
 
@@ -542,14 +827,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final bytes = image.planes.first.bytes;
       final w = image.width;
       final h = image.height;
-      const step = 8;
-      const count = 32;
+      const step = 8, count = 32;
       final startX = (w ~/ 2) - (count * step ~/ 2);
       final startY = (h ~/ 2) - (count * step ~/ 2);
-
       double sum = 0, sumSq = 0;
       int n = 0;
-
       for (int gy = 0; gy < count; gy++) {
         for (int gx = 0; gx < count; gx++) {
           final px = startX + gx * step;
@@ -561,7 +843,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           n++;
         }
       }
-
       if (n < 2) return 1.0;
       final mean = sum / n;
       final variance = (sumSq / n) - (mean * mean);
@@ -576,10 +857,17 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final sensorOrientation = _camCtrl!.description.sensorOrientation;
     InputImageRotation rotation;
     switch (sensorOrientation) {
-      case 90: rotation = InputImageRotation.rotation90deg; break;
-      case 180: rotation = InputImageRotation.rotation180deg; break;
-      case 270: rotation = InputImageRotation.rotation270deg; break;
-      default: rotation = InputImageRotation.rotation0deg;
+      case 90:
+        rotation = InputImageRotation.rotation90deg;
+        break;
+      case 180:
+        rotation = InputImageRotation.rotation180deg;
+        break;
+      case 270:
+        rotation = InputImageRotation.rotation270deg;
+        break;
+      default:
+        rotation = InputImageRotation.rotation0deg;
     }
     final plane = image.planes.first;
     return InputImage.fromBytes(
@@ -593,8 +881,277 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     );
   }
 
+  Future<bool> _checkRoleAndGeofence() async {
+    if (mounted) setState(() => _isCheckingGeofence = true);
+
+    try {
+      String role = widget.employee.position;
+      String department = widget.employee.department;
+      bool wfhAccess = widget.employee.wfhAccess;
+
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('🔍 [Geofence] employee.id     = ${widget.employee.id}');
+      debugPrint('🔍 [Geofence] initial role    = "$role"');
+      debugPrint('🔍 [Geofence] initial dept    = "$department"');
+      debugPrint('🔍 [Geofence] initial wfh     = $wfhAccess');
+
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(widget.employee.id)
+            .get()
+            .timeout(const Duration(seconds: 5));
+
+        if (doc.exists) {
+          final data = doc.data();
+          if (data != null) {
+            final rawRole = data['role'] ?? data['position'];
+            if (rawRole != null && rawRole.toString().trim().isNotEmpty) {
+              role = rawRole.toString();
+            }
+
+            final rawDept = data['department'];
+            if (rawDept != null && rawDept.toString().trim().isNotEmpty) {
+              department = rawDept.toString();
+            }
+
+            final rawWfh = data['wfhAccess'];
+            if (rawWfh != null) {
+              wfhAccess = rawWfh is bool
+                  ? rawWfh
+                  : rawWfh.toString().toLowerCase() == 'true';
+            }
+          }
+        } else {
+          debugPrint(
+              '⚠️ [Geofence] Employee doc not found — using widget fallback');
+        }
+      } catch (e) {
+        debugPrint('⚠️ [Geofence] Firestore read failed: $e');
+      }
+
+      debugPrint('✅ [Geofence] resolved role       = "$role"');
+      debugPrint('✅ [Geofence] resolved department = "$department"');
+      debugPrint('✅ [Geofence] resolved wfh        = $wfhAccess');
+
+      if (wfhAccess) {
+        debugPrint('🏠 [Geofence] WFH ENABLED → bypassing geofence');
+        if (mounted) setState(() => _isCheckingGeofence = false);
+        return true;
+      }
+
+      final roleLower = role.toLowerCase().trim();
+      final deptLower = department.toLowerCase().trim();
+      final isDriver = roleLower.contains('driver') ||
+          deptLower.contains('driver') ||
+          roleLower.contains('rider') ||
+          deptLower.contains('rider');
+
+      if (isDriver) {
+        debugPrint('🚗 [Geofence] DRIVER/RIDER detected '
+            '(role="$role", dept="$department") → bypassing geofence');
+        if (mounted) setState(() => _isCheckingGeofence = false);
+        return true;
+      }
+
+      debugPrint('📍 [Geofence] Checking regular employee location...');
+
+      GeofenceResult? geoResult;
+      bool geofenceFailed = false;
+
+      try {
+        geoResult = await GeofenceService.instance
+            .checkGeofence()
+            .timeout(const Duration(seconds: 12));
+      } catch (e) {
+        debugPrint('❌ [Geofence] checkGeofence error: $e');
+        geofenceFailed = true;
+      }
+
+      final isInside = geoResult?.isInside ?? false;
+      final distance = geoResult?.distanceMeters;
+
+      debugPrint('📍 [Geofence] inside=$isInside, distance=${distance}m');
+
+      if (isInside) {
+        if (mounted) setState(() => _isCheckingGeofence = false);
+        return true;
+      }
+
+      String distanceText;
+      if (geofenceFailed) {
+        distanceText =
+        'Hindi ma-verify ang location (GPS error o walang signal).';
+      } else if (distance != null) {
+        distanceText = '${distance.toStringAsFixed(0)} meters from office';
+      } else {
+        distanceText = 'Location outside authorized zone';
+      }
+
+      if (mounted) {
+        setState(() {
+          _faceState = _FaceState.error;
+          _errorMessage = 'You are outside the work zone.\n\n'
+              'Role: $role\n'
+              'Department: $department\n'
+              'Distance: $distanceText\n\n'
+              'If you are on WFH, ask Admin to enable WFH access.';
+          _isCheckingGeofence = false;
+        });
+        _shakeCtrl.forward(from: 0);
+      }
+      return false;
+    } catch (e) {
+      debugPrint('❌ [Geofence] Outer catch error: $e');
+      if (mounted) {
+        setState(() {
+          _faceState = _FaceState.error;
+          _errorMessage = 'Location verification failed.\n\n'
+              'Hindi ma-verify kung nasa work zone ka. '
+              'Paki-check ang GPS at internet connection, '
+              'o mag-request ng WFH access sa admin.';
+          _isCheckingGeofence = false;
+        });
+        _shakeCtrl.forward(from: 0);
+      }
+      return false;
+    }
+  }
+
+  Color _matchColor(double percent) {
+    if (percent >= 95) return const Color(0xFF16A34A);
+    if (percent >= 75) return const Color(0xFF3B82F6);
+    if (percent >= 55) return const Color(0xFFF59E0B);
+    return const Color(0xFFEF4444);
+  }
+
+  String _matchLabel(double percent) {
+    if (percent >= 95) return 'EXCELLENT MATCH';
+    if (percent >= 75) return 'STRONG MATCH';
+    if (percent >= 55) return 'ACCEPTABLE MATCH';
+    return 'WEAK MATCH';
+  }
+
+  String get _employeeIdForAttendance {
+    final empId = widget.employee.employeeId;
+    if (empId.isNotEmpty) return empId;
+    return widget.employee.id;
+  }
+
+  Future<void> _writeAttendanceLog() async {
+    try {
+      final employeeId = _employeeIdForAttendance;
+      if (employeeId.isEmpty) {
+        debugPrint('❌ [attendance_logs] Walang employee ID — hindi maisusulat');
+        return;
+      }
+
+      final alreadyClockedIn =
+      await ClockStatusService.instance.isCurrentlyClockedIn(employeeId);
+      final attendanceType = alreadyClockedIn ? 'OUT' : 'IN';
+      final isClockIn = attendanceType == 'IN';
+
+      final now = DateTime.now();
+      final todayStr = now.toIso8601String().substring(0, 10);
+      final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
+          '${now.minute.toString().padLeft(2, '0')}:'
+          '${now.second.toString().padLeft(2, '0')}';
+
+      final employeeName = widget.employee.fullName;
+      final deviceName = kIsWeb ? 'Web Browser' : 'Mobile App';
+
+      final attendancePayload = <String, dynamic>{
+        'employee_id': employeeId,
+        'employee_name': employeeName,
+        'date': todayStr,
+        'type': attendanceType,
+        'time': timeStr,
+        'timestamp': FieldValue.serverTimestamp(),
+        'created_at': now.toIso8601String(),
+        'verification_method':
+        _isEnrollmentMode ? 'face_enrollment' : 'face_match',
+        'face_match_percent': _matchPercent,
+        'device': deviceName,
+      };
+
+      debugPrint('💾 [attendance_logs] Saving: $attendancePayload');
+
+      final docRef = await FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .add(attendancePayload);
+
+      debugPrint(
+          '✅ [attendance_logs] Saved (${docRef.id}) — type=$attendanceType');
+
+      final activityLogPayload = <String, dynamic>{
+        'type': _isEnrollmentMode
+            ? 'face_enrollment_complete'
+            : (isClockIn ? 'clock_in' : 'clock_out'),
+        'action': _isEnrollmentMode
+            ? 'Face Enrollment Complete'
+            : (isClockIn ? 'Clocked In (Face)' : 'Clocked Out (Face)'),
+        'employeeId': widget.employee.id,
+        'employee_id': employeeId,
+        'employee_name': employeeName,
+        'email': widget.employee.email,
+        'face_match_score': _matchScore,
+        'face_match_percent': _matchPercent,
+        'face_matched': _faceMatched,
+        'liveness_passed':
+        _isEnrollmentMode ? false : (_blinkDone && _smileDone),
+        'enrollment_mode': _isEnrollmentMode,
+        'enrolled_angles': _isEnrollmentMode ? _enrollCaptureCount : 0,
+        'time': timeStr,
+        'date': todayStr,
+        'device': deviceName,
+        'platform': deviceName,
+        'timestamp': FieldValue.serverTimestamp(),
+      };
+
+      final historyLogPayload = <String, dynamic>{
+        'type': isClockIn ? 'login' : 'logout',
+        'employee_id': employeeId,
+        'employee_name': employeeName,
+        'device': deviceName,
+        'timestamp': FieldValue.serverTimestamp(),
+      };
+
+      Future.wait([
+        FirebaseFirestore.instance
+            .collection('activity logs')
+            .add(activityLogPayload)
+            .then((ref) =>
+            debugPrint('✅ [activity logs] written: ${ref.id}'))
+            .catchError((e) {
+          debugPrint('⚠️ [activity logs] FAILED (non-critical): $e');
+        }),
+        FirebaseFirestore.instance
+            .collection('activity_logs')
+            .add(historyLogPayload)
+            .then((ref) =>
+            debugPrint('✅ [activity_logs] written: ${ref.id}'))
+            .catchError((e) {
+          debugPrint('⚠️ [activity_logs] FAILED (non-critical): $e');
+        }),
+      ]).whenComplete(() {
+        debugPrint('🎉 [FacialRecognition] All secondary writes settled');
+      });
+
+      await FirebaseFirestore.instance.waitForPendingWrites();
+      debugPrint('✅ [attendance_logs] Server sync confirmed!');
+    } catch (e) {
+      debugPrint('❌ [attendance_logs] Write failed: $e');
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ON SUCCESS — FULL REPLACEMENT (walang overlay)
+  // ══════════════════════════════════════════════════════════════
   Future<void> _onSuccess() async {
     if (!mounted) return;
+
+    final navigator = Navigator.of(context);
+
     setState(() {
       _faceState = _FaceState.success;
       _errorMessage = null;
@@ -602,15 +1159,43 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _pulseCtrl.stop();
     _ringCtrl.stop();
     _successCtrl.forward();
+    _matchCountCtrl.forward(from: 0);
+
+    final canProceed = await _checkRoleAndGeofence();
+    if (!canProceed) return;
+
+    await _writeAttendanceLog();
+
+    // ✅ ADMIN NOTIFICATION
+    try {
+      final nowNotif = DateTime.now();
+      final timeStrNotif = '${nowNotif.hour.toString().padLeft(2, '0')}:'
+          '${nowNotif.minute.toString().padLeft(2, '0')}';
+      AdminNotificationService.instance.notifyClockIn(
+        employeeId: _employeeIdForAttendance,
+        employeeName: widget.employee.fullName,
+        timeStr: timeStrNotif,
+        faceMatchPercent: _matchPercent,
+      );
+    } catch (e) {
+      debugPrint('⚠️ Admin notification failed: $e');
+    }
 
     try {
       await FirebaseFirestore.instance.collection('activity logs').add({
-        'type': 'facial_recognition_verified',
+        'type': _isEnrollmentMode
+            ? 'face_enrollment_complete'
+            : 'facial_recognition_verified',
         'employeeId': widget.employee.id,
         'employee_name': widget.employee.fullName,
         'email': widget.employee.email,
         'face_match_score': _matchScore,
+        'face_match_percent': _matchPercent,
         'face_matched': _faceMatched,
+        'liveness_passed':
+        _isEnrollmentMode ? false : (_blinkDone && _smileDone),
+        'enrollment_mode': _isEnrollmentMode,
+        'enrolled_angles': _isEnrollmentMode ? _enrollCaptureCount : 0,
         'timestamp': FieldValue.serverTimestamp(),
         'device': kIsWeb ? 'Web Browser' : 'Mobile App',
       });
@@ -618,15 +1203,19 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       debugPrint('⚠️ Log save failed: $e');
     }
 
-    await Future.delayed(const Duration(milliseconds: 1600));
+    await Future.delayed(const Duration(milliseconds: 2000));
     if (!mounted) return;
 
-    Navigator.of(context).push(
+    navigator.pushReplacement(
       MaterialPageRoute(
         builder: (_) => ClockInSuccessScreen(
           employee: widget.employee,
+          arrivalTime: widget.arrivalTime,
+          faceMatchPercent: _matchPercent,
+          verificationMethod:
+          _isEnrollmentMode ? 'face_enrollment' : 'face_match',
           onContinue: () {
-            Navigator.of(context).pushAndRemoveUntil(
+            navigator.pushAndRemoveUntil(
               MaterialPageRoute(
                   builder: (_) => MainScreen(employee: widget.employee)),
                   (route) => false,
@@ -672,9 +1261,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
-
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0A0A0A) : const Color(0xFF121212),
+      backgroundColor:
+      isDark ? const Color(0xFF0A0A0A) : const Color(0xFF121212),
       body: SafeArea(
         top: false,
         bottom: false,
@@ -682,13 +1271,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           builder: (context, constraints) {
             final screenWidth = constraints.maxWidth;
             final contentWidth = screenWidth < 420 ? screenWidth : 375.0;
-
             return Center(
               child: SizedBox(
                 width: contentWidth,
                 height: constraints.maxHeight,
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(screenWidth <= 420 ? 0 : 40),
+                  borderRadius:
+                  BorderRadius.circular(screenWidth <= 420 ? 0 : 40),
                   child: FadeTransition(
                     opacity: _fadeAnim,
                     child: Stack(
@@ -740,43 +1329,35 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SizedBox(
-                    width: 19.99,
-                    height: 19.99,
-                    child: CustomPaint(painter: _BackArrowPainter()),
-                  ),
+                      width: 19.99,
+                      height: 19.99,
+                      child: CustomPaint(painter: _BackArrowPainter())),
                   const SizedBox(width: 2),
                   const Text('Back',
                       style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white,
-                        height: 0.9,
-                      )),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white,
+                          height: 0.9)),
                 ],
               ),
             ),
           ),
           const Positioned(
-            left: 24,
-            top: 95.99,
-            child: Text('Auth & Clock In',
-                style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                  height: 0.9,
-                )),
-          ),
+              left: 24,
+              top: 95.99,
+              child: Text('Auth & Clock In',
+                  style: TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      height: 0.9))),
           const Positioned(
-            left: 24,
-            top: 136.99,
-            child: Text('Select your initial verification method',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.white,
-                  height: 0.9,
-                )),
-          ),
+              left: 24,
+              top: 136.99,
+              child: Text('Face + Liveness verification',
+                  style: TextStyle(
+                      fontSize: 14, color: Colors.white, height: 0.9))),
         ],
       ),
     );
@@ -789,10 +1370,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 12,
+              offset: const Offset(0, 4))
         ],
       ),
       padding: const EdgeInsets.fromLTRB(0, 18, 0, 0),
@@ -800,14 +1380,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Step 1: Initial Login',
+          Text(
+              _isEnrollmentMode
+                  ? 'Step 3: Face Registration (Auto-Capture)'
+                  : 'Step 3: Facial Recognition',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: tc.stepLabelColor,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
-              )),
+                  color: tc.stepLabelColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5)),
           const SizedBox(height: 12),
           _buildModalCard(tc),
         ],
@@ -817,6 +1399,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   Widget _buildModalCard(_ThemeColors tc) {
     final isScanning = _faceState == _FaceState.scanning;
+    final isEnrolling = _faceState == _FaceState.enrolling;
+    final isSuccess = _faceState == _FaceState.success;
+    final isBusy = isScanning || isEnrolling || _isCheckingTemplate;
 
     return Container(
       width: double.infinity,
@@ -829,10 +1414,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFF05000).withValues(alpha: 0.35),
-            blurRadius: 30,
-            offset: const Offset(0, 12),
-          ),
+              color: const Color(0xFFF05000).withValues(alpha: 0.35),
+              blurRadius: 30,
+              offset: const Offset(0, 12))
         ],
       ),
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
@@ -845,41 +1429,76 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             child: Center(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: (!isScanning && _faceState != _FaceState.success)
+                onTap: (!isBusy && !isSuccess && !_isCheckingGeofence)
                     ? _startScan
                     : null,
-                child: isScanning
+                child: isSuccess
+                    ? _buildVerifiedBadgeWithScore()
+                    : (isScanning || isEnrolling)
                     ? _buildCameraPreview()
-                    : (_faceState == _FaceState.success
-                    ? _buildVerifiedBadge()
-                    : _buildFaceIconBox(tc)),
+                    : _buildFaceIconBox(),
               ),
             ),
           ),
-          if (isScanning) ...[
+          if (isScanning || isEnrolling) ...[
             const SizedBox(height: 16),
             _buildScanProgressBar(),
           ],
           const SizedBox(height: 20),
+
+          if (isEnrolling) ...[
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.face_retouching_natural,
+                      color: Colors.white, size: 14),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Captured $_enrollCaptureCount / $_requiredEnrollCaptures',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+
+          if (isSuccess) ...[
+            _buildMatchPercentBadge(),
+            const SizedBox(height: 14),
+          ],
+
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
             child: Text(
               _stateTitle.replaceAll('\n', ' '),
-              key: ValueKey('title_$_faceState'),
+              key: ValueKey(
+                  'title_${_faceState}_${_isEnrollmentMode}_${_enrollCaptureCount}'),
               textAlign: TextAlign.center,
               style: const TextStyle(
-                color: _white,
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-              ),
+                  color: _white, fontSize: 20, fontWeight: FontWeight.w700),
             ),
           ),
           const SizedBox(height: 8),
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
             child: Text(
-              _errorMessage ?? _stateSubtitle.replaceAll('\n', ' '),
-              key: ValueKey('subtitle_${_errorMessage ?? _faceState.toString()}'),
+              _errorMessage ??
+                  (_isEnrollmentMode
+                      ? _enrollHint
+                      : _stateSubtitle.replaceAll('\n', ' ')),
+              key: ValueKey(
+                  'subtitle_${_errorMessage ?? _faceState}_$_enrollCaptureCount'),
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: _white.withValues(alpha: 0.9),
@@ -888,73 +1507,228 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               ),
             ),
           ),
-          // ✅ Show camera error kung meron
+          if (_isCheckingGeofence) ...[
+            const SizedBox(height: 12),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      color: Colors.white, strokeWidth: 2)),
+              const SizedBox(width: 8),
+              Text('Verifying location...',
+                  style: TextStyle(
+                      color: _white.withValues(alpha: 0.9),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+            ]),
+          ],
+          if (_isCheckingTemplate) ...[
+            const SizedBox(height: 12),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      color: Colors.white, strokeWidth: 2)),
+              const SizedBox(width: 8),
+              Text('Checking face data...',
+                  style: TextStyle(
+                      color: _white.withValues(alpha: 0.9),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+            ]),
+          ],
           if (_camError != null && _faceState == _FaceState.idle) ...[
             const SizedBox(height: 8),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.3),
-                borderRadius: BorderRadius.circular(6),
+                  color: Colors.black.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(6)),
+              child: Text('⚠️ $_camError',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: _warning, fontSize: 10)),
+            ),
+          ],
+
+          if (isEnrolling && !_isCapturing) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border:
+                Border.all(color: Colors.white.withValues(alpha: 0.3)),
               ),
-              child: Text(
-                '⚠️ $_camError',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: _warning, fontSize: 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    _facePresent && _autoCaptureProgress > 0
+                        ? Icons.timer_rounded
+                        : Icons.info_outline_rounded,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      _facePresent && _autoCaptureProgress > 0
+                          ? 'Huwag gumalaw... auto-capturing'
+                          : 'I-center ang mukha para mag-auto-capture',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
-          const SizedBox(height: 24),
+          if (_isCapturing) ...[
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2)),
+                const SizedBox(width: 10),
+                Text('Processing...',
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ],
+
+          const SizedBox(height: 20),
           _buildCancelButton(tc),
         ],
       ),
     );
   }
 
-  Widget _buildFaceIconBox(_ThemeColors tc) {
+  Widget _buildMatchPercentBadge() {
+    final percent = _matchPercent;
+    final color = _matchColor(percent);
+    final label = _matchLabel(percent);
+    final isEnrollment = _isEnrollmentMode;
+
+    return AnimatedBuilder(
+      animation: _matchCountAnim,
+      builder: (_, __) {
+        final animatedPercent = (percent * _matchCountAnim.value);
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: color.withValues(alpha: 0.7), width: 2),
+            boxShadow: [
+              BoxShadow(
+                  color: color.withValues(alpha: 0.4),
+                  blurRadius: 16,
+                  spreadRadius: 1)
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                isEnrollment ? 'ENROLLMENT COMPLETE' : label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    animatedPercent.toStringAsFixed(1),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 30,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -1,
+                    ),
+                  ),
+                  Text(
+                    '%',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+              if (!isEnrollment) ...[
+                const SizedBox(height: 2),
+                Text(
+                  'Similarity · Required ${(_matchThreshold * 100).toStringAsFixed(0)}%',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.6),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildFaceIconBox() {
     return SizedBox(
       width: 75,
       height: 75,
       child: AnimatedBuilder(
         animation: Listenable.merge([_pulseAnim, _successAnim, _shakeAnim]),
         builder: (_, __) {
-          final isSuccess = _faceState == _FaceState.success;
           final isError = _faceState == _FaceState.error;
           final shakeX = isError
               ? _shakeAnim.value * (_shakeCtrl.value * 10 % 2 == 0 ? 1 : -1)
               : 0.0;
-
           return Transform.translate(
             offset: Offset(shakeX, 0),
             child: Transform.scale(
-              scale: isSuccess ? 1.0 : _pulseAnim.value,
+              scale: _pulseAnim.value,
               child: Container(
                 width: 75,
                 height: 75,
                 decoration: BoxDecoration(
-                  color: isSuccess ? Colors.transparent : _white,
+                  color: _white,
                   borderRadius: BorderRadius.circular(18),
-                  border: isSuccess ? Border.all(color: _success, width: 2.5) : null,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 15,
-                      offset: const Offset(0, 6),
-                    ),
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 15,
+                        offset: const Offset(0, 6))
                   ],
                 ),
                 child: Center(
-                  child: isSuccess
-                      ? Transform.scale(
-                    scale: _successAnim.value,
-                    child: const Icon(Icons.how_to_reg_rounded,
-                        color: _success, size: 36),
-                  )
-                      : CustomPaint(
+                  child: CustomPaint(
                     size: const Size(36, 36),
                     painter: _FaceScanIconPainter(
-                      color: isError ? _error : _orange,
-                    ),
+                        color: isError ? _error : _orange),
                   ),
                 ),
               ),
@@ -965,60 +1739,47 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     );
   }
 
-  Widget _buildVerifiedBadge() {
+  Widget _buildVerifiedBadgeWithScore() {
     return AnimatedBuilder(
       animation: _successAnim,
-      builder: (_, __) {
-        return Transform.scale(
-          scale: _successAnim.value,
-          child: Container(
-            width: 140,
-            height: 140,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-              ],
+      builder: (_, __) => Transform.scale(
+        scale: _successAnim.value,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            SizedBox(
+              width: 140,
+              height: 140,
+              child: CustomPaint(
+                painter: _VerifiedBadgePainter(color: _verifiedGreen),
+              ),
             ),
-            child: CustomPaint(
-              size: const Size(140, 140),
-              painter: _VerifiedBadgePainter(color: _verifiedGreen),
-            ),
-          ),
-        );
-      },
+          ],
+        ),
+      ),
     );
   }
 
-  // ✅ IMPROVED camera preview — priority sa real camera
   Widget _buildCameraPreview() {
     final faceDetected = _facePresent;
     final hasWarning = _faceWarning != _FaceWarning.none;
-    final borderColor = hasWarning ? _warning : (faceDetected ? _faceGreen : _orange);
-
-    double blinkProgress = 0.0;
-    if (faceDetected && !hasWarning && _eyesWereClosed) {
-      blinkProgress = (_closedFrames / _minClosedFrames).clamp(0.0, 1.0);
-    }
-
-    // ✅ Check kung may valid camera
+    final borderColor = _isEnrollmentMode
+        ? (hasWarning
+        ? _warning
+        : (faceDetected ? _enrollBlue : _enrollBlue))
+        : (hasWarning ? _warning : (faceDetected ? _faceGreen : _orange));
     final bool hasRealCamera = _camCtrl != null &&
         _camCtrl!.value.isInitialized &&
         _camCtrl!.value.previewSize != null;
 
-    debugPrint('🎥 Building preview: hasRealCamera=$hasRealCamera, '
-        'isWeb=$kIsWeb, camReady=$_camReady');
-
     return AnimatedBuilder(
-      animation: Listenable.merge([_ringAnim, _scanLineAnim, _warningAnim]),
+      animation: Listenable.merge(
+          [_ringAnim, _scanLineAnim, _warningAnim, _flashAnim]),
       builder: (_, __) {
         final glowOpacity = faceDetected
             ? 0.6 + 0.35 * (0.5 + 0.5 * math.sin(_ringAnim.value * 2 * math.pi))
-            : 0.3 + 0.30 * (0.5 + 0.5 * math.sin(_ringAnim.value * 2 * math.pi));
+            : 0.3 +
+            0.30 * (0.5 + 0.5 * math.sin(_ringAnim.value * 2 * math.pi));
 
         return ClipRRect(
           borderRadius: BorderRadius.circular(16),
@@ -1029,7 +1790,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               alignment: Alignment.center,
               fit: StackFit.expand,
               children: [
-                // ✅ PRIORITY: Real camera preview
                 if (hasRealCamera)
                   FittedBox(
                     fit: BoxFit.cover,
@@ -1043,57 +1803,34 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                     ),
                   )
                 else if (kIsWeb)
-                  _buildMockPreviewBackground(faceDetected)
+                  Container(color: Colors.black)
                 else
                   Container(
-                    color: Colors.black,
-                    child: const Center(
-                      child: CircularProgressIndicator(
-                        color: Colors.orange,
-                        strokeWidth: 2,
-                      ),
-                    ),
-                  ),
-
-                // Scan line
+                      color: Colors.black,
+                      child: const Center(
+                          child: CircularProgressIndicator(
+                              color: Colors.orange, strokeWidth: 2))),
                 Positioned.fill(
                   child: Align(
                     alignment: Alignment(0, (_scanLineAnim.value * 2) - 1),
                     child: Container(
                       height: 2,
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Colors.transparent,
-                            borderColor.withValues(alpha: 0.95),
-                            borderColor,
-                            borderColor.withValues(alpha: 0.95),
-                            Colors.transparent,
-                          ],
-                        ),
+                        gradient: LinearGradient(colors: [
+                          Colors.transparent,
+                          borderColor.withValues(alpha: 0.95),
+                          borderColor,
+                          borderColor.withValues(alpha: 0.95),
+                          Colors.transparent,
+                        ]),
                       ),
                     ),
                   ),
                 ),
-
                 Positioned.fill(
                   child: CustomPaint(
-                    painter: _FaceBracketPainter(color: borderColor),
-                  ),
+                      painter: _FaceBracketPainter(color: borderColor)),
                 ),
-
-                if (faceDetected && !hasWarning && _eyesWereClosed && _closedFrames > 0)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: CustomPaint(
-                        painter: _HoldProgressPainter(
-                          progress: blinkProgress,
-                          color: _faceGreen,
-                        ),
-                      ),
-                    ),
-                  ),
-
                 Positioned.fill(
                   child: IgnorePointer(
                     child: Container(
@@ -1101,48 +1838,76 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
                           color: borderColor.withValues(
-                            alpha: hasWarning ? _warningAnim.value : glowOpacity,
-                          ),
+                              alpha: hasWarning
+                                  ? _warningAnim.value
+                                  : glowOpacity),
                           width: faceDetected ? 2.5 : 2,
                         ),
                       ),
                     ),
                   ),
                 ),
-
+                if (_isEnrollmentMode &&
+                    _autoCaptureProgress > 0 &&
+                    !_isCapturing)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: CustomPaint(
+                        painter: _AutoCaptureRingPainter(
+                          progress: _autoCaptureProgress,
+                          color: _enrollBlue,
+                        ),
+                      ),
+                    ),
+                  ),
+                if (_justCaptured && _flashCtrl.value > 0)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          color: _success.withValues(
+                              alpha: 0.35 * (1 - _flashAnim.value)),
+                        ),
+                        child: Center(
+                          child: Transform.scale(
+                            scale: 0.5 + 0.5 * _flashAnim.value,
+                            child: Icon(
+                              Icons.check_circle_rounded,
+                              color: Colors.white,
+                              size: 80 * (1 + 0.2 * _flashAnim.value),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 Positioned(
                   top: 6,
                   right: 6,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.55),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Container(
                           width: 5,
                           height: 5,
                           decoration: BoxDecoration(
-                              color: borderColor, shape: BoxShape.circle),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          _statusBadgeText,
+                              color: borderColor, shape: BoxShape.circle)),
+                      const SizedBox(width: 4),
+                      Text(_statusBadgeText,
                           style: const TextStyle(
-                            color: _white,
-                            fontSize: 7.5,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.6,
-                          ),
-                        ),
-                      ],
-                    ),
+                              color: _white,
+                              fontSize: 7.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.6)),
+                    ]),
                   ),
                 ),
-
                 if (hasWarning)
                   Positioned(
                     bottom: 6,
@@ -1151,118 +1916,105 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                       builder: (_, __) => Opacity(
                         opacity: _warningAnim.value,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: Colors.black.withValues(alpha: 0.72),
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: _warning.withValues(alpha: 0.7)),
+                            border: Border.all(
+                                color: _warning.withValues(alpha: 0.7)),
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.warning_amber_rounded,
-                                  color: _warning, size: 11),
-                              const SizedBox(width: 4),
-                              Text(_warningHintText,
-                                  style: const TextStyle(
+                          child:
+                          Row(mainAxisSize: MainAxisSize.min, children: [
+                            const Icon(Icons.warning_amber_rounded,
+                                color: _warning, size: 11),
+                            const SizedBox(width: 4),
+                            Text(_warningHintText,
+                                style: const TextStyle(
                                     color: _warning,
                                     fontSize: 8,
-                                    fontWeight: FontWeight.w700,
-                                  )),
-                            ],
+                                    fontWeight: FontWeight.w700)),
+                          ]),
+                        ),
+                      ),
+                    ),
+                  )
+                else if (_justCaptured)
+                  Positioned(
+                    bottom: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.72),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(_captureFlashMessage ?? 'Captured!',
+                          style: const TextStyle(
+                              color: _success,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700)),
+                    ),
+                  )
+                else if (faceDetected && _autoCaptureProgress > 0)
+                    Positioned(
+                      bottom: 6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                            'Huwag gumalaw (${(_autoCaptureProgress * 100).toInt()}%)',
+                            style: const TextStyle(
+                                color: _enrollBlue,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    )
+                  else if (faceDetected)
+                      Positioned(
+                        bottom: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(20),
                           ),
+                          child: Text(
+                              _isEnrollmentMode
+                                  ? 'Auto-capture ready'
+                                  : _livenessHint,
+                              style: TextStyle(
+                                  color: _isEnrollmentMode
+                                      ? _enrollBlue
+                                      : _faceGreen,
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                      )
+                    else
+                      Positioned(
+                        bottom: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text('I-center ang mukha',
+                              style: TextStyle(
+                                  color: _white.withValues(alpha: 0.75),
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w600)),
                         ),
                       ),
-                    ),
-                  )
-                else if (faceDetected)
-                  Positioned(
-                    bottom: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        _blinkDetected ? 'Blink detected! ✓' : 'Blink to verify',
-                        style: TextStyle(
-                          color: _blinkDetected ? _success : _faceGreen,
-                          fontSize: 8,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  )
-                else
-                  Positioned(
-                    bottom: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.55),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text('Center your face',
-                          style: TextStyle(
-                            color: _white.withValues(alpha: 0.75),
-                            fontSize: 8,
-                            fontWeight: FontWeight.w600,
-                          )),
-                    ),
-                  ),
               ],
             ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildMockPreviewBackground(bool faceDetected) {
-    return AnimatedBuilder(
-      animation: _ringAnim,
-      builder: (_, __) {
-        final t = _ringAnim.value;
-        return Container(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: const Alignment(0, -0.2),
-              radius: 0.9 + 0.1 * math.sin(t * 2 * math.pi),
-              colors: [
-                faceDetected ? const Color(0xFF1B4332) : const Color(0xFF2B1A0F),
-                const Color(0xFF0A0A0A),
-              ],
-            ),
-          ),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
-                width: 140,
-                height: 180,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: faceDetected
-                      ? _faceGreen.withValues(alpha: 0.18)
-                      : Colors.white.withValues(alpha: 0.04),
-                  border: Border.all(
-                    color: faceDetected
-                        ? _faceGreen.withValues(alpha: 0.4)
-                        : Colors.white.withValues(alpha: 0.1),
-                    width: 1.5,
-                  ),
-                ),
-                child: Icon(
-                  Icons.person_outline_rounded,
-                  size: 64,
-                  color: faceDetected
-                      ? _faceGreen.withValues(alpha: 0.8)
-                      : Colors.white.withValues(alpha: 0.35),
-                ),
-              ),
-            ],
           ),
         );
       },
@@ -1282,20 +2034,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 4))
           ],
         ),
         child: Center(
           child: AnimatedDefaultTextStyle(
             duration: const Duration(milliseconds: 200),
             style: TextStyle(
-              color: tc.cancelText,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+                color: tc.cancelText,
+                fontSize: 14,
+                fontWeight: FontWeight.w600),
             child: const Text('Cancel Authentication'),
           ),
         ),
@@ -1304,27 +2054,41 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   double get _scanProgress {
-    if (_blinkDetected) return 1.0;
-    if (!_facePresent) return 0.0;
-    if (_faceWarning != _FaceWarning.none) return 0.15;
-    if (_eyesWereClosed && _closedFrames > 0) {
-      final blinkFrac = (_closedFrames / _minClosedFrames).clamp(0.0, 1.0);
-      return 0.55 + (0.40 * blinkFrac);
+    if (_faceState == _FaceState.success) return 1.0;
+
+    if (_isEnrollmentMode) {
+      final base = _enrollCaptureCount / _requiredEnrollCaptures;
+      final partial = (_autoCaptureProgress / _requiredEnrollCaptures);
+      return (base + partial).clamp(0.05, 0.98);
     }
-    return 0.55;
+
+    if (!_facePresent) return 0.1;
+    if (_faceWarning != _FaceWarning.none) return 0.25;
+    if (_blinkDone && _smileDone) return 0.95;
+    if (_blinkDone) return 0.7;
+    return 0.5;
   }
 
   Color get _scanProgressColor {
-    if (_blinkDetected) return _success;
+    if (_isEnrollmentMode) return _enrollBlue;
+    if (_smileDone && _blinkDone) return _success;
     if (_faceWarning != _FaceWarning.none) return _warning;
     if (_facePresent) return _faceGreen;
     return _white.withValues(alpha: 0.5);
   }
 
   String get _scanProgressLabel {
-    if (_blinkDetected) return 'Verifying...';
+    if (_isEnrollmentMode) {
+      if (_isCapturing) return 'Capturing...';
+      if (_justCaptured) return 'Saved! Next angle...';
+      if (_enrollCaptureCount == 0) return 'Angle 1/3: Look forward';
+      if (_enrollCaptureCount == 1) return 'Angle 2/3: Turn right';
+      return 'Angle 3/3: Turn left';
+    }
+    if (_smileDone && _blinkDone) return 'Verifying...';
     if (_faceWarning != _FaceWarning.none) return 'Fix issue';
-    if (_facePresent) return 'Blink to finish';
+    if (_blinkDone && !_smileDone) return 'Step 2: Smile';
+    if (_facePresent) return 'Step 1: Blink';
     return 'Looking for face';
   }
 
@@ -1338,112 +2102,164 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             height: 8,
             width: double.infinity,
             color: Colors.black.withValues(alpha: 0.22),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return Align(
-                  alignment: Alignment.centerLeft,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    curve: Curves.easeOut,
-                    width: constraints.maxWidth * _scanProgress,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: _scanProgressColor,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
+            child: LayoutBuilder(builder: (context, constraints) {
+              return Align(
+                alignment: Alignment.centerLeft,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOut,
+                  width: constraints.maxWidth * _scanProgress,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: _scanProgressColor,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
                           color: _scanProgressColor.withValues(alpha: 0.6),
-                          blurRadius: 6,
-                        ),
-                      ],
-                    ),
+                          blurRadius: 6)
+                    ],
                   ),
-                );
-              },
-            ),
+                ),
+              );
+            }),
           ),
         ),
         const SizedBox(height: 6),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 200),
-          child: Text(
-            _scanProgressLabel,
-            key: ValueKey('progress_label_$_scanProgressLabel'),
-            style: TextStyle(
-              color: _white.withValues(alpha: 0.85),
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          child: Text(_scanProgressLabel,
+              key: ValueKey('progress_label_$_scanProgressLabel'),
+              style: TextStyle(
+                  color: _white.withValues(alpha: 0.85),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600)),
         ),
       ],
     );
   }
 
-  int get _detectedFaceCount => _facePresent ? 1 : 0;
-
   String get _statusBadgeText {
-    if (_blinkDetected) return 'VERIFYING';
+    if (_isCapturing) return 'CAPTURING';
+    if (_justCaptured) return 'SAVED';
+    if (_faceState == _FaceState.success) {
+      return '${_matchPercent.toStringAsFixed(0)}% ✓';
+    }
+    if (_isEnrollmentMode) {
+      return _facePresent ? 'AUTO' : 'SCANNING';
+    }
+    if (_smileDone && _blinkDone) return 'VERIFYING';
     switch (_faceWarning) {
-      case _FaceWarning.blurry: return 'BLURRY';
-      case _FaceWarning.faceMask: return 'MASK ON';
-      case _FaceWarning.occluded: return 'BLOCKED';
-      case _FaceWarning.headAngle: return 'ANGLE';
-      case _FaceWarning.eyesClosed: return 'EYES SHUT';
+      case _FaceWarning.blurry:
+        return 'BLURRY';
+      case _FaceWarning.faceMask:
+        return 'MASK ON';
+      case _FaceWarning.occluded:
+        return 'BLOCKED';
+      case _FaceWarning.headAngle:
+        return 'ANGLE';
+      case _FaceWarning.eyesClosed:
+        return 'EYES SHUT';
       case _FaceWarning.none:
-        return _detectedFaceCount > 0 ? 'FACE FOUND' : 'SCANNING';
+        return _facePresent ? 'FACE FOUND' : 'SCANNING';
     }
   }
 
   String get _warningHintText {
     switch (_faceWarning) {
-      case _FaceWarning.blurry: return 'Hold still — too blurry';
-      case _FaceWarning.faceMask: return 'Remove face mask';
-      case _FaceWarning.occluded: return 'Remove obstructions';
-      case _FaceWarning.headAngle: return 'Face the camera directly';
-      case _FaceWarning.eyesClosed: return 'Please open your eyes';
-      case _FaceWarning.none: return '';
+      case _FaceWarning.blurry:
+        return 'Hold still — too blurry';
+      case _FaceWarning.faceMask:
+        return 'Remove face mask';
+      case _FaceWarning.occluded:
+        return 'Remove obstructions';
+      case _FaceWarning.headAngle:
+        return 'Face the camera directly';
+      case _FaceWarning.eyesClosed:
+        return 'Please open your eyes';
+      case _FaceWarning.none:
+        return '';
     }
   }
 
+  String get _livenessHint {
+    if (_blinkDone && !_smileDone) return 'Now smile 😊';
+    if (_blinkDone && _smileDone) return 'Verifying...';
+    return 'Blink your eyes 👁️';
+  }
+
   String get _stateTitle {
+    if (_isCheckingTemplate) return 'Checking\nFace Data...';
+    if (_isEnrollmentMode) {
+      if (_faceState == _FaceState.success) return 'Face\nRegistered!';
+      if (_isCapturing) return 'Saving\nTemplate...';
+      if (_justCaptured) return 'Captured!';
+      return 'Auto-Capture\nFace';
+    }
+    if (_isCheckingGeofence) return 'Verifying\nLocation...';
     switch (_faceState) {
-      case _FaceState.idle: return 'Facial\nRecognition';
+      case _FaceState.idle:
+        return 'Facial\nRecognition';
       case _FaceState.scanning:
-        if (_blinkDetected) return 'Verifying\nIdentity...';
-        if (_detectedFaceCount > 0) {
+        if (_smileDone && _blinkDone) return 'Verifying\nIdentity...';
+        if (_facePresent) {
           return _faceWarning != _FaceWarning.none
               ? 'Quality\nCheck Failed'
-              : 'Face\nDetected';
+              : 'Liveness\nCheck';
         }
         return 'Scanning\nFace...';
-      case _FaceState.success: return 'Details\nVerified';
-      case _FaceState.error: return 'Try Again';
+      case _FaceState.success:
+        return 'Matched!\n${_matchPercent.toStringAsFixed(1)}%';
+      case _FaceState.error:
+        return 'Try Again';
+      case _FaceState.enrolling:
+        return 'Auto-Capture\nFace';
     }
   }
 
   String get _stateSubtitle {
+    if (_isCheckingTemplate) {
+      return 'Nagsusuri kung may naka-enroll nang face data...';
+    }
+    if (_isEnrollmentMode) {
+      if (_justCaptured) {
+        return _captureFlashMessage ?? 'Saved! Proceed to next angle.';
+      }
+      return 'First-time login mo ito. I-center ang mukha mo — kusang\n'
+          'mag-capture (1.5s stable) para sa 3 angles.';
+    }
+    if (_isCheckingGeofence) {
+      return 'Checking your role and location\nto verify clock-in permissions...';
+    }
     switch (_faceState) {
       case _FaceState.idle:
         return 'Tap the camera icon to start\nfacial scan';
       case _FaceState.scanning:
-        if (_blinkDetected) return 'Matching your face\nwith registered photo...';
-        if (_detectedFaceCount > 0) {
+        if (_smileDone && _blinkDone) {
+          return 'Matching your face\nwith registered photo...';
+        }
+        if (_facePresent) {
           if (_faceWarning != _FaceWarning.none) return _warningHintText;
-          return 'Blink your eyes to verify\nliveness';
+          if (!_blinkDone) return 'Step 1 of 2: Blink your eyes';
+          if (!_smileDone) return 'Step 2 of 2: Smile for the camera';
         }
         return 'Verifying facial structure & depth...';
       case _FaceState.success:
-        return 'Identity confirmed: Employee.\nProceeding...';
+        return 'Similarity: ${_matchPercent.toStringAsFixed(1)}%  •  '
+            'Required: ${(_matchThreshold * 100).toStringAsFixed(0)}%\n'
+            'Identity confirmed. Proceeding...';
       case _FaceState.error:
         return 'Face not recognized.\nTap to try again.';
+      case _FaceState.enrolling:
+        return _enrollHint;
     }
   }
 }
 
-enum _FaceState { idle, scanning, success, error }
+enum _FaceState { idle, scanning, success, error, enrolling }
 enum _FaceWarning { none, blurry, faceMask, occluded, headAngle, eyesClosed }
+enum _LivenessStep { waitingForFace, blink, smile }
 
+// ─── PAINTERS ───────────────────────────────────────────────────────
 class _BackArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -1453,12 +2269,10 @@ class _BackArrowPainter extends CustomPainter {
       ..strokeWidth = 1.66602
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-
     final path = Path()
       ..moveTo(size.width * 0.75, size.height * 0.75)
       ..lineTo(size.width * 0.25, size.height * 0.5)
       ..lineTo(size.width * 0.75, size.height * 0.25);
-
     canvas.drawPath(path, paint);
   }
 
@@ -1469,73 +2283,61 @@ class _BackArrowPainter extends CustomPainter {
 class _FaceScanIconPainter extends CustomPainter {
   final Color color;
   const _FaceScanIconPainter({required this.color});
-
   @override
   void paint(Canvas canvas, Size size) {
     final s = size.width / 24;
     Offset p(double x, double y) => Offset(x * s, y * s);
-
     final strokePaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2 * s
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-
     canvas.drawPath(
-      Path()
-        ..moveTo(p(3, 7).dx, p(3, 7).dy)
-        ..lineTo(p(3, 5).dx, p(3, 5).dy)
-        ..arcToPoint(p(5, 3), radius: Radius.circular(2 * s), clockwise: true)
-        ..lineTo(p(7, 3).dx, p(7, 3).dy),
-      strokePaint,
-    );
+        Path()
+          ..moveTo(p(3, 7).dx, p(3, 7).dy)
+          ..lineTo(p(3, 5).dx, p(3, 5).dy)
+          ..arcToPoint(p(5, 3),
+              radius: Radius.circular(2 * s), clockwise: true)
+          ..lineTo(p(7, 3).dx, p(7, 3).dy),
+        strokePaint);
     canvas.drawPath(
-      Path()
-        ..moveTo(p(17, 3).dx, p(17, 3).dy)
-        ..lineTo(p(19, 3).dx, p(19, 3).dy)
-        ..arcToPoint(p(21, 5), radius: Radius.circular(2 * s), clockwise: true)
-        ..lineTo(p(21, 7).dx, p(21, 7).dy),
-      strokePaint,
-    );
+        Path()
+          ..moveTo(p(17, 3).dx, p(17, 3).dy)
+          ..lineTo(p(19, 3).dx, p(19, 3).dy)
+          ..arcToPoint(p(21, 5),
+              radius: Radius.circular(2 * s), clockwise: true)
+          ..lineTo(p(21, 7).dx, p(21, 7).dy),
+        strokePaint);
     canvas.drawPath(
-      Path()
-        ..moveTo(p(21, 17).dx, p(21, 17).dy)
-        ..lineTo(p(21, 19).dx, p(21, 19).dy)
-        ..arcToPoint(p(19, 21), radius: Radius.circular(2 * s), clockwise: true)
-        ..lineTo(p(17, 21).dx, p(17, 21).dy),
-      strokePaint,
-    );
+        Path()
+          ..moveTo(p(21, 17).dx, p(21, 17).dy)
+          ..lineTo(p(21, 19).dx, p(21, 19).dy)
+          ..arcToPoint(p(19, 21),
+              radius: Radius.circular(2 * s), clockwise: true)
+          ..lineTo(p(17, 21).dx, p(17, 21).dy),
+        strokePaint);
     canvas.drawPath(
-      Path()
-        ..moveTo(p(7, 21).dx, p(7, 21).dy)
-        ..lineTo(p(5, 21).dx, p(5, 21).dy)
-        ..arcToPoint(p(3, 19), radius: Radius.circular(2 * s), clockwise: true)
-        ..lineTo(p(3, 17).dx, p(3, 17).dy),
-      strokePaint,
-    );
-
+        Path()
+          ..moveTo(p(7, 21).dx, p(7, 21).dy)
+          ..lineTo(p(5, 21).dx, p(5, 21).dy)
+          ..arcToPoint(p(3, 19),
+              radius: Radius.circular(2 * s), clockwise: true)
+          ..lineTo(p(3, 17).dx, p(3, 17).dy),
+        strokePaint);
     final dotPaint = Paint()
       ..color = color
       ..style = PaintingStyle.fill;
     canvas.drawCircle(p(9, 9), 1.1 * s, dotPaint);
     canvas.drawCircle(p(15, 9), 1.1 * s, dotPaint);
-
     canvas.drawPath(
-      Path()
-        ..moveTo(p(9, 13).dx, p(9, 13).dy)
-        ..cubicTo(
-          p(9.5, 13.8).dx, p(9.5, 13.8).dy,
-          p(10.5, 14.5).dx, p(10.5, 14.5).dy,
-          p(12, 14.5).dx, p(12, 14.5).dy,
-        )
-        ..cubicTo(
-          p(13.5, 14.5).dx, p(13.5, 14.5).dy,
-          p(14.5, 13.8).dx, p(14.5, 13.8).dy,
-          p(15, 13).dx, p(15, 13).dy,
-        ),
-      strokePaint,
-    );
+        Path()
+          ..moveTo(p(9, 13).dx, p(9, 13).dy)
+          ..cubicTo(p(9.5, 13.8).dx, p(9.5, 13.8).dy, p(10.5, 14.5).dx,
+              p(10.5, 14.5).dy, p(12, 14.5).dx, p(12, 14.5).dy)
+          ..cubicTo(p(13.5, 14.5).dx, p(13.5, 14.5).dy, p(14.5, 13.8).dx,
+              p(14.5, 13.8).dy, p(15, 13).dx, p(15, 13).dy),
+        strokePaint);
   }
 
   @override
@@ -1545,7 +2347,6 @@ class _FaceScanIconPainter extends CustomPainter {
 class _FaceBracketPainter extends CustomPainter {
   final Color color;
   const _FaceBracketPainter({required this.color});
-
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
@@ -1553,28 +2354,47 @@ class _FaceBracketPainter extends CustomPainter {
       ..strokeWidth = 2.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
-
     final margin = size.width * 0.06;
     final r = size.width * 0.08;
     final len = size.width * 0.15;
-
-    canvas.drawLine(Offset(margin + r, margin), Offset(margin + r + len, margin), paint);
-    canvas.drawArc(Rect.fromLTWH(margin, margin, r * 2, r * 2), math.pi, math.pi / 2, false, paint);
-    canvas.drawLine(Offset(margin, margin + r), Offset(margin, margin + r + len), paint);
-
+    canvas.drawLine(
+        Offset(margin + r, margin), Offset(margin + r + len, margin), paint);
+    canvas.drawArc(
+        Rect.fromLTWH(margin, margin, r * 2, r * 2),
+        math.pi,
+        math.pi / 2,
+        false,
+        paint);
+    canvas.drawLine(
+        Offset(margin, margin + r), Offset(margin, margin + r + len), paint);
     final xr = size.width - margin;
-    canvas.drawLine(Offset(xr - r, margin), Offset(xr - r - len, margin), paint);
-    canvas.drawArc(Rect.fromLTWH(xr - r * 2, margin, r * 2, r * 2), -math.pi / 2, math.pi / 2, false, paint);
-    canvas.drawLine(Offset(xr, margin + r), Offset(xr, margin + r + len), paint);
-
+    canvas.drawLine(
+        Offset(xr - r, margin), Offset(xr - r - len, margin), paint);
+    canvas.drawArc(
+        Rect.fromLTWH(xr - r * 2, margin, r * 2, r * 2),
+        -math.pi / 2,
+        math.pi / 2,
+        false,
+        paint);
+    canvas.drawLine(
+        Offset(xr, margin + r), Offset(xr, margin + r + len), paint);
     final yb = size.height - margin;
-    canvas.drawLine(Offset(margin + r, yb), Offset(margin + r + len, yb), paint);
-    canvas.drawArc(Rect.fromLTWH(margin, yb - r * 2, r * 2, r * 2), math.pi / 2, math.pi / 2, false, paint);
-    canvas.drawLine(Offset(margin, yb - r), Offset(margin, yb - r - len), paint);
-
-    canvas.drawLine(Offset(xr - r, yb), Offset(xr - r - len, yb), paint);
-    canvas.drawArc(Rect.fromLTWH(xr - r * 2, yb - r * 2, r * 2, r * 2), 0, math.pi / 2, false, paint);
-    canvas.drawLine(Offset(xr, yb - r), Offset(xr, yb - r - len), paint);
+    canvas.drawLine(
+        Offset(margin + r, yb), Offset(margin + r + len, yb), paint);
+    canvas.drawArc(
+        Rect.fromLTWH(margin, yb - r * 2, r * 2, r * 2),
+        math.pi / 2,
+        math.pi / 2,
+        false,
+        paint);
+    canvas.drawLine(
+        Offset(margin, yb - r), Offset(margin, yb - r - len), paint);
+    canvas.drawLine(
+        Offset(xr - r, yb), Offset(xr - r - len, yb), paint);
+    canvas.drawArc(Rect.fromLTWH(xr - r * 2, yb - r * 2, r * 2, r * 2), 0,
+        math.pi / 2, false, paint);
+    canvas.drawLine(
+        Offset(xr, yb - r), Offset(xr, yb - r - len), paint);
   }
 
   @override
@@ -1584,124 +2404,126 @@ class _FaceBracketPainter extends CustomPainter {
 class _VerifiedBadgePainter extends CustomPainter {
   final Color color;
   const _VerifiedBadgePainter({required this.color});
-
   @override
   void paint(Canvas canvas, Size size) {
     final s = size.width / 112;
     Offset p(double x, double y) => Offset(x * s, y * s);
-
-    final frameRect = Rect.fromLTRB(
-      p(1.5, 1.5).dx, p(1.5, 1.5).dy,
-      p(110.496, 110.496).dx, p(110.496, 110.496).dy,
-    );
+    final frameRect = Rect.fromLTRB(p(1.5, 1.5).dx, p(1.5, 1.5).dy,
+        p(110.496, 110.496).dx, p(110.496, 110.496).dy);
     final rrect = RRect.fromRectAndRadius(frameRect, Radius.circular(14.5 * s));
-    canvas.drawRRect(rrect, Paint()..color = Colors.white..style = PaintingStyle.fill);
+    canvas.drawRRect(rrect, Paint()..color = Colors.white);
     canvas.drawRRect(
-      rrect,
-      Paint()
-        ..color = color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3 * s,
-    );
-
+        rrect,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3 * s);
     final strokePaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4 * s
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-
     canvas.drawPath(
-      Path()
-        ..moveTo(p(63.9885, 73.9877).dx, p(63.9885, 73.9877).dy)
-        ..lineTo(p(63.9885, 69.9881).dx, p(63.9885, 69.9881).dy)
-        ..cubicTo(
-          p(63.9885, 67.8665).dx, p(63.9885, 67.8665).dy,
-          p(63.1457, 65.8319).dx, p(63.1457, 65.8319).dy,
-          p(61.6456, 64.3317).dx, p(61.6456, 64.3317).dy,
-        )
-        ..cubicTo(
-          p(60.1454, 62.8316).dx, p(60.1454, 62.8316).dy,
-          p(58.1108, 61.9888).dx, p(58.1108, 61.9888).dy,
-          p(55.9892, 61.9888).dx, p(55.9892, 61.9888).dy,
-        )
-        ..lineTo(p(43.9903, 61.9888).dx, p(43.9903, 61.9888).dy)
-        ..cubicTo(
-          p(41.8687, 61.9888).dx, p(41.8687, 61.9888).dy,
-          p(39.8341, 62.8316).dx, p(39.8341, 62.8316).dy,
-          p(38.3339, 64.3317).dx, p(38.3339, 64.3317).dy,
-        )
-        ..cubicTo(
-          p(36.8337, 65.8319).dx, p(36.8337, 65.8319).dy,
-          p(35.991, 67.8665).dx, p(35.991, 67.8665).dy,
-          p(35.991, 69.9881).dx, p(35.991, 69.9881).dy,
-        )
-        ..lineTo(p(35.991, 73.9877).dx, p(35.991, 73.9877).dy),
-      strokePaint,
-    );
-
+        Path()
+          ..moveTo(p(49.9895, 53.9893).dx, p(49.9895, 53.9893).dy)
+          ..cubicTo(
+              p(54.4074, 53.9893).dx,
+              p(54.4074, 53.9893).dy,
+              p(57.9888, 50.4079).dx,
+              p(57.9888, 50.4079).dy,
+              p(57.9888, 45.99).dx,
+              p(57.9888, 45.99).dy)
+          ..cubicTo(
+              p(57.9888, 41.5721).dx,
+              p(57.9888, 41.5721).dy,
+              p(54.4074, 37.9907).dx,
+              p(54.4074, 37.9907).dy,
+              p(49.9895, 37.9907).dx,
+              p(49.9895, 37.9907).dy)
+          ..cubicTo(
+              p(45.5716, 37.9907).dx,
+              p(45.5716, 37.9907).dy,
+              p(41.9902, 41.5721).dx,
+              p(41.9902, 41.5721).dy,
+              p(41.9902, 45.99).dx,
+              p(41.9902, 45.99).dy)
+          ..cubicTo(
+              p(41.9902, 50.4079).dx,
+              p(41.9902, 50.4079).dy,
+              p(45.5716, 53.9893).dx,
+              p(45.5716, 53.9893).dy,
+              p(49.9895, 53.9893).dx,
+              p(49.9895, 53.9893).dy)
+          ..close(),
+        strokePaint);
     canvas.drawPath(
-      Path()
-        ..moveTo(p(49.9895, 53.9893).dx, p(49.9895, 53.9893).dy)
-        ..cubicTo(
-          p(54.4074, 53.9893).dx, p(54.4074, 53.9893).dy,
-          p(57.9888, 50.4079).dx, p(57.9888, 50.4079).dy,
-          p(57.9888, 45.99).dx, p(57.9888, 45.99).dy,
-        )
-        ..cubicTo(
-          p(57.9888, 41.5721).dx, p(57.9888, 41.5721).dy,
-          p(54.4074, 37.9907).dx, p(54.4074, 37.9907).dy,
-          p(49.9895, 37.9907).dx, p(49.9895, 37.9907).dy,
-        )
-        ..cubicTo(
-          p(45.5716, 37.9907).dx, p(45.5716, 37.9907).dy,
-          p(41.9902, 41.5721).dx, p(41.9902, 41.5721).dy,
-          p(41.9902, 45.99).dx, p(41.9902, 45.99).dy,
-        )
-        ..cubicTo(
-          p(41.9902, 50.4079).dx, p(41.9902, 50.4079).dy,
-          p(45.5716, 53.9893).dx, p(45.5716, 53.9893).dy,
-          p(49.9895, 53.9893).dx, p(49.9895, 53.9893).dy,
-        )
-        ..close(),
-      strokePaint,
-    );
-
-    canvas.drawPath(
-      Path()
-        ..moveTo(p(63.9885, 53.9894).dx, p(63.9885, 53.9894).dy)
-        ..lineTo(p(67.9882, 57.989).dx, p(67.9882, 57.989).dy)
-        ..lineTo(p(75.9875, 49.9897).dx, p(75.9875, 49.9897).dy),
-      strokePaint,
-    );
+        Path()
+          ..moveTo(p(63.9885, 53.9894).dx, p(63.9885, 53.9894).dy)
+          ..lineTo(p(67.9882, 57.989).dx, p(67.9882, 57.989).dy)
+          ..lineTo(p(75.9875, 49.9897).dx, p(75.9875, 49.9897).dy),
+        strokePaint);
   }
 
   @override
   bool shouldRepaint(_VerifiedBadgePainter old) => old.color != color;
 }
 
-class _HoldProgressPainter extends CustomPainter {
+class _AutoCaptureRingPainter extends CustomPainter {
   final double progress;
   final Color color;
-  const _HoldProgressPainter({required this.progress, required this.color});
+
+  const _AutoCaptureRingPainter({
+    required this.progress,
+    required this.color,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color.withValues(alpha: 0.85)
-      ..strokeWidth = 3.5
+    final inset = size.width * 0.02;
+    final radius = (size.width - inset * 2) / 2;
+    final center = Offset(size.width / 2, size.height / 2);
+
+    final trackPaint = Paint()
+      ..color = color.withValues(alpha: 0.15)
       ..style = PaintingStyle.stroke
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawCircle(center, radius - 4, trackPaint);
+
+    final progressPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5
       ..strokeCap = StrokeCap.round;
 
-    const inset = 4.0;
-    final rect = Rect.fromLTWH(inset, inset, size.width - inset * 2, size.height - inset * 2);
-    const startAngle = -math.pi / 2;
-    final sweepAngle = 2 * math.pi * progress;
+    final sweep = progress * 2 * math.pi;
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius - 4),
+      -math.pi / 2,
+      sweep,
+      false,
+      progressPaint,
+    );
 
-    canvas.drawArc(rect, startAngle, sweepAngle, false, paint);
+    if (progress > 0.85) {
+      final glowPaint = Paint()
+        ..color = color.withValues(alpha: 0.5 * progress)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 10
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius - 4),
+        -math.pi / 2,
+        sweep,
+        false,
+        glowPaint,
+      );
+    }
   }
 
   @override
-  bool shouldRepaint(_HoldProgressPainter old) =>
+  bool shouldRepaint(_AutoCaptureRingPainter old) =>
       old.progress != progress || old.color != color;
 }

@@ -2,6 +2,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter/foundation.dart' show kIsWeb; // ✅ BAGONG IMPORT
 import '../services/geofence_service.dart';
 import '../theme/app_theme.dart';
 
@@ -409,19 +410,44 @@ class GeofenceBlockedDialog extends StatelessWidget {
                 style: const TextStyle(color: AppColors.textMuted, fontSize: 12, height: 1.5)),
             const SizedBox(height: 24),
 
+            // ✅ WEB-AWARE BUTTONS
             if (isPermission)
               _ActionButton(
-                label: 'Open Settings', icon: Icons.settings_rounded, color: accentColor,
-                onTap: () async { await Geolocator.openAppSettings(); onDismiss(); },
+                label: kIsWeb ? 'Retry' : 'Open Settings',
+                icon: kIsWeb ? Icons.refresh_rounded : Icons.settings_rounded,
+                color: accentColor,
+                onTap: () async {
+                  if (kIsWeb) {
+                    // Sa web, hindi pwedeng i-open ang settings — retry na lang
+                    onRetry();
+                  } else {
+                    await Geolocator.openAppSettings();
+                    onDismiss();
+                  }
+                },
               )
             else if (isService)
               _ActionButton(
-                label: 'Enable GPS', icon: Icons.gps_fixed_rounded, color: accentColor,
-                onTap: () async { await Geolocator.openLocationSettings(); onDismiss(); },
+                label: kIsWeb ? 'Retry' : 'Enable GPS',
+                icon: kIsWeb ? Icons.refresh_rounded : Icons.gps_fixed_rounded,
+                color: accentColor,
+                onTap: () async {
+                  if (kIsWeb) {
+                    // Sa web, hindi pwedeng i-open ang location settings — retry na lang
+                    onRetry();
+                  } else {
+                    await Geolocator.openLocationSettings();
+                    onDismiss();
+                  }
+                },
               )
             else
-              _ActionButton(label: 'Try Again', icon: Icons.refresh_rounded,
-                  color: accentColor, onTap: onRetry),
+              _ActionButton(
+                label: 'Try Again',
+                icon: Icons.refresh_rounded,
+                color: accentColor,
+                onTap: onRetry,
+              ),
 
             const SizedBox(height: 10),
             TextButton(

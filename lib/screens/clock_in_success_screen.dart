@@ -1,39 +1,32 @@
-// lib/screens/clock_in_success_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:uuid/uuid.dart';
 import '../models/employee.dart';
-import '../models/attendance.dart';
-import '../services/database_service.dart';
 
-enum VerificationMethod { keyFob, pin }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// _ThemeColors — theme-aware colors for clock-in success screen
-// ═══════════════════════════════════════════════════════════════════════════
-class _ThemeColors {
-  final bool isDark;
-  const _ThemeColors(this.isDark);
-
-  // Page background below the orange header
-  Color get contentBg =>
-      isDark ? const Color(0xFF0F0F10) : const Color(0xFFF5F5F5);
-}
+/// Reference frame width used in the original HTML/Figma design
+/// (the mockup phone frame was 399.99px wide with 6.93px border,
+/// giving an inner content width of 386.13px).
+const double _kDesignFrameWidth = 386.13;
 
 class ClockInSuccessScreen extends StatefulWidget {
-  final Employee employee;
-  final Duration autoRedirectDelay;
+  final Employee? employee;
+  final DateTime? arrivalTime;
+  final double? faceMatchPercent;
+  final String? verificationMethod;
+  final String? subtitle;
+  final String type;
   final VoidCallback? onContinue;
-  final ValueChanged<VerificationMethod>? onMethodSelected;
+  final Duration autoRedirectDelay;
 
   const ClockInSuccessScreen({
     super.key,
-    required this.employee,
-    this.autoRedirectDelay = const Duration(seconds: 3),
+    this.employee,
+    this.arrivalTime,
+    this.faceMatchPercent,
+    this.verificationMethod,
+    this.subtitle,
+    this.type = 'IN',
     this.onContinue,
-    this.onMethodSelected,
+    this.autoRedirectDelay = const Duration(milliseconds: 2200),
   });
 
   @override
@@ -41,289 +34,238 @@ class ClockInSuccessScreen extends StatefulWidget {
 }
 
 class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
-    with TickerProviderStateMixin {
-  late final AnimationController _fadeCtrl;
-  late final AnimationController _scaleCtrl;
-  late final AnimationController _checkCtrl;
-  late final AnimationController _pulseCtrl;
-  late final AnimationController _rippleCtrl;
-  late final AnimationController _textSlideCtrl;
-  late final AnimationController _progressCtrl;
-
-  late final Animation<double> _fadeAnim;
-  late final Animation<double> _scaleAnim;
-  late final Animation<double> _checkAnim;
-  late final Animation<double> _pulseAnim;
-  late final Animation<double> _rippleAnim;
-  late final Animation<Offset> _textSlideAnim;
-  late final Animation<double> _textFadeAnim;
-  late final Animation<double> _progressAnim;
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _fadeAnim;
+  late Animation<double> _scaleAnim;
 
   Timer? _redirectTimer;
+  bool _didRedirect = false;
 
-  bool _clockInDone = false;
-  VerificationMethod _selectedMethod = VerificationMethod.keyFob;
+  // ---- Exact colors from the HTML design ----
+  static const _neonGreen = Color(0xFF51FF00);
+  static const _cardBorder = Color(0xFF27272A);
+  static const _subtitleColor = Color(0xFFDFDFDF);
+  static const _backdropBase = Color(0xFF09090B);
+  static const double _backdropAlpha = 0.44;
 
-  // Brand colors (same in both themes)
-  static const Color _white = Color(0xFFFFFFFF);
-  static const Color _headerFrom = Color(0xFFFF8A00);
-  static const Color _headerMid = Color(0xFFFF6B00);
-  static const Color _headerTo = Color(0xFFF54900);
-  static const Color _cardBorder = Color(0xFF382A20);
-  static const Color _iconBorder = Color(0xFF51FF00);
+  // Gradient: #ff8a00 (0%), #fa6a00 (50%), #f54900 (100%)
+  static const _gradTop = Color(0xFFFF8A00);
+  static const _gradMid = Color(0xFFFA6A00);
+  static const _gradEnd = Color(0xFFF54900);
+
+  // ---- Design-frame (399.99px mockup) reference measurements ----
+  // These are the RAW numbers from the HTML. We no longer use them
+  // directly as pixel values — instead everything is scaled against
+  // _kDesignFrameWidth so the card looks identical on any real device.
+  static const double _designCardW = 338.14;
+  static const double _designCardH = 343.03;
+  static const double _designIconSize = 112.0;
+  static const double _designIconLeft = 113.06;
+  static const double _designIconTop = 33.15;
+  static const double _designTitleTop = 177.13;
+  static const double _designTitleLeft = 33.15;
+  static const double _designTitleW = 271.84;
+  static const double _designTitleH = 66.0;
+  static const double _designTitleFontSize = 30.0;
+  static const double _designSubtitleTop = 255.14;
+  static const double _designSubtitleLeft = 60.75;
+  static const double _designSubtitleW = 216.63;
+  static const double _designSubtitleFontSize = 14.0;
+  static const double _designBorderWidth = 1.15;
+  static const double _designRadius = 16.0;
+
+  // ---- Colors for the dimmed background behind the modal ----
+  static const _headerStart = Color(0xFFFF8A00);
+  static const _headerMid = Color(0xFFFF6B00);
+  static const _headerEnd = Color(0xFFF54900);
+  static const _cardBorderLight = Color(0xFFFDBA74);
+  static const _optionOrange = Color(0xFFF97316);
 
   @override
   void initState() {
     super.initState();
-
-    _fadeCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 600));
-    _scaleCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 700));
-    _checkCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 800));
-    _pulseCtrl =
-        AnimationController(vsync: this, duration: const Duration(seconds: 2));
-    _rippleCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1600));
-    _textSlideCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 700));
-    _progressCtrl =
-        AnimationController(vsync: this, duration: widget.autoRedirectDelay);
-
-    _fadeAnim = Tween<double>(begin: 0, end: 1)
-        .animate(CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut));
-    _scaleAnim = Tween<double>(begin: 0.5, end: 1)
-        .animate(CurvedAnimation(parent: _scaleCtrl, curve: Curves.elasticOut));
-    _checkAnim = Tween<double>(begin: 0, end: 1).animate(
-        CurvedAnimation(parent: _checkCtrl, curve: Curves.easeOutCubic));
-    _pulseAnim = Tween<double>(begin: 0.96, end: 1.04)
-        .animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
-    _rippleAnim = Tween<double>(begin: 0, end: 1)
-        .animate(CurvedAnimation(parent: _rippleCtrl, curve: Curves.easeOut));
-    _textSlideAnim =
-        Tween<Offset>(begin: const Offset(0, 0.3), end: Offset.zero).animate(
-            CurvedAnimation(parent: _textSlideCtrl, curve: Curves.easeOutCubic));
-    _textFadeAnim = Tween<double>(begin: 0, end: 1)
-        .animate(CurvedAnimation(parent: _textSlideCtrl, curve: Curves.easeOut));
-    _progressAnim = Tween<double>(begin: 0, end: 1)
-        .animate(CurvedAnimation(parent: _progressCtrl, curve: Curves.linear));
-
-    _fadeCtrl.forward();
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) _scaleCtrl.forward();
-    });
-    Future.delayed(const Duration(milliseconds: 400), () {
-      if (mounted) _checkCtrl.forward();
-    });
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        _pulseCtrl.repeat(reverse: true);
-        _rippleCtrl.repeat();
-        _textSlideCtrl.forward();
-        _progressCtrl.forward();
-      }
-    });
-
-    _saveClockIn();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 500));
+    _fadeAnim = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _scaleAnim = Tween<double>(begin: 0.92, end: 1.0)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
+    _ctrl.forward();
     _redirectTimer = Timer(widget.autoRedirectDelay, _handleContinue);
   }
 
-  Future<void> _saveClockIn() async {
-    try {
-      final now = DateTime.now();
-      final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
-          '${now.minute.toString().padLeft(2, '0')}:'
-          '${now.second.toString().padLeft(2, '0')}';
-      final dateStr = now.toIso8601String().substring(0, 10);
-      final employeeIdVal = widget.employee.employeeId ?? widget.employee.id;
-
-      final attendance = Attendance(
-        id: const Uuid().v4(),
-        employeeId: employeeIdVal,
-        date: dateStr,
-        timeIn: timeStr,
-        timeOut: null,
-        status: AttendanceStatus.present,
-        method: AttendanceMethod.face,
-        createdAt: now,
-      );
-
-      if (!kIsWeb) {
-        await DatabaseService.instance.logAttendance(attendance);
-        await DatabaseService.instance.saveClockInFile(
-          employee: widget.employee,
-          attendance: attendance,
-        );
-      }
-
-      await FirebaseFirestore.instance.collection('attendance_logs').add({
-        'type': 'IN',
-        'employee_id': employeeIdVal,
-        'employeeId': employeeIdVal,
-        'employee_name': widget.employee.fullName,
-        'email': widget.employee.email,
-        'time': timeStr,
-        'timestamp': timeStr,
-        'date': dateStr,
-        'device': kIsWeb ? 'Web Browser' : 'Mobile App',
-      });
-
-      if (mounted) {
-        setState(() {
-          _clockInDone = true;
-        });
-      }
-    } catch (e) {
-      debugPrint('Clock-in save error: $e');
-    }
-  }
-
   void _handleContinue() {
+    if (_didRedirect) return;
+    _didRedirect = true;
     if (!mounted) return;
     if (widget.onContinue != null) {
       widget.onContinue!();
     } else {
-      Navigator.of(context).pop();
+      Navigator.of(context).maybePop();
     }
-  }
-
-  void _selectMethod(VerificationMethod method) {
-    setState(() => _selectedMethod = method);
-    widget.onMethodSelected?.call(method);
   }
 
   @override
   void dispose() {
-    _fadeCtrl.dispose();
-    _scaleCtrl.dispose();
-    _checkCtrl.dispose();
-    _pulseCtrl.dispose();
-    _rippleCtrl.dispose();
-    _textSlideCtrl.dispose();
-    _progressCtrl.dispose();
     _redirectTimer?.cancel();
+    _ctrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final tc = _ThemeColors(isDark);
-    final statusBarHeight = MediaQuery.of(context).padding.top;
-
-    return Scaffold(
-      backgroundColor: tc.contentBg,
-      body: Stack(
-        children: [
-          // --- Background: header only (no orange circle) ---
-          Column(
-            children: [
-              Container(
-                height: 287.13 + statusBarHeight,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [_headerFrom, _headerMid, _headerTo],
-                    stops: [0.0, 0.33, 1.0],
-                  ),
-                  borderRadius: const BorderRadius.vertical(
-                    bottom: Radius.circular(16),
-                  ),
-                  border: Border(
-                    bottom: BorderSide(
-                      color: _cardBorder,
-                      width: 1.15,
-                    ),
-                  ),
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: Stack(
+          children: [
+            // "Auth & Clock In" screen recreated as a static, dimmed
+            // background — since ClockInSuccessScreen is usually reached
+            // via pushReplacement, there's nothing left underneath it.
+            // This matches the HTML design where the previous screen is
+            // still visible (dimmed) behind the success overlay.
+            Positioned.fill(
+              child: Opacity(
+                opacity: 0.55,
+                child: IgnorePointer(child: _buildDimmedBackground()),
+              ),
+            ),
+            // Dark Overlay Backdrop (rgba(9,9,11,0.44))
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: _handleContinue,
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  color: _backdropBase.withValues(alpha: _backdropAlpha),
                 ),
-                child: Stack(
-                  children: [
-                    Positioned(
-                      left: 24,
-                      top: 48 + statusBarHeight,
-                      child: GestureDetector(
-                        onTap: () => Navigator.of(context).pop(),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.arrow_back_ios_new_rounded,
-                              color: _white.withValues(alpha: 0.8),
-                              size: 20,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Back',
-                              style: TextStyle(
-                                color: _white.withValues(alpha: 0.8),
+              ),
+            ),
+            // Centered Modal Card
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Available width after the 24px horizontal padding
+                    // on each side (matches the HTML's own padding).
+                    final availableWidth = constraints.maxWidth.isFinite
+                        ? constraints.maxWidth
+                        : MediaQuery.of(context).size.width - 48;
+
+                    // Scale factor relative to the original design frame.
+                    // Cap it so the card doesn't blow up on tablets/web.
+                    double scale = availableWidth / _designCardW;
+                    if (scale > 1.25) scale = 1.25;
+                    if (scale <= 0) scale = 1.0;
+
+                    return FadeTransition(
+                      opacity: _fadeAnim,
+                      child: ScaleTransition(
+                        scale: _scaleAnim,
+                        child: GestureDetector(
+                          onTap: _handleContinue,
+                          child: _buildSuccessCard(scale),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Recreates the "Auth & Clock In" header + "Step 1: Initial Login"
+  /// card, purely as decorative background content. It is not tappable
+  /// (wrapped in IgnorePointer by the caller) — its only job is to make
+  /// the success screen look like it's overlaid on top of the previous
+  /// step, matching the HTML design.
+  Widget _buildDimmedBackground() {
+    return Container(
+      color: Colors.white,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [_headerStart, _headerMid, _headerEnd],
+              ),
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(28),
+                bottomRight: Radius.circular(28),
+              ),
+            ),
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 60),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.chevron_left_rounded,
+                            color: Colors.white, size: 22),
+                        SizedBox(width: 4),
+                        Text('Back',
+                            style: TextStyle(
+                                color: Colors.white,
                                 fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                                fontWeight: FontWeight.w600)),
+                      ],
                     ),
-                    Positioned(
-                      left: 24,
-                      top: 95.99 + statusBarHeight,
-                      child: const Text(
-                        'Auth & Clock In',
+                    SizedBox(height: 20),
+                    Text('Auth & Clock In',
                         style: TextStyle(
-                          color: _white,
-                          fontSize: 30,
-                          fontWeight: FontWeight.w700,
-                          height: 1.1,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      left: 24,
-                      top: 136.99 + statusBarHeight,
-                      child: Text(
-                        'Select your initial verification method',
-                        style: TextStyle(
-                          color: _white.withValues(alpha: 0.8),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w400,
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
+                            color: Colors.white,
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.5)),
+                    SizedBox(height: 6),
+                    Text('Select your initial verification method',
+                        style: TextStyle(color: Colors.white, fontSize: 14)),
                   ],
                 ),
               ),
-              // Empty space below header (theme-aware)
-              Expanded(
-                child: Container(
-                  color: tc.contentBg,
-                ),
-              ),
-            ],
-          ),
-
-          // --- Overlay ---
-          FadeTransition(
-            opacity: _fadeAnim,
-            child: Container(
-              width: double.infinity,
-              height: double.infinity,
-              color: Colors.black.withValues(alpha: 0.44),
             ),
           ),
-
-          // --- Success modal ---
-          Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildSuccessCard(),
-                ],
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Transform.translate(
+              offset: const Offset(0, -40),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Column(children: [
+                  const Text('Step 1: Initial Login',
+                      style: TextStyle(
+                          color: Color(0xFF1F2937),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 20),
+                  Row(children: [
+                    Expanded(
+                        child: _dimmedOptionPlaceholder(
+                            Icons.contactless_rounded, 'Key Fob')),
+                    const SizedBox(width: 12),
+                    Expanded(
+                        child: _dimmedOptionPlaceholder(
+                            Icons.key_rounded, 'Use PIN')),
+                  ]),
+                ]),
               ),
             ),
           ),
@@ -332,307 +274,183 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     );
   }
 
-  Widget _buildSuccessCard() {
-    return ScaleTransition(
-      scale: _scaleAnim,
+  Widget _dimmedOptionPlaceholder(IconData icon, String label) {
+    return AspectRatio(
+      aspectRatio: 0.95,
       child: Container(
-        width: 338.14,
-        height: 343.03,
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [_headerFrom, _headerMid, _headerTo],
-            stops: [0.0, 0.5, 1.0],
-          ),
+          color: Colors.white,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: const Color(0xFF27272A),
-            width: 1.15,
+          border: Border.all(color: _cardBorderLight, width: 1.5),
+        ),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _cardBorderLight, width: 1.5),
+            ),
+            child: Icon(icon, color: _optionOrange, size: 24),
           ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x0F000000),
-              blurRadius: 10,
-              offset: Offset(0, 12.5),
-            ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            // Checkmark
-            Positioned(
-              left: 113.06,
-              top: 33.15,
-              child: AnimatedBuilder(
-                animation:
-                Listenable.merge([_pulseAnim, _rippleAnim, _checkAnim]),
-                builder: (context, _) {
-                  return SizedBox(
-                    width: 112,
-                    height: 112,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        ..._buildRipples(),
-                        Transform.scale(
-                          scale: _pulseAnim.value,
-                          child: Container(
-                            width: 100,
-                            height: 100,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: _iconBorder.withValues(
-                                    alpha: 0.3 * _checkAnim.value),
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                        ),
-                        Container(
-                          width: 80,
-                          height: 80,
-                          decoration: BoxDecoration(
-                            color: _white,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: _iconBorder.withValues(
-                                  alpha: _checkAnim.value.clamp(0, 1)),
-                              width: 4,
-                            ),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0x26000000),
-                                blurRadius: 10,
-                                offset: Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: Center(
-                            child: _AnimatedCheckmark(
-                              progress: _checkAnim.value,
-                              color: _iconBorder,
-                              size: 44,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
-            // "Verified & Clocked In!"
-            Positioned(
-              left: 33.15,
-              top: 177.13,
-              width: 271.84,
-              height: 66,
-              child: SlideTransition(
-                position: _textSlideAnim,
-                child: FadeTransition(
-                  opacity: _textFadeAnim,
-                  child: const Text(
-                    'Verified & Clocked\nIn!',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: _white,
-                      fontSize: 30,
-                      fontWeight: FontWeight.w500,
-                      height: 1.15,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            // "Starting your shift and redirecting..."
-            Positioned(
-              left: 60.75,
-              top: 255.14,
-              child: SlideTransition(
-                position: _textSlideAnim,
-                child: FadeTransition(
-                  opacity: _textFadeAnim,
-                  child: Container(
-                    width: 216.63,
-                    height: 22.75,
-                    child: Stack(
-                      children: [
-                        Positioned(
-                          left: -9,
-                          top: -0.85,
-                          child: Text(
-                            'Starting your shift and redirecting...',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: _white.withValues(alpha: 0.88),
-                              fontSize: 14,
-                              height: 1.4,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            // Progress bar (auto-redirect)
-            Positioned(
-              left: 33.15,
-              bottom: 20,
-              right: 33.15,
-              child: _buildRedirectProgress(),
-            ),
-          ],
-        ),
+          const SizedBox(height: 10),
+          Text(label,
+              style: const TextStyle(
+                  color: Color(0xFF1F2937),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700)),
+        ]),
       ),
     );
   }
 
-  List<Widget> _buildRipples() {
-    return List.generate(3, (i) {
-      final t = (_rippleAnim.value + i / 3) % 1.0;
-      final radius = 50 + t * 40.0;
-      final opacity = (1 - t) * 0.25;
-      return Container(
-        width: radius * 2,
-        height: radius * 2,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: _iconBorder.withValues(alpha: opacity),
-            width: 1.5,
-          ),
-        ),
-      );
-    });
-  }
+  Widget _buildSuccessCard(double scale) {
+    final isClockIn = widget.type.toUpperCase() == 'IN';
+    final accent = isClockIn ? _neonGreen : const Color(0xFFC4FF0A);
+    final title = isClockIn ? 'Verified &\nClocked In!' : 'Clocked Out!';
+    final subtitle = widget.subtitle ??
+        (isClockIn
+            ? 'Starting your shift and redirecting...'
+            : 'Ending your shift and redirecting...');
 
-  Widget _buildRedirectProgress() {
-    return AnimatedBuilder(
-      animation: _progressAnim,
-      builder: (_, __) {
-        final remaining = widget.autoRedirectDelay.inSeconds -
-            (widget.autoRedirectDelay.inSeconds * _progressAnim.value).floor();
-        return Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Auto-redirecting to dashboard',
-                  style: TextStyle(
-                    color: _white.withValues(alpha: 0.7),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                Text(
-                  '${remaining}s',
-                  style: const TextStyle(
-                    color: _white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: LinearProgressIndicator(
-                value: _progressAnim.value,
-                backgroundColor: _white.withValues(alpha: 0.2),
-                valueColor: const AlwaysStoppedAnimation<Color>(_white),
-                minHeight: 3,
+    final cardW = _designCardW * scale;
+    final cardH = _designCardH * scale;
+
+    return Container(
+      width: cardW,
+      height: cardH,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(_designRadius * scale),
+        gradient: const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [_gradTop, _gradMid, _gradEnd],
+          stops: [0.0, 0.5, 1.0],
+        ),
+        border: Border.all(
+          color: _cardBorder,
+          width: _designBorderWidth * scale,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 10 * scale,
+            offset: Offset(0, 12.5 * scale),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          // Check icon (white rounded box + neon border + check)
+          Positioned(
+            top: _designIconTop * scale,
+            left: _designIconLeft * scale,
+            child: SizedBox(
+              width: _designIconSize * scale,
+              height: _designIconSize * scale,
+              child: CustomPaint(
+                painter: _CheckIconPainter(color: accent),
               ),
             ),
-          ],
-        );
-      },
+          ),
+          // Success Title Text
+          Positioned(
+            top: _designTitleTop * scale,
+            left: _designTitleLeft * scale,
+            width: _designTitleW * scale,
+            height: _designTitleH * scale,
+            child: Center(
+              child: Text(
+                title,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: _designTitleFontSize * scale,
+                  fontWeight: FontWeight.w500,
+                  height: 1.1,
+                  letterSpacing: -0.3,
+                ),
+              ),
+            ),
+          ),
+          // Subtitle Text
+          Positioned(
+            top: _designSubtitleTop * scale,
+            left: _designSubtitleLeft * scale,
+            width: _designSubtitleW * scale,
+            child: Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: _subtitleColor,
+                fontSize: _designSubtitleFontSize * scale,
+                fontWeight: FontWeight.w400,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-// ---- Helper widgets ----
-
-class _AnimatedCheckmark extends StatelessWidget {
-  final double progress;
+/// Renders the exact SVG check icon from the HTML design:
+/// white rounded box, neon-green rounded border, neon-green
+/// circle + checkmark inside.
+class _CheckIconPainter extends CustomPainter {
   final Color color;
-  final double size;
-
-  const _AnimatedCheckmark({
-    required this.progress,
-    required this.color,
-    required this.size,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      size: Size(size, size),
-      painter: _CheckmarkPainter(progress: progress, color: color),
-    );
-  }
-}
-
-class _CheckmarkPainter extends CustomPainter {
-  final double progress;
-  final Color color;
-
-  const _CheckmarkPainter({required this.progress, required this.color});
+  const _CheckIconPainter({required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (progress <= 0) return;
+    const svgSize = 112.0;
+    final scale = size.width / svgSize;
 
-    final paint = Paint()
+    final fillPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+
+    final borderPaint = Paint()
       ..color = color
-      ..strokeWidth = size.width * 0.1
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = 3.0 * scale
       ..style = PaintingStyle.stroke;
 
-    final glowPaint = Paint()
-      ..color = color.withValues(alpha: 0.3 * progress)
-      ..strokeWidth = size.width * 0.16
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromLTRB(
+        1.5 * scale,
+        1.5 * scale,
+        110.496 * scale,
+        110.496 * scale,
+      ),
+      Radius.circular(14.5 * scale),
+    );
+
+    canvas.drawRRect(rrect, fillPaint);
+    canvas.drawRRect(rrect, borderPaint);
+
+    final strokePaint = Paint()
+      ..color = color
+      ..strokeWidth = 3.99965 * scale
       ..style = PaintingStyle.stroke
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
 
-    final cx = size.width * 0.5;
-    final cy = size.height * 0.5;
-    final start = Offset(cx - size.width * 0.28, cy);
-    final mid = Offset(cx - size.width * 0.05, cy + size.height * 0.22);
-    final end = Offset(cx + size.width * 0.30, cy - size.height * 0.18);
+    // Inner Circle
+    canvas.drawCircle(
+      Offset(55.989 * scale, 55.989 * scale),
+      19.998 * scale,
+      strokePaint,
+    );
 
-    final path = Path();
-    if (progress < 0.5) {
-      final t = progress / 0.5;
-      path.moveTo(start.dx, start.dy);
-      path.lineTo(
-        start.dx + (mid.dx - start.dx) * t,
-        start.dy + (mid.dy - start.dy) * t,
-      );
-    } else {
-      final t = (progress - 0.5) / 0.5;
-      path.moveTo(start.dx, start.dy);
-      path.lineTo(mid.dx, mid.dy);
-      path.lineTo(
-        mid.dx + (end.dx - mid.dx) * t,
-        mid.dy + (end.dy - mid.dy) * t,
-      );
-    }
-
-    canvas.drawPath(path, glowPaint);
-    canvas.drawPath(path, path.getBounds().isEmpty ? paint : paint);
-    canvas.drawPath(path, paint);
+    // Inner Checkmark Path
+    final checkPath = Path()
+      ..moveTo(49.9897 * scale, 55.9889 * scale)
+      ..lineTo(53.9894 * scale, 59.9886 * scale)
+      ..lineTo(61.9887 * scale, 51.9893 * scale);
+    canvas.drawPath(checkPath, strokePaint);
   }
 
   @override
-  bool shouldRepaint(_CheckmarkPainter old) =>
-      old.progress != progress || old.color != color;
+  bool shouldRepaint(_CheckIconPainter old) => old.color != color;
 }

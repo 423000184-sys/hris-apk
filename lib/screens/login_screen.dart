@@ -15,36 +15,30 @@ import 'landing_screen.dart';
 
 enum _LoginStep { selectMethod, pinEntry, nfcWait, clientMeeting }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// _ThemeColors — theme-aware colors resolved per build
-// ═══════════════════════════════════════════════════════════════════════════
 class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
 
-  // Background gradient
-  Color get bgTop    => isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
-  Color get bgMid    => isDark ? const Color(0xFF0F0D0B) : const Color(0xFFFFF0E5);
-  Color get bgBottom => isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFE3D1);
-
-  // Card
-  Color get cardBg     => isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
-  Color get cardBorder => isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
-
-  // Option button
-  Color get optionBorder => isDark ? const Color(0xFF7C2D12) : const Color(0xFFFDBA74);
-  Color get hoverBg      => isDark ? const Color(0xFF27272A) : const Color(0xFFFFF7ED);
-
-  // Text
-  Color get textDark  => isDark ? Colors.white : const Color(0xFF1F2937);
-  Color get textMuted => isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
-
-  // Info bar
-  Color get infoBg     => isDark ? const Color(0xFF1F1F23) : Colors.white;
-  Color get infoBorder => isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
-  Color get infoText   => isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
-
-  // Method buttons inner icon bg
+  Color get bgTop => isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
+  Color get bgMid => isDark ? const Color(0xFF0F0D0B) : const Color(0xFFFFF0E5);
+  Color get bgBottom =>
+      isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFE3D1);
+  Color get cardBg =>
+      isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
+  Color get cardBorder =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
+  Color get optionBorder =>
+      isDark ? const Color(0xFF7C2D12) : const Color(0xFFFDBA74);
+  Color get hoverBg =>
+      isDark ? const Color(0xFF27272A) : const Color(0xFFFFF7ED);
+  Color get textDark => isDark ? Colors.white : const Color(0xFF1F2937);
+  Color get textMuted =>
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
+  Color get infoBg => isDark ? const Color(0xFF1F1F23) : Colors.white;
+  Color get infoBorder =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
+  Color get infoText =>
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
   Color get methodIconBg => isDark ? const Color(0xFF27272A) : Colors.white;
 }
 
@@ -63,7 +57,9 @@ class _LoginScreenState extends State<LoginScreen>
   String? _errorMessage;
   _LoginStep _step = _LoginStep.selectMethod;
 
-  // Client Meeting (camera capture) state
+  // ✅ BAGO: capture arrival time sa pinaka-unang bukasan ng login
+  late final DateTime _arrivalTime;
+
   CameraController? _cameraController;
   bool _isCapturing = false;
   bool _captureSuccess = false;
@@ -84,27 +80,38 @@ class _LoginScreenState extends State<LoginScreen>
   late AnimationController _nfcPulseController;
   late Animation<double> _nfcPulseAnim;
 
-  // ── Static brand colors (same in both themes) ─────────────────────────
   static const Color _headerStart = Color(0xFFFF8A00);
   static const Color _headerMid = Color(0xFFFF6B00);
   static const Color _headerEnd = Color(0xFFF54900);
   static const Color _headerBorder = Color(0xFF382A20);
-
   static const Color _orange = Color(0xFFF97316);
-
   static const Color _white = Color(0xFFFFFFFF);
   static const Color _error = Color(0xFFDC2626);
   static const Color _errorBg = Color(0xFFFEE2E2);
-
   static const Color _modalGradTop = Color(0xFFFF8A00);
   static const Color _modalGradMid = Color(0xFFFA6A00);
   static const Color _modalGradEnd = Color(0xFFF54900);
   static const Color _scrim = Color.fromRGBO(9, 9, 21, 0.44);
-
   static const Color _cmPreviewBg = Color(0xFF20212A);
   static const Color _cmShutterOuter = Color(0xFFFFA500);
   static const Color _cmShutterInner = Color(0xFFFEE0AA);
   static const Color _cmShutterGlow = Color(0xFFFF8C00);
+
+  // ---- Exact HTML measurements for the orange header ----
+  // (design frame inner width = 386.13px)
+  static const double _kHeaderDesignFrameWidth = 386.13;
+  static const double _kHeaderH = 287.13;
+  static const double _kHeaderBorderBottom = 1.15;
+  static const double _kHeaderRadius = 16.0;
+  static const double _kBackLeft = 24.0;
+  static const double _kBackTop = 48.0;
+  static const double _kBackIconSize = 19.99;
+  static const double _kTitleLeft = 24.0;
+  static const double _kTitleTop = 95.99;
+  static const double _kTitleFontSize = 30.0;
+  static const double _kSubtitleLeft = 24.0;
+  static const double _kSubtitleTop = 136.99;
+  static const double _kSubtitleFontSize = 14.0;
 
   static const List<String> _notFoundCodes = [
     'user-not-found',
@@ -117,14 +124,18 @@ class _LoginScreenState extends State<LoginScreen>
   void initState() {
     super.initState();
 
+    // ✅ CRITICAL: I-save ang arrival time sa pinaka-start ng login flow
+    _arrivalTime = DateTime.now();
+    debugPrint('⏱️ [LoginScreen] Arrival time captured: $_arrivalTime');
+
     _shakeController = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 500));
     _fadeController = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 600));
     _modalController = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 260));
-    _nfcPulseController = AnimationController(
-        vsync: this, duration: const Duration(seconds: 2));
+    _nfcPulseController =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2));
 
     _shakeAnim = Tween<double>(begin: 0, end: 10).animate(
         CurvedAnimation(parent: _shakeController, curve: Curves.elasticIn));
@@ -160,9 +171,11 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  // ── NFC ──────────────────────────────────────────────────────────────
   Future<void> _checkCapabilities() async {
-    if (kIsWeb) return;
+    if (kIsWeb) {
+      if (mounted) setState(() => _nfcAvailable = false);
+      return;
+    }
     try {
       final available = await NfcManager.instance.isAvailable();
       if (mounted) setState(() => _nfcAvailable = available);
@@ -172,7 +185,10 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _startNfcSession() async {
-    if (kIsWeb) return;
+    if (kIsWeb) {
+      _setError('NFC is not available on web browsers. Please use PIN instead.');
+      return;
+    }
     try {
       await NfcManager.instance.stopSession();
       NfcManager.instance.startSession(
@@ -184,14 +200,12 @@ class _LoginScreenState extends State<LoginScreen>
             _setError('Could not read keyfob ID.');
             return;
           }
-
           if (mounted) {
             setState(() {
               _isLoading = true;
               _errorMessage = null;
             });
           }
-
           try {
             final employee = await _findEmployeeByNfc(serial);
             if (employee != null) {
@@ -254,7 +268,6 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
-  // ── PIN login ─────────────────────────────────────────────────────────
   Future<void> _loginWithPin() async {
     if (_pinInput.length < 4) return;
     setState(() {
@@ -267,8 +280,7 @@ class _LoginScreenState extends State<LoginScreen>
       employee = await _findEmployeeByPin(_pinInput);
 
       if (employee == null && !kIsWeb) {
-        final localEmployees =
-        await DatabaseService.instance.getAllEmployees();
+        final localEmployees = await DatabaseService.instance.getAllEmployees();
         for (final emp in localEmployees) {
           final valid =
           await SecurityService.instance.verifyPin(emp.id, _pinInput);
@@ -329,10 +341,12 @@ class _LoginScreenState extends State<LoginScreen>
       'last_name': lastName,
       'full_name': fullName,
       'email': data['email'] ?? '',
+      'role': data['role'] ?? 'Employee',
       'department': data['role'] ?? data['department'] ?? '',
       'position': data['role'] ?? data['position'] ?? '',
       'phone': data['phone'],
       'photo_path': data['photoPath'],
+      'photo_url': data['photoUrl'],
       'face_embedding': data['faceEmbedding'],
       'fingerprint_hash': data['fingerprintHash'],
       'pin_hash': null,
@@ -360,14 +374,12 @@ class _LoginScreenState extends State<LoginScreen>
       final email = (data?['email'] as String? ?? '').trim();
       final password = (data?['password'] as String? ?? '').trim();
       if (email.isEmpty || password.isEmpty) {
-        debugPrint(
-            'Firebase Auth skipped — no email/password for ${employee.fullName}.');
+        debugPrint('Firebase Auth skipped — no email/password.');
         return;
       }
       try {
         await FirebaseAuth.instance.signInWithEmailAndPassword(
             email: email, password: password);
-        debugPrint('Firebase Auth ✓ signed in: $email');
       } catch (signInErr) {
         final code = signInErr is FirebaseAuthException ? signInErr.code : '';
         if (_notFoundCodes.contains(code)) {
@@ -404,6 +416,7 @@ class _LoginScreenState extends State<LoginScreen>
           'employee_name': employee.fullName,
           'email': employee.email,
           'role': employee.position,
+          'arrival_time': Timestamp.fromDate(_arrivalTime),
           'timestamp': FieldValue.serverTimestamp(),
           'device': kIsWeb ? 'Web Browser' : 'Mobile App',
         });
@@ -413,9 +426,13 @@ class _LoginScreenState extends State<LoginScreen>
 
       if (!mounted) return;
 
+      // ✅ FIX: Ipasa ang `arrivalTime` sa FingerprintScreen
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
-          builder: (_) => FingerprintScreen(employee: employee),
+          builder: (_) => FingerprintScreen(
+            employee: employee,
+            arrivalTime: _arrivalTime,
+          ),
         ),
             (route) => false,
       );
@@ -434,8 +451,8 @@ class _LoginScreenState extends State<LoginScreen>
     setState(() => _errorMessage = null);
     if (key == 'del') {
       if (_pinInput.isNotEmpty) {
-        setState(() =>
-        _pinInput = _pinInput.substring(0, _pinInput.length - 1));
+        setState(
+                () => _pinInput = _pinInput.substring(0, _pinInput.length - 1));
       }
     } else if (_pinInput.length < 4) {
       setState(() => _pinInput += key);
@@ -457,6 +474,10 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   void _goToStep(_LoginStep step) {
+    if (step == _LoginStep.nfcWait && kIsWeb) {
+      _setError('NFC is not available on web. Please use PIN instead.');
+      return;
+    }
     setState(() {
       _step = step;
       _errorMessage = null;
@@ -517,16 +538,13 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _startCameraSession() async {
-    if (kIsWeb) {
-      _setError('Camera check-in is not available on web.');
-      return;
-    }
     await _releaseCamera();
-
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
-        _setError('No camera found on this device.');
+        _setError(kIsWeb
+            ? 'No camera detected. Please allow camera access in your browser.'
+            : 'No camera found on this device.');
         return;
       }
       final selected = cameras.firstWhere(
@@ -546,7 +564,9 @@ class _LoginScreenState extends State<LoginScreen>
       if (mounted) setState(() {});
     } catch (e) {
       debugPrint('Camera init error: $e');
-      _setError('Could not start camera. Check camera permission.');
+      _setError(kIsWeb
+          ? 'Could not start camera. Please allow camera access and try again.'
+          : 'Could not start camera. Check camera permission.');
     }
   }
 
@@ -579,17 +599,14 @@ class _LoginScreenState extends State<LoginScreen>
     });
     try {
       final photo = await controller.takePicture();
-      debugPrint('Client meeting photo captured: ${photo.path} at $_now');
-
+      debugPrint('Client meeting photo: ${photo.path} at $_now');
       _clockTimer?.cancel();
       await _releaseCamera();
-
       if (!mounted) return;
       setState(() {
         _isCapturing = false;
         _captureSuccess = true;
       });
-
       _successCloseTimer?.cancel();
       _successCloseTimer = Timer(const Duration(seconds: 2), () {
         if (mounted && _step == _LoginStep.clientMeeting && _captureSuccess) {
@@ -668,7 +685,6 @@ class _LoginScreenState extends State<LoginScreen>
         card = const SizedBox.shrink();
         break;
     }
-
     return Positioned.fill(
       child: FadeTransition(
         opacity: _modalOpacityAnim,
@@ -676,143 +692,209 @@ class _LoginScreenState extends State<LoginScreen>
           color: _scrim,
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Center(
-            child: ScaleTransition(
-              scale: _modalScaleAnim,
-              child: card,
-            ),
+            child: ScaleTransition(scale: _modalScaleAnim, child: card),
           ),
         ),
       ),
     );
   }
 
-  // ── HEADER (same gradient, brand color) ────────────────────────────────
   Widget _buildOrangeHeader() {
-    const double radius = 16;
-    const double borderWidth = 1.15;
-    const double innerRadius = radius - borderWidth;
+    return SafeArea(
+      bottom: false,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          double scale = constraints.maxWidth.isFinite
+              ? constraints.maxWidth / _kHeaderDesignFrameWidth
+              : 1.0;
+          if (scale <= 0) scale = 1.0;
+          if (scale > 1.25) scale = 1.25;
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: _headerBorder,
-        borderRadius: BorderRadius.only(
-          bottomLeft: Radius.circular(radius),
-          bottomRight: Radius.circular(radius),
-        ),
-      ),
-      padding: const EdgeInsets.only(bottom: borderWidth),
-      child: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [_headerStart, _headerMid, _headerEnd],
-            stops: [0.0001, 0.3318, 1.0],
-          ),
-          borderRadius: BorderRadius.only(
-            bottomLeft: Radius.circular(innerRadius),
-            bottomRight: Radius.circular(innerRadius),
-          ),
-        ),
-        child: SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                GestureDetector(
-                  onTap: _goBack,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: const [
-                      Icon(Icons.chevron_left_rounded,
-                          color: _white, size: 20),
-                      SizedBox(width: 2),
-                      Text('Back',
-                          style: TextStyle(
-                              color: _white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500)),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                const Text('Auth & Clock In',
-                    style: TextStyle(
-                        color: _white,
-                        fontSize: 30,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.3)),
-                const SizedBox(height: 8),
-                const Text('Select your initial verification method',
-                    style: TextStyle(
-                        color: _white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w400)),
-              ],
+          final outerRadius = _kHeaderRadius * scale;
+          final borderW = _kHeaderBorderBottom * scale;
+          final innerRadius = (outerRadius - borderW).clamp(0.0, outerRadius);
+          return Container(
+            width: double.infinity,
+            height: _kHeaderH * scale,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: _headerBorder,
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(outerRadius),
+                bottomRight: Radius.circular(outerRadius),
+              ),
             ),
-          ),
-        ),
+            padding: EdgeInsets.only(bottom: borderW),
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [_headerStart, _headerMid, _headerEnd],
+                  stops: [0.0001, 0.3318, 1.0],
+                ),
+                borderRadius: BorderRadius.only(
+                  bottomLeft: Radius.circular(innerRadius),
+                  bottomRight: Radius.circular(innerRadius),
+                ),
+              ),
+              child: Stack(
+                children: [
+                  Positioned(
+                    left: _kBackLeft * scale,
+                    top: _kBackTop * scale,
+                    child: GestureDetector(
+                      onTap: _goBack,
+                      behavior: HitTestBehavior.opaque,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: _kBackIconSize * scale,
+                            height: _kBackIconSize * scale,
+                            child: CustomPaint(painter: _BackArrowPainter()),
+                          ),
+                          SizedBox(width: 2 * scale),
+                          Text(
+                            'Back',
+                            style: TextStyle(
+                              color: _white,
+                              fontSize: 16 * scale,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Title
+                  Positioned(
+                    left: _kTitleLeft * scale,
+                    top: _kTitleTop * scale,
+                    child: Text(
+                      'Auth & Clock In',
+                      style: TextStyle(
+                        color: _white,
+                        fontSize: _kTitleFontSize * scale,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                  // Subtitle
+                  Positioned(
+                    left: _kSubtitleLeft * scale,
+                    top: _kSubtitleTop * scale,
+                    child: Text(
+                      'Select your initial verification method',
+                      style: TextStyle(
+                        color: _white,
+                        fontSize: _kSubtitleFontSize * scale,
+                        fontWeight: FontWeight.w400,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
 
   Widget _buildSelectMethodStep(_ThemeColors tc) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-      child: Column(children: [
-        _buildOverlapCard(
-          tc: tc,
-          stepLabel: 'Step 1: Initial Login',
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        double scale = constraints.maxWidth.isFinite
+            ? constraints.maxWidth / _kHeaderDesignFrameWidth
+            : 1.0;
+        if (scale <= 0) scale = 1.0;
+        if (scale > 1.25) scale = 1.25;
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
           child: Column(children: [
-            Row(children: [
-              Expanded(
-                child: _MethodButton(
-                  icon: Icons.contactless_rounded,
-                  label: 'Key Fob',
-                  enabled: !kIsWeb && _nfcAvailable,
-                  onTap: () => _goToStep(_LoginStep.nfcWait),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _MethodButton(
-                  icon: Icons.key_rounded,
-                  label: 'Use PIN',
-                  onTap: () => _goToStep(_LoginStep.pinEntry),
-                ),
-              ),
-            ]),
-            const SizedBox(height: 16),
-            _buildClientMeetingButton(),
-          ]),
-        ),
-        if (kIsWeb || !_nfcAvailable) ...[
-          const SizedBox(height: 16),
-          Container(
-            padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: tc.infoBg,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: tc.infoBorder, width: 1.5),
+            _buildOverlapCard(
+              tc: tc,
+              stepLabel: 'Step 1: Initial Login',
+              overlap: 64 * scale,
+              child: Column(children: [
+                Row(children: [
+                  Expanded(
+                    child: _MethodButton(
+                      icon: Icons.contactless_rounded,
+                      label: 'Key Fob',
+                      enabled: !kIsWeb && _nfcAvailable,
+                      onTap: () => _goToStep(_LoginStep.nfcWait),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _MethodButton(
+                      icon: Icons.key_rounded,
+                      label: 'Use PIN',
+                      onTap: () => _goToStep(_LoginStep.pinEntry),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 16),
+                _buildClientMeetingButton(),
+              ]),
             ),
-            child: Row(children: [
-              Icon(Icons.info_outline_rounded, color: tc.infoText, size: 16),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  kIsWeb
-                      ? 'NFC is not available on web. Use PIN to sign in.'
-                      : 'NFC not available on this device. Use PIN to sign in.',
-                  style: TextStyle(color: tc.infoText, fontSize: 12),
+            if (kIsWeb) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: tc.infoBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: tc.infoBorder, width: 1.5),
                 ),
+                child: Row(children: [
+                  Icon(Icons.info_outline_rounded,
+                      color: tc.infoText, size: 16),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'NFC / Key Fob is not supported by web browsers. '
+                          'Please use PIN or Client Meeting login, or download the APK.',
+                      style: TextStyle(
+                          color: tc.infoText, fontSize: 12, height: 1.4),
+                    ),
+                  ),
+                ]),
               ),
-            ]),
-          ),
-        ],
-      ]),
+            ] else if (!_nfcAvailable) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: tc.infoBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: tc.infoBorder, width: 1.5),
+                ),
+                child: Row(children: [
+                  Icon(Icons.info_outline_rounded,
+                      color: tc.infoText, size: 16),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'NFC not available on this device. Use PIN to sign in.',
+                      style: TextStyle(color: tc.infoText, fontSize: 12),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+          ]),
+        );
+      },
     );
   }
 
@@ -837,13 +919,18 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
+  /// [overlap] is how far (in logical px) the card is pulled UP into
+  /// the orange header above it, creating the rounded "S-curve"
+  /// silhouette where the header's straight bottom corners meet the
+  /// card's rounded top corners — matching the design mock.
   Widget _buildOverlapCard({
     required _ThemeColors tc,
     required String stepLabel,
     required Widget child,
+    double overlap = 30,
   }) {
     return Transform.translate(
-      offset: const Offset(0, -30),
+      offset: Offset(0, -overlap),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(20),
@@ -881,7 +968,6 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  // ── PIN MODAL ──────────────────────────────────────────────────────────
   Widget _buildPinModalCard() {
     return Container(
       width: double.infinity,
@@ -913,8 +999,8 @@ class _LoginScreenState extends State<LoginScreen>
               borderRadius: BorderRadius.circular(12),
             ),
             alignment: Alignment.center,
-            child: const Icon(Icons.key_rounded,
-                color: _modalGradTop, size: 32),
+            child:
+            const Icon(Icons.key_rounded, color: _modalGradTop, size: 32),
           ),
           const SizedBox(height: 20),
           const Text('Enter PIN',
@@ -926,8 +1012,8 @@ class _LoginScreenState extends State<LoginScreen>
           Text(
             'Please enter your 4-digit PIN to begin',
             textAlign: TextAlign.center,
-            style:
-            TextStyle(color: Colors.white.withValues(alpha: 0.92), fontSize: 14),
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.92), fontSize: 14),
           ),
           const SizedBox(height: 24),
           AnimatedBuilder(
@@ -935,9 +1021,7 @@ class _LoginScreenState extends State<LoginScreen>
             builder: (_, child) => Transform.translate(
               offset: Offset(
                   _shakeAnim.value *
-                      ((_shakeController.value * 10).round().isEven
-                          ? 1
-                          : -1),
+                      ((_shakeController.value * 10).round().isEven ? 1 : -1),
                   0),
               child: child,
             ),
@@ -999,8 +1083,15 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  // ── NFC MODAL ──────────────────────────────────────────────────────────
   Widget _buildNfcModalCard() {
+    if (kIsWeb) {
+      return _buildUnsupportedWebCard(
+        icon: Icons.contactless_rounded,
+        title: 'NFC Not Supported',
+        message: 'NFC / Key Fob login is not available on web browsers.\n\n'
+            'Please use PIN or Client Meeting login instead.',
+      );
+    }
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
@@ -1069,10 +1160,66 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  // ── CLIENT MEETING MODAL ───────────────────────────────────────────────
+  Widget _buildUnsupportedWebCard({
+    required IconData icon,
+    required String title,
+    required String message,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white, width: 1.15),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 12.5),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, color: _modalGradTop, size: 40),
+          ),
+          const SizedBox(height: 20),
+          Text(title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700)),
+          const SizedBox(height: 12),
+          Text(message,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.85),
+                  fontSize: 13,
+                  height: 1.5)),
+          const SizedBox(height: 24),
+          _buildCancelButton(),
+        ],
+      ),
+    );
+  }
+
   Widget _buildClientMeetingModalCard() {
     if (_captureSuccess) return _buildClientMeetingSuccessCard();
-
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
@@ -1141,10 +1288,8 @@ class _LoginScreenState extends State<LoginScreen>
           children: [
             const Icon(Icons.switch_camera, color: Colors.white, size: 18),
             const SizedBox(width: 4),
-            Text(
-              _useFrontCamera ? 'Front' : 'Back',
-              style: const TextStyle(color: Colors.white, fontSize: 12),
-            ),
+            Text(_useFrontCamera ? 'Front' : 'Back',
+                style: const TextStyle(color: Colors.white, fontSize: 12)),
           ],
         ),
       ),
@@ -1183,21 +1328,17 @@ class _LoginScreenState extends State<LoginScreen>
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        _siteName,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600),
-                      ),
+                      Text(_siteName,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600)),
                       const SizedBox(height: 6),
-                      Text(
-                        _formatTimestamp(_now),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            color: Colors.white70, fontSize: 12),
-                      ),
+                      Text(_formatTimestamp(_now),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 12)),
                     ],
                   ),
                 ),
@@ -1213,14 +1354,12 @@ class _LoginScreenState extends State<LoginScreen>
     final controller = _cameraController;
     if (controller == null || !controller.value.isInitialized) {
       return const Center(
-        child: CircularProgressIndicator(
-            color: Colors.white54, strokeWidth: 2.5),
+        child:
+        CircularProgressIndicator(color: Colors.white54, strokeWidth: 2.5),
       );
     }
     final previewSize = controller.value.previewSize;
-    if (previewSize == null) {
-      return CameraPreview(controller);
-    }
+    if (previewSize == null) return CameraPreview(controller);
     return FittedBox(
       fit: BoxFit.cover,
       child: SizedBox(
@@ -1308,29 +1447,21 @@ class _LoginScreenState extends State<LoginScreen>
               borderRadius: BorderRadius.circular(12),
             ),
             alignment: Alignment.center,
-            child: const Icon(
-              Icons.check_circle_rounded,
-              color: _modalGradTop,
-              size: 32,
-            ),
+            child: const Icon(Icons.check_circle_rounded,
+                color: _modalGradTop, size: 32),
           ),
           const SizedBox(height: 20),
-          const Text(
-            'Successfully Clock In',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 30,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          const Text('Successfully Clock In',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w500)),
           const SizedBox(height: 10),
           Text(
             'Just wait for the HR Approvement...',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.92),
-              fontSize: 14,
-            ),
+                color: Colors.white.withValues(alpha: 0.92), fontSize: 14),
           ),
           const SizedBox(height: 8),
         ],
@@ -1338,7 +1469,6 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  // ── Shared widgets ─────────────────────────────────────────────────────
   Widget _buildCancelButton() {
     return GestureDetector(
       onTap: _goBack,
@@ -1399,7 +1529,30 @@ class _LoginScreenState extends State<LoginScreen>
   }
 }
 
-// ── METHOD BUTTON (theme-aware) ──────────────────────────────────────────
+/// Draws the exact SVG chevron used in the HTML Back button:
+/// `M12.4951 14.9941L7.49707 9.9961L12.4951 4.99805`
+class _BackArrowPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.66602 * (size.width / 19.99)
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final s = size.width / 19.99;
+    Offset p(double x, double y) => Offset(x * s, (y - 5) * s);
+    final path = Path()
+      ..moveTo(p(12.4951, 14.9941).dx, p(12.4951, 14.9941).dy)
+      ..lineTo(p(7.49707, 9.9961).dx, p(7.49707, 9.9961).dy)
+      ..lineTo(p(12.4951, 4.99805).dx, p(12.4951, 4.99805).dy);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
 class _MethodButton extends StatefulWidget {
   final IconData icon;
   final String label;
@@ -1423,7 +1576,6 @@ class _MethodButtonState extends State<_MethodButton>
   late Animation<double> _scaleAnim;
 
   static const Color _orange = Color(0xFFF97316);
-
   bool _pressed = false;
 
   @override
@@ -1446,7 +1598,7 @@ class _MethodButtonState extends State<_MethodButton>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
 
-    return GestureDetector(
+    final button = GestureDetector(
       onTapDown: widget.enabled
           ? (_) {
         _pressCtrl.forward();
@@ -1529,10 +1681,17 @@ class _MethodButtonState extends State<_MethodButton>
         ),
       ),
     );
+
+    if (!widget.enabled) {
+      return Tooltip(
+        message: 'NFC / Key Fob is not supported on web browsers',
+        child: button,
+      );
+    }
+    return button;
   }
 }
 
-// ── PIN KEY (white variant) ─────────────────────────────────────────────
 class _PinKeyWhite extends StatefulWidget {
   final String label;
   final VoidCallback onTap;

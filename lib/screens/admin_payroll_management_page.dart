@@ -6,10 +6,12 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'admin_theme.dart';
 import '../widgets/bootstrap_grid.dart';
+import '../services/payroll_calculator.dart';
+import '../services/employee_notification_service.dart';
 
 class AdminPayrollManagementPage extends StatefulWidget {
   final Map<String, dynamic> employeeData;
-  final VoidCallback? onBack; // ✅ Back callback
+  final VoidCallback? onBack;
 
   const AdminPayrollManagementPage({
     super.key,
@@ -26,6 +28,9 @@ class _AdminPayrollManagementPageState
     extends State<AdminPayrollManagementPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
+  PayrollBreakdown _b = PayrollBreakdown.empty;
+  bool _loading = true;
+
   String get _name {
     final raw = widget.employeeData['name'];
     if (raw != null && raw.toString().isNotEmpty) return raw.toString();
@@ -35,23 +40,12 @@ class _AdminPayrollManagementPageState
     return full.isEmpty ? 'Unknown Employee' : full;
   }
 
-  String get _employeeId {
-    return (widget.employeeData['id'] ??
-        widget.employeeData['employeeId'] ??
-        'EMP-2023-042')
-        .toString();
-  }
+  String get _employeeId =>
+      (widget.employeeData['id'] ?? widget.employeeData['employeeId'] ?? '—')
+          .toString();
 
-  String get _department {
-    return (widget.employeeData['department'] ?? 'Unassigned').toString();
-  }
-
-  double get _basicSalary {
-    final raw = widget.employeeData['basicSalary'];
-    if (raw is num) return raw.toDouble();
-    if (raw is String) return double.tryParse(raw) ?? 0.0;
-    return 0.0;
-  }
+  String get _department =>
+      (widget.employeeData['department'] ?? 'Unassigned').toString();
 
   String? get _photoUrl {
     final url = widget.employeeData['photoUrl'];
@@ -59,13 +53,46 @@ class _AdminPayrollManagementPageState
     return null;
   }
 
-  double get _sss => _basicSalary * 0.045;
-  double get _philhealth => _basicSalary * 0.025;
-  double get _pagibig => _basicSalary * 0.020;
-  double get _totalDeduction => _sss + _philhealth + _pagibig;
-  double get _netPay => _basicSalary - _totalDeduction;
+  DateTime get _periodStart {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, 1);
+  }
 
-  // ✅ Back handler
+  DateTime get _periodEnd {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month + 1, 0, 23, 59, 59);
+  }
+
+  String get _periodLabel {
+    final s = _periodStart;
+    final e = _periodEnd;
+    const m = [
+      '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return '${m[s.month]} ${s.day} - ${m[e.month]} ${e.day}, ${e.year}';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final b = await PayrollCalculator.compute(
+      employee: widget.employeeData,
+      periodStart: _periodStart,
+      periodEnd: _periodEnd,
+    );
+    if (!mounted) return;
+    setState(() {
+      _b = b;
+      _loading = false;
+    });
+  }
+
   void _handleBack() {
     if (widget.onBack != null) {
       widget.onBack!();
@@ -79,7 +106,7 @@ class _AdminPayrollManagementPageState
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat.a4,
-        build: (pw.Context pwContext) {
+        build: (pw.Context c) {
           return pw.Padding(
             padding: const pw.EdgeInsets.all(24),
             child: pw.Column(
@@ -92,19 +119,26 @@ class _AdminPayrollManagementPageState
                 pw.Text('Employee: $_name'),
                 pw.Text('ID: $_employeeId'),
                 pw.Text('Department: $_department'),
-                pw.Text('Period: Oct 1 - Oct 15, 2023'),
+                pw.Text('Period: $_periodLabel'),
                 pw.Divider(),
-                pw.SizedBox(height: 12),
-                pw.Text('Basic Salary: ₱${_basicSalary.toStringAsFixed(2)}'),
-                pw.Text('SSS Deduction: ₱${_sss.toStringAsFixed(2)}'),
+                pw.SizedBox(height: 8),
+                pw.Text('EARNINGS',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                pw.Text('Basic Salary: ${PayrollCalculator.peso(_b.basicSalary)}'),
+                pw.Text('Allowances: ${PayrollCalculator.peso(_b.allowances)}'),
+                pw.Text('Gross: ${PayrollCalculator.peso(_b.grossPay)}'),
+                pw.SizedBox(height: 8),
+                pw.Text('DEDUCTIONS',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                 pw.Text(
-                    'PhilHealth Deduction: ₱${_philhealth.toStringAsFixed(2)}'),
-                pw.Text('Pag-IBIG Deduction: ₱${_pagibig.toStringAsFixed(2)}'),
-                pw.Text(
-                    'Total Deductions: ₱${_totalDeduction.toStringAsFixed(2)}'),
-                pw.SizedBox(height: 12),
+                    'Absences (${_b.absentDays} day/s): -${PayrollCalculator.peso(_b.absenceDeduction)}'),
+                pw.Text('SSS: -${PayrollCalculator.peso(_b.sss)}'),
+                pw.Text('PhilHealth: -${PayrollCalculator.peso(_b.philhealth)}'),
+                pw.Text('Pag-IBIG: -${PayrollCalculator.peso(_b.pagibig)}'),
+                pw.Text('Total: -${PayrollCalculator.peso(_b.totalDeductions)}'),
+                pw.SizedBox(height: 8),
                 pw.Divider(),
-                pw.Text('NET PAY: ₱${_netPay.toStringAsFixed(2)}',
+                pw.Text('NET PAY: ${PayrollCalculator.peso(_b.netPay)}',
                     style: pw.TextStyle(
                         fontSize: 18, fontWeight: pw.FontWeight.bold)),
               ],
@@ -117,33 +151,55 @@ class _AdminPayrollManagementPageState
   }
 
   Future<void> _handlePrint() async {
-    final pdfBytes = await _generatePdf();
+    final bytes = await _generatePdf();
     await Printing.layoutPdf(
-      onLayout: (PdfPageFormat format) async => pdfBytes,
+      onLayout: (PdfPageFormat f) async => bytes,
       name: 'payslip_$_employeeId.pdf',
     );
+
+    // ✅ AUTO-NOTIFY EMPLOYEE
+    await _notifyEmployeePayroll();
   }
 
   Future<void> _handleDownload() async {
-    final pdfBytes = await _generatePdf();
+    final bytes = await _generatePdf();
     await Printing.sharePdf(
-      bytes: pdfBytes,
+      bytes: bytes,
       filename: 'payslip_$_employeeId.pdf',
     );
+
+    // ✅ AUTO-NOTIFY EMPLOYEE
+    await _notifyEmployeePayroll();
+  }
+
+  /// ✅ Send notification sa employee na may payslip na
+  Future<void> _notifyEmployeePayroll() async {
+    try {
+      await EmployeeNotificationService.instance.sendPayrollAlert(
+        employeeId: _employeeId,
+        employeeName: _name,
+        month: _periodLabel,
+        netPay: _b.netPay,
+      );
+      debugPrint('✅ [PayrollMgmt] Employee notified of payslip');
+    } catch (e) {
+      debugPrint('⚠️ [PayrollMgmt] Employee notification failed: $e');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // ✅ PopScope — para gumana ang Android hardware back button
     return PopScope(
       canPop: false,
-      onPopInvokedWithResult: (didPop, result) {
+      onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         _handleBack();
       },
       child: Scaffold(
         backgroundColor: tc.background,
-        body: SingleChildScrollView(
+        body: _loading
+            ? Center(child: CircularProgressIndicator(color: tc.orange))
+            : SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: BsContainer(
             maxWidth: 1300,
@@ -151,7 +207,6 @@ class _AdminPayrollManagementPageState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // ✅ Back button sa taas
                 _buildBackButton(),
                 const SizedBox(height: 12),
                 _buildProfileCard(),
@@ -168,9 +223,6 @@ class _AdminPayrollManagementPageState
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BACK BUTTON
-  // ══════════════════════════════════════════════════════════════
   Widget _buildBackButton() {
     return Align(
       alignment: Alignment.centerLeft,
@@ -191,14 +243,11 @@ class _AdminPayrollManagementPageState
               children: [
                 Icon(Icons.arrow_back_rounded, size: 18, color: tc.text),
                 const SizedBox(width: 8),
-                Text(
-                  'Back to Payroll',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: tc.text,
-                  ),
-                ),
+                Text('Back to Payroll',
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: tc.text)),
               ],
             ),
           ),
@@ -207,9 +256,6 @@ class _AdminPayrollManagementPageState
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PROFILE CARD
-  // ══════════════════════════════════════════════════════════════
   Widget _buildProfileCard() {
     return Container(
       padding: const EdgeInsets.all(24),
@@ -219,10 +265,9 @@ class _AdminPayrollManagementPageState
         border: Border.all(color: tc.border),
       ),
       child: LayoutBuilder(
-        builder: (context, constraints) {
-          final w =
-          constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
-          final isWide = w > 700;
+        builder: (ctx, c) {
+          final w = c.maxWidth.isFinite ? c.maxWidth : 800.0;
+          final wide = w > 700;
 
           final avatar = Container(
             width: 64,
@@ -230,12 +275,10 @@ class _AdminPayrollManagementPageState
             decoration: BoxDecoration(
               color: const Color(0xFFFFECD0),
               shape: BoxShape.circle,
-              border: Border.all(color: tc.border, width: 1),
+              border: Border.all(color: tc.border),
               image: _photoUrl != null
                   ? DecorationImage(
-                image: NetworkImage(_photoUrl!),
-                fit: BoxFit.cover,
-              )
+                  image: NetworkImage(_photoUrl!), fit: BoxFit.cover)
                   : null,
             ),
             child: _photoUrl == null
@@ -243,10 +286,9 @@ class _AdminPayrollManagementPageState
               child: Text(
                 _getInitials(_name),
                 style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: tc.orangeText,
-                ),
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: tc.orangeText),
               ),
             )
                 : null,
@@ -274,7 +316,7 @@ class _AdminPayrollManagementPageState
                       runSpacing: 4,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Text('🆔 ID: $_employeeId',
+                        Text('🆔 $_employeeId',
                             style: TextStyle(
                                 fontSize: 12,
                                 color: tc.muted,
@@ -294,7 +336,7 @@ class _AdminPayrollManagementPageState
                             borderRadius: BorderRadius.circular(6),
                             border: Border.all(color: tc.border),
                           ),
-                          child: Text('📅 Oct 1 - Oct 15, 2023',
+                          child: Text('📅 $_periodLabel',
                               style: TextStyle(
                                   fontSize: 12,
                                   color: tc.text,
@@ -344,7 +386,7 @@ class _AdminPayrollManagementPageState
             ],
           );
 
-          if (isWide) {
+          if (wide) {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -354,14 +396,9 @@ class _AdminPayrollManagementPageState
               ],
             );
           }
-
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              header,
-              const SizedBox(height: 16),
-              actions,
-            ],
+            children: [header, const SizedBox(height: 16), actions],
           );
         },
       ),
@@ -370,44 +407,33 @@ class _AdminPayrollManagementPageState
 
   Widget _buildMetricsRow() {
     return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
-        final isWide = w > 800;
+      builder: (ctx, c) {
+        final w = c.maxWidth.isFinite ? c.maxWidth : 800.0;
+        final wide = w > 800;
         const gap = 20.0;
 
         final cards = <Widget>[
-          _buildMetricCard(
-              'NET PAY',
-              '₱${_netPay.toStringAsFixed(2)}',
-              'Total take-home for this period',
-              false),
-          _buildMetricCard(
-              'GROSS PAY',
-              '₱${_basicSalary.toStringAsFixed(2)}',
-              'Regular earnings',
-              false),
-          _buildMetricCard(
-              'TOTAL DEDUCTIONS',
-              '₱${_totalDeduction.toStringAsFixed(2)}',
-              '9% of Gross Pay',
-              true),
+          _buildMetricCard('NET PAY', PayrollCalculator.peso(_b.netPay),
+              'Total take-home for this period', false),
+          _buildMetricCard('GROSS PAY', PayrollCalculator.peso(_b.grossPay),
+              'Basic + Allowances + OT', false),
+          _buildMetricCard('TOTAL DEDUCTIONS',
+              PayrollCalculator.peso(_b.totalDeductions),
+              'Absences + Govt (9%)', true),
         ];
 
-        if (isWide) {
-          return IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: cards[0]),
-                const SizedBox(width: gap),
-                Expanded(child: cards[1]),
-                const SizedBox(width: gap),
-                Expanded(child: cards[2]),
-              ],
-            ),
+        if (wide) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: cards[0]),
+              const SizedBox(width: gap),
+              Expanded(child: cards[1]),
+              const SizedBox(width: gap),
+              Expanded(child: cards[2]),
+            ],
           );
         }
-
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -419,148 +445,6 @@ class _AdminPayrollManagementPageState
           ],
         );
       },
-    );
-  }
-
-  Widget _buildBreakdownGrid() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
-        final isWide = w > 900;
-
-        final earnings = _buildEarningsCard();
-        final remittances = _buildRemittancesCard();
-
-        if (isWide) {
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(flex: 13, child: earnings),
-              const SizedBox(width: 20),
-              Expanded(flex: 10, child: remittances),
-            ],
-          );
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            earnings,
-            const SizedBox(height: 20),
-            remittances,
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildEarningsCard() {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: tc.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text('Earnings Breakdown',
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: tc.text),
-                    overflow: TextOverflow.ellipsis),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                    color: tc.orange.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(6)),
-                child: Text('₱${_basicSalary.toStringAsFixed(2)}',
-                    style: TextStyle(
-                        color: tc.orangeText,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          _buildBreakdownItem('Basic Salary', 'Regular 15-day period',
-              '₱${_basicSalary.toStringAsFixed(2)}', false),
-          _buildBreakdownItem('Overtime Pay', '0 hours logged', '₱0.00', false),
-          _buildBreakdownItem('Late', '0 hours logged', '₱0.00', false),
-          _buildBreakdownItem('Leave', '0 hours logged', '₱0.00', false),
-          _buildBreakdownItem('Allowances', 'Non-taxable', '₱0.00', false),
-          _buildBreakdownItem('Absent', '0 hrs', '-₱0.00', true),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRemittancesCard() {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: tc.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text('Government Remittances & Deductions',
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: tc.text),
-                    overflow: TextOverflow.ellipsis),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                    color: tc.pillErrBg,
-                    borderRadius: BorderRadius.circular(6)),
-                child: Text('₱${_totalDeduction.toStringAsFixed(2)}',
-                    style: TextStyle(
-                        color: tc.pillErrTx,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          _buildBreakdownItem('SSS Contribution', '4.5% Employee Share',
-              '-₱${_sss.toStringAsFixed(2)}', true),
-          _buildBreakdownItem('PhilHealth Contribution', '2.5% Employee Share',
-              '-₱${_philhealth.toStringAsFixed(2)}', true),
-          _buildBreakdownItem('Pag-IBIG Contribution', '2.0% Employee Share',
-              '-₱${_pagibig.toStringAsFixed(2)}', true),
-          _buildBreakdownItem('Withholding Tax',
-              'Calculated based on net taxable income', '-₱0.00', true),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: tc.pillWarnBg,
-              border: Border(left: BorderSide(color: tc.pillWarnTx, width: 4)),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              'ℹ️ Total statutory deductions amount to 9% of the basic salary (₱${_basicSalary.toStringAsFixed(2)}) for this pay period.',
-              style: TextStyle(fontSize: 11, color: tc.pillWarnTx, height: 1.4),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -599,10 +483,249 @@ class _AdminPayrollManagementPageState
     );
   }
 
-  Widget _buildBreakdownItem(
-      String title, String desc, String amount, bool isNegative) {
+  Widget _buildBreakdownGrid() {
+    return LayoutBuilder(
+      builder: (ctx, c) {
+        final w = c.maxWidth.isFinite ? c.maxWidth : 800.0;
+        final wide = w > 900;
+
+        final earnings = _earningsCard();
+        final benefits = _benefitsCard();
+        final absences = _absencesCard();
+        final govt = _govtCard();
+
+        if (wide) {
+          return Column(
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: earnings),
+                  const SizedBox(width: 20),
+                  Expanded(child: benefits),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: absences),
+                  const SizedBox(width: 20),
+                  Expanded(child: govt),
+                ],
+              ),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            earnings,
+            const SizedBox(height: 20),
+            benefits,
+            const SizedBox(height: 20),
+            absences,
+            const SizedBox(height: 20),
+            govt,
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _earningsCard() {
+    return _panel(
+      title: 'Earnings Breakdown',
+      badge: PayrollCalculator.peso(_b.grossPay),
+      badgeColor: tc.orange.withValues(alpha: 0.15),
+      badgeTextColor: tc.orangeText,
+      children: [
+        _item('Basic Salary', 'Regular monthly pay',
+            PayrollCalculator.peso(_b.basicSalary), false),
+        _item('Allowances', 'Housing / Transport / Special',
+            PayrollCalculator.peso(_b.allowances), false),
+        _item('Overtime Pay', 'Additional hours',
+            PayrollCalculator.peso(_b.overtimePay), false),
+        Divider(color: tc.border, height: 20),
+        _item('Total Gross', 'Sum of earnings',
+            PayrollCalculator.peso(_b.grossPay), false, bold: true),
+      ],
+    );
+  }
+
+  Widget _benefitsCard() {
+    return _panel(
+      title: 'Benefits (Accrued)',
+      badge: PayrollCalculator.peso(_b.totalBenefits),
+      badgeColor: tc.pillGreenBg,
+      badgeTextColor: tc.pillGreenTx,
+      children: [
+        _item('13th Month Pay', '1/12 of basic salary',
+            PayrollCalculator.peso(_b.thirteenthMonth), false),
+        _item('SIL Credits', '5 days × daily rate (convertible)',
+            PayrollCalculator.peso(_b.silCredits), false),
+        _item('Service Incentive', 'Based on tenure & attendance',
+            '—', false),
+        Divider(color: tc.border, height: 20),
+        _item('Total Benefits', 'Accrued, not yet paid',
+            PayrollCalculator.peso(_b.totalBenefits), false, bold: true),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: tc.pillGreenBg,
+            border: Border(left: BorderSide(color: tc.pillGreenTx, width: 4)),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            'ℹ️ Benefits are not deducted from net pay. These are additional savings received at the 13th month payout or year-end.',
+            style: TextStyle(
+                fontSize: 11, color: tc.pillGreenTx, height: 1.4),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _absencesCard() {
+    return _panel(
+      title: 'Attendance & Absences',
+      badge: _b.absentDays > 0
+          ? '-${PayrollCalculator.peso(_b.absenceDeduction)}'
+          : 'Perfect',
+      badgeColor: _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
+      badgeTextColor: _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
+      children: [
+        _item('Working Days', 'Weekdays in the period',
+            '${_b.workingDays}', false),
+        _item('Present Days', 'With clock-in logged',
+            '${_b.presentDays}', false),
+        _item('Absent Days', 'No clock-in on weekday',
+            '${_b.absentDays}', _b.absentDays > 0),
+        _item('Daily Rate', 'Basic ÷ working days',
+            PayrollCalculator.peso(_b.dailyRate), false),
+        Divider(color: tc.border, height: 20),
+        _item('Absence Deduction',
+            '${_b.absentDays} day/s × daily rate',
+            '-${PayrollCalculator.peso(_b.absenceDeduction)}',
+            _b.absentDays > 0,
+            bold: true),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
+            border: Border(
+                left: BorderSide(
+                    color: _b.absentDays > 0
+                        ? tc.pillErrTx
+                        : tc.pillGreenTx,
+                    width: 4)),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            _b.absentDays > 0
+                ? '⚠️ ${_b.absentDays} absent day(s) automatically deducted from salary based on attendance logs.'
+                : '✓ No absences this period. Full salary will be received.',
+            style: TextStyle(
+                fontSize: 11,
+                color:
+                _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
+                height: 1.4),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _govtCard() {
+    final total = _b.sss + _b.philhealth + _b.pagibig + _b.withholdingTax;
+    return _panel(
+      title: 'Government Remittances & Deductions',
+      badge: '-${PayrollCalculator.peso(total)}',
+      badgeColor: tc.pillErrBg,
+      badgeTextColor: tc.pillErrTx,
+      children: [
+        _item('SSS Contribution', '4.5% Employee Share',
+            '-${PayrollCalculator.peso(_b.sss)}', true),
+        _item('PhilHealth Contribution', '2.5% Employee Share',
+            '-${PayrollCalculator.peso(_b.philhealth)}', true),
+        _item('Pag-IBIG Contribution', '2.0% Employee Share',
+            '-${PayrollCalculator.peso(_b.pagibig)}', true),
+        _item('Withholding Tax',
+            'Calculated based on net taxable income',
+            '-${PayrollCalculator.peso(_b.withholdingTax)}', true),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: tc.pillWarnBg,
+            border: Border(left: BorderSide(color: tc.pillWarnTx, width: 4)),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            'ℹ️ Total statutory deductions amount to 9% of the basic salary (${PayrollCalculator.peso(_b.basicSalary)}) for this pay period.',
+            style:
+            TextStyle(fontSize: 11, color: tc.pillWarnTx, height: 1.4),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _panel({
+    required String title,
+    required String badge,
+    required Color badgeColor,
+    required Color badgeTextColor,
+    required List<Widget> children,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: tc.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: tc.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(title,
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: tc.text),
+                    overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                    color: badgeColor,
+                    borderRadius: BorderRadius.circular(6)),
+                child: Text(badge,
+                    style: TextStyle(
+                        color: badgeTextColor,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  Widget _item(String title, String desc, String amount, bool negative,
+      {bool bold = false}) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -614,7 +737,8 @@ class _AdminPayrollManagementPageState
                 Text(title,
                     style: TextStyle(
                         fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                        fontWeight:
+                        bold ? FontWeight.w700 : FontWeight.w600,
                         color: tc.text),
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
@@ -625,14 +749,11 @@ class _AdminPayrollManagementPageState
             ),
           ),
           const SizedBox(width: 8),
-          Text(
-            amount,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: isNegative ? tc.red : tc.text,
-            ),
-          ),
+          Text(amount,
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: negative ? tc.red : tc.text)),
         ],
       ),
     );

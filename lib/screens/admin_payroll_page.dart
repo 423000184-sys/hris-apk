@@ -1,7 +1,9 @@
 // lib/screens/admin_payroll_page.dart
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'admin_theme.dart';
 import '../widgets/bootstrap_grid.dart';
+import '../services/payroll_calculator.dart';
 
 class AdminPayrollPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
@@ -22,11 +24,43 @@ class AdminPayrollPage extends StatefulWidget {
 class _AdminPayrollPageState extends State<AdminPayrollPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
-  String _selectedPayPeriod = 'Oct 01 - Oct 15, 2023';
+  String _selectedPayPeriod = 'Current Month';
   String _selectedDepartment = 'All Departments';
   String _searchQuery = '';
 
   final TextEditingController _searchCtrl = TextEditingController();
+
+  Map<String, int> _presentDaysMap = {};
+  bool _loadingAttendance = true;
+
+  DateTime get _periodStart {
+    final n = DateTime.now();
+    return DateTime(n.year, n.month, 1);
+  }
+
+  DateTime get _periodEnd {
+    final n = DateTime.now();
+    return DateTime(n.year, n.month + 1, 0, 23, 59, 59);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAttendance();
+  }
+
+  Future<void> _loadAttendance() async {
+    setState(() => _loadingAttendance = true);
+    final map = await PayrollCalculator.fetchPresentDaysMap(
+      periodStart: _periodStart,
+      periodEnd: _periodEnd,
+    );
+    if (!mounted) return;
+    setState(() {
+      _presentDaysMap = map;
+      _loadingAttendance = false;
+    });
+  }
 
   @override
   void dispose() {
@@ -34,12 +68,59 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     super.dispose();
   }
 
-  // ✅ Helper — kumuha ng totoong salary mula sa employee data
-  double _getSalary(Map<String, dynamic> emp) {
-    final raw = emp['basicSalary'];
-    if (raw is num) return raw.toDouble();
-    if (raw is String) return double.tryParse(raw) ?? 0.0;
-    return 0.0;
+  PayrollBreakdown _computeForEmp(Map<String, dynamic> emp) {
+    int? present;
+    for (final k in ['id', 'employeeId', 'employee_id', 'nfcTagId', 'authUid']) {
+      final key = emp[k]?.toString().trim();
+      if (key != null && key.isNotEmpty && _presentDaysMap.containsKey(key)) {
+        present = _presentDaysMap[key];
+        break;
+      }
+    }
+
+    final workingDays = PayrollCalculator.countWeekdays(_periodStart, _periodEnd);
+    final basic = PayrollCalculator.toDbl(emp['basicSalary']);
+    final allowances = PayrollCalculator.toDbl(emp['allowances']) +
+        PayrollCalculator.toDbl(emp['housingAllowance']) +
+        PayrollCalculator.toDbl(emp['transportAllowance']) +
+        PayrollCalculator.toDbl(emp['specialAllowance']);
+    final overtime = PayrollCalculator.toDbl(emp['overtimePay']);
+    final gross = basic + allowances + overtime;
+
+    final wd = workingDays > 0 ? workingDays : 22;
+    final dailyRate = wd > 0 ? basic / wd : 0.0;
+    final p = present ?? 0;
+    final absent = (wd - p).clamp(0, wd);
+    final absenceDeduction = dailyRate * absent;
+
+    final sss = basic * PayrollCalculator.sssRate;
+    final ph = basic * PayrollCalculator.philhealthRate;
+    final pi = basic * PayrollCalculator.pagibigRate;
+    final tax = 0.0;
+
+    final totalDed = absenceDeduction + sss + ph + pi + tax;
+    final net = gross - totalDed;
+
+    return PayrollBreakdown(
+      basicSalary: basic,
+      allowances: allowances,
+      overtimePay: overtime,
+      grossPay: gross,
+      thirteenthMonth: basic / 12,
+      silCredits: dailyRate * 5,
+      totalBenefits: (basic / 12) + (dailyRate * 5),
+      workingDays: wd,
+      presentDays: p,
+      absentDays: absent,
+      dailyRate: dailyRate,
+      absenceDeduction: absenceDeduction,
+      sss: sss,
+      philhealth: ph,
+      pagibig: pi,
+      withholdingTax: tax,
+      totalDeductions: totalDed,
+      netPay: net,
+    );
   }
 
   @override
@@ -52,36 +133,36 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
       }
     }
 
-    final filteredEmployees = widget.employees.where((emp) {
+    final filtered = widget.employees.where((emp) {
       final name = (emp['name'] ??
           '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}')
           .toString()
           .toLowerCase();
-      final id = (emp['id'] ?? emp['employeeId'] ?? '').toString().toLowerCase();
+      final id =
+      (emp['id'] ?? emp['employeeId'] ?? '').toString().toLowerCase();
       final dept = (emp['department'] ?? '').toString();
 
       final matchesSearch = _searchQuery.isEmpty ||
           name.contains(_searchQuery.toLowerCase()) ||
           id.contains(_searchQuery.toLowerCase());
-      final matchesDept =
-          _selectedDepartment == 'All Departments' || dept == _selectedDepartment;
+      final matchesDept = _selectedDepartment == 'All Departments' ||
+          dept == _selectedDepartment;
 
       return matchesSearch && matchesDept;
     }).toList();
 
-    double totalNetDisbursement = 0;
+    double totalNet = 0;
+    double totalDeductions = 0;
+    double totalAbsences = 0;
     int pendingCount = 0;
 
-    for (var emp in filteredEmployees) {
-      final basicSalary = _getSalary(emp);
-      final netPay = basicSalary * 0.9;
-      totalNetDisbursement += netPay;
-
-      final status =
-      (emp['payrollStatus'] ?? 'Processed').toString().toLowerCase();
-      if (status == 'pending' || status == 'on hold') {
-        pendingCount++;
-      }
+    for (final emp in filtered) {
+      final b = _computeForEmp(emp);
+      totalNet += b.netPay;
+      totalDeductions += b.totalDeductions;
+      totalAbsences += b.absenceDeduction;
+      final s = (emp['payrollStatus'] ?? 'Processed').toString().toLowerCase();
+      if (s == 'pending' || s == 'on hold') pendingCount++;
     }
 
     return Container(
@@ -98,14 +179,32 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
               const SizedBox(height: 20),
               _buildSearchBar(),
               const SizedBox(height: 16),
-              _buildStatsRow(totalNetDisbursement, pendingCount),
+              _buildStatsRow(totalNet, pendingCount, totalDeductions,
+                  totalAbsences),
               const SizedBox(height: 20),
               _buildFiltersRow(departments),
               const SizedBox(height: 16),
-              _buildTable(filteredEmployees),
+              if (_loadingAttendance)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: tc.orange),
+                      ),
+                      const SizedBox(width: 10),
+                      Text('Kinukuha ang attendance logs...',
+                          style: TextStyle(fontSize: 12, color: tc.muted)),
+                    ],
+                  ),
+                ),
+              _buildTable(filtered),
               const SizedBox(height: 16),
               Text(
-                'Showing ${filteredEmployees.length} of ${widget.employees.length} employees',
+                'Showing ${filtered.length} of ${widget.employees.length} employees',
                 style: TextStyle(fontSize: 12, color: tc.muted),
               ),
               const SizedBox(height: 40),
@@ -117,95 +216,83 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   }
 
   Widget _buildPageHeader() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
-        final narrow = w < 720;
+    return LayoutBuilder(builder: (ctx, c) {
+      final w = c.maxWidth.isFinite ? c.maxWidth : 800.0;
+      final narrow = w < 720;
 
-        final titleWidget = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Payroll Management',
+      final title = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Payroll Management',
               style: TextStyle(
-                fontSize: narrow ? 20 : 24,
-                fontWeight: FontWeight.w800,
-                color: tc.text,
-                letterSpacing: -0.5,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              'Manage and review employee disbursements for the current period.',
-              style: TextStyle(fontSize: 13, color: tc.muted),
-            ),
+                  fontSize: narrow ? 20 : 24,
+                  fontWeight: FontWeight.w800,
+                  color: tc.text,
+                  letterSpacing: -0.5)),
+          const SizedBox(height: 2),
+          Text(
+              'Manage and review employee disbursements — absences auto-deducted.',
+              style: TextStyle(fontSize: 13, color: tc.muted)),
+        ],
+      );
+
+      final refresh = OutlinedButton.icon(
+        onPressed: _loadingAttendance ? null : _loadAttendance,
+        icon: Icon(Icons.refresh, size: 16, color: tc.text),
+        label: Text('Refresh',
+            style: TextStyle(
+                color: tc.text, fontWeight: FontWeight.w600, fontSize: 13)),
+        style: OutlinedButton.styleFrom(
+          backgroundColor: tc.card,
+          side: BorderSide(color: tc.border),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+
+      final export = ElevatedButton.icon(
+        onPressed: () {},
+        icon: const Icon(Icons.download, size: 16, color: Colors.white),
+        label: const Text('Export to CSV',
+            style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 13)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: tc.orange,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+
+      if (narrow) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            title,
+            const SizedBox(height: 16),
+            Row(children: [
+              Expanded(child: export),
+              const SizedBox(width: 10),
+              refresh,
+            ]),
           ],
         );
-
-        final filtersBtn = OutlinedButton.icon(
-          onPressed: () {},
-          icon: Icon(Icons.tune, size: 16, color: tc.text),
-          label: Text('Filters',
-              style: TextStyle(
-                  color: tc.text, fontWeight: FontWeight.w600, fontSize: 13)),
-          style: OutlinedButton.styleFrom(
-            backgroundColor: tc.card,
-            side: BorderSide(color: tc.border),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        );
-
-        final exportBtn = ElevatedButton.icon(
-          onPressed: () {},
-          icon: const Icon(Icons.download, size: 16, color: Colors.white),
-          label: const Text('Export to CSV',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13)),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: tc.orange,
-            elevation: 0,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        );
-
-        if (narrow) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              titleWidget,
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(child: exportBtn),
-                  const SizedBox(width: 10),
-                  filtersBtn,
-                ],
-              ),
-            ],
-          );
-        }
-
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: titleWidget),
-            const SizedBox(width: 16),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                filtersBtn,
-                const SizedBox(width: 10),
-                exportBtn,
-              ],
-            ),
-          ],
-        );
-      },
-    );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: title),
+          const SizedBox(width: 16),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            refresh,
+            const SizedBox(width: 10),
+            export,
+          ]),
+        ],
+      );
+    });
   }
 
   Widget _buildSearchBar() {
@@ -217,76 +304,91 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: tc.border),
       ),
-      child: Row(
-        children: [
-          Icon(Icons.search_rounded, size: 18, color: tc.muted),
-          const SizedBox(width: 10),
-          Expanded(
-            child: TextField(
-              controller: _searchCtrl,
-              onChanged: (v) => setState(() => _searchQuery = v),
-              style: TextStyle(color: tc.text, fontSize: 14),
-              cursorColor: tc.orange,
-              decoration: InputDecoration(
-                hintText: 'Search by name or employee ID...',
-                hintStyle: TextStyle(color: tc.muted, fontSize: 14),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-              ),
+      child: Row(children: [
+        Icon(Icons.search_rounded, size: 18, color: tc.muted),
+        const SizedBox(width: 10),
+        Expanded(
+          child: TextField(
+            controller: _searchCtrl,
+            onChanged: (v) => setState(() => _searchQuery = v),
+            style: TextStyle(color: tc.text, fontSize: 14),
+            cursorColor: tc.orange,
+            decoration: InputDecoration(
+              hintText: 'Search by name or employee ID...',
+              hintStyle: TextStyle(color: tc.muted, fontSize: 14),
+              border: InputBorder.none,
+              isDense: true,
+              contentPadding: EdgeInsets.zero,
             ),
           ),
-          if (_searchQuery.isNotEmpty)
-            IconButton(
-              icon: Icon(Icons.close_rounded, size: 18, color: tc.muted),
-              onPressed: () {
-                _searchCtrl.clear();
-                setState(() => _searchQuery = '');
-              },
-            ),
-        ],
-      ),
+        ),
+        if (_searchQuery.isNotEmpty)
+          IconButton(
+            icon: Icon(Icons.close_rounded, size: 18, color: tc.muted),
+            onPressed: () {
+              _searchCtrl.clear();
+              setState(() => _searchQuery = '');
+            },
+          ),
+      ]),
     );
   }
 
-  Widget _buildStatsRow(double totalNetDisbursement, int pendingCount) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
-        final isWide = w >= 900;
-        const gap = 20.0;
+  // ══════════════════════════════════════════════════════════════
+  // STATS ROW
+  // ══════════════════════════════════════════════════════════════
+  // ✅ FIX: `CrossAxisAlignment.stretch` → `CrossAxisAlignment.start`
+  // Sanhi ng dating error:
+  //   "Assertion failed: box.dart:2251"
+  //   "Assertion failed: mouse_tracker.dart:199"
+  // Ito ay dahil ang `stretch` ay nangangailangan ng bounded height,
+  // pero ang buong page ay nasa loob ng SingleChildScrollView
+  // (vertical) na may infinite height.
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildStatsRow(double totalNet, int pending, double totalDed,
+      double totalAbs) {
+    return LayoutBuilder(builder: (ctx, c) {
+      final w = c.maxWidth.isFinite ? c.maxWidth : 800.0;
+      final wide = w >= 900;
+      const gap = 16.0;
 
-        final totalCard = _buildTotalCard(totalNetDisbursement);
-        final pendingCard = _buildPendingCard(pendingCount);
+      final cards = <Widget>[
+        _statCard('TOTAL NET DISBURSEMENT', PayrollCalculator.peso(totalNet),
+            Icons.account_balance_wallet_outlined, false),
+        _statCard('TOTAL DEDUCTIONS', PayrollCalculator.peso(totalDed),
+            Icons.trending_down_rounded, true),
+        _statCard('ABSENCE KALTAS', PayrollCalculator.peso(totalAbs),
+            Icons.event_busy_outlined, true),
+        _statCard('PENDING APPROVALS', '$pending Employees',
+            Icons.pending_actions_rounded, false),
+      ];
 
-        if (isWide) {
-          return IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(flex: 2, child: totalCard),
-                const SizedBox(width: gap),
-                Expanded(flex: 1, child: pendingCard),
-              ],
-            ),
-          );
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+      if (wide) {
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start, // ✅ START, HINDI STRETCH
           children: [
-            totalCard,
-            const SizedBox(height: gap),
-            pendingCard,
+            for (int i = 0; i < cards.length; i++) ...[
+              Expanded(child: cards[i]),
+              if (i < cards.length - 1) const SizedBox(width: gap),
+            ]
           ],
         );
-      },
-    );
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (int i = 0; i < cards.length; i++) ...[
+            cards[i],
+            if (i < cards.length - 1) const SizedBox(height: gap),
+          ]
+        ],
+      );
+    });
   }
 
-  Widget _buildTotalCard(double total) {
+  Widget _statCard(String title, String value, IconData icon, bool danger) {
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: tc.card,
         borderRadius: BorderRadius.circular(16),
@@ -299,98 +401,30 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('TOTAL NET DISBURSEMENT',
+                Text(title,
                     style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
                         color: tc.muted,
                         letterSpacing: 0.5)),
                 const SizedBox(height: 8),
-                Text(
-                  '₱${_formatCurrency(total)}',
-                  style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      color: tc.text),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.arrow_upward, size: 14, color: tc.green),
-                    const SizedBox(width: 4),
-                    Flexible(
-                      child: Text('4.2% from last period',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: tc.green),
-                          overflow: TextOverflow.ellipsis),
-                    ),
-                  ],
-                ),
+                Text(value,
+                    style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: danger ? tc.red : tc.text),
+                    overflow: TextOverflow.ellipsis),
               ],
             ),
           ),
-          const SizedBox(width: 12),
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: tc.surface,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: tc.border),
             ),
-            child: Icon(Icons.account_balance_wallet_outlined,
-                size: 36, color: tc.muted),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPendingCard(int pendingCount) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: const Color(0xFFA35200),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text('PENDING APPROVALS',
-              style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFFFFECD0),
-                  letterSpacing: 0.5)),
-          const SizedBox(height: 4),
-          Text('$pendingCount Employees',
-              style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white),
-              overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () {},
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFC27803),
-                elevation: 0,
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-              ),
-              child: const Text('Review Now',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white)),
-            ),
+            child: Icon(icon, size: 28, color: tc.muted),
           ),
         ],
       ),
@@ -415,23 +449,18 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
               value: _selectedPayPeriod,
               dropdownColor: tc.card,
               icon: Icon(Icons.keyboard_arrow_down, size: 16, color: tc.muted),
-              items: const [
-                'Oct 01 - Oct 15, 2023',
-                'Oct 16 - Oct 31, 2023'
-              ].map((period) {
+              items: const ['Current Month', 'Last Month'].map((p) {
                 return DropdownMenuItem(
-                  value: period,
-                  child: Text(period,
+                  value: p,
+                  child: Text(p,
                       style: TextStyle(
                           fontSize: 13,
                           color: tc.text,
                           fontWeight: FontWeight.w500)),
                 );
               }).toList(),
-              onChanged: (val) {
-                if (val != null) {
-                  setState(() => _selectedPayPeriod = val);
-                }
+              onChanged: (v) {
+                if (v != null) setState(() => _selectedPayPeriod = v);
               },
             ),
           ),
@@ -449,20 +478,18 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
               value: _selectedDepartment,
               dropdownColor: tc.card,
               icon: Icon(Icons.keyboard_arrow_down, size: 16, color: tc.muted),
-              items: departments.map((dept) {
+              items: departments.map((d) {
                 return DropdownMenuItem(
-                  value: dept,
-                  child: Text(dept,
+                  value: d,
+                  child: Text(d,
                       style: TextStyle(
                           fontSize: 13,
                           color: tc.text,
                           fontWeight: FontWeight.w500)),
                 );
               }).toList(),
-              onChanged: (val) {
-                if (val != null) {
-                  setState(() => _selectedDepartment = val);
-                }
+              onChanged: (v) {
+                if (v != null) setState(() => _selectedDepartment = v);
               },
             ),
           ),
@@ -471,7 +498,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     );
   }
 
-  Widget _buildTable(List<Map<String, dynamic>> filteredEmployees) {
+  Widget _buildTable(List<Map<String, dynamic>> employees) {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -481,153 +508,142 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final w =
-            constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
+        child: LayoutBuilder(builder: (ctx, c) {
+          final w = c.maxWidth.isFinite ? c.maxWidth : 800.0;
 
-            if (filteredEmployees.isEmpty) {
-              return Container(
-                padding: const EdgeInsets.all(48),
-                child: Center(
-                  child: Column(
-                    children: [
-                      Icon(Icons.people_outline_rounded,
-                          size: 48, color: tc.muted),
-                      const SizedBox(height: 12),
-                      Text(
-                        'No employees match your filters.',
-                        style: TextStyle(color: tc.muted, fontSize: 14),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }
-
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minWidth: w),
-                child: DataTable(
-                  headingRowColor: WidgetStateProperty.all(tc.surface),
-                  dataRowMinHeight: 64,
-                  dataRowMaxHeight: 72,
-                  columnSpacing: 32,
-                  columns: [
-                    _col('EMPLOYEE NAME & ID'),
-                    _col('BASIC SALARY'),
-                    _col('DEDUCTIONS (TAX/SSS)'),
-                    _col('NET PAY'),
-                    _col('STATUS'),
-                    _col('ACTION'),
+          if (employees.isEmpty) {
+            return Container(
+              padding: const EdgeInsets.all(48),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(Icons.people_outline_rounded,
+                        size: 48, color: tc.muted),
+                    const SizedBox(height: 12),
+                    Text('No employees match your filters.',
+                        style: TextStyle(color: tc.muted, fontSize: 14)),
                   ],
-                  rows: filteredEmployees.map((emp) {
-                    final rawId =
-                    (emp['id'] ?? emp['employeeId'] ?? 'N/A').toString();
-                    final displayId = rawId.length > 10
-                        ? '${rawId.substring(0, 8)}...'
-                        : rawId;
-
-                    final name = emp['name'] ??
-                        '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}';
-                    final initials = _getInitials(name);
-
-                    // ✅ TOTOONG SALARY (walang fallback)
-                    final double basicSalary = _getSalary(emp);
-                    final double deduction = basicSalary * 0.09;
-                    final double netPay = basicSalary - deduction;
-                    final String status =
-                    (emp['payrollStatus'] ?? 'PROCESSED')
-                        .toString()
-                        .toUpperCase();
-
-                    return DataRow(cells: [
-                      DataCell(
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            CircleAvatar(
-                              radius: 18,
-                              backgroundColor:
-                              tc.orange.withValues(alpha: 0.15),
-                              child: Text(initials,
-                                  style: TextStyle(
-                                      color: tc.orangeText,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12)),
-                            ),
-                            const SizedBox(width: 12),
-                            ConstrainedBox(
-                              constraints:
-                              const BoxConstraints(maxWidth: 180),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(name,
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 13,
-                                          color: tc.text),
-                                      overflow: TextOverflow.ellipsis),
-                                  Text('ID: $displayId',
-                                      style: TextStyle(
-                                          fontSize: 11, color: tc.muted)),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      DataCell(Text(
-                          basicSalary > 0
-                              ? '₱${_formatCurrency(basicSalary)}'
-                              : 'Not set',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w500,
-                              fontSize: 13,
-                              color: basicSalary > 0 ? tc.text : tc.muted))),
-                      DataCell(
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('-₱${_formatCurrency(deduction)}',
-                                style: TextStyle(
-                                    color: tc.red,
-                                    fontWeight: FontWeight.w500,
-                                    fontSize: 13)),
-                            Text('SSS, PhilHealth, Pag-IBIG',
-                                style:
-                                TextStyle(fontSize: 10, color: tc.muted)),
-                          ],
-                        ),
-                      ),
-                      DataCell(Text('₱${_formatCurrency(netPay)}',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              color: tc.orangeText))),
-                      DataCell(_buildStatusBadge(status)),
-                      DataCell(
-                        IconButton(
-                          icon: Icon(Icons.remove_red_eye_outlined,
-                              size: 16, color: tc.muted),
-                          onPressed: () {
-                            widget.onSelectEmployee(emp);
-                          },
-                        ),
-                      ),
-                    ]);
-                  }).toList(),
                 ),
               ),
             );
-          },
-        ),
+          }
+
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: w),
+              child: DataTable(
+                headingRowColor: WidgetStateProperty.all(tc.surface),
+                dataRowMinHeight: 68,
+                dataRowMaxHeight: 78,
+                columnSpacing: 28,
+                columns: [
+                  _col('EMPLOYEE'),
+                  _col('BASIC'),
+                  _col('ABSENCES'),
+                  _col('GOVT (9%)'),
+                  _col('NET PAY'),
+                  _col('STATUS'),
+                  _col('ACTION'),
+                ],
+                rows: employees.map((emp) {
+                  final b = _computeForEmp(emp);
+                  final name = emp['name'] ??
+                      '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}';
+                  final initials = _getInitials(name);
+                  final rawId =
+                  (emp['id'] ?? emp['employeeId'] ?? 'N/A').toString();
+                  final displayId = rawId.length > 10
+                      ? '${rawId.substring(0, 8)}...'
+                      : rawId;
+                  final status =
+                  (emp['payrollStatus'] ?? 'PROCESSED').toString().toUpperCase();
+                  final govt = b.sss + b.philhealth + b.pagibig + b.withholdingTax;
+
+                  return DataRow(cells: [
+                    DataCell(Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircleAvatar(
+                          radius: 18,
+                          backgroundColor: tc.orange.withValues(alpha: 0.15),
+                          child: Text(initials,
+                              style: TextStyle(
+                                  color: tc.orangeText,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12)),
+                        ),
+                        const SizedBox(width: 12),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 180),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(name,
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                      color: tc.text),
+                                  overflow: TextOverflow.ellipsis),
+                              Text('ID: $displayId',
+                                  style: TextStyle(
+                                      fontSize: 11, color: tc.muted)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )),
+                    DataCell(Text(
+                        b.basicSalary > 0
+                            ? PayrollCalculator.peso(b.basicSalary)
+                            : 'Not set',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w500,
+                            fontSize: 13,
+                            color: b.basicSalary > 0 ? tc.text : tc.muted))),
+                    DataCell(Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                            b.absentDays > 0
+                                ? '${b.absentDays} day/s'
+                                : 'Perfect',
+                            style: TextStyle(
+                                color: b.absentDays > 0 ? tc.red : tc.green,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13)),
+                        Text(
+                            '-${PayrollCalculator.peso(b.absenceDeduction)}',
+                            style: TextStyle(
+                                fontSize: 11, color: tc.muted)),
+                      ],
+                    )),
+                    DataCell(Text('-${PayrollCalculator.peso(govt)}',
+                        style: TextStyle(
+                            color: tc.red,
+                            fontWeight: FontWeight.w500,
+                            fontSize: 13))),
+                    DataCell(Text(PayrollCalculator.peso(b.netPay),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            color: tc.orangeText))),
+                    DataCell(_statusBadge(status)),
+                    DataCell(IconButton(
+                      icon: Icon(Icons.remove_red_eye_outlined,
+                          size: 16, color: tc.muted),
+                      onPressed: () => widget.onSelectEmployee(emp),
+                    )),
+                  ]);
+                }).toList(),
+              ),
+            ),
+          );
+        }),
       ),
     );
   }
@@ -640,41 +656,35 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
             color: tc.muted)),
   );
 
-  Widget _buildStatusBadge(String status) {
-    Color bgColor;
-    Color textColor;
-
+  Widget _statusBadge(String status) {
+    Color bg, tx;
     if (status.contains('PROCESS')) {
-      bgColor = tc.pillGreenBg;
-      textColor = tc.pillGreenTx;
+      bg = tc.pillGreenBg;
+      tx = tc.pillGreenTx;
     } else if (status.contains('PEND')) {
-      bgColor = tc.pillWarnBg;
-      textColor = tc.pillWarnTx;
+      bg = tc.pillWarnBg;
+      tx = tc.pillWarnTx;
     } else {
-      bgColor = tc.pillBlueBg;
-      textColor = tc.pillBlueTx;
+      bg = tc.pillBlueBg;
+      tx = tc.pillBlueTx;
     }
-
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(20),
-      ),
+      decoration:
+      BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
               width: 6,
               height: 6,
-              decoration:
-              BoxDecoration(color: textColor, shape: BoxShape.circle)),
+              decoration: BoxDecoration(color: tx, shape: BoxShape.circle)),
           const SizedBox(width: 6),
           Text(status,
               style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
-                  color: textColor,
+                  color: tx,
                   letterSpacing: 0.5)),
         ],
       ),
@@ -682,19 +692,12 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   }
 
   String _getInitials(String name) {
-    final parts = name.trim().split(' ');
+    final parts = name.trim().split(RegExp(r'\s+'));
     if (parts.length >= 2 && parts[0].isNotEmpty && parts[1].isNotEmpty) {
       return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     } else if (parts.isNotEmpty && parts[0].isNotEmpty) {
       return parts[0][0].toUpperCase();
     }
     return 'HR';
-  }
-
-  String _formatCurrency(double amount) {
-    return amount.toStringAsFixed(2).replaceAllMapped(
-      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
-          (Match m) => '${m[1]},',
-    );
   }
 }
