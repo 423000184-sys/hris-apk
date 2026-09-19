@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'login_screen.dart';
+import '../widgets/bootstrap_grid.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
-// _T — colors that are the same for both themes (brand, status, accent)
+// _T — colors that are the same for both themes
 // ═══════════════════════════════════════════════════════════════════════════
 class _T {
   static const Color headerStart = Color(0xFFF54900);
@@ -40,14 +41,20 @@ class _T {
   static const Color mutedGrey    = Color(0xFFA1A1AA);
   static const Color inactiveTab  = Color(0xFF71717A);
   static const Color white        = Color(0xFFFFFFFF);
+
+  // Desktop (web PC / macOS) colors from HTML mock
+  static const Color desktopBg       = Color(0xFF0C0C0E);
+  static const Color desktopNavText  = Color(0xFFD4D4D8);
+  static const Color desktopMuted    = Color(0xFF9F9FA9);
+  static const Color desktopBadge    = Color(0xFFFF8904);
+  static const Color desktopDivider  = Color(0x14FFFFFF); // ~ rgba(255,255,255,.05)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// _ThemeColors — theme-aware colors resolved per build
+// _ThemeColors — theme-aware colors for mobile layout
 // ═══════════════════════════════════════════════════════════════════════════
 class _ThemeColors {
   final bool isDark;
-
   const _ThemeColors(this.isDark);
 
   Color get heroBgStart => isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
@@ -76,6 +83,10 @@ class _LandingScreenState extends State<LandingScreen>
   late Animation<double> _fadeAnim;
 
   static const String _logoAsset = 'assets/images/logo.png';
+
+  /// Breakpoint above which (on web) we render the desktop
+  /// two-column Bootstrap layout. Below this, mobile layout is used.
+  static const double _desktopBreakpoint = 992.0;
 
   @override
   void initState() {
@@ -109,72 +120,38 @@ class _LandingScreenState extends State<LandingScreen>
     super.dispose();
   }
 
+  double _degToRad(double deg) => deg * 3.1415926535 / 180;
+
+  /// TRUE only on web when viewport is wide (PC / macOS).
+  bool _useDesktopLayout(BuildContext context) {
+    if (!kIsWeb) return false;
+    final w = MediaQuery.of(context).size.width;
+    return w >= _desktopBreakpoint;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BUILD
+  // ═══════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
+    final useDesktop = _useDesktopLayout(context);
 
     return Scaffold(
-      backgroundColor: tc.scaffoldBg,
+      backgroundColor:
+      useDesktop ? _T.desktopBg : tc.scaffoldBg,
       body: FadeTransition(
         opacity: _fadeAnim,
         child: Column(
           children: [
-            _buildNavbar(),
+            _buildNavbar(useDesktop: useDesktop),
             Expanded(
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [tc.heroBgStart, tc.heroBgEnd],
-                    ),
-                  ),
-                  child: Stack(
-                    clipBehavior: Clip.hardEdge,
-                    children: [
-                      Positioned(
-                        bottom: -130,
-                        left: -150,
-                        child: IgnorePointer(
-                          child: Transform.rotate(
-                            angle: _degToRad(425),
-                            child: Opacity(
-                              opacity: tc.watermarkOpacity,
-                              child: ColorFiltered(
-                                colorFilter: const ColorFilter.mode(
-                                  Color.fromRGBO(255, 138, 0, 0.10),
-                                  BlendMode.srcIn,
-                                ),
-                                child: Image.asset(
-                                  _logoAsset,
-                                  width: 500,
-                                  height: 500,
-                                  fit: BoxFit.contain,
-                                  errorBuilder: (_, __, ___) {
-                                    debugPrint('logo.png failed to load');
-                                    return const SizedBox.shrink();
-                                  },
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildHeroSection(tc),
-                          _buildWorkingZoneSection(tc),
-                          _buildDashboardPreview(),
-                          const SizedBox(height: 32),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+                child: useDesktop
+                    ? _buildDesktopBody()
+                    : _buildMobileBody(tc),
               ),
             ),
           ],
@@ -183,10 +160,80 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  double _degToRad(double deg) => deg * 3.1415926535 / 180;
+  // ═══════════════════════════════════════════════════════════════════════
+  // NAVBAR — two styles
+  // ═══════════════════════════════════════════════════════════════════════
+  Widget _buildNavbar({required bool useDesktop}) {
+    if (useDesktop) return _buildDesktopNavbar();
+    return _buildMobileNavbar();
+  }
 
-  // ── NAVBAR ──────────────────────────────────────────────────────────────
-  Widget _buildNavbar() {
+  /// Desktop nav — matches HTML mock (dark, plain "Sign In").
+  Widget _buildDesktopNavbar() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: _T.desktopBg,
+        border: Border(
+          bottom: BorderSide(color: _T.desktopDivider, width: 1),
+        ),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: BsContainer(
+          maxWidth: 1600,
+          padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 20),
+          child: Row(
+            children: [
+              // Orange logo tile
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: _T.ctaSolid,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: const Icon(
+                  Icons.access_time_rounded,
+                  color: Colors.black,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                'R.A.C.O.M.A.',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.4,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: _goToLogin,
+                behavior: HitTestBehavior.opaque,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  child: Text(
+                    'Sign In',
+                    style: TextStyle(
+                      color: _T.desktopNavText,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Mobile nav — original orange gradient with "Log In" border button.
+  Widget _buildMobileNavbar() {
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -225,10 +272,10 @@ class _LandingScreenState extends State<LandingScreen>
               ),
               const Spacer(),
               GestureDetector(
-                onTap: _goToLogin, // ✅ Diretso sa Login, walang blocking
+                onTap: _goToLogin,
                 child: Container(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: Colors.white, width: 1),
@@ -250,7 +297,267 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  // ── HERO SECTION ────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+  // DESKTOP BODY — 2-column Bootstrap layout (matches HTML mock)
+  // ═══════════════════════════════════════════════════════════════════════
+  Widget _buildDesktopBody() {
+    return Container(
+      width: double.infinity,
+      color: _T.desktopBg,
+      padding: const EdgeInsets.symmetric(vertical: 96),
+      child: BsContainer(
+        maxWidth: 1600,
+        padding: const EdgeInsets.symmetric(horizontal: 48),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Left column: hero content ──
+            Expanded(flex: 6, child: _buildDesktopHeroLeft()),
+            const SizedBox(width: 80),
+            // ── Right column: dashboard preview ──
+            Expanded(flex: 4, child: _buildDesktopDashboard()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDesktopHeroLeft() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── Badge pill ──
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.1),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.verified_user_rounded,
+                  color: _T.desktopBadge, size: 16),
+              SizedBox(width: 8),
+              Text(
+                'Verified Location Tracking',
+                style: TextStyle(
+                  color: _T.desktopBadge,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 40),
+
+        // ── Heading ──
+        const Text(
+          'Clock in',
+          style: TextStyle(
+            fontSize: 72,
+            fontWeight: FontWeight.w700,
+            height: 1.05,
+            color: Colors.white,
+          ),
+        ),
+        ShaderMask(
+          shaderCallback: (bounds) => const LinearGradient(
+            colors: [_T.heroDescGradStart, _T.heroDescGradEnd],
+          ).createShader(bounds),
+          child: const Text(
+            'where it matters.',
+            style: TextStyle(
+              fontSize: 72,
+              fontWeight: FontWeight.w700,
+              height: 1.05,
+              color: Colors.white,
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 28),
+
+        // ── Description ──
+        const SizedBox(
+          width: 576,
+          child: Text(
+            'Seamless, location-based time tracking for modern teams. '
+                'Automatically verify when you are on-site and ready to work, '
+                'ensuring accurate logs and eliminating guesswork.',
+            style: TextStyle(
+              color: _T.desktopMuted,
+              fontSize: 18,
+              height: 1.55,
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 48),
+
+        // ── Working Zone ──
+        Row(
+          children: const [
+            Icon(Icons.location_on_rounded,
+                color: _T.workZoneIcon, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'The Working Zone',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        const SizedBox(
+          width: 576,
+          child: Text(
+            'Authorized working zones are defined geographical areas '
+                'designated for your workplace. Once you enter the perimeter, '
+                'our Live GPS system authenticates your location, enabling the '
+                'Clock In feature securely.',
+            style: TextStyle(
+              color: _T.desktopMuted,
+              fontSize: 16,
+              height: 1.55,
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 32),
+
+        // ── Get Started CTA ──
+        _buildDesktopCTA(),
+      ],
+    );
+  }
+
+  Widget _buildDesktopCTA() {
+    return SizedBox(
+      width: 340,
+      child: GestureDetector(
+        onTap: _goToLogin,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 18),
+          decoration: BoxDecoration(
+            color: _T.ctaSolid,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFF97316).withValues(alpha: 0.4),
+                blurRadius: 40,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              Text(
+                'Get Started',
+                style: TextStyle(
+                  color: Colors.black,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 18,
+                ),
+              ),
+              SizedBox(width: 8),
+              Icon(Icons.arrow_forward_rounded,
+                  color: Colors.black, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Desktop dashboard preview — same mock, with an orange glow behind.
+  Widget _buildDesktopDashboard() {
+    return Stack(
+      children: [
+        // Orange glow behind the card
+        Positioned.fill(
+          child: Container(
+            decoration: BoxDecoration(
+              color: _T.ctaSolid.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(40),
+            ),
+          ),
+        ),
+        // The card itself
+        _buildDashboardPreview(),
+      ],
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // MOBILE BODY — original layout (unchanged behaviour)
+  // ═══════════════════════════════════════════════════════════════════════
+  Widget _buildMobileBody(_ThemeColors tc) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [tc.heroBgStart, tc.heroBgEnd],
+        ),
+      ),
+      child: Stack(
+        clipBehavior: Clip.hardEdge,
+        children: [
+          Positioned(
+            bottom: -130,
+            left: -150,
+            child: IgnorePointer(
+              child: Transform.rotate(
+                angle: _degToRad(425),
+                child: Opacity(
+                  opacity: tc.watermarkOpacity,
+                  child: ColorFiltered(
+                    colorFilter: const ColorFilter.mode(
+                      Color.fromRGBO(255, 138, 0, 0.10),
+                      BlendMode.srcIn,
+                    ),
+                    child: Image.asset(
+                      _logoAsset,
+                      width: 500,
+                      height: 500,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) {
+                        debugPrint('logo.png failed to load');
+                        return const SizedBox.shrink();
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeroSection(tc),
+              _buildWorkingZoneSection(tc),
+              _buildDashboardPreview(),
+              const SizedBox(height: 32),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── HERO (mobile) ──────────────────────────────────────────────────────
   Widget _buildHeroSection(_ThemeColors tc) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
@@ -319,8 +626,7 @@ class _LandingScreenState extends State<LandingScreen>
           ),
           const SizedBox(height: 20),
           Container(
-            padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
             decoration: BoxDecoration(
               color: _T.badgeBg,
               borderRadius: BorderRadius.circular(20),
@@ -390,19 +696,19 @@ class _LandingScreenState extends State<LandingScreen>
             ),
           ),
           const SizedBox(height: 20),
-          _buildCTAButton(),
+          _buildMobileCTAButton(),
           const SizedBox(height: 16),
         ],
       ),
     );
   }
 
-  // ── CTA BUTTON ──────────────────────────────────────────────────────────
-  Widget _buildCTAButton() {
+  // ── CTA (mobile) ───────────────────────────────────────────────────────
+  Widget _buildMobileCTAButton() {
     return SizedBox(
       width: double.infinity,
       child: GestureDetector(
-        onTap: _goToLogin, // ✅ Laging enabled, diretso sa Login
+        onTap: _goToLogin,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -439,7 +745,7 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  // ── WORKING ZONE SECTION ────────────────────────────────────────────────
+  // ── Working Zone (mobile) ──────────────────────────────────────────────
   Widget _buildWorkingZoneSection(_ThemeColors tc) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
@@ -477,7 +783,7 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  // ── DASHBOARD PREVIEW (always dark - it's a mock) ───────────────────────
+  // ── DASHBOARD PREVIEW (used by both layouts) ───────────────────────────
   Widget _buildDashboardPreview() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -487,6 +793,13 @@ class _LandingScreenState extends State<LandingScreen>
           color: _T.dashCardBg,
           borderRadius: BorderRadius.circular(32),
           border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 30,
+              offset: const Offset(0, 12),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -548,13 +861,12 @@ class _LandingScreenState extends State<LandingScreen>
                   end: Alignment.bottomRight,
                   colors: [_T.statusStart, _T.statusEnd],
                 ),
-                border:
-                Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Column(
+              child: const Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
+                children: [
                   Text(
                     'You are currently',
                     style: TextStyle(
@@ -663,8 +975,7 @@ class _LandingScreenState extends State<LandingScreen>
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: _T.locCardBg,
-                border:
-                Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
@@ -709,8 +1020,7 @@ class _LandingScreenState extends State<LandingScreen>
             const SizedBox(height: 16),
             Container(
               width: double.infinity,
-              padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               decoration: BoxDecoration(
                 color: _T.ctaSolid,
                 borderRadius: BorderRadius.circular(14),
@@ -738,8 +1048,7 @@ class _LandingScreenState extends State<LandingScreen>
                       ),
                       Text(
                         '01:45 PM',
-                        style:
-                        TextStyle(color: Colors.white70, fontSize: 11),
+                        style: TextStyle(color: Colors.white70, fontSize: 11),
                       ),
                     ],
                   ),

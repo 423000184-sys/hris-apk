@@ -6,12 +6,14 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../theme/app_theme.dart';
 import '../models/employee.dart' as model;
 import '../widgets/employee_notification_bell.dart';
-import '../services/local_notification_service.dart';      // ✅ BAGO
-import '../services/employee_notification_watcher.dart';  // ✅ BAGO
+import '../services/local_notification_service.dart';
+import '../services/employee_notification_watcher.dart';
+import '../services/presence_monitor_service.dart';   // 🛰️ NEW
 import 'dashboard_screen.dart';
 import 'clock_screen.dart';
 import 'attendance_history_screen.dart';
 import 'apply_leave_screen.dart';
+import 'itinerary_screen.dart';
 import 'reports_screen.dart';
 import 'profile_screen.dart';
 
@@ -29,7 +31,7 @@ class MainScreenState extends State<MainScreen>
   int _previousIndex = 0;
   bool _showClockOverlay = false;
 
-  // ✅ BAGO: Watcher para sa device notifications
+  // ✅ Watcher para sa device notifications
   EmployeeNotificationWatcher? _notifWatcher;
 
   final GlobalKey<DashboardScreenState> _dashboardKey =
@@ -88,7 +90,8 @@ class MainScreenState extends State<MainScreen>
 
   void _closeClockOverlayAndRefresh() {
     if (!mounted) return;
-    debugPrint('✅ [MainScreen] Clock action done — closing overlay + refreshing dashboard');
+    debugPrint(
+        '✅ [MainScreen] Clock action done — closing overlay + refreshing dashboard');
     setState(() {
       _showClockOverlay = false;
       _selectedIndex = 0;
@@ -97,7 +100,7 @@ class MainScreenState extends State<MainScreen>
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ✅ BAGO: INIT + DISPOSE para sa device notifications
+  // INIT + DISPOSE
   // ══════════════════════════════════════════════════════════════
   @override
   void initState() {
@@ -114,12 +117,28 @@ class MainScreenState extends State<MainScreen>
     } else {
       debugPrint('⚠️ [MainScreen] employeeId empty — watcher NOT started');
     }
+
+    // 🛰️ Start presence monitor — 5-min IN/OUT detection
+    final emp = widget.employee;
+    if (emp != null) {
+      PresenceMonitorService.instance.start(employee: emp);
+      debugPrint(
+          '🛰️ [MainScreen] Presence monitor started for ${emp.fullName}');
+    } else {
+      debugPrint(
+          '⚠️ [MainScreen] No employee — presence monitor NOT started');
+    }
   }
 
   @override
   void dispose() {
     _notifWatcher?.stop();
     debugPrint('🔔 [MainScreen] Watcher stopped');
+
+    // 🛰️ Stop presence monitor kapag nawala ang MainScreen
+    PresenceMonitorService.instance.stop();
+    debugPrint('🛰️ [MainScreen] Presence monitor stopped');
+
     super.dispose();
   }
 
@@ -210,6 +229,12 @@ class MainScreenState extends State<MainScreen>
                     ),
                   ),
 
+                // ═══════════════════════════════════════════════════
+                // TOP-RIGHT ACTION BUTTONS
+                // ❌ Inalis na ang _buildHistoryButton() (orange circle
+                //    na may history icon — parang refresh)
+                // ✅ Nananatili lang: Notification Bell + Reports
+                // ═══════════════════════════════════════════════════
                 Positioned(
                   top: 12,
                   right: 12,
@@ -225,8 +250,7 @@ class MainScreenState extends State<MainScreen>
                             size: 22,
                           ),
                         const SizedBox(width: 10),
-                        _buildHistoryButton(),
-                        const SizedBox(width: 10),
+                        // (Inalis ang _buildHistoryButton dito)
                         _buildReportsButton(),
                       ],
                     ),
@@ -263,6 +287,8 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
+  // ⛔ HINDI NA GINAGAMIT — naiwan lang para sa safety
+  // (Puwede mong burahin kung gusto mo, pero safe na iwan)
   Widget _buildHistoryButton() {
     return GestureDetector(
       onTap: () => switchTabWithHistory(1),

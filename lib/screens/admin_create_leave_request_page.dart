@@ -304,7 +304,6 @@ class _AdminCreateLeaveRequestPageState
   Widget _responsiveGrid({required List<Widget> children}) {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
-      // Stack on xs/sm, 2-col on md+
       final narrow = !r.up(BsSize.md);
 
       if (narrow) {
@@ -356,21 +355,61 @@ class _AdminCreateLeaveRequestPageState
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // ⭐ IMPROVED — Flexible name matching
+  //    Order: exact → starts-with → unique-contains
+  // ══════════════════════════════════════════════════════════════
   void _tryFindEmployee(String value) {
     final String typedName = value.trim().toLowerCase();
     if (typedName.isEmpty) {
-      setState(() => _selectedEmployeeId = null);
+      if (_selectedEmployeeId != null) {
+        setState(() => _selectedEmployeeId = null);
+      }
       return;
     }
+
+    // 1️⃣ Exact match muna
     for (final employee in widget.employees) {
       final String employeeName = _empName(employee).trim().toLowerCase();
       if (employeeName == typedName) {
-        setState(
-                () => _selectedEmployeeId = (employee['id'] ?? '').toString());
+        final id = (employee['id'] ?? '').toString();
+        if (_selectedEmployeeId != id) {
+          setState(() => _selectedEmployeeId = id);
+        }
         return;
       }
     }
-    setState(() => _selectedEmployeeId = null);
+
+    // 2️⃣ Starts-with match (e.g. "April" → "April Vincent C. De Guia")
+    for (final employee in widget.employees) {
+      final String employeeName = _empName(employee).trim().toLowerCase();
+      if (employeeName.startsWith(typedName)) {
+        final id = (employee['id'] ?? '').toString();
+        if (_selectedEmployeeId != id) {
+          setState(() => _selectedEmployeeId = id);
+        }
+        return;
+      }
+    }
+
+    // 3️⃣ Contains match — kung unique lang (1 match) para safe
+    final matches = widget.employees.where((e) {
+      final name = _empName(e).trim().toLowerCase();
+      return name.contains(typedName);
+    }).toList();
+
+    if (matches.length == 1) {
+      final id = (matches.first['id'] ?? '').toString();
+      if (_selectedEmployeeId != id) {
+        setState(() => _selectedEmployeeId = id);
+      }
+      return;
+    }
+
+    // Walang match (o maraming ambiguous match)
+    if (_selectedEmployeeId != null) {
+      setState(() => _selectedEmployeeId = null);
+    }
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -389,7 +428,6 @@ class _AdminCreateLeaveRequestPageState
           _labeledField(
             "Inclusive Dates",
             LayoutBuilder(builder: (_, c) {
-              // Stack From/To on very narrow
               final veryNarrow = c.maxWidth < 320;
               final fromField = _editableDateField(
                 label: "From",
@@ -680,9 +718,8 @@ class _AdminCreateLeaveRequestPageState
   Widget _buildLeaveTypes() {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
-      // Chips get wider on smaller screens for better tap targets
       final chipWidth = r.responsive<double>(
-        xs: (c.maxWidth - 24) / 2, // 2 cols on phone
+        xs: (c.maxWidth - 24) / 2,
         sm: 130,
         md: 130,
         lg: 130,
@@ -774,7 +811,6 @@ class _AdminCreateLeaveRequestPageState
           ),
           const SizedBox(height: 16),
 
-          // Signature block — responsive
           LayoutBuilder(builder: (_, c) {
             final narrow = c.maxWidth < 400;
             final sigInfo = Column(
@@ -839,7 +875,6 @@ class _AdminCreateLeaveRequestPageState
             );
           }),
 
-          // Approval items
           _buildApprovalItem("Section Head", "Pending Recommendation"),
           _buildApprovalItem("Department Head", "Pending Approval"),
         ],
@@ -959,7 +994,10 @@ class _AdminCreateLeaveRequestPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // SUBMIT LEAVE REQUEST
+  // ⭐ SUBMIT LEAVE REQUEST — Fixed logic
+  //    1. Multi-identifier save (6 fields) para mag-match sa mobile
+  //    2. Single source of truth (leave_applications lang)
+  //    3. Walang duplicate array save
   // ══════════════════════════════════════════════════════════════
   Future<void> _submitLeaveRequest() async {
     final parsedFrom = _parseDate(_fromDateController.text);
@@ -1004,12 +1042,51 @@ class _AdminCreateLeaveRequestPageState
     setState(() => _isSubmitting = true);
 
     try {
-      final leaveData = {
+      // ⭐ Kunin ang buong employee object para sa extra identifiers
+      Map<String, dynamic> selectedEmp = {};
+      try {
+        selectedEmp = widget.employees.firstWhere(
+              (e) => (e['id'] ?? '').toString() == _selectedEmployeeId,
+        );
+      } catch (_) {
+        selectedEmp = {};
+      }
+
+      final typedId = (selectedEmp['employeeId'] ??
+          selectedEmp['employee_id'] ??
+          '')
+          .toString()
+          .trim();
+      final authUid = (selectedEmp['authUid'] ??
+          selectedEmp['auth_uid'] ??
+          selectedEmp['uid'] ??
+          '')
+          .toString()
+          .trim();
+      final empEmail = (selectedEmp['email'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+
+      // ⭐ BUILD leave data — MARAMING identifier fields
+      //    para siguradong mag-match sa mobile kahit anong ID ang gamitin
+      final leaveData = <String, dynamic>{
+        // ─── TARGET EMPLOYEE IDs (multi-identifier) ───
         'employeeId': _selectedEmployeeId,
+        'employee_id': _selectedEmployeeId,
+        'employeeDocId': _selectedEmployeeId,
+        if (typedId.isNotEmpty) 'employeeCode': typedId,
+        if (authUid.isNotEmpty) 'employeeAuthUid': authUid,
+        if (empEmail.isNotEmpty) 'employeeEmail': empEmail,
+
+        // ─── DISPLAY ───
         'employeeName': _nameController.text.trim(),
+        'employee_name': _nameController.text.trim(),
         'position': _positionController.text.trim(),
         'department': _departmentController.text.trim(),
         'reliever': _relieverController.text.trim(),
+
+        // ─── LEAVE DETAILS ───
         'leaveType': _selectedLeaveType,
         'startDate': _dateFrom!.toIso8601String(),
         'endDate': _dateTo!.toIso8601String(),
@@ -1020,32 +1097,49 @@ class _AdminCreateLeaveRequestPageState
             ? "${_returnTime!.hour.toString().padLeft(2, '0')}:${_returnTime!.minute.toString().padLeft(2, '0')}"
             : null,
         'reason': _reasonController.text.trim(),
+
+        // ─── STATUS (lowercase 'pending') ───
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': 'admin',
+        'source': 'admin',
       };
 
-      await FirebaseFirestore.instance
+      // ⭐ SAVE sa leave_applications lang (single source of truth)
+      //    Ito ang binabasa ng:
+      //      - Admin Activity → Pending Leave Requests
+      //      - Mobile Apply Leave → Leave History
+      final docRef = await FirebaseFirestore.instance
           .collection('leave_applications')
           .add(leaveData);
 
-      await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(_selectedEmployeeId)
-          .update({
-        'leaveRequests': FieldValue.arrayUnion([
-          {
-            'id': DateTime.now().millisecondsSinceEpoch.toString(),
-            'leaveType': _selectedLeaveType,
-            'startDate': _dateFrom!.toIso8601String(),
-            'endDate': _dateTo!.toIso8601String(),
-            'days': _totalDays.toInt(),
-            'reason': _reasonController.text.trim(),
-            'status': 'pending',
-            'createdAt': Timestamp.now(),
-          }
-        ]),
-      });
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('✅ [AdminCreateLeave] Saved: ${docRef.id}');
+      debugPrint('   Employee:     ${_nameController.text.trim()}');
+      debugPrint('   employeeId:   $_selectedEmployeeId');
+      debugPrint('   employeeCode: $typedId');
+      debugPrint('   authUid:      $authUid');
+      debugPrint('   email:        $empEmail');
+      debugPrint('   Leave: $_selectedLeaveType, ${_totalDays.toInt()} day(s)');
+      debugPrint('═══════════════════════════════════════════');
+
+      // ─── Optional: Activity log ───
+      try {
+        await FirebaseFirestore.instance.collection('activity logs').add({
+          'type': 'leave_created_by_admin',
+          'employeeId': _selectedEmployeeId,
+          'employee_name': _nameController.text.trim(),
+          'leaveType': _selectedLeaveType,
+          'days': _totalDays.toInt(),
+          'leaveDocId': docRef.id,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        debugPrint('⚠️ Activity log warning: $e');
+      }
+
+      // ⚠️ REMOVED: Ang array save sa employees/{id}/leaveRequests
+      //    (ito ang nagdudulot ng DUPLICATE sa Admin Activity page)
 
       if (!mounted) return;
 

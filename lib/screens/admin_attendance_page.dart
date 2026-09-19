@@ -1,8 +1,12 @@
 // lib/screens/admin_attendance_page.dart
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:syncfusion_flutter_datepicker/datepicker.dart';
 import 'admin_theme.dart';
+import 'admin_database.dart';
 import 'admin_dashboard.dart';
 import '../widgets/bootstrap_grid.dart';
 
@@ -14,6 +18,9 @@ class AdminAttendancePage extends StatefulWidget {
   final VoidCallback onRefreshNeeded;
   final List<Map<String, dynamic>> locations;
 
+  // Employees list — fallback kung empty, mag-stream ng sarili
+  final List<Map<String, dynamic>> employees;
+
   const AdminAttendancePage({
     super.key,
     required this.title,
@@ -22,6 +29,7 @@ class AdminAttendancePage extends StatefulWidget {
     required this.searchQuery,
     required this.onRefreshNeeded,
     required this.locations,
+    this.employees = const [],
   });
 
   @override
@@ -29,34 +37,255 @@ class AdminAttendancePage extends StatefulWidget {
 }
 
 class _AdminAttendancePageState extends State<AdminAttendancePage> {
-  // ══════════════════════════════════════════════════════════════
-  // THEME ACCESSOR
-  // ══════════════════════════════════════════════════════════════
   AdminColors get tc => AdminTheme.getColors(context);
 
   // Filter states
   String _selectedEventType = 'All Events';
   String _selectedDepartment = 'All Departments';
+  String _selectedYear = 'All Years';
   DateTimeRange? _selectedDateRange;
   int _currentPage = 1;
   final int _rowsPerPage = 5;
 
   final List<String> _eventTypes = ['All Events', 'IN', 'OUT'];
 
+  // Employee lookup — self-sufficient, may sariling stream
+  Map<String, Map<String, dynamic>> _employeeLookup = {};
+  List<Map<String, dynamic>> _localEmployees = [];
+  StreamSubscription? _empSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _localEmployees = widget.employees;
+    _buildEmployeeLookup();
+    _listenToEmployees();
+  }
+
+  @override
+  void didUpdateWidget(covariant AdminAttendancePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.employees != widget.employees ||
+        oldWidget.employees.length != widget.employees.length) {
+      if (widget.employees.isNotEmpty) {
+        _localEmployees = widget.employees;
+        _buildEmployeeLookup();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _empSub?.cancel();
+    super.dispose();
+  }
+
+  // ⭐ DIRECT STREAM — ito ang sagot sa 0 employees problem
+  void _listenToEmployees() {
+    _empSub = AdminDatabase.streamEmployees().listen(
+          (emps) {
+        if (!mounted) return;
+        debugPrint('📡 [Attendance] Stream fired: ${emps.length} employees');
+        setState(() {
+          _localEmployees = emps.isNotEmpty ? emps : widget.employees;
+          _buildEmployeeLookup();
+        });
+      },
+      onError: (e) {
+        debugPrint('❌ [Attendance] Employee stream error: $e');
+      },
+    );
+  }
+
+  void _buildEmployeeLookup() {
+    final source =
+    _localEmployees.isNotEmpty ? _localEmployees : widget.employees;
+
+    final map = <String, Map<String, dynamic>>{};
+
+    for (final emp in source) {
+      final id = (emp['id'] ?? '').toString().trim();
+      final empId =
+      (emp['employeeId'] ?? emp['employee_id'] ?? '').toString().trim();
+      final email = (emp['email'] ?? '').toString().trim().toLowerCase();
+      final name = (emp['name'] ??
+          emp['fullName'] ??
+          '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}')
+          .toString()
+          .trim()
+          .toLowerCase();
+
+      if (id.isNotEmpty) map[id] = emp;
+      if (empId.isNotEmpty) map[empId] = emp;
+      if (email.isNotEmpty) map['email:$email'] = emp;
+      if (name.isNotEmpty) map['name:$name'] = emp;
+    }
+
+    _employeeLookup = map;
+    debugPrint(
+        '📋 [Attendance] Lookup built: ${map.length} keys from ${source.length} employees');
+  }
+
+  Map<String, dynamic>? _findEmployee(Map<String, dynamic> log) {
+    final id = (log['employee_id'] ??
+        log['employeeId'] ??
+        log['employeeID'] ??
+        '')
+        .toString()
+        .trim();
+    if (id.isNotEmpty && _employeeLookup.containsKey(id)) {
+      return _employeeLookup[id];
+    }
+
+    final email = (log['email'] ?? '').toString().trim().toLowerCase();
+    if (email.isNotEmpty && _employeeLookup.containsKey('email:$email')) {
+      return _employeeLookup['email:$email'];
+    }
+
+    final name = (log['employee_name'] ??
+        log['employeeName'] ??
+        log['name'] ??
+        '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    if (name.isNotEmpty && _employeeLookup.containsKey('name:$name')) {
+      return _employeeLookup['name:$name'];
+    }
+
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // RESOLVERS
+  // ═══════════════════════════════════════════════════════════════
+  String _resolveDepartment(Map<String, dynamic> log) {
+    final fromLog =
+    (log['department'] ?? log['dept'] ?? log['section'] ?? '')
+        .toString()
+        .trim();
+    if (fromLog.isNotEmpty) return fromLog;
+
+    final emp = _findEmployee(log);
+    if (emp != null) {
+      final dept =
+      (emp['department'] ?? emp['dept'] ?? '').toString().trim();
+      if (dept.isNotEmpty) return dept;
+
+      final role = (emp['role'] ?? emp['position'] ?? '').toString().trim();
+      if (role.isNotEmpty) return role;
+    }
+    return 'No Department';
+  }
+
+  String _resolveName(Map<String, dynamic> log) {
+    final fromLog = (log['employee_name'] ??
+        log['employeeName'] ??
+        log['name'] ??
+        '')
+        .toString()
+        .trim();
+    if (fromLog.isNotEmpty) return fromLog;
+
+    final emp = _findEmployee(log);
+    if (emp != null) {
+      final full =
+      (emp['name'] ?? emp['fullName'] ?? '').toString().trim();
+      if (full.isNotEmpty) return full;
+
+      final first =
+      (emp['firstName'] ?? emp['first_name'] ?? '').toString().trim();
+      final last =
+      (emp['lastName'] ?? emp['last_name'] ?? '').toString().trim();
+      final combo = '$first $last'.trim();
+      if (combo.isNotEmpty) return combo;
+    }
+    return 'Unknown Employee';
+  }
+
+  String _resolveEmail(Map<String, dynamic> log) {
+    final fromLog = (log['email'] ?? '').toString().trim();
+    if (fromLog.isNotEmpty) return fromLog;
+
+    final emp = _findEmployee(log);
+    if (emp != null) return (emp['email'] ?? '').toString().trim();
+    return '';
+  }
+
+  String? _resolvePhotoUrl(Map<String, dynamic> log) {
+    const photoKeys = ['photoUrl', 'photo', 'imageUrl', 'image', 'avatar'];
+
+    for (final key in photoKeys) {
+      final v = (log[key] ?? '').toString().trim();
+      if (v.isNotEmpty && v != '—' && v != 'null') return v;
+    }
+
+    final emp = _findEmployee(log);
+    if (emp != null) {
+      for (final key in photoKeys) {
+        final v = (emp[key] ?? '').toString().trim();
+        if (v.isNotEmpty && v != '—' && v != 'null') return v;
+      }
+    }
+    return null;
+  }
+
+  String? _resolveRegisteredDevice(Map<String, dynamic> log) {
+    final fromLog = (log['registeredDevice'] ??
+        log['deviceName'] ??
+        log['device'] ??
+        '')
+        .toString()
+        .trim();
+    if (fromLog.isNotEmpty && fromLog != '—' && fromLog != 'null') {
+      return fromLog;
+    }
+
+    final emp = _findEmployee(log);
+    if (emp != null) {
+      final dev = (emp['deviceName'] ??
+          emp['registeredDevice'] ??
+          emp['device'] ??
+          '')
+          .toString()
+          .trim();
+      if (dev.isNotEmpty && dev != '—' && dev != 'null') return dev;
+    }
+    return null;
+  }
+
   List<String> get _departments {
-    final depts = widget.logs
-        .map((log) => log['department']?.toString() ?? '')
-        .where((d) => d.isNotEmpty)
-        .toSet()
-        .toList();
-    return ['All Departments', ...depts];
+    final depts = <String>{};
+    for (final log in widget.logs) {
+      final dept = _resolveDepartment(log);
+      if (dept.isNotEmpty && dept != 'No Department') depts.add(dept);
+    }
+    return ['All Departments', ...depts.toList()..sort()];
+  }
+
+  // 🆕 Available years — descending order (newest first)
+  List<String> get _years {
+    final years = <int>{};
+    for (final log in widget.logs) {
+      final ts = log['timestamp'];
+      DateTime? dt;
+      if (ts is Timestamp) {
+        dt = ts.toDate();
+      } else if (ts is DateTime) {
+        dt = ts;
+      }
+      if (dt != null) years.add(dt.year);
+    }
+    final sorted = years.toList()..sort((a, b) => b.compareTo(a));
+    return ['All Years', ...sorted.map((y) => y.toString())];
   }
 
   List<Map<String, dynamic>> get _filteredLogs {
     var filtered = widget.logs.where((log) {
-      final name = (log['employee_name'] ?? '').toString().toLowerCase();
-      final id = (log['employee_id'] ?? '').toString().toLowerCase();
-      final email = (log['email'] ?? '').toString().toLowerCase();
+      final name = _resolveName(log).toLowerCase();
+      final id =
+      (log['employee_id'] ?? log['employeeId'] ?? '').toString().toLowerCase();
+      final email = _resolveEmail(log).toLowerCase();
       final query = widget.searchQuery.toLowerCase();
       return name.contains(query) ||
           id.contains(query) ||
@@ -71,10 +300,28 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     }
 
     if (_selectedDepartment != 'All Departments') {
-      filtered = filtered.where((log) {
-        final dept = (log['department'] ?? '').toString();
-        return dept == _selectedDepartment;
-      }).toList();
+      filtered = filtered
+          .where((log) => _resolveDepartment(log) == _selectedDepartment)
+          .toList();
+    }
+
+    // 🆕 YEAR filter
+    if (_selectedYear != 'All Years') {
+      final year = int.tryParse(_selectedYear);
+      if (year != null) {
+        filtered = filtered.where((log) {
+          final ts = log['timestamp'];
+          if (ts == null) return false;
+          DateTime? dt;
+          if (ts is Timestamp) {
+            dt = ts.toDate();
+          } else if (ts is DateTime) {
+            dt = ts;
+          }
+          if (dt == null) return false;
+          return dt.year == year;
+        }).toList();
+      }
     }
 
     if (_selectedDateRange != null) {
@@ -91,8 +338,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         }
         return dt.isAfter(
             _selectedDateRange!.start.subtract(const Duration(days: 1))) &&
-            dt.isBefore(
-                _selectedDateRange!.end.add(const Duration(days: 1)));
+            dt.isBefore(_selectedDateRange!.end.add(const Duration(days: 1)));
       }).toList();
     }
 
@@ -103,23 +349,19 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       if (tsA == null) return 1;
       if (tsB == null) return -1;
 
-      DateTime dtA, dtB;
+      DateTime? dtA;
+      DateTime? dtB;
       if (tsA is Timestamp) {
         dtA = tsA.toDate();
       } else if (tsA is DateTime) {
         dtA = tsA;
-      } else {
-        return 0;
       }
-
       if (tsB is Timestamp) {
         dtB = tsB.toDate();
       } else if (tsB is DateTime) {
         dtB = tsB;
-      } else {
-        return 0;
       }
-
+      if (dtA == null || dtB == null) return 0;
       return dtB.compareTo(dtA);
     });
 
@@ -159,29 +401,234 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return DateFormat('MMM d, yyyy').format(dt);
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 🆕 DATE RANGE PICKER — Syncfusion (custom dialog, NOT fullscreen)
+  // ══════════════════════════════════════════════════════════════
   Future<void> _pickDateRange() async {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final picked = await showDateRangePicker(
+    DateTimeRange? tempRange = _selectedDateRange;
+
+    final applied = await showDialog<bool>(
       context: context,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now(),
-      initialDateRange: _selectedDateRange,
-      builder: (ctx, child) => Theme(
-        data: AdminTheme.themeData(isDark),
-        child: child!,
-      ),
+      barrierDismissible: true,
+      builder: (dialogCtx) {
+        return Dialog(
+          backgroundColor: tc.card,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          insetPadding: const EdgeInsets.all(24),
+          child: Container(
+            width: 640,
+            height: 620,
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+            child: Column(
+              children: [
+                // ─── HEADER ───
+                Row(
+                  children: [
+                    Icon(Icons.date_range_rounded,
+                        color: tc.orange, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Select Date Range',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: tc.text,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.close_rounded,
+                          color: tc.muted, size: 20),
+                      onPressed: () => Navigator.pop(dialogCtx, false),
+                      tooltip: 'Close',
+                    ),
+                  ],
+                ),
+                Divider(color: tc.border, height: 20),
+
+                // ─── DATE PICKER ───
+                Expanded(
+                  child: SfDateRangePicker(
+                    view: DateRangePickerView.month,
+                    selectionMode: DateRangePickerSelectionMode.range,
+                    initialSelectedRange: _selectedDateRange != null
+                        ? PickerDateRange(
+                      _selectedDateRange!.start,
+                      _selectedDateRange!.end,
+                    )
+                        : null,
+                    minDate: DateTime(2020),
+                    maxDate: DateTime.now(),
+                    showActionButtons: false,
+                    enablePastDates: true,
+                    onSelectionChanged:
+                        (DateRangePickerSelectionChangedArgs args) {
+                      if (args.value is PickerDateRange) {
+                        final range = args.value as PickerDateRange;
+                        if (range.startDate != null) {
+                          tempRange = DateTimeRange(
+                            start: range.startDate!,
+                            end: range.endDate ?? range.startDate!,
+                          );
+                        }
+                      }
+                    },
+                    backgroundColor: tc.card,
+                    headerStyle: DateRangePickerHeaderStyle(
+                      backgroundColor: tc.card,
+                      textStyle: TextStyle(
+                        color: tc.text,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                    monthCellStyle: DateRangePickerMonthCellStyle(
+                      textStyle: TextStyle(
+                        color: tc.text,
+                        fontSize: 13,
+                      ),
+                      todayTextStyle: TextStyle(
+                        color: tc.orange,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      trailingDatesTextStyle: TextStyle(
+                        color: tc.muted.withValues(alpha: 0.5),
+                      ),
+                      leadingDatesTextStyle: TextStyle(
+                        color: tc.muted.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    monthViewSettings: DateRangePickerMonthViewSettings(
+                      viewHeaderStyle: DateRangePickerViewHeaderStyle(
+                        textStyle: TextStyle(
+                          color: tc.muted,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    rangeSelectionColor:
+                    tc.orange.withValues(alpha: 0.25),
+                    startRangeSelectionColor: tc.orange,
+                    endRangeSelectionColor: tc.orange,
+                    todayHighlightColor: tc.orange,
+                    selectionColor: tc.orange,
+                    selectionTextStyle: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Divider(color: tc.border, height: 20),
+
+                // ─── ACTIONS ───
+                Row(
+                  children: [
+                    if (_selectedDateRange != null)
+                      TextButton.icon(
+                        onPressed: () {
+                          setState(() {
+                            _selectedDateRange = null;
+                            _currentPage = 1;
+                          });
+                          Navigator.pop(dialogCtx, false);
+                        },
+                        icon: Icon(Icons.clear_rounded,
+                            size: 14, color: tc.muted),
+                        label: Text(
+                          'CLEAR',
+                          style: TextStyle(
+                            color: tc.muted,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogCtx, false),
+                      child: Text(
+                        'CANCEL',
+                        style: TextStyle(
+                          color: tc.muted,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(dialogCtx, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: tc.orange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 22, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        'APPLY',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
-    if (picked != null) {
-      setState(() => _selectedDateRange = picked);
+
+    if (applied == true && tempRange != null) {
+      setState(() {
+        _selectedDateRange = tempRange;
+        _currentPage = 1;
+      });
     }
   }
 
+  // ⭐ ENRICHED VERIFICATION
   void _openVerification(Map<String, dynamic> log) {
+    final enrichedLog = Map<String, dynamic>.from(log);
+
+    final device = _resolveRegisteredDevice(log);
+    if (device != null && device.isNotEmpty) {
+      enrichedLog['registeredDevice'] = device;
+    }
+
+    enrichedLog['resolvedEmployeeName'] = _resolveName(log);
+    enrichedLog['resolvedEmail'] = _resolveEmail(log);
+    enrichedLog['resolvedDepartment'] = _resolveDepartment(log);
+
+    final photo = _resolvePhotoUrl(log);
+    if (photo != null && photo.isNotEmpty) {
+      enrichedLog['resolvedPhotoUrl'] = photo;
+    }
+
+    debugPrint('═══════════════════════════════════════════');
+    debugPrint('🔍 [Attendance] Opening verification');
+    debugPrint('   logId:     ${log['id']}');
+    debugPrint('   empName:   ${enrichedLog['resolvedEmployeeName']}');
+    debugPrint('   device:    ${enrichedLog['registeredDevice'] ?? 'N/A'}');
+    debugPrint('   dept:      ${enrichedLog['resolvedDepartment']}');
+    debugPrint('═══════════════════════════════════════════');
+
     final dashboard = context.findAncestorStateOfType<AdminDashboardState>();
     if (dashboard != null) {
       dashboard.openAttendanceVerification(
         log['id'] ?? '',
-        log,
+        enrichedLog,
       );
     }
   }
@@ -212,206 +659,214 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // HEADER
-  // ══════════════════════════════════════════════════════════════
+  // ─── HEADER ────────────────────────────────────────────────
   Widget _buildPageHeader() {
-    return LayoutBuilder(
-      builder: (_, c) {
-        final r = BsResponsive(c.maxWidth);
-        final narrow = !r.up(BsSize.md);
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      final narrow = !r.up(BsSize.md);
 
-        final title = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.title,
-              style: TextStyle(
-                fontSize: r.responsive<double>(
-                  xs: 22, sm: 26, md: 28, lg: 32,
-                ),
-                fontWeight: FontWeight.w700,
-                color: tc.text,
-                letterSpacing: -0.3,
-              ),
+      final title = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.title,
+            style: TextStyle(
+              fontSize: r.responsive<double>(xs: 22, sm: 26, md: 28, lg: 32),
+              fontWeight: FontWeight.w700,
+              color: tc.text,
+              letterSpacing: -0.3,
             ),
-            const SizedBox(height: 4),
-            Text(
-              'Monitor real-time employee check-ins and check-outs across all departments.',
-              style: TextStyle(
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Monitor real-time employee check-ins and check-outs across all departments.',
+            style: TextStyle(
                 fontSize: r.responsive<double>(xs: 13, md: 16),
-                color: tc.textMuted,
-              ),
-            ),
-          ],
-        );
+                color: tc.textMuted),
+          ),
+        ],
+      );
 
-        final refreshBtn = _buildActionButton(
-          icon: Icons.refresh_rounded,
-          label: 'Refresh',
-          onPressed: widget.onRefreshNeeded,
-          bgColor: tc.card,
-          textColor: tc.text,
-          borderColor: tc.border,
-        );
+      final refreshBtn = _buildActionButton(
+        icon: Icons.refresh_rounded,
+        label: 'Refresh',
+        onPressed: widget.onRefreshNeeded,
+        bgColor: tc.card,
+        textColor: tc.text,
+        borderColor: tc.border,
+      );
 
-        final exportBtn = _buildActionButton(
-          icon: Icons.download_rounded,
-          label: 'Export Logs',
-          onPressed: () {},
-          bgColor: tc.orange,
-          textColor: tc.isDark ? tc.onOrange : Colors.white,
-          borderColor: tc.orange,
-        );
+      final exportBtn = _buildActionButton(
+        icon: Icons.download_rounded,
+        label: 'Export Logs',
+        onPressed: () {},
+        bgColor: tc.orange,
+        textColor: tc.isDark ? tc.onOrange : Colors.white,
+        borderColor: tc.orange,
+      );
 
-        if (narrow) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              title,
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(child: refreshBtn),
-                  const SizedBox(width: 12),
-                  Expanded(child: exportBtn),
-                ],
-              ),
-            ],
-          );
-        }
-
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.start,
+      if (narrow) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(child: title),
-            Row(
-              children: [
-                refreshBtn,
-                const SizedBox(width: 12),
-                exportBtn,
-              ],
-            ),
+            title,
+            const SizedBox(height: 16),
+            Row(children: [
+              Expanded(child: refreshBtn),
+              const SizedBox(width: 12),
+              Expanded(child: exportBtn),
+            ]),
           ],
         );
-      },
-    );
+      }
+
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: title),
+          Row(children: [
+            refreshBtn,
+            const SizedBox(width: 12),
+            exportBtn,
+          ]),
+        ],
+      );
+    });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FILTER BAR
-  // ══════════════════════════════════════════════════════════════
+  // ─── FILTER BAR ────────────────────────────────────────────
   Widget _buildFilterBar() {
-    return LayoutBuilder(
-      builder: (_, c) {
-        final r = BsResponsive(c.maxWidth);
-        final narrow = !r.up(BsSize.lg);
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      final narrow = !r.up(BsSize.lg);
 
-        final dateField = _buildFilterField(
-          label: 'DATE RANGE',
-          child: InkWell(
-            onTap: _pickDateRange,
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 14),
-              decoration: BoxDecoration(
-                color: tc.card,
-                border: Border.all(color: tc.border),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Text(
-                      _selectedDateRange == null
-                          ? 'mm / dd / yyyy'
-                          : '${DateFormat('MM/dd/yyyy').format(_selectedDateRange!.start)} - ${DateFormat('MM/dd/yyyy').format(_selectedDateRange!.end)}',
-                      style: TextStyle(
-                        color: tc.text,
-                        fontSize: 14,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
+      // ─── 1. DATE RANGE ───
+      final dateField = _buildFilterField(
+        label: 'DATE RANGE',
+        child: InkWell(
+          onTap: _pickDateRange,
+          child: Container(
+            padding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            decoration: BoxDecoration(
+              color: tc.card,
+              border: Border.all(color: tc.border),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    _selectedDateRange == null
+                        ? 'mm / dd / yyyy'
+                        : '${DateFormat('MM/dd/yyyy').format(_selectedDateRange!.start)} - ${DateFormat('MM/dd/yyyy').format(_selectedDateRange!.end)}',
+                    style: TextStyle(color: tc.text, fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  Icon(Icons.calendar_today, size: 16, color: tc.muted),
-                ],
-              ),
+                ),
+                Icon(Icons.calendar_today, size: 16, color: tc.muted),
+              ],
             ),
           ),
-        );
+        ),
+      );
 
-        final eventField = _buildFilterField(
-          label: 'EVENT TYPE',
-          child: _buildDropdown<String>(
-            value: _selectedEventType,
-            items: _eventTypes,
-            onChanged: (val) =>
-                setState(() => _selectedEventType = val!),
-          ),
-        );
+      // ─── 2. YEAR ───
+      final yearField = _buildFilterField(
+        label: 'YEAR',
+        child: _buildDropdown<String>(
+          value: _selectedYear,
+          items: _years,
+          onChanged: (val) => setState(() {
+            _selectedYear = val ?? 'All Years';
+            _currentPage = 1;
+          }),
+        ),
+      );
 
-        final deptField = _buildFilterField(
-          label: 'DEPARTMENT',
-          child: _buildDropdown<String>(
-            value: _selectedDepartment,
-            items: _departments,
-            onChanged: (val) =>
-                setState(() => _selectedDepartment = val!),
-          ),
-        );
+      // ─── 3. EVENT TYPE ───
+      final eventField = _buildFilterField(
+        label: 'EVENT TYPE',
+        child: _buildDropdown<String>(
+          value: _selectedEventType,
+          items: _eventTypes,
+          onChanged: (val) => setState(() {
+            _selectedEventType = val ?? 'All Events';
+            _currentPage = 1;
+          }),
+        ),
+      );
 
-        final applyBtn = SizedBox(
-          height: 48,
-          child: ElevatedButton(
-            onPressed: () => setState(() {}),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: tc.surface,
-              foregroundColor: tc.textMuted,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-            child: const Text('Apply Filters',
-                style: TextStyle(fontSize: 14)),
-          ),
-        );
+      // ─── 4. DEPARTMENT ───
+      final deptField = _buildFilterField(
+        label: 'DEPARTMENT',
+        child: _buildDropdown<String>(
+          value: _selectedDepartment,
+          items: _departments,
+          onChanged: (val) => setState(() {
+            _selectedDepartment = val ?? 'All Departments';
+            _currentPage = 1;
+          }),
+        ),
+      );
 
-        return Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: tc.card,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: tc.border),
+      // ─── 5. APPLY BUTTON ───
+      final applyBtn = SizedBox(
+        height: 48,
+        child: ElevatedButton(
+          onPressed: () => setState(() => _currentPage = 1),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: tc.surface,
+            foregroundColor: tc.textMuted,
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8)),
           ),
-          child: narrow
-              ? Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              dateField,
-              const SizedBox(height: 12),
-              eventField,
-              const SizedBox(height: 12),
-              deptField,
-              const SizedBox(height: 16),
-              applyBtn,
-            ],
-          )
-              : Row(
-            children: [
-              Expanded(flex: 2, child: dateField),
-              const SizedBox(width: 16),
-              Expanded(child: eventField),
-              const SizedBox(width: 16),
-              Expanded(child: deptField),
-              const SizedBox(width: 16),
-              applyBtn,
-            ],
-          ),
-        );
-      },
-    );
+          child:
+          const Text('Apply Filters', style: TextStyle(fontSize: 14)),
+        ),
+      );
+
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: tc.card,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: tc.border),
+        ),
+        child: narrow
+            ? Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            dateField,
+            const SizedBox(height: 12),
+            yearField,
+            const SizedBox(height: 12),
+            eventField,
+            const SizedBox(height: 12),
+            deptField,
+            const SizedBox(height: 16),
+            applyBtn,
+          ],
+        )
+            : Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(flex: 2, child: dateField),
+            const SizedBox(width: 12),
+            Expanded(child: yearField),
+            const SizedBox(width: 12),
+            Expanded(child: eventField),
+            const SizedBox(width: 12),
+            Expanded(child: deptField),
+            const SizedBox(width: 12),
+            applyBtn,
+          ],
+        ),
+      );
+    });
   }
 
   Widget _buildDropdown<T>({
@@ -425,10 +880,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       dropdownColor: tc.card,
       iconEnabledColor: tc.text,
       style: TextStyle(
-        color: tc.text,
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
-      ),
+          color: tc.text, fontSize: 14, fontWeight: FontWeight.w500),
       decoration: InputDecoration(
         filled: true,
         fillColor: tc.card,
@@ -458,36 +910,32 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // TABLE
-  // ══════════════════════════════════════════════════════════════
+  // ─── TABLE ─────────────────────────────────────────────────
   Widget _buildTable() {
-    return LayoutBuilder(
-      builder: (_, c) {
-        final r = BsResponsive(c.maxWidth);
-        final isMobile = !r.up(BsSize.md);
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      final isMobile = !r.up(BsSize.md);
 
-        return Container(
-          decoration: BoxDecoration(
-            color: tc.card,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: tc.border),
-          ),
-          child: Column(
-            children: [
-              if (!isMobile) _buildTableHeader(),
-              if (_paginatedLogs.isEmpty)
-                _buildEmptyState()
-              else if (isMobile)
-                ..._paginatedLogs.map((log) => _buildMobileCard(log))
-              else
-                ..._paginatedLogs.map((log) => _buildRow(log)),
-              if (_paginatedLogs.isNotEmpty) _buildPagination(),
-            ],
-          ),
-        );
-      },
-    );
+      return Container(
+        decoration: BoxDecoration(
+          color: tc.card,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: tc.border),
+        ),
+        child: Column(
+          children: [
+            if (!isMobile) _buildTableHeader(),
+            if (_paginatedLogs.isEmpty)
+              _buildEmptyState()
+            else if (isMobile)
+              ..._paginatedLogs.map((log) => _buildMobileCard(log))
+            else
+              ..._paginatedLogs.map((log) => _buildRow(log)),
+            if (_paginatedLogs.isNotEmpty) _buildPagination(),
+          ],
+        ),
+      );
+    });
   }
 
   Widget _buildTableHeader() {
@@ -502,8 +950,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       ),
       child: Row(
         children: [
-          _th('EMPLOYEE', flex: 2),
-          _th('CONTACT', flex: 2),
+          _th('EMPLOYEE', flex: 3),
+          _th('CONTACT', flex: 3),
           _th('DATE', flex: 1),
           _th('TIME', flex: 1),
           _th('EVENT', flex: 1),
@@ -520,10 +968,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         children: [
           Icon(Icons.hourglass_empty, size: 64, color: tc.muted),
           const SizedBox(height: 16),
-          Text(
-            'No attendance records found',
-            style: TextStyle(fontSize: 16, color: tc.muted),
-          ),
+          Text('No attendance records found',
+              style: TextStyle(fontSize: 16, color: tc.muted)),
         ],
       ),
     );
@@ -542,50 +988,136 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ─── DESKTOP ROW ──────────────────────────────────────────
-  Widget _buildRow(Map<String, dynamic> log) {
-    final type = (log['type'] ?? 'IN').toString().toUpperCase();
-    final isLogin = type == 'IN' || type == 'LOGIN';
-    final name = (log['employee_name'] ?? 'Unknown Employee').toString();
-    final email = (log['email'] ?? '').toString();
-    final employeeId = (log['employee_id'] ?? '').toString();
-    final dept = (log['department'] ?? '').toString();
+  // ─── AVATAR ────────────────────────────────────────────────
+  Widget _buildAvatarWidget({
+    required String? photoUrl,
+    required String initials,
+    required double size,
+    required double fontSize,
+  }) {
+    if (photoUrl == null || photoUrl.isEmpty || photoUrl == '—') {
+      return _initialsAvatar(
+          initials: initials, size: size, fontSize: fontSize);
+    }
 
-    String initials = '?';
-    if (name.isNotEmpty) {
-      final parts = name.split(' ');
-      if (parts.length >= 2) {
-        initials = parts[0][0].toUpperCase() + parts[1][0].toUpperCase();
-      } else {
-        initials = name.substring(0, 1).toUpperCase();
+    if (photoUrl.startsWith('data:image')) {
+      try {
+        final b64 = photoUrl.split(',').last;
+        final bytes = base64Decode(b64);
+        return Container(
+          width: size,
+          height: size,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+                color: tc.orange.withValues(alpha: 0.3), width: 1.5),
+          ),
+          child: Image.memory(
+            bytes,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _initialsAvatar(
+                initials: initials, size: size, fontSize: fontSize),
+          ),
+        );
+      } catch (e) {
+        debugPrint('⚠️ [Attendance] Base64 decode failed: $e');
+        return _initialsAvatar(
+            initials: initials, size: size, fontSize: fontSize);
       }
     }
 
-    final displayEmail =
-    email.isNotEmpty ? email : '$employeeId@company.com';
+    return Container(
+      width: size,
+      height: size,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border:
+        Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1.5),
+      ),
+      child: Image.network(
+        photoUrl,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _initialsAvatar(
+            initials: initials, size: size, fontSize: fontSize),
+      ),
+    );
+  }
+
+  Widget _initialsAvatar({
+    required String initials,
+    required double size,
+    required double fontSize,
+  }) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.15),
+        shape: BoxShape.circle,
+        border:
+        Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1),
+      ),
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: fontSize,
+            color: tc.orangeText,
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _initialsFor(String name) {
+    if (name.isEmpty || name == 'Unknown Employee') return '?';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return parts[0][0].toUpperCase();
+  }
+
+  // ─── DESKTOP ROW ───────────────────────────────────────────
+  Widget _buildRow(Map<String, dynamic> log) {
+    final type = (log['type'] ?? 'IN').toString().toUpperCase();
+    final isLogin = type == 'IN' || type == 'LOGIN';
+
+    final name = _resolveName(log);
+    final email = _resolveEmail(log);
+    final dept = _resolveDepartment(log);
+    final photoUrl = _resolvePhotoUrl(log);
+    final employeeId =
+    (log['employee_id'] ?? log['employeeId'] ?? '').toString();
+
+    final initials = _initialsFor(name);
+    final displayEmail = email.isNotEmpty
+        ? email
+        : (employeeId.isNotEmpty ? '$employeeId@company.com' : '—');
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: tc.border, width: 0.5)),
       ),
       child: Row(
         children: [
           Expanded(
-            flex: 2,
+            flex: 3,
             child: Row(
               children: [
-                CircleAvatar(
-                  radius: 20,
-                  backgroundColor: tc.orange.withValues(alpha: 0.15),
-                  child: Text(
-                    initials,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
-                      color: tc.orangeText,
-                    ),
-                  ),
+                _buildAvatarWidget(
+                  photoUrl: photoUrl,
+                  initials: initials,
+                  size: 40,
+                  fontSize: 15,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -595,20 +1127,24 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                       Text(
                         name,
                         style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: tc.text,
-                        ),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: tc.text),
                         overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
+                      const SizedBox(height: 2),
                       Text(
-                        dept.isNotEmpty ? dept : 'No Department',
+                        dept,
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w500,
-                          color: tc.textMuted,
+                          color: dept == 'No Department'
+                              ? tc.muted
+                              : tc.orangeText,
                         ),
                         overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
                     ],
                   ),
@@ -617,39 +1153,30 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             ),
           ),
           Expanded(
-            flex: 2,
+            flex: 3,
             child: Text(
               displayEmail,
-              style: TextStyle(fontSize: 14, color: tc.text),
+              style: TextStyle(fontSize: 13, color: tc.text),
               overflow: TextOverflow.ellipsis,
             ),
           ),
           Expanded(
             flex: 1,
-            child: Text(
-              _fmtDate(log['timestamp']),
-              style: TextStyle(fontSize: 14, color: tc.text),
-            ),
+            child: Text(_fmtDate(log['timestamp']),
+                style: TextStyle(fontSize: 13, color: tc.text)),
           ),
           Expanded(
             flex: 1,
             child: Text(
               _fmtTime(log['timestamp']),
               style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: tc.text,
-              ),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: tc.text),
             ),
           ),
-          Expanded(
-            flex: 1,
-            child: _buildEventPill(isLogin),
-          ),
-          Expanded(
-            flex: 1,
-            child: _buildActions(log),
-          ),
+          Expanded(flex: 1, child: _buildEventPill(isLogin)),
+          Expanded(flex: 1, child: _buildActions(log)),
         ],
       ),
     );
@@ -659,23 +1186,18 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   Widget _buildMobileCard(Map<String, dynamic> log) {
     final type = (log['type'] ?? 'IN').toString().toUpperCase();
     final isLogin = type == 'IN' || type == 'LOGIN';
-    final name = (log['employee_name'] ?? 'Unknown Employee').toString();
-    final email = (log['email'] ?? '').toString();
-    final employeeId = (log['employee_id'] ?? '').toString();
-    final dept = (log['department'] ?? '').toString();
 
-    String initials = '?';
-    if (name.isNotEmpty) {
-      final parts = name.split(' ');
-      if (parts.length >= 2) {
-        initials = parts[0][0].toUpperCase() + parts[1][0].toUpperCase();
-      } else {
-        initials = name.substring(0, 1).toUpperCase();
-      }
-    }
+    final name = _resolveName(log);
+    final email = _resolveEmail(log);
+    final dept = _resolveDepartment(log);
+    final photoUrl = _resolvePhotoUrl(log);
+    final employeeId =
+    (log['employee_id'] ?? log['employeeId'] ?? '').toString();
 
-    final displayEmail =
-    email.isNotEmpty ? email : '$employeeId@company.com';
+    final initials = _initialsFor(name);
+    final displayEmail = email.isNotEmpty
+        ? email
+        : (employeeId.isNotEmpty ? '$employeeId@company.com' : '—');
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -688,17 +1210,11 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                radius: 22,
-                backgroundColor: tc.orange.withValues(alpha: 0.15),
-                child: Text(
-                  initials,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                    color: tc.orangeText,
-                  ),
-                ),
+              _buildAvatarWidget(
+                photoUrl: photoUrl,
+                initials: initials,
+                size: 48,
+                fontSize: 16,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -708,28 +1224,28 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                     Text(
                       name,
                       style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: tc.text,
-                      ),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: tc.text),
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      dept.isNotEmpty ? dept : 'No Department',
+                      dept,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
-                        color: tc.textMuted,
+                        color: dept == 'No Department'
+                            ? tc.muted
+                            : tc.orangeText,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      displayEmail,
-                      style: TextStyle(fontSize: 12, color: tc.textMuted),
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    Text(displayEmail,
+                        style:
+                        TextStyle(fontSize: 12, color: tc.textMuted),
+                        overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),
@@ -742,10 +1258,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
               Icon(Icons.calendar_today_rounded,
                   size: 13, color: tc.textMuted),
               const SizedBox(width: 6),
-              Text(
-                _fmtDate(log['timestamp']),
-                style: TextStyle(fontSize: 12, color: tc.textMuted),
-              ),
+              Text(_fmtDate(log['timestamp']),
+                  style: TextStyle(fontSize: 12, color: tc.textMuted)),
               const SizedBox(width: 12),
               Icon(Icons.access_time_rounded,
                   size: 13, color: tc.textMuted),
@@ -753,10 +1267,9 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
               Text(
                 _fmtTime(log['timestamp']),
                 style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: tc.text,
-                ),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: tc.text),
               ),
               const Spacer(),
               _buildEventPill(isLogin, compact: true),
@@ -769,10 +1282,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   Widget _buildEventPill(bool isLogin, {bool compact = false}) {
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 10 : 12,
-        vertical: 4,
-      ),
+      padding:
+      EdgeInsets.symmetric(horizontal: compact ? 10 : 12, vertical: 4),
       decoration: BoxDecoration(
         color: isLogin ? tc.pillGreenBg : tc.pillBlueBg,
         borderRadius: BorderRadius.circular(20),
@@ -808,60 +1319,48 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                 _openVerification(log);
                 break;
               case 'approve':
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content:
-                    Text('Approved: ${log['employee_name'] ?? 'log'}'),
-                    backgroundColor: tc.green,
-                  ),
-                );
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('Approved: ${_resolveName(log)}'),
+                  backgroundColor: tc.green,
+                ));
                 break;
               case 'flag':
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                        'Flagged for review: ${log['employee_name'] ?? 'log'}'),
-                    backgroundColor: tc.red,
-                  ),
-                );
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('Flagged: ${_resolveName(log)}'),
+                  backgroundColor: tc.red,
+                ));
                 break;
             }
           },
           itemBuilder: (_) => [
             PopupMenuItem<String>(
               value: 'verify',
-              child: Row(
-                children: [
-                  Icon(Icons.fact_check_outlined,
-                      size: 16, color: tc.orange),
-                  const SizedBox(width: 10),
-                  Text('View Verification',
-                      style: TextStyle(color: tc.text, fontSize: 13)),
-                ],
-              ),
+              child: Row(children: [
+                Icon(Icons.fact_check_outlined,
+                    size: 16, color: tc.orange),
+                const SizedBox(width: 10),
+                Text('View Verification',
+                    style: TextStyle(color: tc.text, fontSize: 13)),
+              ]),
             ),
             PopupMenuItem<String>(
               value: 'approve',
-              child: Row(
-                children: [
-                  Icon(Icons.check_circle_outline,
-                      size: 16, color: tc.green),
-                  const SizedBox(width: 10),
-                  Text('Approve',
-                      style: TextStyle(color: tc.text, fontSize: 13)),
-                ],
-              ),
+              child: Row(children: [
+                Icon(Icons.check_circle_outline,
+                    size: 16, color: tc.green),
+                const SizedBox(width: 10),
+                Text('Approve',
+                    style: TextStyle(color: tc.text, fontSize: 13)),
+              ]),
             ),
             PopupMenuItem<String>(
               value: 'flag',
-              child: Row(
-                children: [
-                  Icon(Icons.flag_outlined, size: 16, color: tc.red),
-                  const SizedBox(width: 10),
-                  Text('Flag for Review',
-                      style: TextStyle(color: tc.text, fontSize: 13)),
-                ],
-              ),
+              child: Row(children: [
+                Icon(Icons.flag_outlined, size: 16, color: tc.red),
+                const SizedBox(width: 10),
+                Text('Flag for Review',
+                    style: TextStyle(color: tc.text, fontSize: 13)),
+              ]),
             ),
           ],
         ),
@@ -891,13 +1390,12 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            onPressed:
-            _currentPage > 1 ? () => setState(() => _currentPage--) : null,
-            icon: Icon(
-              Icons.chevron_left,
-              size: 20,
-              color: _currentPage > 1 ? tc.text : tc.muted,
-            ),
+            onPressed: _currentPage > 1
+                ? () => setState(() => _currentPage--)
+                : null,
+            icon: Icon(Icons.chevron_left,
+                size: 20,
+                color: _currentPage > 1 ? tc.text : tc.muted),
           ),
           ...List.generate(_totalPages, (index) {
             final i = index + 1;
@@ -909,7 +1407,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
               decoration: BoxDecoration(
                 color: isActive ? tc.orange : Colors.transparent,
                 borderRadius: BorderRadius.circular(4),
-                border: isActive ? null : Border.all(color: tc.border),
+                border:
+                isActive ? null : Border.all(color: tc.border),
               ),
               child: InkWell(
                 onTap: () => setState(() => _currentPage = i),
@@ -931,17 +1430,17 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             onPressed: _currentPage < _totalPages
                 ? () => setState(() => _currentPage++)
                 : null,
-            icon: Icon(
-              Icons.chevron_right,
-              size: 20,
-              color: _currentPage < _totalPages ? tc.text : tc.muted,
-            ),
+            icon: Icon(Icons.chevron_right,
+                size: 20,
+                color:
+                _currentPage < _totalPages ? tc.text : tc.muted),
           ),
         ],
       );
 
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        padding:
+        const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         decoration: BoxDecoration(
           color: tc.surface,
           borderRadius: const BorderRadius.only(
@@ -956,9 +1455,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             info,
             const SizedBox(height: 12),
             SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: controls,
-            ),
+                scrollDirection: Axis.horizontal, child: controls),
           ],
         )
             : Row(
@@ -969,9 +1466,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BOTTOM CARDS
-  // ══════════════════════════════════════════════════════════════
+  // ─── BOTTOM CARDS ──────────────────────────────────────────
   Widget _buildBottomCards() {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -987,7 +1482,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           ],
         );
       }
-      // ✅ FIX: `start` imbes na `stretch` — pareho naman may fixed height (300)
       return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -999,14 +1493,11 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     });
   }
 
-  /// Biometric card with image + fallback gradient + LIVE badge
   Widget _buildBiometricCard() {
     return Container(
       height: 300,
       clipBehavior: Clip.hardEdge,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-      ),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16)),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -1032,42 +1523,9 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                     ],
                   ),
                 ),
-                child: Stack(
-                  children: [
-                    Positioned(
-                      top: -20,
-                      right: -20,
-                      child: Icon(
-                        Icons.fingerprint,
-                        size: 200,
-                        color: Colors.white.withValues(alpha: 0.04),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: -30,
-                      left: -30,
-                      child: Icon(
-                        Icons.qr_code_2_rounded,
-                        size: 180,
-                        color: Colors.white.withValues(alpha: 0.04),
-                      ),
-                    ),
-                    Positioned(
-                      top: 40,
-                      left: 40,
-                      child: Icon(
-                        Icons.face_retouching_natural,
-                        size: 100,
-                        color: Colors.white.withValues(alpha: 0.03),
-                      ),
-                    ),
-                  ],
-                ),
               );
             },
           ),
-
-          // Gradient overlay
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -1082,55 +1540,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
               ),
             ),
           ),
-
-          // LIVE badge
-          Positioned(
-            top: 16,
-            right: 16,
-            child: Container(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  width: 1,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF4CE346),
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Color(0x804CE346),
-                          blurRadius: 6,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  const Text(
-                    'LIVE',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Content
           Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
@@ -1140,20 +1549,16 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                 Text(
                   'Real-time Biometric Integration',
                   style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                    height: 1.2,
-                  ),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      height: 1.2),
                 ),
                 SizedBox(height: 8),
                 Text(
-                  'Every login and logout is synchronized instantly with central biometric hardware, ensuring 100% accurate timekeeping records for payroll processing.',
+                  'Every login and logout is synchronized instantly with central biometric hardware.',
                   style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.white70,
-                    height: 1.5,
-                  ),
+                      fontSize: 14, color: Colors.white70, height: 1.5),
                 ),
               ],
             ),
@@ -1164,7 +1569,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   }
 
   Widget _buildAuditCard() {
-    final Color onOrange = tc.isDark ? tc.onOrange : const Color(0xFF623200);
+    final Color onOrange =
+    tc.isDark ? tc.onOrange : const Color(0xFF623200);
 
     return Container(
       height: 300,
@@ -1181,20 +1587,18 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           Text(
             'Secure Audit Trail',
             style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-              color: onOrange,
-              height: 1.2,
-            ),
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: onOrange,
+                height: 1.2),
           ),
           const SizedBox(height: 12),
           Text(
-            'Detailed logs track not only timestamps but also specific device IDs and location data for total administrative transparency.',
+            'Detailed logs track timestamps, device IDs, and location data for administrative transparency.',
             style: TextStyle(
-              fontSize: 14,
-              color: onOrange.withValues(alpha: 0.9),
-              height: 1.5,
-            ),
+                fontSize: 14,
+                color: onOrange.withValues(alpha: 0.9),
+                height: 1.5),
           ),
           const Spacer(),
           SizedBox(
@@ -1206,14 +1610,12 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                 foregroundColor: tc.orange,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                    borderRadius: BorderRadius.circular(8)),
                 elevation: 0,
               ),
-              child: const Text(
-                'View Compliance Report',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
-              ),
+              child: const Text('View Compliance Report',
+                  style: TextStyle(
+                      fontWeight: FontWeight.w700, fontSize: 14)),
             ),
           ),
         ],
@@ -1221,22 +1623,19 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // HELPERS
-  // ══════════════════════════════════════════════════════════════
-
-  Widget _buildFilterField({required String label, required Widget child}) {
+  // ─── HELPERS ───────────────────────────────────────────────
+  Widget _buildFilterField(
+      {required String label, required Widget child}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           label,
           style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            color: tc.textMuted,
-            letterSpacing: 0.5,
-          ),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: tc.textMuted,
+              letterSpacing: 0.5),
         ),
         const SizedBox(height: 6),
         child,
@@ -1258,19 +1657,17 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       label: Text(
         label,
         style: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          color: textColor ?? tc.textMuted,
-        ),
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: textColor ?? tc.textMuted),
       ),
       style: OutlinedButton.styleFrom(
         backgroundColor: bgColor ?? tc.card,
-        side: BorderSide(
-          color: borderColor ?? tc.border,
-          width: 1,
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        side: BorderSide(color: borderColor ?? tc.border, width: 1),
+        padding:
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        shape:
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         elevation: 0,
       ),
     );

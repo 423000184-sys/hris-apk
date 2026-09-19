@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'admin_theme.dart';
 import '../widgets/bootstrap_grid.dart';
 import '../services/payroll_calculator.dart';
+import '../services/attendance_hours_service.dart';
 
 class AdminPayrollPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
@@ -31,6 +32,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   final TextEditingController _searchCtrl = TextEditingController();
 
   Map<String, int> _presentDaysMap = {};
+  Map<String, EmployeeHoursSummary> _hoursMap = {};
   bool _loadingAttendance = true;
 
   DateTime get _periodStart {
@@ -46,18 +48,27 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   @override
   void initState() {
     super.initState();
-    _loadAttendance();
+    _loadAll();
   }
 
-  Future<void> _loadAttendance() async {
+  Future<void> _loadAll() async {
     setState(() => _loadingAttendance = true);
-    final map = await PayrollCalculator.fetchPresentDaysMap(
-      periodStart: _periodStart,
-      periodEnd: _periodEnd,
-    );
+
+    final results = await Future.wait([
+      PayrollCalculator.fetchPresentDaysMap(
+        periodStart: _periodStart,
+        periodEnd: _periodEnd,
+      ),
+      AttendanceHoursService.instance.fetchHoursMap(
+        periodStart: _periodStart,
+        periodEnd: _periodEnd,
+      ),
+    ]);
+
     if (!mounted) return;
     setState(() {
-      _presentDaysMap = map;
+      _presentDaysMap = results[0] as Map<String, int>;
+      _hoursMap = results[1] as Map<String, EmployeeHoursSummary>;
       _loadingAttendance = false;
     });
   }
@@ -68,9 +79,38 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     super.dispose();
   }
 
+  /// Look up hours summary for employee
+  EmployeeHoursSummary _getHoursFor(Map<String, dynamic> emp) {
+    for (final k in [
+      'id',
+      'employeeId',
+      'employee_id',
+      'nfcTagId',
+      'authUid'
+    ]) {
+      final key = emp[k]?.toString().trim();
+      if (key != null && key.isNotEmpty && _hoursMap.containsKey(key)) {
+        return _hoursMap[key]!;
+      }
+    }
+    return EmployeeHoursSummary.empty;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ✅ FIXED: _computeForEmp
+  //    - daysWithLogs: p       (non-nullable int, hindi present)
+  //    - daysWithLunchApplied: lunchMinutes > 0 ? p : 0
+  // ══════════════════════════════════════════════════════════════
   PayrollBreakdown _computeForEmp(Map<String, dynamic> emp) {
+    // ─── Present days lookup ────────────────────────────────
     int? present;
-    for (final k in ['id', 'employeeId', 'employee_id', 'nfcTagId', 'authUid']) {
+    for (final k in [
+      'id',
+      'employeeId',
+      'employee_id',
+      'nfcTagId',
+      'authUid'
+    ]) {
       final key = emp[k]?.toString().trim();
       if (key != null && key.isNotEmpty && _presentDaysMap.containsKey(key)) {
         present = _presentDaysMap[key];
@@ -78,46 +118,90 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
       }
     }
 
-    final workingDays = PayrollCalculator.countWeekdays(_periodStart, _periodEnd);
+    // ─── Hours summary lookup ───────────────────────────────
+    final hrs = _getHoursFor(emp);
+
+    // ─── Basic fields ───────────────────────────────────────
+    final workingDays = PayrollCalculator.countWeekdays(
+      _periodStart,
+      _periodEnd,
+    );
     final basic = PayrollCalculator.toDbl(emp['basicSalary']);
-    final allowances = PayrollCalculator.toDbl(emp['allowances']) +
-        PayrollCalculator.toDbl(emp['housingAllowance']) +
-        PayrollCalculator.toDbl(emp['transportAllowance']) +
-        PayrollCalculator.toDbl(emp['specialAllowance']);
+    final allowances =
+        PayrollCalculator.toDbl(emp['basicAllowance'] ?? emp['allowances']) +
+            PayrollCalculator.toDbl(emp['housingAllowance']) +
+            PayrollCalculator.toDbl(emp['transportAllowance']) +
+            PayrollCalculator.toDbl(emp['specialAllowance']);
     final overtime = PayrollCalculator.toDbl(emp['overtimePay']);
     final gross = basic + allowances + overtime;
 
+    // ─── 💰 Salary config from Firestore ────────────────────
+    final configuredWD = PayrollCalculator.toInt(
+      emp['workingDaysPerMonth'],
+      22,
+    );
+    final workingDaysPerMonth = configuredWD > 0 ? configuredWD : 22;
+    final salarySource = (emp['salarySource'] as String?) ?? 'manual';
+
+    // Daily rate: prefer saved value, else compute
+    final savedDaily = PayrollCalculator.toDbl(emp['dailyRate']);
+    final dailyRate = savedDaily > 0
+        ? savedDaily
+        : (workingDaysPerMonth > 0 ? basic / workingDaysPerMonth : 0.0);
+
+    // ─── Attendance ─────────────────────────────────────────
     final wd = workingDays > 0 ? workingDays : 22;
-    final dailyRate = wd > 0 ? basic / wd : 0.0;
-    final p = present ?? 0;
+    final p = present ?? 0; // ✅ non-nullable int
     final absent = (wd - p).clamp(0, wd);
     final absenceDeduction = dailyRate * absent;
 
+    // ─── Government ─────────────────────────────────────────
     final sss = basic * PayrollCalculator.sssRate;
     final ph = basic * PayrollCalculator.philhealthRate;
     final pi = basic * PayrollCalculator.pagibigRate;
-    final tax = 0.0;
+    const tax = 0.0;
 
     final totalDed = absenceDeduction + sss + ph + pi + tax;
     final net = gross - totalDed;
 
+    // ─── 🍱 Work hours from EmployeeHoursSummary ────────────
+    final netMinutes = hrs.totalNetMinutes;
+    final lunchMinutes = hrs.totalLunchDeductedMinutes;
+    final otMinutes = hrs.totalOvertimeMinutes;
+    final rawMinutes = netMinutes + lunchMinutes;
+
     return PayrollBreakdown(
+      // Earnings
       basicSalary: basic,
       allowances: allowances,
       overtimePay: overtime,
       grossPay: gross,
+      // Benefits
       thirteenthMonth: basic / 12,
       silCredits: dailyRate * 5,
       totalBenefits: (basic / 12) + (dailyRate * 5),
+      // Attendance
       workingDays: wd,
+      workingDaysPerMonth: workingDaysPerMonth,
       presentDays: p,
       absentDays: absent,
       dailyRate: dailyRate,
       absenceDeduction: absenceDeduction,
+      // 🍱 Work Hours
+      workRawMinutes: rawMinutes,
+      workLunchMinutes: lunchMinutes,
+      workNetMinutes: netMinutes,
+      workOvertimeMinutes: otMinutes,
+      daysWithLogs: p, // ✅ FIXED: p (int) hindi present (int?)
+      daysWithLunchApplied: lunchMinutes > 0 ? p : 0, // ✅ FIXED: p (int)
+      // Salary metadata
+      salarySource: salarySource,
+      // Government
       sss: sss,
       philhealth: ph,
       pagibig: pi,
       withholdingTax: tax,
+      // Totals
       totalDeductions: totalDed,
       netPay: net,
     );
@@ -154,13 +238,19 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     double totalNet = 0;
     double totalDeductions = 0;
     double totalAbsences = 0;
+    int totalNetMinutes = 0;
+    int totalOTMinutes = 0;
     int pendingCount = 0;
 
     for (final emp in filtered) {
       final b = _computeForEmp(emp);
+      final hrs = _getHoursFor(emp);
       totalNet += b.netPay;
       totalDeductions += b.totalDeductions;
       totalAbsences += b.absenceDeduction;
+      totalNetMinutes += hrs.totalNetMinutes;
+      totalOTMinutes += hrs.totalOvertimeMinutes;
+
       final s = (emp['payrollStatus'] ?? 'Processed').toString().toLowerCase();
       if (s == 'pending' || s == 'on hold') pendingCount++;
     }
@@ -179,8 +269,14 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
               const SizedBox(height: 20),
               _buildSearchBar(),
               const SizedBox(height: 16),
-              _buildStatsRow(totalNet, pendingCount, totalDeductions,
-                  totalAbsences),
+              _buildStatsRow(
+                totalNet,
+                pendingCount,
+                totalDeductions,
+                totalAbsences,
+                totalNetMinutes,
+                totalOTMinutes,
+              ),
               const SizedBox(height: 20),
               _buildFiltersRow(departments),
               const SizedBox(height: 16),
@@ -196,7 +292,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                             strokeWidth: 2, color: tc.orange),
                       ),
                       const SizedBox(width: 10),
-                      Text('Kinukuha ang attendance logs...',
+                      Text('Kinukuha ang attendance at hours logs...',
                           style: TextStyle(fontSize: 12, color: tc.muted)),
                     ],
                   ),
@@ -231,13 +327,13 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                   letterSpacing: -0.5)),
           const SizedBox(height: 2),
           Text(
-              'Manage and review employee disbursements — absences auto-deducted.',
+              'Manage and review employee disbursements — absences at lunch break auto-deducted.',
               style: TextStyle(fontSize: 13, color: tc.muted)),
         ],
       );
 
       final refresh = OutlinedButton.icon(
-        onPressed: _loadingAttendance ? null : _loadAttendance,
+        onPressed: _loadingAttendance ? null : _loadAll,
         icon: Icon(Icons.refresh, size: 16, color: tc.text),
         label: Text('Refresh',
             style: TextStyle(
@@ -334,38 +430,44 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // STATS ROW
-  // ══════════════════════════════════════════════════════════════
-  // ✅ FIX: `CrossAxisAlignment.stretch` → `CrossAxisAlignment.start`
-  // Sanhi ng dating error:
-  //   "Assertion failed: box.dart:2251"
-  //   "Assertion failed: mouse_tracker.dart:199"
-  // Ito ay dahil ang `stretch` ay nangangailangan ng bounded height,
-  // pero ang buong page ay nasa loob ng SingleChildScrollView
-  // (vertical) na may infinite height.
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildStatsRow(double totalNet, int pending, double totalDed,
-      double totalAbs) {
+  Widget _buildStatsRow(
+      double totalNet,
+      int pending,
+      double totalDed,
+      double totalAbs,
+      int totalNetMinutes,
+      int totalOTMinutes,
+      ) {
     return LayoutBuilder(builder: (ctx, c) {
       final w = c.maxWidth.isFinite ? c.maxWidth : 800.0;
-      final wide = w >= 900;
+      final wide = w >= 1100;
       const gap = 16.0;
+
+      String fmtHours(int m) {
+        final h = m ~/ 60;
+        final mm = m % 60;
+        if (mm == 0) return '${h}h';
+        return '${h}h ${mm}m';
+      }
 
       final cards = <Widget>[
         _statCard('TOTAL NET DISBURSEMENT', PayrollCalculator.peso(totalNet),
             Icons.account_balance_wallet_outlined, false),
+        _statCard('TOTAL HOURS', fmtHours(totalNetMinutes),
+            Icons.schedule_rounded, false),
+        _statCard('OVERTIME HOURS', fmtHours(totalOTMinutes),
+            Icons.timer_rounded, false),
         _statCard('TOTAL DEDUCTIONS', PayrollCalculator.peso(totalDed),
             Icons.trending_down_rounded, true),
         _statCard('ABSENCE KALTAS', PayrollCalculator.peso(totalAbs),
             Icons.event_busy_outlined, true),
-        _statCard('PENDING APPROVALS', '$pending Employees',
+        _statCard('PENDING', '$pending Employees',
             Icons.pending_actions_rounded, false),
       ];
 
       if (wide) {
         return Row(
-          crossAxisAlignment: CrossAxisAlignment.start, // ✅ START, HINDI STRETCH
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             for (int i = 0; i < cards.length; i++) ...[
               Expanded(child: cards[i]),
@@ -536,10 +638,11 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                 headingRowColor: WidgetStateProperty.all(tc.surface),
                 dataRowMinHeight: 68,
                 dataRowMaxHeight: 78,
-                columnSpacing: 28,
+                columnSpacing: 24,
                 columns: [
                   _col('EMPLOYEE'),
                   _col('BASIC'),
+                  _col('HOURS'),
                   _col('ABSENCES'),
                   _col('GOVT (9%)'),
                   _col('NET PAY'),
@@ -548,6 +651,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                 ],
                 rows: employees.map((emp) {
                   final b = _computeForEmp(emp);
+                  final hrs = _getHoursFor(emp);
                   final name = emp['name'] ??
                       '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}';
                   final initials = _getInitials(name);
@@ -556,9 +660,11 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                   final displayId = rawId.length > 10
                       ? '${rawId.substring(0, 8)}...'
                       : rawId;
-                  final status =
-                  (emp['payrollStatus'] ?? 'PROCESSED').toString().toUpperCase();
-                  final govt = b.sss + b.philhealth + b.pagibig + b.withholdingTax;
+                  final status = (emp['payrollStatus'] ?? 'PROCESSED')
+                      .toString()
+                      .toUpperCase();
+                  final govt =
+                      b.sss + b.philhealth + b.pagibig + b.withholdingTax;
 
                   return DataRow(cells: [
                     DataCell(Row(
@@ -608,6 +714,35 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        Text(hrs.netDisplay,
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: tc.text)),
+                        Text(
+                          hrs.totalLunchDeductedMinutes > 0
+                              ? '-${hrs.lunchDisplay} lunch'
+                              : 'no lunch',
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: tc.muted,
+                              fontStyle: FontStyle.italic),
+                        ),
+                        if (hrs.totalOvertimeMinutes > 0)
+                          Text(
+                            '+${hrs.overtimeDisplay} OT',
+                            style: TextStyle(
+                                fontSize: 10,
+                                color: tc.green,
+                                fontWeight: FontWeight.w700),
+                          ),
+                      ],
+                    )),
+                    DataCell(Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                         Text(
                             b.absentDays > 0
                                 ? '${b.absentDays} day/s'
@@ -616,8 +751,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                                 color: b.absentDays > 0 ? tc.red : tc.green,
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13)),
-                        Text(
-                            '-${PayrollCalculator.peso(b.absenceDeduction)}',
+                        Text('-${PayrollCalculator.peso(b.absenceDeduction)}',
                             style: TextStyle(
                                 fontSize: 11, color: tc.muted)),
                       ],

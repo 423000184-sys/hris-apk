@@ -7,6 +7,8 @@ import 'package:intl/intl.dart';
 import '../theme/app_theme.dart';
 import '../services/database_service.dart';
 import '../services/security_service.dart';
+// ❌ REMOVED: employee_hours_service.dart
+// ❌ REMOVED: work_hours_summary_card.dart
 import '../data/local/dao/sync_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../models/attendance.dart';
@@ -17,9 +19,6 @@ class _Extra {
   static const Color lime = Color(0xFFC4FF0A);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// _ThemeColors — theme-aware colors for the attendance screen
-// ═══════════════════════════════════════════════════════════════════════════
 class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
@@ -28,31 +27,26 @@ class _ThemeColors {
   Color get card => isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
   Color get cardBorder =>
       isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
-
   Color get statBg => isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
   Color get statBorder =>
       isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
   Color get statLabel =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF666666);
-
   Color get mobileCardBg =>
       isDark ? const Color(0xFF1A1A1D) : const Color(0xFFF8F8F8);
   Color get mobileCardBorder =>
       isDark ? const Color(0xFF2A2A2E) : const Color(0xFFE0E0E0);
   Color get mobileRowDivider =>
       isDark ? const Color(0xFF2A2A2E) : const Color(0xFFE0E0E0);
-
   Color get textPrimary => isDark ? Colors.white : Colors.black;
   Color get textSecondary =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF71717A);
-
   Color get emptyIcon =>
       isDark ? const Color(0x33FFFFFF) : const Color(0xFFD1D5DB);
   Color get emptyTitle =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
   Color get emptySubtitle =>
       isDark ? const Color(0xFF888888) : const Color(0xFF9CA3AF);
-
   Color get refreshBg => isDark ? const Color(0xFF18181B) : Colors.white;
 }
 
@@ -88,11 +82,11 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
   StreamSubscription? _syncSub;
   StreamSubscription? _connectSub;
   StreamSubscription? _attendanceSub;
-
-  // ✅ Live Firestore stream — para auto-refresh kapag may bagong clock in/out
   StreamSubscription<QuerySnapshot>? _remoteAttendanceSub;
 
   late TabController _tabController;
+
+  // ❌ REMOVED: Work hours summary state
 
   @override
   void initState() {
@@ -119,7 +113,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
             if (mounted) _loadData();
           });
 
-      // ✅ Listen sa Firestore para live-update kapag may bagong clock in/out
       _startRemoteAttendanceListener();
     }
 
@@ -137,9 +130,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     super.dispose();
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ LIVE FIRESTORE LISTENER
-  // ══════════════════════════════════════════════════════════════
+  // ❌ REMOVED: _loadHoursSummary()
+
   void _startRemoteAttendanceListener() {
     _resolveEmployeeId().then((empId) {
       if (empId == null || empId.isEmpty) return;
@@ -153,17 +145,14 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
           .listen(
             (snap) {
           if (!mounted) return;
-          debugPrint(
-              '📡 [AttendanceHistory] Live update: ${snap.docs.length} docs');
           _loadData();
+          // ❌ REMOVED: _loadHoursSummary();
         },
-        onError: (e) => debugPrint(
-            '❌ [AttendanceHistory] Remote listener error: $e'),
+        onError: (e) => debugPrint('❌ Remote listener error: $e'),
       );
     });
   }
 
-  // ✅ Helper: resolve employee ID kahit saan mang source
   Future<String?> _resolveEmployeeId() async {
     final initId = widget.initialEmployee?.employeeId ??
         widget.initialEmployee?.id;
@@ -298,9 +287,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ MOBILE DATA — Local DB + Firestore MERGED
-  // ══════════════════════════════════════════════════════════════
   Future<void> _loadMobileData() async {
     final empId = await _resolveEmployeeId();
     Employee? emp = widget.initialEmployee;
@@ -309,27 +295,19 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     int pending = 0;
 
     if (empId != null) {
-      // Local DB
       try {
         emp = await DatabaseService.instance.getEmployeeById(empId);
         localRecords = await DatabaseService.instance
             .getAttendanceByEmployee(empId, limit: 90);
         pending = await SyncService.instance.getPendingCount();
       } catch (e) {
-        debugPrint('⚠️ [AttendanceHistory] Local DB read failed: $e');
+        debugPrint('⚠️ Local DB read failed: $e');
       }
 
-      // Remote Firestore
       remoteRecords = await _fetchRemoteAttendance(empId);
     }
 
-    // Merge — Firestore wins
     final merged = _mergeAttendance(localRecords, remoteRecords);
-
-    debugPrint('📊 [AttendanceHistory] Merged: '
-        '${localRecords.length} local + '
-        '${remoteRecords.length} remote = '
-        '${merged.length} total');
 
     if (mounted) {
       setState(() {
@@ -341,10 +319,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ FETCH REMOTE ATTENDANCE FROM FIRESTORE
-  // Pinagsama-sama ang IN/OUT per date para bumuo ng Attendance.
-  // ══════════════════════════════════════════════════════════════
   Future<List<Attendance>> _fetchRemoteAttendance(String empId) async {
     try {
       final snap = await FirebaseFirestore.instance
@@ -352,7 +326,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
           .where('employee_id', isEqualTo: empId)
           .get();
 
-      // Group logs by date
       final Map<String, List<Map<String, dynamic>>> byDate = {};
       for (final doc in snap.docs) {
         final d = doc.data();
@@ -366,7 +339,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
         final date = entry.key;
         final logs = entry.value;
 
-        // Sort by time ascending
         logs.sort((a, b) {
           final ta = (a['time'] ?? '').toString();
           final tb = (b['time'] ?? '').toString();
@@ -380,7 +352,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
           final time = (log['time'] ?? '').toString();
           if (type == 'IN' || type == 'CLOCK_IN') {
             timeIn = time;
-            timeOut = null; // reset out bago magbagong IN
+            timeOut = null;
           } else if (type == 'OUT' || type == 'CLOCK_OUT') {
             if (timeIn != null) timeOut = time;
           }
@@ -388,7 +360,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
 
         if (timeIn == null && timeOut == null) continue;
 
-        // Compute status (Late kung pagkatapos ng 9:15 AM)
         AttendanceStatus status = AttendanceStatus.present;
         if (timeIn != null) {
           try {
@@ -401,7 +372,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
           } catch (_) {}
         }
 
-        // ✅ Resolve method mula sa logs (default: face)
         AttendanceMethod method = AttendanceMethod.face;
         for (final log in logs) {
           final m = (log['verification_method'] ?? log['method'] ?? '')
@@ -429,7 +399,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
           }
         }
 
-        // ✅ Parse createdAt mula sa first log's timestamp/created_at
         DateTime createdAt = DateTime.now();
         final rawTs = logs.first['timestamp'];
         final rawCreated = logs.first['created_at'];
@@ -452,29 +421,22 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
       }
 
       records.sort((a, b) => b.date.compareTo(a.date));
-      debugPrint(
-          '✅ [AttendanceHistory] Loaded ${records.length} remote records');
       return records;
     } catch (e) {
-      debugPrint('⚠️ [AttendanceHistory] _fetchRemoteAttendance failed: $e');
+      debugPrint('⚠️ _fetchRemoteAttendance failed: $e');
       return [];
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ MERGE — Firestore wins, local fills gaps
-  // ══════════════════════════════════════════════════════════════
   List<Attendance> _mergeAttendance(
       List<Attendance> local, List<Attendance> remote) {
     final Map<String, Attendance> byDate = {};
-
     for (final r in local) {
       byDate[r.date] = r;
     }
     for (final r in remote) {
       byDate[r.date] = r;
     }
-
     final result = byDate.values.toList()
       ..sort((a, b) => b.date.compareTo(a.date));
     return result;
@@ -487,13 +449,14 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     await SyncService.instance.syncPending();
     if (mounted) setState(() => _syncing = false);
     await _loadData();
+    // ❌ REMOVED: await _loadHoursSummary();
   }
 
   void _snack(String msg, Color color) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content:
-      Text(msg, style: const TextStyle(color: Colors.white, fontSize: 13)),
+      content: Text(msg,
+          style: const TextStyle(color: Colors.white, fontSize: 13)),
       backgroundColor: color,
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -537,21 +500,13 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
   }
 
   void _handleBack() {
-    debugPrint('🔙 Back button tapped!');
-
     if (widget.onBack != null) {
-      debugPrint('  → using onBack callback');
       widget.onBack!();
       return;
     }
-
     if (Navigator.canPop(context)) {
-      debugPrint('  → Navigator.pop');
       Navigator.pop(context);
-      return;
     }
-
-    debugPrint('  → no back handler available');
   }
 
   @override
@@ -581,7 +536,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     );
   }
 
-  // ✅ HEADER
   Widget _buildHeader() {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -643,12 +597,12 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.cloud_upload_outlined,
+                    const Icon(Icons.cloud_upload_outlined,
                         color: AppColors.warning, size: 11),
                     const SizedBox(width: 3),
                     Text(
                       '$_pendingCount',
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 10,
                         color: AppColors.warning,
                         fontWeight: FontWeight.w700,
@@ -686,13 +640,13 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
                   border:
                   Border.all(color: Colors.white.withValues(alpha: 0.35)),
                 ),
-                child: Row(
+                child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.refresh_rounded,
+                    Icon(Icons.refresh_rounded,
                         color: Colors.white, size: 14),
-                    const SizedBox(width: 6),
-                    const Text(
+                    SizedBox(width: 6),
+                    Text(
                       'Refresh',
                       style: TextStyle(
                         color: Colors.white,
@@ -764,10 +718,10 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.error_outline_rounded,
+            const Icon(Icons.error_outline_rounded,
                 color: AppColors.error, size: 40),
             const SizedBox(height: 12),
-            Text(
+            const Text(
               'Failed to load records',
               style: TextStyle(
                 color: AppColors.error,
@@ -806,6 +760,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     ),
   );
 
+  // ❌ REMOVED: _buildHoursSummarySection()
+  // ❌ REMOVED: _summaryTab()
+
   Widget _buildStatsRow(_ThemeColors tc) {
     final present = kIsWeb
         ? _combined.where((r) => r['has_out'] == true).length
@@ -824,7 +781,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
       child: Row(
         children: [
           Expanded(
-              child: _statCard(tc, '$present', 'Present Days', AppColors.orange)),
+              child:
+              _statCard(tc, '$present', 'Present Days', AppColors.orange)),
           const SizedBox(width: 15),
           Expanded(child: _statCard(tc, '$late', 'Late Days', _Extra.lime)),
         ],
@@ -890,6 +848,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     return ListView(
       padding: const EdgeInsets.only(bottom: 80),
       children: [
+        // ❌ REMOVED: _buildHoursSummarySection(tc),
         _buildStatsRow(tc),
         ..._combined.map((r) => _buildCombinedCard(tc, r)),
         const SizedBox(height: 20),
@@ -1258,10 +1217,16 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     return RefreshIndicator(
       color: AppColors.orange,
       backgroundColor: tc.refreshBg,
-      onRefresh: _sync,
+      onRefresh: () async {
+        await _sync();
+        // ❌ REMOVED: await _loadHoursSummary();
+      },
       child: ListView(
         padding: const EdgeInsets.only(bottom: 20),
         children: [
+          // ❌ REMOVED: _buildHoursSummarySection(tc),
+
+          // Stats row
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
             child: Row(
@@ -1271,10 +1236,12 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
                         tc, '$present', 'Present Days', AppColors.orange)),
                 const SizedBox(width: 15),
                 Expanded(
-                    child: _statCard(tc, '$late', 'Late Days', _Extra.lime)),
+                    child:
+                    _statCard(tc, '$late', 'Late Days', _Extra.lime)),
               ],
             ),
           ),
+
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Text(

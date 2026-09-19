@@ -33,6 +33,9 @@ class _AdminAttendanceVerificationPageState
   Map<String, dynamic>? _employeeData;
   Map<String, dynamic>? _locationData;
   String? _deviceInfoOverride;
+  String _deviceStatus = 'none'; // 'registered' | 'unregistered' | 'legacy' | 'none'
+  String _registeredDeviceValue = '';
+  String _actualDeviceValue = '';
   String? _clientInfoOverride;
   bool _loading = true;
 
@@ -45,7 +48,7 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // EXTRACT LATLNG from any map
+  // EXTRACT LATLNG
   // ══════════════════════════════════════════════════════════════
   ll.LatLng? _extractLatLng(Map<String, dynamic> data) {
     final geo = data['location'] ??
@@ -86,21 +89,265 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // EXTRACT DEVICE INFO
+  // ⭐ DEVICE MATCH HELPER
+  //
+  // Determines kung ang `actualDevice` ay tumutugma sa
+  // `registeredDevice`. Strict token-based matching para sa
+  // specific device models (e.g., "Samsung SM-A546E").
+  //
+  // Rules:
+  //   1. Exact match (case-insensitive) → MATCH
+  //   2. Both generic (e.g., "Web Browser") → exact only
+  //   3. One generic + one specific → NO MATCH
+  //   4. Both specific → token containment check:
+  //      lahat ng tokens ng shorter string ay present sa longer
+  //      (para "Samsung SM-A546E" vs "Samsung SM-A546F" = NO MATCH)
   // ══════════════════════════════════════════════════════════════
-  String? _extractDeviceInfo(Map<String, dynamic> data) {
-    const keys = [
-      'deviceInfo', 'device', 'deviceName', 'deviceModel',
-      'userAgent', 'platform', 'deviceId', 'device_id',
-      'clientDevice', 'phoneModel', 'browser', 'os', 'source',
-    ];
-    for (final key in keys) {
-      final v = data[key];
-      if (v != null && v.toString().trim().isNotEmpty) {
-        return v.toString().trim();
+  bool _fuzzyDeviceMatch(String registered, String actual) {
+    final regLower = registered.toLowerCase().trim();
+    final actLower = actual.toLowerCase().trim();
+
+    if (regLower.isEmpty || actLower.isEmpty) return false;
+
+    // Exact match
+    if (regLower == actLower) return true;
+
+    // Clean suffixes / normalize whitespace
+    String clean(String s) {
+      return s
+          .replaceAll(RegExp(r'\(web\)', caseSensitive: false), '')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+    }
+
+    final regClean = clean(regLower);
+    final actClean = clean(actLower);
+
+    if (regClean.isEmpty || actClean.isEmpty) return false;
+    if (regClean == actClean) return true;
+
+    // Generic terms — walang specific brand/model info
+    const genericTerms = {
+      'mobile app',
+      'web browser',
+      'android app',
+      'ios app',
+      'windows app',
+      'macos app',
+      'linux app',
+      'mobile',
+      'web',
+      'android',
+      'ios',
+      'unknown device',
+      'not recorded',
+      '—',
+      'null',
+    };
+
+    final regIsGeneric = genericTerms.contains(regClean);
+    final actIsGeneric = genericTerms.contains(actClean);
+
+    // Isa lang ang generic → hindi match
+    if (regIsGeneric != actIsGeneric) return false;
+
+    // Pareho generic → dapat exact
+    if (regIsGeneric && actIsGeneric) {
+      return regClean == actClean;
+    }
+
+    // ─── Both specific → token containment ───
+    // Split by space, dash, underscore, comma, dot
+    final regTokens = regClean
+        .split(RegExp(r'[\s\-_\,\.]+'))
+        .where((t) => t.length >= 2)
+        .toSet();
+    final actTokens = actClean
+        .split(RegExp(r'[\s\-_\,\.]+'))
+        .where((t) => t.length >= 2)
+        .toSet();
+
+    if (regTokens.isEmpty || actTokens.isEmpty) return false;
+
+    // Determine shorter / longer
+    final shorter =
+    regTokens.length <= actTokens.length ? regTokens : actTokens;
+    final longer =
+    regTokens.length <= actTokens.length ? actTokens : regTokens;
+
+    // Lahat ng tokens ng shorter ay dapat present sa longer
+    return shorter.every((t) => longer.contains(t));
+  }
+
+  /// Check kung ang value ay "legacy" generic na dating format
+  bool _isLegacyDeviceValue(String value) {
+    final v = value.toLowerCase().trim();
+    return v == 'mobile app' ||
+        v == 'android app' ||
+        v == 'ios app' ||
+        v == 'windows app' ||
+        v == 'macos app' ||
+        v == 'linux app';
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ⭐ EXTRACT DEVICE INFO WITH REGISTRATION CHECK
+  //
+  // Returns:
+  //   {
+  //     'displayValue': String,       — ano ipapakita
+  //     'status': 'registered'        — matched ang registered device
+  //             | 'unregistered'      — may registered pero iba ang ginamit
+  //             | 'legacy'            — registered is old generic format
+  //             | 'none',             — walang registered device
+  //     'registeredDevice': String,
+  //     'actualDevice': String,
+  //   }
+  // ══════════════════════════════════════════════════════════════
+  Map<String, dynamic> _extractDeviceInfoWithSource(
+      Map<String, dynamic> log) {
+    // ─── 1. Get registered device from employee profile ───
+    String registeredDevice = '';
+    if (_employeeData != null) {
+      // Priority: registeredDevice → deviceModel → deviceName
+      final candidates = [
+        _employeeData!['registeredDevice'],
+        _employeeData!['deviceModel'],
+        _employeeData!['deviceName'],
+        _employeeData!['device'],
+      ];
+      for (final c in candidates) {
+        final v = (c ?? '').toString().trim();
+        if (v.isNotEmpty &&
+            v != '—' &&
+            v.toLowerCase() != 'null' &&
+            v.toLowerCase() != 'not recorded') {
+          registeredDevice = v;
+          break;
+        }
       }
     }
-    return null;
+
+    // ─── 2. Get ACTUAL device used in this attendance log ───
+    //         Specific keys muna bago generic na 'device'
+    String actualDevice = '';
+
+    const specificKeys = [
+      'deviceModel',
+      'deviceInfo',
+      'clientDevice',
+      'phoneModel',
+      'deviceName',
+    ];
+    for (final key in specificKeys) {
+      final v = (log[key] ?? '').toString().trim();
+      if (v.isNotEmpty &&
+          v != '—' &&
+          v.toLowerCase() != 'null' &&
+          v.toLowerCase() != 'mobile app' &&
+          v.toLowerCase() != 'web browser' &&
+          !_isLegacyDeviceValue(v)) {
+        actualDevice = v;
+        break;
+      }
+    }
+
+    // Fallback sa generic 'device'
+    if (actualDevice.isEmpty) {
+      final v = (log['device'] ?? '').toString().trim();
+      if (v.isNotEmpty && v != '—' && v.toLowerCase() != 'null') {
+        actualDevice = v;
+      }
+    }
+
+    // Fallback sa platform / os
+    if (actualDevice.isEmpty) {
+      const fallbackKeys = ['platform', 'os', 'userAgent', 'browser'];
+      for (final key in fallbackKeys) {
+        final v = (log[key] ?? '').toString().trim();
+        if (v.isNotEmpty && v != '—' && v.toLowerCase() != 'null') {
+          actualDevice = v;
+          break;
+        }
+      }
+    }
+
+    debugPrint('📱 [Device] registered="$registeredDevice" | '
+        'actual="$actualDevice"');
+
+    // ─── 3. Compare and decide status ───
+    if (registeredDevice.isNotEmpty) {
+      // 🔶 Legacy check — kung generic pa ang registered
+      if (_isLegacyDeviceValue(registeredDevice)) {
+        // Kung ang actual ay specific na (bagong format), flag as legacy
+        // para ma-update ng employee.
+        if (actualDevice.isNotEmpty && !_isLegacyDeviceValue(actualDevice)) {
+          return {
+            'displayValue': actualDevice,
+            'status': 'legacy',
+            'registeredDevice': registeredDevice,
+            'actualDevice': actualDevice,
+          };
+        }
+        // Kung pareho legacy — i-treat as registered
+        return {
+          'displayValue': registeredDevice,
+          'status': 'registered',
+          'registeredDevice': registeredDevice,
+          'actualDevice': actualDevice.isNotEmpty
+              ? actualDevice
+              : registeredDevice,
+        };
+      }
+
+      // Walang actual info
+      if (actualDevice.isEmpty) {
+        return {
+          'displayValue': registeredDevice,
+          'status': 'registered',
+          'registeredDevice': registeredDevice,
+          'actualDevice': '',
+        };
+      }
+
+      // ⭐ Fuzzy match
+      final matches = _fuzzyDeviceMatch(registeredDevice, actualDevice);
+
+      if (matches) {
+        // ✅ MATCH — same device
+        return {
+          'displayValue': registeredDevice,
+          'status': 'registered',
+          'registeredDevice': registeredDevice,
+          'actualDevice': actualDevice,
+        };
+      } else {
+        // ⚠️ MISMATCH — ibang device ang ginamit
+        return {
+          'displayValue': actualDevice,
+          'status': 'unregistered',
+          'registeredDevice': registeredDevice,
+          'actualDevice': actualDevice,
+        };
+      }
+    }
+
+    // Walang registered device sa profile
+    if (actualDevice.isNotEmpty) {
+      return {
+        'displayValue': actualDevice,
+        'status': 'none',
+        'registeredDevice': '',
+        'actualDevice': actualDevice,
+      };
+    }
+
+    return {
+      'displayValue': 'Not recorded',
+      'status': 'none',
+      'registeredDevice': '',
+      'actualDevice': '',
+    };
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -108,8 +355,14 @@ class _AdminAttendanceVerificationPageState
   // ══════════════════════════════════════════════════════════════
   String? _extractClientInfo(Map<String, dynamic> data) {
     const keys = [
-      'client', 'clientName', 'clientInfo', 'purpose', 'reason',
-      'verificationMethod', 'verificationNote', 'note',
+      'client',
+      'clientName',
+      'clientInfo',
+      'purpose',
+      'reason',
+      'verificationMethod',
+      'verificationNote',
+      'note',
     ];
     for (final key in keys) {
       final v = data[key];
@@ -134,9 +387,10 @@ class _AdminAttendanceVerificationPageState
     debugPrint('═══════════════════════════════════════════════════');
     debugPrint('🔍 [VERIFY] Fetch: name="$empName" id="$empId" email="$empEmail"');
     debugPrint('🔍 [VERIFY] Log timestamp: $logTs');
-    debugPrint('🔍 [VERIFY] Log fields: ${log.keys.toList()}');
+    debugPrint('🔍 [VERIFY] Log device keys: '
+        'device=${log['device']} deviceModel=${log['deviceModel']} '
+        'deviceName=${log['deviceName']}');
 
-    _deviceInfoOverride = _extractDeviceInfo(log);
     _clientInfoOverride = _extractClientInfo(log);
 
     final logCoords = _extractLatLng(log);
@@ -147,10 +401,11 @@ class _AdminAttendanceVerificationPageState
         'locationName': log['locationName'] ?? log['location_name'],
         'timestamp': log['timestamp'],
       };
-      debugPrint('✅ [VERIFY] Coords IN LOG: ${logCoords.latitude}, ${logCoords.longitude}');
+      debugPrint('✅ [VERIFY] Coords IN LOG: '
+          '${logCoords.latitude}, ${logCoords.longitude}');
     }
 
-    // 1. Fetch employee doc
+    // ═══ 1. Fetch employee doc FIRST (need registered device) ═══
     try {
       Map<String, dynamic>? found;
 
@@ -214,8 +469,38 @@ class _AdminAttendanceVerificationPageState
       }
 
       _employeeData = found;
+
+      if (found != null) {
+        debugPrint('✅ [VERIFY] Employee deviceName: '
+            '${found['deviceName'] ?? '(none)'}');
+        debugPrint('✅ [VERIFY] Employee registeredDevice: '
+            '${found['registeredDevice'] ?? '(none)'}');
+        debugPrint('✅ [VERIFY] Employee deviceModel: '
+            '${found['deviceModel'] ?? '(none)'}');
+      }
     } catch (e) {
       debugPrint('❌ [VERIFY] Emp error: $e');
+    }
+
+    // ═══ 2. Extract device info WITH registration check ═══
+    final deviceResult = _extractDeviceInfoWithSource(log);
+    _deviceInfoOverride = deviceResult['displayValue'] as String;
+    _deviceStatus = deviceResult['status'] as String;
+    _registeredDeviceValue =
+        deviceResult['registeredDevice'] as String? ?? '';
+    _actualDeviceValue = deviceResult['actualDevice'] as String? ?? '';
+
+    debugPrint('📱 [VERIFY] Device resolved: "$_deviceInfoOverride" '
+        '(status=$_deviceStatus)');
+    if (_deviceStatus == 'unregistered') {
+      debugPrint('⚠️ [VERIFY] MISMATCH! '
+          'Registered="$_registeredDeviceValue" '
+          'Actual="$_actualDeviceValue"');
+    }
+    if (_deviceStatus == 'legacy') {
+      debugPrint('🔶 [VERIFY] LEGACY format — '
+          'Registered="$_registeredDeviceValue" '
+          'Actual="$_actualDeviceValue"');
     }
 
     final Set<String> empIds = {};
@@ -235,14 +520,21 @@ class _AdminAttendanceVerificationPageState
     }
     empEmails.removeWhere((e) => e.isEmpty);
 
-    // 2. Fetch GPS from user locations
+    // ═══ 3. Fetch GPS from user locations ═══
     if (_locationData == null) {
       const locationCollections = [
-        'user locations', 'user_locations', 'locations',
-        'attendance_locations', 'gps_logs',
+        'user locations',
+        'user_locations',
+        'locations',
+        'attendance_locations',
+        'gps_logs',
       ];
       const employeeFieldNames = [
-        'employeeId', 'employee_id', 'empId', 'uid', 'authUid',
+        'employeeId',
+        'employee_id',
+        'empId',
+        'uid',
+        'authUid',
       ];
 
       for (final coll in locationCollections) {
@@ -318,33 +610,6 @@ class _AdminAttendanceVerificationPageState
       }
     }
 
-    // 3. Device info fallback
-    if (_deviceInfoOverride == null) {
-      for (final coll in ['attendance_logs', 'activity_logs', 'clock_ins', 'clock_outs']) {
-        if (_deviceInfoOverride != null) break;
-        for (final id in empIds) {
-          if (_deviceInfoOverride != null) break;
-          try {
-            final s = await FirebaseFirestore.instance
-                .collection(coll)
-                .where('employeeId', isEqualTo: id)
-                .limit(10)
-                .get();
-            for (final d in s.docs) {
-              final device = _extractDeviceInfo(d.data());
-              if (device != null) {
-                _deviceInfoOverride = device;
-                break;
-              }
-            }
-          } catch (_) {}
-        }
-      }
-    }
-
-    if (_deviceInfoOverride == null && _locationData != null) {
-      _deviceInfoOverride = _extractDeviceInfo(_locationData!);
-    }
     if (_clientInfoOverride == null && _locationData != null) {
       _clientInfoOverride = _extractClientInfo(_locationData!);
     }
@@ -479,7 +744,9 @@ class _AdminAttendanceVerificationPageState
   }
 
   String _getDeviceInfo() {
-    if (_deviceInfoOverride != null && _deviceInfoOverride!.isNotEmpty) {
+    if (_deviceInfoOverride != null &&
+        _deviceInfoOverride!.isNotEmpty &&
+        _deviceInfoOverride != '—') {
       return _deviceInfoOverride!;
     }
     return 'Not recorded';
@@ -556,8 +823,6 @@ class _AdminAttendanceVerificationPageState
                     ],
                   ),
                 ),
-
-              // ✅ Bootstrap: stack below lg (992px)
               LayoutBuilder(builder: (_, c) {
                 final stack = !BsResponsive(c.maxWidth).up(BsSize.lg);
 
@@ -581,6 +846,9 @@ class _AdminAttendanceVerificationPageState
                         tc,
                         client: client,
                         deviceInfo: deviceInfo,
+                        deviceStatus: _deviceStatus,
+                        registeredDevice: _registeredDeviceValue,
+                        actualDevice: _actualDeviceValue,
                         locationName: locationName,
                         coordsStr: coordsStr,
                         verificationNote: verificationNote,
@@ -590,10 +858,6 @@ class _AdminAttendanceVerificationPageState
                   );
                 }
 
-                // ✅ FIX: Tinanggal ang IntrinsicHeight — hindi ito
-                // compatible sa LayoutBuilder sa loob ng mga card.
-                // Ito ang sanhi ng "Cannot hit test a render box
-                // with no size" at white screen.
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -617,6 +881,9 @@ class _AdminAttendanceVerificationPageState
                         tc,
                         client: client,
                         deviceInfo: deviceInfo,
+                        deviceStatus: _deviceStatus,
+                        registeredDevice: _registeredDeviceValue,
+                        actualDevice: _actualDeviceValue,
                         locationName: locationName,
                         coordsStr: coordsStr,
                         verificationNote: verificationNote,
@@ -645,8 +912,7 @@ class _AdminAttendanceVerificationPageState
             borderRadius: BorderRadius.circular(8),
             child: Padding(
               padding: const EdgeInsets.only(right: 6),
-              child: Icon(Icons.arrow_back_rounded,
-                  size: 16, color: tc.muted),
+              child: Icon(Icons.arrow_back_rounded, size: 16, color: tc.muted),
             ),
           ),
         ],
@@ -658,7 +924,8 @@ class _AdminAttendanceVerificationPageState
                 TextSpan(
                   text: 'Attendance Logs',
                   recognizer: widget.onBack != null
-                      ? (TapGestureRecognizerHolder(widget.onBack!).recognizer)
+                      ? (TapGestureRecognizerHolder(widget.onBack!)
+                      .recognizer)
                       : null,
                 ),
                 const TextSpan(text: ' > '),
@@ -676,7 +943,7 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // PAGE HEADER — responsive
+  // PAGE HEADER
   // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeader(BuildContext context, AdminColors tc) {
     return LayoutBuilder(builder: (_, c) {
@@ -687,7 +954,10 @@ class _AdminAttendanceVerificationPageState
         'Attendance Verification',
         style: TextStyle(
           fontSize: r.responsive<double>(
-            xs: 22, sm: 24, md: 26, lg: 28,
+            xs: 22,
+            sm: 24,
+            md: 26,
+            lg: 28,
           ),
           fontWeight: FontWeight.w700,
           color: tc.text,
@@ -799,7 +1069,6 @@ class _AdminAttendanceVerificationPageState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Avatar + name + ID badge
           LayoutBuilder(builder: (_, c) {
             final narrow = c.maxWidth < 320;
             final avatarAndName = Row(
@@ -910,8 +1179,6 @@ class _AdminAttendanceVerificationPageState
           const SizedBox(height: 20),
           Divider(color: tc.border, height: 1),
           const SizedBox(height: 16),
-
-          // Department + Manager
           LayoutBuilder(builder: (_, c) {
             final narrow = c.maxWidth < 280;
             if (narrow) {
@@ -928,12 +1195,11 @@ class _AdminAttendanceVerificationPageState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                    child: _metaColumn(tc,
-                        label: 'DEPARTMENT', value: department)),
+                    child:
+                    _metaColumn(tc, label: 'DEPARTMENT', value: department)),
                 const SizedBox(width: 16),
                 Expanded(
-                    child: _metaColumn(tc,
-                        label: 'MANAGER', value: manager)),
+                    child: _metaColumn(tc, label: 'MANAGER', value: manager)),
               ],
             );
           }),
@@ -1051,8 +1317,16 @@ class _AdminAttendanceVerificationPageState
     final statusLabel =
     isLate ? 'Late' : (isLogin ? 'On Time' : 'Clocked Out');
 
-    final subInfo =
-    _s(entry['locationName'] ?? entry['keyfobSerial'] ?? '', '');
+    // Sub info — device model muna, tapos location / keyfob
+    final deviceFromEntry = _s(
+        entry['deviceModel'] ??
+            entry['deviceName'] ??
+            entry['device'] ??
+            '',
+        '');
+    final subInfo = deviceFromEntry.isNotEmpty
+        ? deviceFromEntry
+        : _s(entry['locationName'] ?? entry['keyfobSerial'] ?? '', '');
 
     return IntrinsicHeight(
       child: Row(
@@ -1142,8 +1416,7 @@ class _AdminAttendanceVerificationPageState
                           TextSpan(
                             text: verifiedVia,
                             style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                color: tc.text),
+                                fontWeight: FontWeight.w700, color: tc.text),
                           ),
                         ],
                       ),
@@ -1152,7 +1425,7 @@ class _AdminAttendanceVerificationPageState
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          Icon(Icons.confirmation_number_outlined,
+                          Icon(Icons.phone_iphone_rounded,
                               size: 12, color: tc.muted),
                           const SizedBox(width: 4),
                           Expanded(
@@ -1182,6 +1455,9 @@ class _AdminAttendanceVerificationPageState
       AdminColors tc, {
         required String client,
         required String deviceInfo,
+        required String deviceStatus,
+        required String registeredDevice,
+        required String actualDevice,
         required String locationName,
         required String coordsStr,
         required String verificationNote,
@@ -1204,7 +1480,6 @@ class _AdminAttendanceVerificationPageState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header row
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1233,8 +1508,8 @@ class _AdminAttendanceVerificationPageState
                                   color: tc.text)),
                           const SizedBox(height: 2),
                           Text(verificationNote,
-                              style: TextStyle(
-                                  fontSize: 13, color: tc.muted)),
+                              style:
+                              TextStyle(fontSize: 13, color: tc.muted)),
                         ],
                       ),
                     ),
@@ -1257,35 +1532,35 @@ class _AdminAttendanceVerificationPageState
                   height: 40,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border:
-                    Border.all(color: tc.red.withValues(alpha: 0.3)),
+                    border: Border.all(color: tc.red.withValues(alpha: 0.3)),
                   ),
-                  child: Icon(Icons.flag_outlined,
-                      size: 18, color: tc.red),
+                  child:
+                  Icon(Icons.flag_outlined, size: 18, color: tc.red),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 20),
-
-          // Map preview
           _buildMapPreview(tc,
               dateStr: dateStr,
               coordsStr: coordsStr,
               locationName: locationName),
           const SizedBox(height: 20),
-
-          // Client + Device — stack on narrow
           LayoutBuilder(builder: (_, c) {
             final narrow = c.maxWidth < 400;
             final clientBox = _subDetailBox(tc,
                 icon: Icons.work_outline_rounded,
                 label: 'CLIENT',
                 value: client);
-            final deviceBox = _subDetailBox(tc,
-                icon: Icons.phone_iphone_rounded,
-                label: 'DEVICE INFO',
-                value: deviceInfo);
+
+            // ⭐ DEVICE BOX — specialized widget with registration check
+            final deviceBox = _buildDeviceInfoBox(
+              tc,
+              deviceStatus: deviceStatus,
+              displayValue: deviceInfo,
+              registeredDevice: registeredDevice,
+              actualDevice: actualDevice,
+            );
 
             if (narrow) {
               return Column(
@@ -1311,6 +1586,276 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
+  // ⭐ DEVICE INFO BOX — with registered / unregistered / legacy
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildDeviceInfoBox(
+      AdminColors tc, {
+        required String deviceStatus,
+        required String displayValue,
+        required String registeredDevice,
+        required String actualDevice,
+      }) {
+    final bool isRegistered = deviceStatus == 'registered';
+    final bool isUnregistered = deviceStatus == 'unregistered';
+    final bool isLegacy = deviceStatus == 'legacy';
+    final bool isUnknown = deviceStatus == 'none';
+
+    // Colors per state
+    Color boxBg;
+    Color boxBorder;
+    Color iconColor;
+    Color labelColor;
+    IconData icon;
+    Color valueColor;
+    Color? badgeBg;
+    Color? badgeTextColor;
+    String? badgeText;
+
+    if (isRegistered) {
+      // ✅ Registered — green
+      boxBg = const Color(0xFFDCFCE7);
+      boxBorder = const Color(0xFF22C55E);
+      iconColor = const Color(0xFF166534);
+      labelColor = const Color(0xFF166534);
+      icon = Icons.verified_user_rounded;
+      valueColor = tc.text;
+      badgeBg = const Color(0xFF22C55E);
+      badgeTextColor = Colors.white;
+      badgeText = 'REGISTERED';
+    } else if (isUnregistered) {
+      // ⚠️ Unregistered — red alert
+      boxBg = const Color(0xFFFEE2E2);
+      boxBorder = const Color(0xFFEF4444);
+      iconColor = const Color(0xFF991B1B);
+      labelColor = const Color(0xFF991B1B);
+      icon = Icons.gpp_maybe_rounded;
+      valueColor = const Color(0xFF991B1B);
+      badgeBg = const Color(0xFFEF4444);
+      badgeTextColor = Colors.white;
+      badgeText = 'UNREGISTERED';
+    } else if (isLegacy) {
+      // 🔶 Legacy — amber (registered is old generic format)
+      boxBg = const Color(0xFFFEF3C7);
+      boxBorder = const Color(0xFFF59E0B);
+      iconColor = const Color(0xFF92400E);
+      labelColor = const Color(0xFF92400E);
+      icon = Icons.system_update_alt_rounded;
+      valueColor = const Color(0xFF92400E);
+      badgeBg = const Color(0xFFF59E0B);
+      badgeTextColor = Colors.white;
+      badgeText = 'NEEDS UPDATE';
+    } else {
+      // Normal — surface
+      boxBg = tc.surface;
+      boxBorder = tc.border;
+      iconColor = tc.muted;
+      labelColor = tc.muted;
+      icon = Icons.phone_iphone_rounded;
+      valueColor = tc.text;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: boxBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: boxBorder,
+          width: isRegistered || isUnregistered || isLegacy ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Label row
+          Row(
+            children: [
+              Icon(icon, size: 12, color: iconColor),
+              const SizedBox(width: 6),
+              Text(
+                'DEVICE INFO',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: labelColor,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              if (badgeText != null) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: badgeBg,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    badgeText,
+                    style: TextStyle(
+                      fontSize: 7,
+                      color: badgeTextColor,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // Value (actual device)
+          Text(
+            displayValue,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: valueColor,
+            ),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 2,
+          ),
+
+          // Unregistered — show registered device
+          if (isUnregistered && registeredDevice.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: const Color(0xFFEF4444).withValues(alpha: 0.4),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.warning_amber_rounded,
+                          size: 12, color: Color(0xFF991B1B)),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          'Registered: $registeredDevice',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF991B1B),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  const Text(
+                    'Ibang device ang ginamit kaysa registered',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF991B1B),
+                      fontStyle: FontStyle.italic,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          // Legacy — show note to update
+          if (isLegacy && registeredDevice.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.info_outline_rounded,
+                          size: 12, color: Color(0xFF92400E)),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          'Old format: $registeredDevice',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF92400E),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  const Text(
+                    'Kailangan i-update ang registered device sa profile',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF92400E),
+                      fontStyle: FontStyle.italic,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          // Info hint for registered
+          if (isRegistered && actualDevice.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.check_circle_rounded,
+                    size: 11, color: Color(0xFF166534)),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    'Verified — matches registered device',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF166534),
+                      fontStyle: FontStyle.italic,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ],
+
+          // Hint for unknown
+          if (isUnknown && displayValue == 'Not recorded') ...[
+            const SizedBox(height: 4),
+            Text(
+              'Walang device info sa attendance log at profile',
+              style: TextStyle(
+                fontSize: 10,
+                color: tc.muted,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // MAP PREVIEW
   // ══════════════════════════════════════════════════════════════
   Widget _buildMapPreview(
@@ -1324,7 +1869,10 @@ class _AdminAttendanceVerificationPageState
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
       final mapHeight = r.responsive<double>(
-        xs: 260, sm: 300, md: 340, lg: 340,
+        xs: 260,
+        sm: 300,
+        md: 340,
+        lg: 340,
       );
 
       return Container(
@@ -1442,8 +1990,6 @@ class _AdminAttendanceVerificationPageState
                   ),
                 ),
               ),
-
-            // Overlay info card
             Positioned(
               left: 16,
               right: 16,
@@ -1508,9 +2054,8 @@ class _AdminAttendanceVerificationPageState
                     color: coords != null ? tc.pillGreenBg : tc.pillWarnBg,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: (coords != null
-                          ? tc.pillGreenTx
-                          : tc.pillWarnTx)
+                      color:
+                      (coords != null ? tc.pillGreenTx : tc.pillWarnTx)
                           .withValues(alpha: 0.3),
                     ),
                   ),
@@ -1522,9 +2067,8 @@ class _AdminAttendanceVerificationPageState
                             ? Icons.verified_rounded
                             : Icons.warning_amber_rounded,
                         size: 12,
-                        color: coords != null
-                            ? tc.pillGreenTx
-                            : tc.pillWarnTx,
+                        color:
+                        coords != null ? tc.pillGreenTx : tc.pillWarnTx,
                       ),
                       const SizedBox(width: 4),
                       Text(
@@ -1532,9 +2076,8 @@ class _AdminAttendanceVerificationPageState
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
-                          color: coords != null
-                              ? tc.pillGreenTx
-                              : tc.pillWarnTx,
+                          color:
+                          coords != null ? tc.pillGreenTx : tc.pillWarnTx,
                           height: 1.1,
                         ),
                       ),
@@ -1582,7 +2125,7 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // SUB DETAIL BOX
+  // SUB DETAIL BOX (generic — para sa CLIENT lang)
   // ══════════════════════════════════════════════════════════════
   Widget _subDetailBox(
       AdminColors tc, {

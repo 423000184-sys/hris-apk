@@ -1,11 +1,14 @@
 // lib/screens/login_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:nfc_manager/nfc_manager.dart';
 import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/security_service.dart';
 import '../services/database_service.dart';
 import '../services/location_tracking_service.dart';
@@ -57,7 +60,8 @@ class _LoginScreenState extends State<LoginScreen>
   String? _errorMessage;
   _LoginStep _step = _LoginStep.selectMethod;
 
-  // ✅ BAGO: capture arrival time sa pinaka-unang bukasan ng login
+  bool _clientMeetingMode = false;
+
   late final DateTime _arrivalTime;
 
   CameraController? _cameraController;
@@ -68,7 +72,18 @@ class _LoginScreenState extends State<LoginScreen>
   Timer? _successCloseTimer;
   bool _useFrontCamera = true;
 
-  static const String _siteName = 'National Teachers College';
+  // 📍 Location State
+  double? _currentLatitude;
+  double? _currentLongitude;
+  String _currentPlaceName = 'Getting location…';
+  bool _loadingLocation = false;
+  DateTime? _locationTimestamp;
+  StreamSubscription<Position>? _positionSub;
+
+  Employee? _activeEmployee;
+
+  // ✅ SharedPreferences KEY
+  static const String _kLastEmployeeIdKey = 'last_logged_in_employee_id';
 
   late AnimationController _shakeController;
   late Animation<double> _shakeAnim;
@@ -91,14 +106,12 @@ class _LoginScreenState extends State<LoginScreen>
   static const Color _modalGradTop = Color(0xFFFF8A00);
   static const Color _modalGradMid = Color(0xFFFA6A00);
   static const Color _modalGradEnd = Color(0xFFF54900);
-  static const Color _scrim = Color.fromRGBO(9, 9, 21, 0.44);
+  static const Color _scrim = Color.fromRGBO(9, 9, 21, 0.68);
   static const Color _cmPreviewBg = Color(0xFF20212A);
   static const Color _cmShutterOuter = Color(0xFFFFA500);
   static const Color _cmShutterInner = Color(0xFFFEE0AA);
   static const Color _cmShutterGlow = Color(0xFFFF8C00);
 
-  // ---- Exact HTML measurements for the orange header ----
-  // (design frame inner width = 386.13px)
   static const double _kHeaderDesignFrameWidth = 386.13;
   static const double _kHeaderH = 287.13;
   static const double _kHeaderBorderBottom = 1.15;
@@ -120,11 +133,21 @@ class _LoginScreenState extends State<LoginScreen>
     'INVALID_LOGIN_CREDENTIALS',
   ];
 
+  String? get _employeeId {
+    final emp = _activeEmployee;
+    if (emp == null) return null;
+    if (emp.employeeId.isNotEmpty) return emp.employeeId;
+    if (emp.id.isNotEmpty) return emp.id;
+    return null;
+  }
+
+  String get _employeeName => _activeEmployee?.fullName ?? 'Unknown';
+  String get _employeeEmail => _activeEmployee?.email ?? '';
+
   @override
   void initState() {
     super.initState();
 
-    // ✅ CRITICAL: I-save ang arrival time sa pinaka-start ng login flow
     _arrivalTime = DateTime.now();
     debugPrint('⏱️ [LoginScreen] Arrival time captured: $_arrivalTime');
 
@@ -151,7 +174,19 @@ class _LoginScreenState extends State<LoginScreen>
     _nfcPulseController.repeat(reverse: true);
     _fadeController.forward();
 
+    _startClockTimer();
     _checkCapabilities();
+    _preloadLastEmployee();
+  }
+
+  Future<void> _preloadLastEmployee() async {
+    final lastId = await _getLastEmployeeId();
+    if (lastId == null || lastId.isEmpty) return;
+    final emp = await _loadEmployeeById(lastId);
+    if (emp != null && mounted) {
+      setState(() => _activeEmployee = emp);
+      debugPrint('✅ [Preload] Restored active employee: ${emp.id}');
+    }
   }
 
   @override
@@ -162,6 +197,7 @@ class _LoginScreenState extends State<LoginScreen>
     _nfcPulseController.dispose();
     _clockTimer?.cancel();
     _successCloseTimer?.cancel();
+    _positionSub?.cancel();
     _releaseCamera();
     if (!kIsWeb) {
       try {
@@ -169,6 +205,30 @@ class _LoginScreenState extends State<LoginScreen>
       } catch (_) {}
     }
     super.dispose();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 💾 SHARED PREFERENCES HELPERS
+  // ═══════════════════════════════════════════════════════════════
+  Future<void> _saveLastEmployeeId(String empId) async {
+    if (empId.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kLastEmployeeIdKey, empId);
+      debugPrint('✅ [Prefs] Saved last empId: $empId');
+    } catch (e) {
+      debugPrint('⚠️ [Prefs] Save failed: $e');
+    }
+  }
+
+  Future<String?> _getLastEmployeeId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_kLastEmployeeIdKey);
+    } catch (e) {
+      debugPrint('⚠️ [Prefs] Read failed: $e');
+      return null;
+    }
   }
 
   Future<void> _checkCapabilities() async {
@@ -184,6 +244,163 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 📍 LOCATION
+  // ═══════════════════════════════════════════════════════════════
+  Future<bool> _ensureLocationPermission() async {
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        debugPrint('⚠️ Location services disabled');
+        return false;
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        debugPrint('⚠️ Location permission denied');
+        return false;
+      }
+      return true;
+    } catch (e) {
+      debugPrint('⚠️ Location permission error: $e');
+      return false;
+    }
+  }
+
+  void _startLocationTracking() {
+    _positionSub?.cancel();
+    if (mounted) {
+      setState(() {
+        _loadingLocation = true;
+        _currentPlaceName = 'Getting location…';
+      });
+    }
+    _getCurrentPositionOnce();
+    try {
+      _positionSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          distanceFilter: 10,
+        ),
+      ).listen((Position pos) {
+        _updatePosition(pos);
+      }, onError: (e) {
+        debugPrint('⚠️ Position stream error: $e');
+      });
+    } catch (e) {
+      debugPrint('⚠️ Position stream init failed: $e');
+    }
+  }
+
+  Future<void> _getCurrentPositionOnce() async {
+    try {
+      final ok = await _ensureLocationPermission();
+      if (!ok) {
+        if (mounted) {
+          setState(() {
+            _loadingLocation = false;
+            _currentPlaceName = 'Location unavailable';
+          });
+        }
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best,
+        timeLimit: const Duration(seconds: 15),
+      );
+      await _updatePosition(pos);
+    } catch (e) {
+      debugPrint('⚠️ getCurrentPosition error: $e');
+      if (mounted) {
+        setState(() {
+          _loadingLocation = false;
+          if (_currentPlaceName == 'Getting location…') {
+            _currentPlaceName = 'Location unavailable';
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _updatePosition(Position pos) async {
+    if (!mounted) return;
+    if (pos.latitude == 0 && pos.longitude == 0) return;
+    setState(() {
+      _currentLatitude = pos.latitude;
+      _currentLongitude = pos.longitude;
+      _locationTimestamp = DateTime.now();
+      _loadingLocation = false;
+    });
+    debugPrint('📍 GPS: ${pos.latitude}, ${pos.longitude}');
+    await _reverseGeocode(pos.latitude, pos.longitude);
+  }
+
+  Future<void> _reverseGeocode(double lat, double lng) async {
+    try {
+      final placemarks = await placemarkFromCoordinates(lat, lng);
+      if (placemarks.isEmpty || !mounted) return;
+      final p = placemarks.first;
+      final subLocality = (p.subLocality ?? '').trim();
+      final locality = (p.locality ?? '').trim();
+      final subAdmin = (p.subAdministrativeArea ?? '').trim();
+      final admin = (p.administrativeArea ?? '').trim();
+      final street = (p.street ?? '').trim();
+      final name = (p.name ?? '').trim();
+      String placeName = '';
+      if (subLocality.isNotEmpty &&
+          locality.isNotEmpty &&
+          subLocality != locality) {
+        placeName = '$subLocality, $locality';
+      } else if (locality.isNotEmpty) {
+        placeName = locality;
+      } else if (subAdmin.isNotEmpty) {
+        placeName = subAdmin;
+      } else if (admin.isNotEmpty) {
+        placeName = admin;
+      } else if (subLocality.isNotEmpty) {
+        placeName = subLocality;
+      } else if (street.isNotEmpty) {
+        placeName = street;
+      } else if (name.isNotEmpty) {
+        placeName = name;
+      } else {
+        placeName = 'Unknown location';
+      }
+      if (!mounted) return;
+      setState(() => _currentPlaceName = placeName);
+      debugPrint('📍 Place: $placeName');
+    } catch (e) {
+      debugPrint('⚠️ Reverse geocode failed: $e');
+      if (!mounted) return;
+      setState(() => _currentPlaceName = 'Location unavailable');
+    }
+  }
+
+  String get _locationDisplay {
+    if (_loadingLocation) return 'Getting location…';
+    return _currentPlaceName;
+  }
+
+  void _stopLocationTracking() {
+    _positionSub?.cancel();
+    _positionSub = null;
+    if (mounted) {
+      setState(() {
+        _loadingLocation = false;
+        _currentLatitude = null;
+        _currentLongitude = null;
+        _locationTimestamp = null;
+        _currentPlaceName = 'Getting location…';
+      });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // NFC LOGIN
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _startNfcSession() async {
     if (kIsWeb) {
       _setError('NFC is not available on web browsers. Please use PIN instead.');
@@ -268,6 +485,9 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // PIN LOGIN
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _loginWithPin() async {
     if (_pinInput.length < 4) return;
     setState(() {
@@ -292,6 +512,51 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       if (employee == null) throw 'Invalid PIN. Please try again.';
+
+      await _saveLastEmployeeId(employee.id);
+
+      if (_clientMeetingMode) {
+        _activeEmployee = employee;
+        try {
+          await SecurityService.instance.createSession(employee.id);
+        } catch (e) {
+          debugPrint('⚠️ [ClientMeeting] createSession failed: $e');
+        }
+        if (!kIsWeb) {
+          try {
+            LocationTrackingService.instance.startTracking(employee.id);
+          } catch (e) {
+            debugPrint('⚠️ [ClientMeeting] startTracking failed: $e');
+          }
+        }
+        try {
+          await FirebaseFirestore.instance.collection('activity_logs').add({
+            'type': 'client_meeting_login',
+            'employeeId': employee.id,
+            'employee_id': employee.id,
+            'employee_name': employee.fullName,
+            'email': employee.email,
+            'role': employee.position,
+            'timestamp': FieldValue.serverTimestamp(),
+            'device': kIsWeb ? 'Web Browser' : 'Mobile App',
+          });
+        } catch (e) {
+          debugPrint('⚠️ [ClientMeeting] login audit log failed: $e');
+        }
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _pinInput = '';
+            _errorMessage = null;
+            _clientMeetingMode = false;
+          });
+        }
+        debugPrint(
+            '✅ [ClientMeeting] PIN verified — empId=${employee.id}, name=${employee.fullName}');
+        _goToStep(_LoginStep.clientMeeting);
+        return;
+      }
+
       await _openSession(employee);
     } catch (e) {
       if (mounted) {
@@ -329,14 +594,31 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
-  Employee _docToEmployee(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data();
+  Future<Employee?> _loadEmployeeById(String empId) async {
+    if (empId.isEmpty) return null;
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(empId)
+          .get();
+      if (!doc.exists) return null;
+      return _docToEmployee(doc);
+    } catch (e) {
+      debugPrint('⚠️ _loadEmployeeById($empId) failed: $e');
+      return null;
+    }
+  }
+
+  Employee _docToEmployee(dynamic doc) {
+    final Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+    final String docId = doc.id as String;
     final firstName = data['firstName'] ?? '';
     final lastName = data['lastName'] ?? '';
     final fullName = data['name'] ?? '$firstName $lastName'.trim();
+
     return Employee.fromMap({
-      'id': doc.id,
-      'employee_id': data['employeeId'] ?? doc.id,
+      'id': docId,
+      'employee_id': data['employeeId'] ?? docId,
       'first_name': firstName,
       'last_name': lastName,
       'full_name': fullName,
@@ -403,8 +685,14 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ OPEN SESSION — BINAGO: pushReplacement (dating pushAndRemoveUntil)
+  //    Ito ang nag-a-allow ng back navigation pabalik sa LoginScreen
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _openSession(Employee employee) async {
     try {
+      _activeEmployee = employee;
+      await _saveLastEmployeeId(employee.id);
       await SecurityService.instance.createSession(employee.id);
       if (!kIsWeb) LocationTrackingService.instance.startTracking(employee.id);
       await _signIntoFirebaseAuth(employee);
@@ -413,6 +701,7 @@ class _LoginScreenState extends State<LoginScreen>
         await FirebaseFirestore.instance.collection('activity_logs').add({
           'type': 'login',
           'employeeId': employee.id,
+          'employee_id': employee.id,
           'employee_name': employee.fullName,
           'email': employee.email,
           'role': employee.position,
@@ -425,16 +714,14 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       if (!mounted) return;
-
-      // ✅ FIX: Ipasa ang `arrivalTime` sa FingerprintScreen
-      Navigator.of(context).pushAndRemoveUntil(
+      // ✅ BINAGO: pushReplacement para may babalikan kapag Back
+      Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (_) => FingerprintScreen(
             employee: employee,
             arrivalTime: _arrivalTime,
           ),
         ),
-            (route) => false,
       );
     } catch (e) {
       if (mounted) {
@@ -490,6 +777,7 @@ class _LoginScreenState extends State<LoginScreen>
       _useFrontCamera = true;
       _startCameraSession();
       _startClockTimer();
+      _startLocationTracking();
     }
   }
 
@@ -507,6 +795,7 @@ class _LoginScreenState extends State<LoginScreen>
         _clockTimer?.cancel();
         _successCloseTimer?.cancel();
         _releaseCamera();
+        _stopLocationTracking();
         _useFrontCamera = true;
       }
       _modalController.reverse().then((_) {
@@ -516,14 +805,347 @@ class _LoginScreenState extends State<LoginScreen>
             _errorMessage = null;
             _pinInput = '';
             _captureSuccess = false;
+            _clientMeetingMode = false;
           });
         }
       });
     }
   }
 
-  void _onClientMeetingLogin() {
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ CLIENT MEETING
+  //    May naka-login → CAMERA AGAD
+  //    Walang naka-login → EMPLOYEE PICKER (piliin ang pangalan)
+  // ═══════════════════════════════════════════════════════════════
+  Future<void> _onClientMeetingLogin() async {
+    if (mounted) setState(() => _isLoading = true);
+
+    Employee? resolved;
+
+    // 1. In-memory
+    if (_activeEmployee != null) {
+      resolved = _activeEmployee;
+      debugPrint('✅ [ClientMeeting] Using in-memory employee: ${resolved!.id}');
+    }
+
+    // 2. SecurityService session
+    if (resolved == null) {
+      try {
+        final secId = await SecurityService.instance.getCurrentEmployeeId();
+        if (secId != null && secId.isNotEmpty) {
+          resolved = await _loadEmployeeById(secId);
+          if (resolved != null) {
+            debugPrint(
+                '✅ [ClientMeeting] Resolved from SecurityService: $secId');
+          }
+        }
+      } catch (e) {
+        debugPrint('⚠️ [ClientMeeting] SecurityService lookup failed: $e');
+      }
+    }
+
+    // 3. FirebaseAuth → Firestore
+    if (resolved == null) {
+      final authUser = FirebaseAuth.instance.currentUser;
+      if (authUser != null) {
+        try {
+          final snap = await FirebaseFirestore.instance
+              .collection('employees')
+              .where('authUid', isEqualTo: authUser.uid)
+              .limit(1)
+              .get();
+
+          if (snap.docs.isNotEmpty) {
+            resolved = _docToEmployee(snap.docs.first);
+            debugPrint(
+                '✅ [ClientMeeting] Resolved from authUid: ${resolved.id}');
+          } else if (authUser.email != null) {
+            final emailSnap = await FirebaseFirestore.instance
+                .collection('employees')
+                .where('email', isEqualTo: authUser.email!.toLowerCase())
+                .limit(1)
+                .get();
+            if (emailSnap.docs.isNotEmpty) {
+              resolved = _docToEmployee(emailSnap.docs.first);
+              debugPrint(
+                  '✅ [ClientMeeting] Resolved from email: ${resolved.id}');
+            }
+          }
+        } catch (e) {
+          debugPrint('⚠️ [ClientMeeting] FirebaseAuth lookup failed: $e');
+        }
+      }
+    }
+
+    // 4. SharedPreferences — huling naka-login
+    if (resolved == null) {
+      try {
+        final lastId = await _getLastEmployeeId();
+        if (lastId != null && lastId.isNotEmpty) {
+          resolved = await _loadEmployeeById(lastId);
+          if (resolved != null) {
+            debugPrint(
+                '✅ [ClientMeeting] Resolved from SharedPreferences: $lastId');
+          }
+        }
+      } catch (e) {
+        debugPrint('⚠️ [ClientMeeting] SharedPreferences lookup failed: $e');
+      }
+    }
+
+    // ❌ WALANG EMPLOYEE → IPAKITA ANG EMPLOYEE PICKER
+    if (resolved == null) {
+      debugPrint('📋 [ClientMeeting] No employee — showing picker.');
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      await _showEmployeePicker();
+      return;
+    }
+
+    // ✅ MAY EMPLOYEE — setup session, camera agad
+    await _startClientMeetingFor(resolved);
+  }
+
+  // ✅ Common helper — setup session at buksan camera para sa isang employee
+  Future<void> _startClientMeetingFor(Employee employee) async {
+    _activeEmployee = employee;
+    try {
+      await SecurityService.instance.createSession(employee.id);
+    } catch (e) {
+      debugPrint('⚠️ [ClientMeeting] createSession failed: $e');
+    }
+    if (!kIsWeb) {
+      try {
+        LocationTrackingService.instance.startTracking(employee.id);
+      } catch (e) {
+        debugPrint('⚠️ [ClientMeeting] startTracking failed: $e');
+      }
+    }
+    try {
+      await FirebaseFirestore.instance.collection('activity_logs').add({
+        'type': 'client_meeting_login',
+        'employeeId': employee.id,
+        'employee_id': employee.id,
+        'employee_name': employee.fullName,
+        'email': employee.email,
+        'role': employee.position,
+        'timestamp': FieldValue.serverTimestamp(),
+        'device': kIsWeb ? 'Web Browser' : 'Mobile App',
+      });
+    } catch (e) {
+      debugPrint('⚠️ [ClientMeeting] audit log failed: $e');
+    }
+
+    debugPrint(
+        '✅ [ClientMeeting] Employee resolved — ${employee.fullName} (${employee.id})');
+
+    if (!mounted) return;
+    setState(() => _isLoading = false);
     _goToStep(_LoginStep.clientMeeting);
+  }
+
+  // ✅ EMPLOYEE PICKER — listahan ng lahat ng active employees
+  Future<void> _showEmployeePicker() async {
+    List<Employee> employees = [];
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('employees')
+          .where('status', isEqualTo: 'active')
+          .get();
+      employees = snap.docs.map((d) => _docToEmployee(d)).toList();
+      employees.sort((a, b) =>
+          a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase()));
+    } catch (e) {
+      debugPrint('⚠️ Failed to fetch employees: $e');
+    }
+
+    if (!mounted) return;
+
+    // Walang laman ang employees → ipakita ang fallback dialog
+    if (employees.isEmpty) {
+      _showNoEmployeesDialog();
+      return;
+    }
+
+    final selected = await showModalBottomSheet<Employee>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return Container(
+          height: MediaQuery.of(ctx).size.height * 0.78,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFFF8A00), Color(0xFFF54900)],
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.person_search_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Select Employee',
+                            style: TextStyle(
+                              color: Color(0xFF1F2937),
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Piliin ang iyong pangalan para sa Client Meeting',
+                            style: TextStyle(
+                              color: Color(0xFF6B7280),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: employees.length,
+                  separatorBuilder: (_, __) =>
+                  const Divider(height: 1, indent: 70),
+                  itemBuilder: (_, i) {
+                    final emp = employees[i];
+                    final nameParts = emp.fullName.trim().split(' ');
+                    final initials = nameParts.length >= 2
+                        ? '${nameParts[0][0]}${nameParts[1][0]}'.toUpperCase()
+                        : (nameParts.isNotEmpty && nameParts[0].isNotEmpty
+                        ? nameParts[0][0].toUpperCase()
+                        : '?');
+                    final empIdDisplay =
+                    emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
+                    return ListTile(
+                      onTap: () => Navigator.of(ctx).pop(emp),
+                      leading: CircleAvatar(
+                        radius: 22,
+                        backgroundColor:
+                        const Color(0xFFF97316).withValues(alpha: 0.15),
+                        child: Text(
+                          initials,
+                          style: const TextStyle(
+                            color: Color(0xFFF97316),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      title: Text(
+                        emp.fullName,
+                        style: const TextStyle(
+                          color: Color(0xFF1F2937),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'ID: $empIdDisplay'
+                            '${emp.position.isNotEmpty ? " • ${emp.position}" : ""}',
+                        style: const TextStyle(
+                          color: Color(0xFF6B7280),
+                          fontSize: 12,
+                        ),
+                      ),
+                      trailing: const Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        size: 14,
+                        color: Color(0xFF9CA3AF),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (selected == null) {
+      debugPrint('ℹ️ [ClientMeeting] Picker cancelled.');
+      if (mounted) setState(() => _isLoading = false);
+      return;
+    }
+
+    // ✅ I-save sa SharedPreferences para susunod na pindot, diretso na
+    await _saveLastEmployeeId(selected.id);
+
+    // ✅ Simulan ang client meeting para sa piniling employee
+    await _startClientMeetingFor(selected);
+  }
+
+  // ✅ Fallback dialog kung walang employees sa Firestore
+  void _showNoEmployeesDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        backgroundColor: Colors.white,
+        title: const Text(
+          'No Employees Found',
+          style: TextStyle(
+            color: Color(0xFF1F2937),
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        content: const Text(
+          'Walang aktibong employees sa database. Paki-contact ang Admin.',
+          style: TextStyle(color: Color(0xFF4B5563), fontSize: 14),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF97316),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _releaseCamera() async {
@@ -586,6 +1208,9 @@ class _LoginScreenState extends State<LoginScreen>
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 📸 CAPTURE PHOTO — may guard laban sa walang employee
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _capturePhoto() async {
     final controller = _cameraController;
     if (controller == null ||
@@ -593,14 +1218,44 @@ class _LoginScreenState extends State<LoginScreen>
         _isCapturing) {
       return;
     }
+
+    // ✅ GUARD — bawal mag-capture kung walang employee
+    if (_activeEmployee == null || _employeeId == null) {
+      if (mounted) {
+        setState(() => _isCapturing = false);
+        _setError(
+            'Walang naka-login na employee. Mag-login muna gamit ang PIN o Key Fob.');
+      }
+      return;
+    }
+
     setState(() {
       _isCapturing = true;
       _errorMessage = null;
     });
+
     try {
+      final ok = await _ensureLocationPermission();
+      if (ok) {
+        try {
+          final freshPos = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.best,
+            timeLimit: const Duration(seconds: 10),
+          );
+          await _updatePosition(freshPos);
+        } catch (e) {
+          debugPrint('⚠️ Fresh position failed: $e');
+        }
+      }
+
       final photo = await controller.takePicture();
-      debugPrint('Client meeting photo: ${photo.path} at $_now');
+      debugPrint('📸 Client meeting photo: ${photo.path}');
+      debugPrint('📍 Location at capture: $_currentPlaceName');
+
+      await _saveClientMeetingLog(photoPath: photo.path);
+
       _clockTimer?.cancel();
+      _stopLocationTracking();
       await _releaseCamera();
       if (!mounted) return;
       setState(() {
@@ -616,8 +1271,173 @@ class _LoginScreenState extends State<LoginScreen>
     } catch (e) {
       debugPrint('Client meeting capture error: $e');
       if (mounted) setState(() => _isCapturing = false);
-      _setError('Could not capture photo. Please try again.');
+      _setError(e.toString().replaceAll('Exception: ', ''));
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 💾 SAVE CLIENT MEETING — tunay na Employee ID + Name
+  // ═══════════════════════════════════════════════════════════════
+  Future<void> _saveClientMeetingLog({required String photoPath}) async {
+    String empId = _employeeId ?? '';
+    String empName = _employeeName;
+    String empEmail = _employeeEmail;
+
+    // Fallback 1: SecurityService session
+    if (empId.isEmpty) {
+      try {
+        final secId = await SecurityService.instance.getCurrentEmployeeId();
+        if (secId != null && secId.isNotEmpty) {
+          empId = secId;
+          final emp = await _loadEmployeeById(secId);
+          if (emp != null) {
+            empName = emp.fullName;
+            empEmail = emp.email;
+          }
+          debugPrint('🔑 Resolved empId from SecurityService: $empId');
+        }
+      } catch (e) {
+        debugPrint('⚠️ SecurityService lookup failed: $e');
+      }
+    }
+
+    // Fallback 2: SharedPreferences — huling naka-login
+    if (empId.isEmpty) {
+      try {
+        final lastId = await _getLastEmployeeId();
+        if (lastId != null && lastId.isNotEmpty) {
+          empId = lastId;
+          final emp = await _loadEmployeeById(lastId);
+          if (emp != null) {
+            empName = emp.fullName;
+            empEmail = emp.email;
+          }
+          debugPrint('🔑 Resolved empId from SharedPreferences: $empId');
+        }
+      } catch (e) {
+        debugPrint('⚠️ SharedPreferences lookup failed: $e');
+      }
+    }
+
+    // Fallback 3: FirebaseAuth currentUser → Firestore lookup
+    if (empId.isEmpty) {
+      final authUser = FirebaseAuth.instance.currentUser;
+      if (authUser != null) {
+        try {
+          final snap = await FirebaseFirestore.instance
+              .collection('employees')
+              .where('authUid', isEqualTo: authUser.uid)
+              .limit(1)
+              .get();
+          if (snap.docs.isNotEmpty) {
+            final emp = _docToEmployee(snap.docs.first);
+            empId = emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
+            empName = emp.fullName;
+            empEmail = emp.email;
+            debugPrint('🔑 Resolved empId via authUid: $empId');
+          } else if (authUser.email != null) {
+            final emailSnap = await FirebaseFirestore.instance
+                .collection('employees')
+                .where('email', isEqualTo: authUser.email!.toLowerCase())
+                .limit(1)
+                .get();
+            if (emailSnap.docs.isNotEmpty) {
+              final emp = _docToEmployee(emailSnap.docs.first);
+              empId = emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
+              empName = emp.fullName;
+              empEmail = emp.email;
+              debugPrint('🔑 Resolved empId via email: $empId');
+            }
+          }
+        } catch (e) {
+          debugPrint('⚠️ FirebaseAuth → Firestore lookup failed: $e');
+        }
+      }
+    }
+
+    // ❌ STRICT — walang guest. Kung wala talaga, i-throw.
+    if (empId.isEmpty) {
+      debugPrint('❌ Client meeting save BLOCKED — no employee identity.');
+      throw 'Walang naka-login na employee. Mag-login muna gamit ang PIN o Key Fob bago mag-Client Meeting.';
+    }
+
+    // Kunin ang name/email kung kulang pa
+    if (empName == 'Unknown' || empEmail.isEmpty) {
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(empId)
+            .get();
+        if (doc.exists) {
+          final d = doc.data()!;
+          final fn = (d['firstName'] ?? '').toString();
+          final ln = (d['lastName'] ?? '').toString();
+          empName = (d['name'] ?? '$fn $ln').toString().trim();
+          empEmail = (d['email'] ?? '').toString();
+        }
+      } catch (e) {
+        debugPrint('⚠️ Employee name lookup failed: $e');
+      }
+    }
+
+    debugPrint('═══════════════════════════════════════════');
+    debugPrint('📸 SAVING CLIENT MEETING');
+    debugPrint('   empId    : "$empId"');
+    debugPrint('   empName  : "$empName"');
+    debugPrint('   empEmail : "$empEmail"');
+    debugPrint('   location : "$_currentPlaceName"');
+    debugPrint('   photo    : $photoPath');
+    debugPrint('═══════════════════════════════════════════');
+
+    final now = DateTime.now();
+    final dateStr = '${now.year}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+    final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}:'
+        '${now.second.toString().padLeft(2, '0')}';
+
+    final payload = <String, dynamic>{
+      'employee_id': empId,
+      'employeeId': empId,
+      'employee_name': empName,
+      'employee_email': empEmail,
+      'type': 'client_meeting',
+      'action': 'Client Meeting Clock In',
+      'details': 'Client meeting — $_currentPlaceName',
+      'description': 'Client meeting at $_currentPlaceName',
+      'remarks': 'client_meeting',
+      'date': dateStr,
+      'time': timeStr,
+      'photo_path': photoPath,
+      'location_name': _currentPlaceName,
+      'latitude': _currentLatitude,
+      'longitude': _currentLongitude,
+      'location_captured_at': _locationTimestamp != null
+          ? Timestamp.fromDate(_locationTimestamp!)
+          : null,
+      'has_location': _currentLatitude != null && _currentLongitude != null,
+      'device': kIsWeb ? 'Web Browser' : 'Mobile App',
+      'platform': kIsWeb ? 'web' : 'mobile',
+      'zone_type': 'client_meeting',
+      'status': 'pending_hr_approval',
+      'payrollStatus': 'Pending',
+      'timestamp': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+
+    final fs = FirebaseFirestore.instance;
+
+    await fs.collection('attendance_logs').add(payload);
+    debugPrint('✅ Saved → attendance_logs');
+
+    await fs.collection('activity_logs').add(payload);
+    debugPrint('✅ Saved → activity_logs');
+
+    await fs.collection('activity logs').add(payload);
+    debugPrint('✅ Saved → activity logs');
+
+    debugPrint('🎉 Client meeting saved successfully!');
   }
 
   String _formatTimestamp(DateTime dt) {
@@ -632,6 +1452,46 @@ class _LoginScreenState extends State<LoginScreen>
     return '$mm/$dd/$yyyy - $hh:$min $ampm';
   }
 
+  String _formatClockTime(DateTime dt) {
+    int h = dt.hour % 12;
+    if (h == 0) h = 12;
+    final hh = h.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    final ss = dt.second.toString().padLeft(2, '0');
+    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$hh:$mm:$ss $ampm';
+  }
+
+  String _formatClockDate(DateTime dt) {
+    const days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    return '${days[dt.weekday - 1]}, ${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // BUILD
+  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -642,30 +1502,403 @@ class _LoginScreenState extends State<LoginScreen>
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _goBack();
       },
-      child: Scaffold(
-        body: Stack(
-          children: [
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [tc.bgTop, tc.bgMid, tc.bgBottom],
-                  stops: const [0.0, 0.6, 1.0],
-                ),
-              ),
-              child: FadeTransition(
-                opacity: _fadeAnim,
-                child: Column(children: [
-                  _buildOrangeHeader(),
-                  Expanded(child: _buildSelectMethodStep(tc)),
-                ]),
-              ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isWide = constraints.maxWidth >= 1024;
+          if (!isWide) {
+            return Scaffold(
+              backgroundColor: tc.bgMid,
+              body: _buildContent(tc),
+            );
+          }
+          return Scaffold(
+            backgroundColor: const Color(0xFF0A0A0F),
+            body: Stack(
+              children: [
+                _buildWebLayout(tc),
+                if (_step != _LoginStep.selectMethod) _buildDesktopModal(),
+              ],
             ),
-            if (_step != _LoginStep.selectMethod) _buildModalOverlay(),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildWebLayout(_ThemeColors tc) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF0A0A0F),
+            Color(0xFF0D0B08),
+            Color(0xFF1A0F05),
           ],
         ),
       ),
+      child: SafeArea(
+        child: Column(
+          children: [
+            _buildWebTopNav(),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildWebSidebar(),
+                  Expanded(child: _buildWebMainContent(tc)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWebTopNav() {
+    return Container(
+      height: 76,
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFFF8A00), Color(0xFFF54900)],
+              ),
+              borderRadius: BorderRadius.circular(11),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFFF8A00).withValues(alpha: 0.4),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: const Icon(Icons.access_time_rounded,
+                color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 12),
+          const Text(
+            'R.A.C.O.M.A.',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.3,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFF8A00).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                  color: const Color(0xFFFF8A00).withValues(alpha: 0.4)),
+            ),
+            child: const Text(
+              'v1.0.3',
+              style: TextStyle(
+                color: Color(0xFFFF8A00),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const Spacer(),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                _formatClockTime(_now),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.5,
+                  height: 1.0,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                _formatClockDate(_now),
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.45),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWebSidebar() {
+    return Container(
+      width: 280,
+      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+      decoration: BoxDecoration(
+        border: Border(
+          right: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'AUTHENTICATION FLOW',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.4),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 24),
+          _buildStepItem(1, 'Initial Login', 'Key Fob or PIN', isActive: true),
+          _buildStepConnector(),
+          _buildStepItem(2, 'Confirm Identity', 'Secondary verification',
+              isActive: false),
+          _buildStepConnector(),
+          _buildStepItem(3, 'Clock In', 'Attendance recorded', isActive: false),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepItem(int n, String title, String subtitle,
+      {required bool isActive}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 32,
+          height: 32,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            gradient: isActive
+                ? const LinearGradient(
+              colors: [Color(0xFFFF8A00), Color(0xFFF54900)],
+            )
+                : null,
+            color: isActive ? null : Colors.white.withValues(alpha: 0.05),
+            shape: BoxShape.circle,
+            border: isActive
+                ? null
+                : Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            boxShadow: isActive
+                ? [
+              BoxShadow(
+                color: const Color(0xFFFF8A00).withValues(alpha: 0.4),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ]
+                : null,
+          ),
+          child: Text(
+            '$n',
+            style: TextStyle(
+              color:
+              isActive ? Colors.white : Colors.white.withValues(alpha: 0.4),
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+            ),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: isActive
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.55),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStepConnector() {
+    return Container(
+      margin: const EdgeInsets.only(left: 15, top: 6, bottom: 6),
+      width: 2,
+      height: 24,
+      color: Colors.white.withValues(alpha: 0.08),
+    );
+  }
+
+  Widget _buildWebMainContent(_ThemeColors tc) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 56, vertical: 40),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Auth & Clock In',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 42,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -1.4,
+              height: 1.05,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Choose your verification method to begin your shift.',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.55),
+              fontSize: 15,
+            ),
+          ),
+          const SizedBox(height: 40),
+          SizedBox(
+            height: 320,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: _WebOptionCard(
+                    icon: Icons.contactless_rounded,
+                    title: 'Key Fob',
+                    desc:
+                    'Tap your fob on the NFC reader to authenticate instantly.',
+                    enabled: !kIsWeb && _nfcAvailable,
+                    onTap: () => _goToStep(_LoginStep.nfcWait),
+                  ),
+                ),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: _WebOptionCard(
+                    icon: Icons.key_rounded,
+                    title: 'Use PIN',
+                    desc:
+                    'Enter your 4-digit security PIN to verify your identity.',
+                    enabled: true,
+                    onTap: () => _goToStep(_LoginStep.pinEntry),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 32),
+          Row(
+            children: [
+              Text(
+                'Having trouble? ',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.4),
+                  fontSize: 13,
+                ),
+              ),
+              GestureDetector(
+                onTap: () {},
+                child: const Text(
+                  'Contact administrator',
+                  style: TextStyle(
+                    color: Color(0xFFFF8A00),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.underline,
+                    decorationColor: Color(0xFFFF8A00),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDesktopModal() {
+    Widget card;
+    switch (_step) {
+      case _LoginStep.pinEntry:
+        card = _buildPinModalCard();
+        break;
+      case _LoginStep.nfcWait:
+        card = _buildNfcModalCard();
+        break;
+      case _LoginStep.clientMeeting:
+        card = _buildClientMeetingModalCard();
+        break;
+      case _LoginStep.selectMethod:
+        return const SizedBox.shrink();
+    }
+    return Positioned.fill(
+      child: FadeTransition(
+        opacity: _modalOpacityAnim,
+        child: Container(
+          color: _scrim,
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          child: Center(
+            child: SingleChildScrollView(
+              child: ScaleTransition(scale: _modalScaleAnim, child: card),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent(_ThemeColors tc) {
+    return Stack(
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [tc.bgTop, tc.bgMid, tc.bgBottom],
+              stops: const [0.0, 0.6, 1.0],
+            ),
+          ),
+          child: FadeTransition(
+            opacity: _fadeAnim,
+            child: Column(children: [
+              _buildOrangeHeader(),
+              Expanded(child: _buildSelectMethodStep(tc)),
+            ]),
+          ),
+        ),
+        if (_step != _LoginStep.selectMethod) _buildModalOverlay(),
+      ],
     );
   }
 
@@ -708,7 +1941,7 @@ class _LoginScreenState extends State<LoginScreen>
               ? constraints.maxWidth / _kHeaderDesignFrameWidth
               : 1.0;
           if (scale <= 0) scale = 1.0;
-          if (scale > 1.25) scale = 1.25;
+          if (scale > 1.0) scale = 1.0;
 
           final outerRadius = _kHeaderRadius * scale;
           final borderW = _kHeaderBorderBottom * scale;
@@ -768,7 +2001,6 @@ class _LoginScreenState extends State<LoginScreen>
                       ),
                     ),
                   ),
-                  // Title
                   Positioned(
                     left: _kTitleLeft * scale,
                     top: _kTitleTop * scale,
@@ -783,7 +2015,6 @@ class _LoginScreenState extends State<LoginScreen>
                       ),
                     ),
                   ),
-                  // Subtitle
                   Positioned(
                     left: _kSubtitleLeft * scale,
                     top: _kSubtitleTop * scale,
@@ -813,7 +2044,7 @@ class _LoginScreenState extends State<LoginScreen>
             ? constraints.maxWidth / _kHeaderDesignFrameWidth
             : 1.0;
         if (scale <= 0) scale = 1.0;
-        if (scale > 1.25) scale = 1.25;
+        if (scale > 1.0) scale = 1.0;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -900,7 +2131,7 @@ class _LoginScreenState extends State<LoginScreen>
 
   Widget _buildClientMeetingButton() {
     return GestureDetector(
-      onTap: _onClientMeetingLogin,
+      onTap: _isLoading ? null : _onClientMeetingLogin,
       child: Container(
         width: double.infinity,
         height: 34,
@@ -910,7 +2141,14 @@ class _LoginScreenState extends State<LoginScreen>
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _orange, width: 1),
         ),
-        child: const Text(
+        child: _isLoading
+            ? const SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(
+              color: _orange, strokeWidth: 2),
+        )
+            : const Text(
           'Client Meeting LogIn',
           style: TextStyle(
               color: _orange, fontSize: 14, fontWeight: FontWeight.w500),
@@ -919,10 +2157,6 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  /// [overlap] is how far (in logical px) the card is pulled UP into
-  /// the orange header above it, creating the rounded "S-curve"
-  /// silhouette where the header's straight bottom corners meet the
-  /// card's rounded top corners — matching the design mock.
   Widget _buildOverlapCard({
     required _ThemeColors tc,
     required String stepLabel,
@@ -971,6 +2205,7 @@ class _LoginScreenState extends State<LoginScreen>
   Widget _buildPinModalCard() {
     return Container(
       width: double.infinity,
+      constraints: const BoxConstraints(maxWidth: 380),
       padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -1094,6 +2329,7 @@ class _LoginScreenState extends State<LoginScreen>
     }
     return Container(
       width: double.infinity,
+      constraints: const BoxConstraints(maxWidth: 380),
       padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -1167,6 +2403,7 @@ class _LoginScreenState extends State<LoginScreen>
   }) {
     return Container(
       width: double.infinity,
+      constraints: const BoxConstraints(maxWidth: 380),
       padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -1222,6 +2459,7 @@ class _LoginScreenState extends State<LoginScreen>
     if (_captureSuccess) return _buildClientMeetingSuccessCard();
     return Container(
       width: double.infinity,
+      constraints: const BoxConstraints(maxWidth: 380),
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -1327,18 +2565,49 @@ class _LoginScreenState extends State<LoginScreen>
                   bottom: 20,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Text(_siteName,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600)),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.location_on_rounded,
+                              color: Color(0xFFC4FF0A), size: 14),
+                          const SizedBox(width: 5),
+                          Flexible(
+                            child: Text(
+                              _locationDisplay,
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  shadows: [
+                                    Shadow(
+                                      color: Colors.black87,
+                                      blurRadius: 6,
+                                    ),
+                                  ]),
+                            ),
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 6),
-                      Text(_formatTimestamp(_now),
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              color: Colors.white70, fontSize: 12)),
+                      Text(
+                        _formatTimestamp(_now),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            shadows: [
+                              Shadow(
+                                color: Colors.black87,
+                                blurRadius: 6,
+                              ),
+                            ]),
+                      ),
                     ],
                   ),
                 ),
@@ -1419,6 +2688,7 @@ class _LoginScreenState extends State<LoginScreen>
   Widget _buildClientMeetingSuccessCard() {
     return Container(
       width: double.infinity,
+      constraints: const BoxConstraints(maxWidth: 380),
       padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -1529,8 +2799,186 @@ class _LoginScreenState extends State<LoginScreen>
   }
 }
 
-/// Draws the exact SVG chevron used in the HTML Back button:
-/// `M12.4951 14.9941L7.49707 9.9961L12.4951 4.99805`
+// ═══════════════════════════════════════════════════════════════
+// WEB OPTION CARD
+// ═══════════════════════════════════════════════════════════════
+class _WebOptionCard extends StatefulWidget {
+  final IconData icon;
+  final String title;
+  final String desc;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _WebOptionCard({
+    required this.icon,
+    required this.title,
+    required this.desc,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  State<_WebOptionCard> createState() => _WebOptionCardState();
+}
+
+class _WebOptionCardState extends State<_WebOptionCard> {
+  final ValueNotifier<bool> _hovered = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _pressed = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _hovered.dispose();
+    _pressed.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.enabled;
+
+    return MouseRegion(
+      cursor: enabled
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.forbidden,
+      onEnter: (_) => _hovered.value = true,
+      onExit: (_) => _hovered.value = false,
+      child: GestureDetector(
+        onTapDown: enabled ? (_) => _pressed.value = true : null,
+        onTapUp: enabled
+            ? (_) {
+          _pressed.value = false;
+          widget.onTap();
+        }
+            : null,
+        onTapCancel: enabled ? () => _pressed.value = false : null,
+        child: ValueListenableBuilder<bool>(
+          valueListenable: _hovered,
+          builder: (context, hovered, _) {
+            return ValueListenableBuilder<bool>(
+              valueListenable: _pressed,
+              builder: (context, pressed, __) {
+                final active = enabled && (hovered || pressed);
+                final scale = pressed ? 0.98 : 1.0;
+
+                return AnimatedScale(
+                  duration: const Duration(milliseconds: 140),
+                  scale: scale,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    padding: const EdgeInsets.all(28),
+                    decoration: BoxDecoration(
+                      color: active
+                          ? const Color(0xFFFF8A00).withValues(alpha: 0.06)
+                          : Colors.white.withValues(alpha: 0.03),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: active
+                            ? const Color(0xFFFF8A00)
+                            .withValues(alpha: 0.5)
+                            : Colors.white.withValues(alpha: 0.08),
+                        width: 1.5,
+                      ),
+                      boxShadow: active
+                          ? [
+                        BoxShadow(
+                          color: const Color(0xFFFF8A00)
+                              .withValues(alpha: 0.18),
+                          blurRadius: 32,
+                          offset: const Offset(0, 12),
+                        ),
+                      ]
+                          : null,
+                    ),
+                    child: Opacity(
+                      opacity: enabled ? 1.0 : 0.45,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.max,
+                        children: [
+                          Container(
+                            width: 56,
+                            height: 56,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [Color(0xFFFF8A00), Color(0xFFF54900)],
+                              ),
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFFFF8A00)
+                                      .withValues(alpha: 0.35),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
+                            child: Icon(widget.icon,
+                                color: Colors.white, size: 26),
+                          ),
+                          const SizedBox(height: 20),
+                          Text(
+                            widget.title,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.4,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            widget.desc,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.5),
+                              fontSize: 14,
+                              height: 1.5,
+                            ),
+                          ),
+                          const Spacer(),
+                          Row(
+                            children: [
+                              Text(
+                                'Select',
+                                style: TextStyle(
+                                  color: enabled
+                                      ? const Color(0xFFFF8A00)
+                                      : Colors.white.withValues(alpha: 0.3),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              AnimatedPadding(
+                                duration: const Duration(milliseconds: 180),
+                                padding: EdgeInsets.only(
+                                    left: hovered && enabled ? 4 : 0),
+                                child: Icon(
+                                  Icons.arrow_forward_rounded,
+                                  color: enabled
+                                      ? const Color(0xFFFF8A00)
+                                      : Colors.white.withValues(alpha: 0.3),
+                                  size: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
 class _BackArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {

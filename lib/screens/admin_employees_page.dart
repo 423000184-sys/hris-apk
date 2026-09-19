@@ -1,4 +1,4 @@
-//lib/screens/admin_employees_page.dart
+// lib/screens/admin_employees_page.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File;
@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:pdf/pdf.dart';
@@ -23,6 +24,29 @@ import '../services/admin_notification_service.dart';
 const int kAdminAnnualLeaveTotal = 18;
 const int kAdminSickLeaveTotal = 18;
 const int kCurrentFaceVersion = 4;
+
+// ══════════════════════════════════════════════════════════════
+// 💰 ROLE-BASED SALARY MATRIX (DEFAULT PRESETS ONLY)
+// ══════════════════════════════════════════════════════════════
+const int kWorkingDaysPerMonth = 22;
+
+const Map<String, Map<String, double>> kRoleSalaryMatrix = {
+  'Employee': {'basicSalary': 18000.0, 'allowances': 2000.0},
+  'Driver':   {'basicSalary': 16000.0, 'allowances': 1500.0},
+  'Admin':    {'basicSalary': 25000.0, 'allowances': 3000.0},
+  'Manager':  {'basicSalary': 45000.0, 'allowances': 5000.0},
+};
+
+double _basicSalaryForRole(String role) =>
+    kRoleSalaryMatrix[role]?['basicSalary'] ?? 0.0;
+
+double _allowancesForRole(String role) =>
+    kRoleSalaryMatrix[role]?['allowances'] ?? 0.0;
+
+double _parseMoneyStr(String s) => double.tryParse(
+  s.replaceAll(',', '').replaceAll('₱', '').trim(),
+) ??
+    0.0;
 
 // ══════════════════════════════════════════════════════════════
 // CUSTOM SCROLL BEHAVIOR
@@ -74,6 +98,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   final _editKeyfobCtrl = TextEditingController();
   final _editPinCtrl = TextEditingController();
   final _editBirthdayCtrl = TextEditingController();
+  final _editDeviceNameCtrl = TextEditingController();
   final _editEmployeeIdCtrl = TextEditingController();
   DateTime? _editBirthday;
   String? _editDepartmentDropdown;
@@ -83,7 +108,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   bool _editWfhAccess = false;
   String _editOriginalEmployeeId = '';
 
-  // ✅ Edit Photo state
+  // ─── SALARY EDIT CONTROLLERS (EDITABLE) ────────────────────
+  final _editBasicSalaryCtrl = TextEditingController();
+  final _editAllowancesCtrl = TextEditingController();
+  final _editDailyRateCtrl = TextEditingController();
+  final _editBankNameCtrl = TextEditingController();
+  final _editAccountNumberCtrl = TextEditingController();
+
   XFile? _editPhotoXFile;
   Uint8List? _editPhotoBytes;
   bool _editPhotoUploading = false;
@@ -147,8 +178,14 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _editPassCtrl.dispose();
     _editKeyfobCtrl.dispose();
     _editPinCtrl.dispose();
+    _editDeviceNameCtrl.dispose();
     _editBirthdayCtrl.dispose();
     _editEmployeeIdCtrl.dispose();
+    _editBasicSalaryCtrl.dispose();
+    _editAllowancesCtrl.dispose();
+    _editDailyRateCtrl.dispose();
+    _editBankNameCtrl.dispose();
+    _editAccountNumberCtrl.dispose();
     _addFirstCtrl.dispose();
     _addLastCtrl.dispose();
     _addEmailCtrl.dispose();
@@ -164,12 +201,83 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
+  // ✅ EDIT CONTROLLERS INITIALIZER — CALLED ONLY ONCE
+  // ══════════════════════════════════════════════════════════════
+  void _initializeEditControllers(Map<String, dynamic> emp) {
+    final photoUrl = _s(emp['photoUrl'], '').isNotEmpty
+        ? _s(emp['photoUrl'], '')
+        : _s(emp['photo'], '');
+    final empId = _s(emp['employeeId'], _s(emp['id'], ''));
+
+    _editPhotoUrl = photoUrl.isNotEmpty && photoUrl != '—' ? photoUrl : null;
+
+    final fullName =
+    '${_s(emp['firstName'], '')} ${_s(emp['lastName'], '')}'.trim();
+    _editFullNameCtrl.text = fullName.isEmpty ? _nameOf(emp) : fullName;
+    _editEmailCtrl.text = _s(emp['email'], '');
+    _editPhoneCtrl.text = _s(emp['phone'], _s(emp['mobile'], ''));
+    _editRoleCtrl.text = _s(emp['role'], '');
+    _editDeptCtrl.text = _s(emp['department'], '');
+    _editKeyfobCtrl.text = _s(emp['nfcTagId'], _s(emp['nfcId'], ''));
+    _editPinCtrl.text = _s(emp['pin'], '');
+    _editDeviceNameCtrl.text = _s(emp['deviceName'], '');
+    _editEmployeeIdCtrl.text = empId;
+    _editOriginalEmployeeId = empId;
+
+    final savedBasic = _moneyOf(emp['basicSalary']);
+    final savedAllow = _moneyOf(emp['basicAllowance'] ?? emp['allowances']);
+    final empRole = _s(emp['role'], 'Employee');
+
+    final basicToShow =
+    savedBasic > 0 ? savedBasic : _basicSalaryForRole(empRole);
+    final allowToShow =
+    savedAllow > 0 ? savedAllow : _allowancesForRole(empRole);
+
+    _editBasicSalaryCtrl.text = basicToShow.toStringAsFixed(2);
+    _editAllowancesCtrl.text = allowToShow.toStringAsFixed(2);
+    _editDailyRateCtrl.text =
+        (basicToShow / kWorkingDaysPerMonth).toStringAsFixed(2);
+    _editBankNameCtrl.text = _s(emp['bankName'], '');
+    _editAccountNumberCtrl.text = _s(emp['accountNumber'], '');
+
+    final bd = _toDateTime(emp['birthday'] ?? emp['birthDate']);
+    _editBirthday = bd;
+    _editBirthdayCtrl.text = bd == null ? '' : _fmtDate(bd, fallback: '');
+
+    _editDepartmentDropdown = _departmentOptions.contains(_editDeptCtrl.text)
+        ? _editDeptCtrl.text
+        : null;
+
+    debugPrint('📝 [initializeEditControllers] Loaded employee: $empId');
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // HELPERS
   // ══════════════════════════════════════════════════════════════
   String _s(dynamic v, [String fallback = '—']) {
     if (v == null) return fallback;
     final str = v.toString().trim();
     return str.isEmpty ? fallback : str;
+  }
+
+  double _parseMoney(String s) => _parseMoneyStr(s);
+
+  String _fmtMoney(dynamic v) {
+    final d = v is num ? v.toDouble() : double.tryParse('$v') ?? 0;
+    if (d == 0) return '';
+    return d.toStringAsFixed(2).replaceAll(RegExp(r'\.00$'), '');
+  }
+
+  double _moneyOf(dynamic v) {
+    if (v == null) return 0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0;
+  }
+
+  void _recomputeDailyRate() {
+    final basic = _parseMoneyStr(_editBasicSalaryCtrl.text);
+    final daily = basic / kWorkingDaysPerMonth;
+    _editDailyRateCtrl.text = daily.toStringAsFixed(2);
   }
 
   int _safeInt(dynamic v, [int fallback = 0]) {
@@ -232,9 +340,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     return _s(v).toLowerCase() == 'true';
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ WFH ACCESS TOGGLE — may ADMIN NOTIFICATION
-  // ══════════════════════════════════════════════════════════════
   Future<void> _setWfhAccess(Map<String, dynamic> emp, bool enabled) async {
     final docId = _s(emp['id'], '');
     if (docId.isEmpty) {
@@ -247,14 +352,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'wfhUpdatedAt': FieldValue.serverTimestamp(),
       });
 
-      // ✅ ADMIN NOTIFICATION
       try {
         AdminNotificationService.instance.notifyWfhToggle(
           employeeId: docId,
           employeeName: _nameOf(emp),
           enabled: enabled,
         );
-        debugPrint('✅ [AdminEmployees] WFH toggle notification sent');
       } catch (e) {
         debugPrint('⚠️ Admin WFH notification failed: $e');
       }
@@ -272,7 +375,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       }
 
       if (!mounted) return;
-
       setState(() {
         emp['wfhAccess'] = enabled;
         if (_selectedProfileEmp != null &&
@@ -343,9 +445,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     return '${d.inHours}h ${d.inMinutes.remainder(60)}m';
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ PICK EDIT PHOTO (Camera / Gallery)
-  // ══════════════════════════════════════════════════════════════
   Future<void> _pickEditPhoto() async {
     try {
       final source = await showModalBottomSheet<ImageSource>(
@@ -417,31 +516,21 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ UPLOAD EDIT PHOTO — Base64 sa Firestore (walang Firebase Storage)
-  // ══════════════════════════════════════════════════════════════
   Future<String?> _uploadEditPhoto(String employeeDocId) async {
     if (_editPhotoXFile == null) return _editPhotoUrl;
 
     setState(() => _editPhotoUploading = true);
     try {
-      debugPrint('📤 Preparing photo for Firestore...');
       final rawBytes =
           _editPhotoBytes ?? await _editPhotoXFile!.readAsBytes();
-      debugPrint(
-          '📤 Original: ${(rawBytes.length / 1024).toStringAsFixed(1)} KB');
 
       final compressed = _compressForFirestore(rawBytes);
       if (compressed == null) {
         _snack('Failed to compress image.', error: true);
         return null;
       }
-      debugPrint(
-          '📤 Compressed: ${(compressed.length / 1024).toStringAsFixed(1)} KB');
 
       final b64 = base64Encode(compressed);
-      debugPrint(
-          '📤 Base64 length: ${(b64.length / 1024).toStringAsFixed(1)} KB');
 
       if (b64.length > 900 * 1024) {
         _snack(
@@ -451,7 +540,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       }
 
       final dataUri = 'data:image/jpeg;base64,$b64';
-      debugPrint('✅ Photo ready as base64 data URI');
       return dataUri;
     } catch (e) {
       debugPrint('❌ Photo processing error: $e');
@@ -524,9 +612,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PHOTO SUITABILITY CHECK
-  // ══════════════════════════════════════════════════════════════
   Future<Map<String, dynamic>> _checkPhotoSuitability(String url) async {
     final completer = Completer<Map<String, dynamic>>();
 
@@ -534,9 +619,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       completer.complete({
         'ok': false,
         'severity': 'error',
-        'title': 'Walang Photo',
-        'message': 'Hindi ka pa nag-upload ng photo.',
-        'suggestion': 'I-upload ang ID-style close-up photo.',
+        'title': 'No Photo',
+        'message': 'You have not uploaded a photo yet.',
+        'suggestion': 'Upload an ID-style close-up photo.',
       });
       return completer.future;
     }
@@ -551,8 +636,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             'ok': false,
             'severity': 'error',
             'title': 'Invalid Photo',
-            'message': 'Hindi ma-decode ang photo.',
-            'suggestion': 'I-upload ulit.',
+            'message': 'Cannot decode the photo.',
+            'suggestion': 'Please upload again.',
           });
           return completer.future;
         }
@@ -567,27 +652,27 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
         if (w < 200 || h < 200) {
           severity = 'error';
-          title = 'Resolution masyadong maliit';
+          title = 'Resolution too small';
           message =
-          'Ang photo ($w×$h) ay masyadong maliit para sa reliable face recognition.';
-          suggestion = 'Kumuha ng bagong photo na at least 400×400 pixels.';
+          'The photo ($w×$h) is too small for reliable face recognition.';
+          suggestion = 'Take a new photo of at least 400×400 pixels.';
         } else if (ratio > 1.2) {
           severity = 'warning';
           title = 'Landscape / Full-body Shot';
           message =
-          'Ang photo ($w×$h) ay landscape. Hindi ito angkop para sa face recognition.';
-          suggestion = 'Mag-upload ng PORTRAIT na close-up (ID-style).';
+          'The photo ($w×$h) is landscape. It is not suitable for face recognition.';
+          suggestion = 'Upload a PORTRAIT close-up (ID-style).';
         } else if (ratio < 0.6) {
           severity = 'warning';
-          title = 'Masyadong Habang Portrait';
-          message = 'Ang photo ($w×$h) ay masyadong mahaba (vertical).';
-          suggestion = 'Gumamit ng standard portrait (3:4 o 4:5 ratio).';
+          title = 'Too Tall Portrait';
+          message = 'The photo ($w×$h) is too tall (vertical).';
+          suggestion = 'Use a standard portrait ratio (3:4 or 4:5).';
         } else {
           severity = 'ok';
           title = 'Photo OK';
           message =
-          'Ang photo ($w×$h, ratio ${ratio.toStringAsFixed(2)}) ay maayos.';
-          suggestion = 'Pwede itong gamitin.';
+          'The photo ($w×$h, ratio ${ratio.toStringAsFixed(2)}) is good.';
+          suggestion = 'You can use this photo.';
         }
 
         completer.complete({
@@ -606,7 +691,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           'severity': 'error',
           'title': 'Error',
           'message': 'Error: $e',
-          'suggestion': 'I-try ulit.',
+          'suggestion': 'Try again.',
         });
       }
       return completer.future;
@@ -629,27 +714,27 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
           if (w < 200 || h < 200) {
             severity = 'error';
-            title = 'Resolution masyadong maliit';
+            title = 'Resolution too small';
             message =
-            'Ang photo ($w×$h) ay masyadong maliit para sa reliable face recognition.';
-            suggestion = 'Kumuha ng bagong photo na at least 400×400 pixels.';
+            'The photo ($w×$h) is too small for reliable face recognition.';
+            suggestion = 'Take a new photo of at least 400×400 pixels.';
           } else if (ratio > 1.2) {
             severity = 'warning';
             title = 'Landscape / Full-body Shot';
             message =
-            'Ang photo ($w×$h, ratio ${ratio.toStringAsFixed(2)}) ay landscape.';
-            suggestion = 'Mag-upload ng PORTRAIT na close-up (ID-style).';
+            'The photo ($w×$h, ratio ${ratio.toStringAsFixed(2)}) is landscape.';
+            suggestion = 'Upload a PORTRAIT close-up (ID-style).';
           } else if (ratio < 0.6) {
             severity = 'warning';
-            title = 'Masyadong Habang Portrait';
-            message = 'Ang photo ($w×$h) ay masyadong mahaba.';
-            suggestion = 'Gumamit ng standard portrait (3:4 o 4:5 ratio).';
+            title = 'Too Tall Portrait';
+            message = 'The photo ($w×$h) is too tall.';
+            suggestion = 'Use a standard portrait ratio (3:4 or 4:5).';
           } else {
             severity = 'ok';
             title = 'Photo OK';
             message =
-            'Ang photo ($w×$h, ratio ${ratio.toStringAsFixed(2)}) ay maayos.';
-            suggestion = 'Pwede itong gamitin.';
+            'The photo ($w×$h, ratio ${ratio.toStringAsFixed(2)}) is good.';
+            suggestion = 'You can use this photo.';
           }
 
           completer.complete({
@@ -667,9 +752,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           completer.complete({
             'ok': false,
             'severity': 'error',
-            'title': 'Hindi Ma-load',
-            'message': 'Hindi ma-load ang photo URL.',
-            'suggestion': 'I-check kung valid ang photo URL.',
+            'title': 'Cannot Load',
+            'message': 'The photo URL cannot be loaded.',
+            'suggestion': 'Check if the photo URL is valid.',
           });
         },
       );
@@ -682,8 +767,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             'ok': false,
             'severity': 'error',
             'title': 'Timeout',
-            'message': 'Hindi nag-load ang photo sa loob ng 10 seconds.',
-            'suggestion': 'I-check ang internet connection.',
+            'message': 'The photo did not load within 10 seconds.',
+            'suggestion': 'Check your internet connection.',
           });
         }
       });
@@ -693,7 +778,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'severity': 'error',
         'title': 'Error',
         'message': 'Error: $e',
-        'suggestion': 'I-try ulit.',
+        'suggestion': 'Try again.',
       });
     }
 
@@ -714,7 +799,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             CircularProgressIndicator(color: tc.orange),
             const SizedBox(width: 20),
             Expanded(
-              child: Text('Vine-verify ang photo ni $name...',
+              child: Text('Verifying photo of $name...',
                   style: TextStyle(color: tc.text)),
             ),
           ],
@@ -804,7 +889,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 ),
               ),
               const SizedBox(height: 12),
-              Text('💡 Rekomendasyon:',
+              Text('💡 Recommendation:',
                   style: TextStyle(
                       color: tc.text,
                       fontWeight: FontWeight.w700,
@@ -814,33 +899,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 result['suggestion'] as String,
                 style: TextStyle(color: tc.muted, fontSize: 12, height: 1.4),
               ),
-              if (severity != 'ok') ...[
-                const SizedBox(height: 14),
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEFF4FF),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: tc.border),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.info_outline_rounded,
-                          size: 16, color: tc.orange),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Para sa 100% reliable na face enrollment, '
-                              'ipa-live scan ang employee sa MOBILE APP.',
-                          style: TextStyle(
-                              color: tc.text, fontSize: 11.5, height: 1.4),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
             ],
           ),
         ),
@@ -1010,14 +1068,10 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       DateTime? outTs;
 
       for (final log in dayLogs) {
-        final rawIn = log['timeIn'] ??
-            log['clockIn'] ??
-            log['in'] ??
-            log['time_in'];
-        final rawOut = log['timeOut'] ??
-            log['clockOut'] ??
-            log['out'] ??
-            log['time_out'];
+        final rawIn =
+            log['timeIn'] ?? log['clockIn'] ?? log['in'] ?? log['time_in'];
+        final rawOut =
+            log['timeOut'] ?? log['clockOut'] ?? log['out'] ?? log['time_out'];
         final parsedIn = _toDateTime(rawIn);
         final parsedOut = _toDateTime(rawOut);
         if (parsedIn != null && parsedOut != null) {
@@ -1197,6 +1251,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         ? 'ENROLLED (v$kCurrentFaceVersion)'
         : 'NOT ENROLLED';
     final photoStatus = _hasProfilePhoto(emp) ? 'UPLOADED' : 'NO PHOTO';
+    final deviceName = _s(emp['deviceName'], 'NOT SET');
 
     pdf.addPage(
       pw.Page(
@@ -1310,6 +1365,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 ]),
                 pw.SizedBox(height: 5),
                 pw.Row(children: [
+                  pw.Text('Registered Device: ',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                  pw.Text(deviceName)
+                ]),
+                pw.SizedBox(height: 5),
+                pw.Row(children: [
                   pw.Text('WFH Access: ',
                       style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                   pw.Text(wfhStatus)
@@ -1410,6 +1471,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 📸 PHOTO / FACE BADGES — kept (not called anymore)
+  // ══════════════════════════════════════════════════════════════
   Widget _photoFaceBadges(Map<String, dynamic> emp, {bool compact = false}) {
     final hasPhoto = _hasProfilePhoto(emp);
     final version = _faceVersionOf(emp);
@@ -1642,29 +1706,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
         );
 
-        final migrateButton = ElevatedButton.icon(
-          onPressed: _migratingFaces ? null : () => _confirmMigrateFaces(),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF7C3AED),
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            elevation: 0,
-          ),
-          icon: _migratingFaces
-              ? const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(
-                  color: Colors.white, strokeWidth: 2))
-              : const Icon(Icons.auto_fix_high_rounded, size: 18),
-          label: Text(
-            _migratingFaces ? 'Migrating...' : 'Migrate Faces',
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
-          ),
-        );
-
         final wipeButton = OutlinedButton.icon(
           onPressed: () => _confirmWipeAllLogs(),
           style: OutlinedButton.styleFrom(
@@ -1686,8 +1727,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             children: [
               title,
               const SizedBox(height: 14),
-              migrateButton,
-              const SizedBox(height: 10),
               wipeButton,
               const SizedBox(height: 10),
               addButton,
@@ -1698,8 +1737,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Expanded(child: title),
-            migrateButton,
-            const SizedBox(width: 8),
             wipeButton,
             const SizedBox(width: 8),
             addButton,
@@ -2042,8 +2079,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   ],
                 ),
                 const SizedBox(height: 14),
-                _photoFaceBadges(emp),
-                const SizedBox(height: 12),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: _wfhAccessToggle(
@@ -2087,12 +2122,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     setState(() => _selectedProfileEmp = emp);
                   } else if (v == 'edit') {
                     _openEditDialog(emp);
-                  } else if (v == 'verifyPhoto') {
-                    _showVerifyPhotoDialog(emp);
                   } else if (v == 'delete') {
                     _confirmDelete(_s(emp['id']), name);
-                  } else if (v == 'resetFace') {
-                    _confirmResetFace(emp);
                   }
                 },
                 itemBuilder: (_) => [
@@ -2113,28 +2144,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       const SizedBox(width: 8),
                       Text('Edit Details',
                           style: TextStyle(color: tc.text, fontSize: 13)),
-                    ]),
-                  ),
-                  PopupMenuItem(
-                    value: 'verifyPhoto',
-                    child: Row(children: [
-                      const Icon(Icons.verified_outlined,
-                          size: 16, color: Color(0xFF16A34A)),
-                      const SizedBox(width: 8),
-                      Text('Verify Photo',
-                          style: TextStyle(
-                              color: const Color(0xFF16A34A), fontSize: 13)),
-                    ]),
-                  ),
-                  PopupMenuItem(
-                    value: 'resetFace',
-                    child: Row(children: [
-                      const Icon(Icons.face_retouching_off,
-                          size: 16, color: Color(0xFF7C3AED)),
-                      const SizedBox(width: 8),
-                      Text('Reset Face Data',
-                          style: TextStyle(
-                              color: const Color(0xFF7C3AED), fontSize: 13)),
                     ]),
                   ),
                   PopupMenuItem(
@@ -2271,8 +2280,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           _infoRow(icon: Icons.business_outlined, text: dept),
           const SizedBox(height: 8),
           _infoRow(icon: Icons.email_outlined, text: email),
-          const SizedBox(height: 12),
-          _photoFaceBadges(emp, compact: true),
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerLeft,
@@ -2570,7 +2577,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   color: tc.text)),
           const SizedBox(height: 8),
           Text(
-            'Profile photo lang ito para sa display. Ang FACE ENROLLMENT ay gagawin ng employee sa mobile app.',
+            'This is just a display photo. FACE ENROLLMENT will be done by the employee in the mobile app.',
             style: TextStyle(fontSize: 13, color: tc.muted, height: 1.5),
           ),
         ],
@@ -2729,7 +2736,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Kung iiwan na blangko, awtomatikong bubuo ng keyfob serial at default PIN na "1234".',
+                    'If left blank, a keyfob serial and default PIN of "1234" will be automatically generated.',
                     style: TextStyle(fontSize: 12, color: tc.muted, height: 1.4),
                   ),
                 ),
@@ -2983,35 +2990,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // ✅ BUILD EDIT PAGE
+  // ══════════════════════════════════════════════════════════════
   Widget _buildEditEmployeePage(Map<String, dynamic> emp) {
-    final photoUrl = _s(emp['photoUrl'], '').isNotEmpty
-        ? _s(emp['photoUrl'], '')
-        : _s(emp['photo'], '');
-    final empId = _s(emp['employeeId'], _s(emp['id'], ''));
-
-    _editPhotoUrl = photoUrl.isNotEmpty && photoUrl != '—'
-        ? photoUrl
-        : null;
-
-    final fullName =
-    '${_s(emp['firstName'], '')} ${_s(emp['lastName'], '')}'.trim();
-    _editFullNameCtrl.text = fullName.isEmpty ? _nameOf(emp) : fullName;
-    _editEmailCtrl.text = _s(emp['email'], '');
-    _editPhoneCtrl.text = _s(emp['phone'], _s(emp['mobile'], ''));
-    _editRoleCtrl.text = _s(emp['role'], '');
-    _editDeptCtrl.text = _s(emp['department'], '');
-    _editKeyfobCtrl.text = _s(emp['nfcTagId'], _s(emp['nfcId'], ''));
-    _editPinCtrl.text = _s(emp['pin'], '');
-    _editEmployeeIdCtrl.text = empId;
-    _editOriginalEmployeeId = empId;
-
-    final bd = _toDateTime(emp['birthday'] ?? emp['birthDate']);
-    _editBirthday = bd;
-    _editBirthdayCtrl.text = bd == null ? '' : _fmtDate(bd, fallback: '');
-
-    _editDepartmentDropdown = _departmentOptions.contains(_editDeptCtrl.text)
-        ? _editDeptCtrl.text
-        : null;
+    final photoUrl = _editPhotoUrl ?? '';
 
     return Container(
       color: tc.background,
@@ -3060,6 +3043,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     children: [
                       _buildEditPersonalInfoCard(),
                       const SizedBox(height: 16),
+                      _buildEditSalaryCard(),
+                      const SizedBox(height: 16),
                       _buildEditBiometricCard(),
                       const SizedBox(height: 16),
                       _buildEditActions(emp),
@@ -3094,8 +3079,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
   Widget _editPhotoCard(String photoUrl) {
     final hasNewPhoto = _editPhotoXFile != null;
-    final displayUrl =
-        _editPhotoUrl ?? (photoUrl.isNotEmpty ? photoUrl : null);
+    final displayUrl = _editPhotoUrl ?? (photoUrl.isNotEmpty ? photoUrl : null);
     final hasUrl = displayUrl != null && displayUrl != '—';
 
     return Container(
@@ -3123,8 +3107,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    CircularProgressIndicator(
-                        color: Color(0xFFFF8C00)),
+                    CircularProgressIndicator(color: Color(0xFFFF8C00)),
                     SizedBox(height: 12),
                     Text(
                       'Processing photo...',
@@ -3160,8 +3143,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 displayUrl!,
                 fit: BoxFit.cover,
                 width: double.infinity,
-                errorWidget:
-                Icon(Icons.person, size: 80, color: tc.muted),
+                errorWidget: Icon(Icons.person,
+                    size: 80, color: tc.muted),
               )
                   : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -3189,7 +3172,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Ito ay profile photo lang — hindi ito ginagamit para sa facial recognition.',
+            'This is just a profile photo — it is not used for facial recognition.',
             style: TextStyle(
               fontSize: 14,
               color: tc.muted,
@@ -3201,8 +3184,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed:
-                  _editPhotoUploading ? null : _pickEditPhoto,
+                  onPressed: _editPhotoUploading ? null : _pickEditPhoto,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFFFF8C00),
                     side: const BorderSide(color: Color(0xFFFF8C00)),
@@ -3245,8 +3227,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           if (hasNewPhoto) ...[
             const SizedBox(height: 10),
             Container(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                 color: const Color(0xFFDCFCE7),
                 borderRadius: BorderRadius.circular(8),
@@ -3259,7 +3240,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'New photo selected — i-save para ma-apply',
+                      'New photo selected — save to apply',
                       style: const TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
@@ -3315,7 +3296,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   const SizedBox(height: 14),
                   _editDepartmentDropdownField(),
                   const SizedBox(height: 14),
-                  _editField('ROLE / DESIGNATION', _editRoleCtrl),
+                  _editRoleField(),
                   const SizedBox(height: 14),
                   _editField('EMPLOYEE ID', _editEmployeeIdCtrl),
                 ],
@@ -3340,8 +3321,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 Row(children: [
                   Expanded(child: _editDepartmentDropdownField()),
                   const SizedBox(width: 16),
-                  Expanded(
-                      child: _editField('ROLE / DESIGNATION', _editRoleCtrl)),
+                  Expanded(child: _editRoleField()),
                 ]),
                 const SizedBox(height: 14),
                 Row(children: [
@@ -3355,6 +3335,346 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           }),
         ],
       ),
+    );
+  }
+
+  Widget _buildEditSalaryCard() {
+    final basic = _parseMoneyStr(_editBasicSalaryCtrl.text);
+    final allowance = _parseMoneyStr(_editAllowancesCtrl.text);
+    final dailyRate = basic / kWorkingDaysPerMonth;
+    final monthlyTotal = basic + allowance;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: tc.card,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFDDC1AE), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.payments_outlined,
+                color: Color(0xFFFF8C00), size: 22),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Compensation & Payroll',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: tc.text,
+                ),
+              ),
+            ),
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF8C00).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                    color: const Color(0xFFFF8C00).withValues(alpha: 0.4)),
+              ),
+              child: const Text('EDITABLE',
+                  style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFFFF8C00),
+                      letterSpacing: 0.5)),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Text(
+            'You can modify Basic Salary and Allowances (e.g., for salary increases). Daily Rate is auto-computed.',
+            style: TextStyle(fontSize: 12, color: tc.muted, height: 1.4),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  const Color(0xFFFF8C00).withValues(alpha: 0.12),
+                  const Color(0xFFFF8C00).withValues(alpha: 0.04),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: const Color(0xFFFF8C00).withValues(alpha: 0.35)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('CURRENT ROLE',
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: tc.muted,
+                            letterSpacing: 0.5)),
+                    const SizedBox(height: 4),
+                    Text(_s(_editRoleCtrl.text, 'Employee'),
+                        style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF904D00))),
+                  ],
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('MONTHLY TOTAL',
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: tc.muted,
+                            letterSpacing: 0.5)),
+                    const SizedBox(height: 4),
+                    Text('₱${monthlyTotal.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFFFF8C00))),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          LayoutBuilder(builder: (context, constraints) {
+            final narrow = constraints.maxWidth < 560;
+            if (narrow) {
+              return Column(children: [
+                _editMoneyInput(
+                  'BASIC SALARY (₱/month)',
+                  _editBasicSalaryCtrl,
+                  onChanged: () => setState(_recomputeDailyRate),
+                ),
+                const SizedBox(height: 14),
+                _editMoneyInput(
+                  'ALLOWANCES (₱/month)',
+                  _editAllowancesCtrl,
+                  onChanged: () => setState(() {}),
+                ),
+                const SizedBox(height: 14),
+                _editDailyRateField(dailyRate),
+                const SizedBox(height: 14),
+                _editField('BANK NAME', _editBankNameCtrl),
+                const SizedBox(height: 14),
+                _editField('ACCOUNT NUMBER', _editAccountNumberCtrl),
+              ]);
+            }
+            return Column(children: [
+              Row(children: [
+                Expanded(
+                  child: _editMoneyInput(
+                    'BASIC SALARY (₱/month)',
+                    _editBasicSalaryCtrl,
+                    onChanged: () => setState(_recomputeDailyRate),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _editMoneyInput(
+                    'ALLOWANCES (₱/month)',
+                    _editAllowancesCtrl,
+                    onChanged: () => setState(() {}),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 14),
+              Row(children: [
+                Expanded(child: _editDailyRateField(dailyRate)),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('WORKING DAYS',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: tc.text,
+                              letterSpacing: 0.4)),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: tc.surface,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: const Color(0xFFDDC1AE), width: 1),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text('$kWorkingDaysPerMonth days',
+                                style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: tc.text)),
+                            Icon(Icons.lock_outline,
+                                size: 14, color: tc.muted),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 14),
+              Row(children: [
+                Expanded(child: _editField('BANK NAME', _editBankNameCtrl)),
+                const SizedBox(width: 16),
+                Expanded(
+                    child:
+                    _editField('ACCOUNT NUMBER', _editAccountNumberCtrl)),
+              ]),
+            ]);
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _editMoneyInput(
+      String label,
+      TextEditingController controller, {
+        required VoidCallback onChanged,
+      }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: tc.text,
+                letterSpacing: 0.4)),
+        const SizedBox(height: 6),
+        Container(
+          decoration: BoxDecoration(
+            color: tc.card,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFDDC1AE), width: 1),
+          ),
+          child: Row(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 16),
+                child: Text('₱ ',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: tc.orange)),
+              ),
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                  ],
+                  onChanged: (_) => onChanged(),
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: tc.text,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  cursorColor: tc.orange,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(
+                        horizontal: 4, vertical: 14),
+                    border: InputBorder.none,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child:
+                Icon(Icons.edit_outlined, size: 14, color: tc.orange),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _editDailyRateField(double dailyRate) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Text('DAILY RATE (₱/day)',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: tc.text,
+                  letterSpacing: 0.4)),
+          const SizedBox(width: 6),
+          Container(
+            padding:
+            const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: tc.orange.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text('AUTO',
+                style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    letterSpacing: 0.5)),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFF8C00).withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: const Color(0xFFFF8C00).withValues(alpha: 0.5),
+                width: 1),
+          ),
+          child: Row(
+            children: [
+              Text('₱ ',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: tc.orange)),
+              Expanded(
+                child: Text(
+                  dailyRate.toStringAsFixed(2),
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: tc.orange),
+                ),
+              ),
+              Icon(Icons.calculate_outlined, size: 14, color: tc.orange),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text('Basic Salary ÷ 22 working days',
+            style: TextStyle(
+                fontSize: 10,
+                color: tc.muted,
+                fontStyle: FontStyle.italic)),
+      ],
     );
   }
 
@@ -3389,6 +3709,47 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             style: TextStyle(
               fontSize: 15,
               color: muted ? tc.muted : tc.text,
+              fontWeight: FontWeight.w500,
+            ),
+            cursorColor: tc.orange,
+            decoration: const InputDecoration(
+              isDense: true,
+              contentPadding:
+              EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              border: InputBorder.none,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _editRoleField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'ROLE / DESIGNATION',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: tc.text,
+            letterSpacing: 0.4,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Container(
+          decoration: BoxDecoration(
+            color: tc.card,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFDDC1AE), width: 1),
+          ),
+          child: TextField(
+            controller: _editRoleCtrl,
+            onChanged: (_) => setState(() {}),
+            style: TextStyle(
+              fontSize: 15,
+              color: tc.text,
               fontWeight: FontWeight.w500,
             ),
             cursorColor: tc.orange,
@@ -3569,14 +3930,22 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   _keyfobField(),
                   const SizedBox(height: 14),
                   _editField('4-DIGIT PIN', _editPinCtrl),
+                  const SizedBox(height: 14),
+                  _editField('REGISTERED DEVICE', _editDeviceNameCtrl),
                 ],
               );
             }
-            return Row(
+            return Column(
               children: [
-                Expanded(child: _keyfobField()),
-                const SizedBox(width: 16),
-                Expanded(child: _editField('4-DIGIT PIN', _editPinCtrl)),
+                Row(
+                  children: [
+                    Expanded(child: _keyfobField()),
+                    const SizedBox(width: 16),
+                    Expanded(child: _editField('4-DIGIT PIN', _editPinCtrl)),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                _editField('REGISTERED DEVICE', _editDeviceNameCtrl),
               ],
             );
           }),
@@ -3593,6 +3962,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 icon: Icons.check_circle_rounded,
                 label: 'Pin-pad Enabled',
               ),
+              if (_editDeviceNameCtrl.text.trim().isNotEmpty)
+                _biometricChip(
+                  icon: Icons.smartphone_rounded,
+                  label: 'Device Bound',
+                ),
             ],
           ),
           const SizedBox(height: 16),
@@ -3640,8 +4014,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       const SizedBox(height: 4),
                       Text(
                         _editWfhAccess
-                            ? 'ON — Puwedeng mag-clock in kahit wala sa office location.'
-                            : 'OFF — Kailangan nasa loob ng office geofence.',
+                            ? 'ON — Employee can clock in even outside the office location.'
+                            : 'OFF — Employee must be inside the office geofence.',
                         style: TextStyle(
                           fontSize: 12,
                           color: _editWfhAccess
@@ -3800,6 +4174,14 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             return;
           }
 
+          final basicSalary =
+          _parseMoneyStr(_editBasicSalaryCtrl.text);
+          if (basicSalary <= 0) {
+            _snack('⚠️ Basic Salary must be > 0.', error: true);
+            setState(() => _editSaving = false);
+            return;
+          }
+
           if (newEmployeeId != _editOriginalEmployeeId) {
             final idErr = await _checkEmployeeIdUnique(newEmployeeId);
             if (idErr != null) {
@@ -3831,6 +4213,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             }
           }
 
+          final allowance =
+          _parseMoneyStr(_editAllowancesCtrl.text);
+          final dailyRate = basicSalary / kWorkingDaysPerMonth;
+          final monthlyTotal = basicSalary + allowance;
+          final newRole = _editRoleCtrl.text.trim();
+
           final data = <String, dynamic>{
             'firstName': firstName,
             'lastName': lastName,
@@ -3838,15 +4226,42 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             'employeeId': newEmployeeId,
             'email': email,
             'phone': _editPhoneCtrl.text.trim(),
-            'role': _editRoleCtrl.text.trim(),
+            'role': newRole,
             'department': _editDeptCtrl.text.trim(),
             'nfcTagId': _editKeyfobCtrl.text.trim().toUpperCase(),
             'pin': _editPinCtrl.text.trim(),
+            'deviceName': _editDeviceNameCtrl.text.trim(),
             'wfhAccess': _editWfhAccess,
             if (_editBirthday != null)
               'birthday': Timestamp.fromDate(_editBirthday!),
             if (uploadedPhotoUrl != null) 'photoUrl': uploadedPhotoUrl,
+            'basicSalary': basicSalary,
+            'allowances': allowance,
+            'basicAllowance': allowance,
+            'housingAllowance': 0.0,
+            'transportAllowance': 0.0,
+            'specialAllowance': 0.0,
+            'dailyRate': dailyRate,
+            'monthlyTotal': monthlyTotal,
+            'workingDaysPerMonth': kWorkingDaysPerMonth,
+            'salarySource': 'manual',
+            'bankName': _editBankNameCtrl.text.trim(),
+            'accountNumber': _editAccountNumberCtrl.text.trim(),
+            'salaryConfigured': true,
+            'salaryUpdatedAt': FieldValue.serverTimestamp(),
           };
+
+          debugPrint('═══════════════════════════════════════════');
+          debugPrint('💾 [SAVE] Doc ID: ${_s(emp['id'])}');
+          debugPrint('   Full Name:    $fullName');
+          debugPrint('   Role:         $newRole');
+          debugPrint('   Department:   ${_editDeptCtrl.text.trim()}');
+          debugPrint('   Basic Salary: $basicSalary');
+          debugPrint('   Allowances:   $allowance');
+          debugPrint('   Daily Rate:   $dailyRate');
+          debugPrint('   Device:       ${_editDeviceNameCtrl.text.trim()}');
+          debugPrint('   WFH Access:   $_editWfhAccess');
+          debugPrint('═══════════════════════════════════════════');
 
           final err =
           await AdminDatabase.updateEmployee(_s(emp['id']), data);
@@ -3855,7 +4270,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           if (err != null) {
             _snack('Update failed: $err', error: true);
           } else {
-            _snack('Employee profile updated!');
+            _snack('✅ Employee profile updated!');
             setState(() {
               _isEditingEmployee = false;
               _selectedProfileEmp = {...emp, ...data};
@@ -4194,8 +4609,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             );
           }),
           const SizedBox(height: 24),
-          _enrollmentGuideBanner(emp),
-          const SizedBox(height: 24),
           Wrap(
             spacing: 12,
             runSpacing: 12,
@@ -4231,38 +4644,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     style:
                     TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
               ),
-              OutlinedButton.icon(
-                onPressed: () => _showVerifyPhotoDialog(emp),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF16A34A),
-                  backgroundColor: tc.card,
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                  side: const BorderSide(color: Color(0xFF16A34A)),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                icon: const Icon(Icons.verified_outlined, size: 16),
-                label: const Text('Verify Photo',
-                    style:
-                    TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => _confirmResetFace(emp),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF7C3AED),
-                  backgroundColor: tc.card,
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                  side: const BorderSide(color: Color(0xFF7C3AED)),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                icon: const Icon(Icons.face_retouching_off, size: 16),
-                label: const Text('Reset Face Data',
-                    style:
-                    TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-              ),
             ],
           ),
         ],
@@ -4270,6 +4651,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 📋 ENROLLMENT GUIDE BANNER — kept (not called anymore)
+  // ══════════════════════════════════════════════════════════════
   Widget _enrollmentGuideBanner(Map<String, dynamic> emp) {
     final hasPhoto = _hasProfilePhoto(emp);
     final version = _faceVersionOf(emp);
@@ -4309,8 +4693,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 : const Color(0xFFF59E0B),
             title: 'Profile Photo',
             subtitle: hasPhoto
-                ? '✅ Uploaded — makikita sa directory at profile'
-                : '📷 Hindi pa na-upload — pwede i-add sa Edit Details',
+                ? '✅ Uploaded — visible in directory and profile'
+                : '📷 Not yet uploaded — can be added in Edit Details',
           ),
           const SizedBox(height: 10),
           _statusRow(
@@ -4326,10 +4710,10 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 : const Color(0xFFA855F7),
             title: 'Face Biometric',
             subtitle: hasFace && isCurrent
-                ? '✅ Enrolled (v$version) — makakapag-login na sa face scan'
+                ? '✅ Enrolled (v$version) — can log in via face scan'
                 : (hasFace
-                ? '⚠️ Old version v$version — kailangan i-reset at i-enroll ulit'
-                : '📱 Hindi pa na-enroll — kailangan mag-scan ng mukha sa MOBILE APP'),
+                ? '⚠️ Old version v$version — must be reset and re-enrolled'
+                : '📱 Not yet enrolled — face must be scanned in the MOBILE APP'),
           ),
           if (!hasFace) ...[
             const SizedBox(height: 12),
@@ -4344,7 +4728,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    '📱 Paano Mag-Enroll ng Face:',
+                    '📱 How to Enroll Face:',
                     style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w800,
@@ -4352,21 +4736,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '1. Buksan ang mobile app\n'
-                        '2. Login gamit ang email + password\n'
-                        '3. Pumunta sa "Face Enrollment" screen\n'
-                        '4. I-scan ang mukha (blink + smile)',
+                    '1. Open the mobile app\n'
+                        '2. Login using email + password\n'
+                        '3. Go to the "Face Enrollment" screen\n'
+                        '4. Scan your face (blink + smile)',
                     style: TextStyle(
                         fontSize: 12, color: tc.text, height: 1.55),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '⚠️ Hindi pwedeng i-enroll mula sa profile photo — kailangan ng LIVE face scan.',
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF6B21A8),
-                        height: 1.4),
                   ),
                 ],
               ),
@@ -4506,6 +4881,18 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             mono: true,
           ),
           const SizedBox(height: 12),
+
+          if (_s(emp['deviceName'], '').isNotEmpty &&
+              _s(emp['deviceName'], '') != '—') ...[
+            _credBox(
+              label: 'REGISTERED DEVICE',
+              value: _s(emp['deviceName'], 'NOT SET'),
+              verified: true,
+              verifiedText: 'Device bound',
+            ),
+            const SizedBox(height: 12),
+          ],
+
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -4527,8 +4914,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                           ? Icons.home_work_rounded
                           : Icons.home_outlined,
                       size: 18,
-                      color:
-                      wfhEnabled ? const Color(0xFF166534) : tc.muted,
+                      color: wfhEnabled ? const Color(0xFF166534) : tc.muted,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -4553,8 +4939,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 const SizedBox(height: 4),
                 Text(
                   wfhEnabled
-                      ? 'Puwedeng mag-clock in kahit wala sa office geofence.'
-                      : 'Kailangan nasa loob ng office geofence para makapasok.',
+                      ? 'Employee can clock in even outside the office geofence.'
+                      : 'Employee must be inside the office geofence to clock in.',
                   style: TextStyle(
                     fontSize: 12,
                     color: wfhEnabled ? const Color(0xFF166534) : tc.muted,
@@ -4565,6 +4951,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             ),
           ),
           const SizedBox(height: 12),
+
+          // ⭐ BIOMETRIC STATUS section — KEPT
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -4606,7 +4994,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 Text(
                   count > 0
                       ? 'Face version: v$version  •  Templates: $count'
-                      : 'Hindi pa nag-e-enroll ng face biometric.',
+                      : 'Face biometric has not been enrolled yet.',
                   style: TextStyle(
                     fontSize: 11,
                     color: faceIsCurrent ? const Color(0xFF166534) : tc.muted,
@@ -4681,6 +5069,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
+  // ⭐ _biometricItem — KEPT, used by BIOMETRIC STATUS
   Widget _biometricItem({
     required IconData icon,
     required String label,
@@ -5060,8 +5449,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           final pendingSick = stats['pendingSick'] ?? 0;
           final remainingAnnual =
               stats['remainingAnnual'] ?? kAdminAnnualLeaveTotal;
-          final remainingSick =
-              stats['remainingSick'] ?? kAdminSickLeaveTotal;
+          final remainingSick = stats['remainingSick'] ?? kAdminSickLeaveTotal;
 
           final pending = leaves
               .where(
@@ -5713,17 +6101,26 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // ✅ OPEN EDIT DIALOG
+  // ══════════════════════════════════════════════════════════════
   void _openEditDialog(Map<String, dynamic> emp) {
+    _initializeEditControllers(emp);
+
     setState(() {
       _selectedProfileEmp = emp;
       _isEditingEmployee = true;
       _editWfhAccess = _isWfhEnabled(emp);
       _editPhotoXFile = null;
       _editPhotoBytes = null;
-      _editPhotoUrl = null;
     });
+
+    debugPrint('✏️ [openEditDialog] Edit mode activated for: ${_nameOf(emp)}');
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 🧠 FACE METHODS — KEPT (not called from UI but still here)
+  // ══════════════════════════════════════════════════════════════
   void _confirmResetFace(Map<String, dynamic> emp) => showDialog(
     context: context,
     builder: (_) => AlertDialog(
@@ -5752,7 +6149,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Burahin ang dating face embedding ni ${_nameOf(emp)}?',
+            'Delete the previous face embedding of ${_nameOf(emp)}?',
             style: TextStyle(
                 color: tc.text,
                 fontWeight: FontWeight.w600,
@@ -5783,13 +6180,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF92400E)),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Pagkatapos i-reset, kailangan mag-register ulit ng face '
-                      'data gamit ang bagong algorithm.',
-                  style:
-                  TextStyle(fontSize: 12, color: tc.text, height: 1.4),
                 ),
               ],
             ),
@@ -5859,7 +6249,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       });
 
       _snack(
-          '✅ Face data cleared. I-register ulit ang face ng employee gamit ang registration screen.');
+          '✅ Face data cleared. Re-register the employee face using the registration screen.');
       widget.onRefreshNeeded();
     } catch (e) {
       if (!mounted) return;
@@ -5875,7 +6265,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     }).toList();
 
     if (outdated.isEmpty) {
-      _snack('✅ Walang outdated face data. Lahat ay v$kCurrentFaceVersion na.');
+      _snack('✅ No outdated face data. Everyone is on v$kCurrentFaceVersion.');
       return;
     }
 
@@ -5907,7 +6297,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'May ${outdated.length} employee(s) na may LUMANG face data (v1-v3):',
+                'There are ${outdated.length} employee(s) with OLD face data (v1-v3):',
                 style: TextStyle(
                     color: tc.text,
                     fontWeight: FontWeight.w600,
@@ -5958,12 +6348,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Lahat ng outdated face data ay buburahin. '
-                    'Kailangan ng bawat employee na mag-register ulit ng face.',
-                style: TextStyle(fontSize: 12.5, color: tc.text, height: 1.45),
               ),
             ],
           ),

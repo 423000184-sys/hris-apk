@@ -67,12 +67,8 @@ class NetworkGuard {
 
       if (!hasTransport) return false;
 
-      // ✅ WEB: hindi na mag-fetch ng google.com
-      //    (CORS error ang dating nangyayari).
-      //    Tiwala na lang sa connectivity_plus (navigator.onLine).
       if (kIsWeb) return true;
 
-      // ✅ MOBILE/DESKTOP: DNS lookup lang, walang CORS issue.
       final lookup = await InternetAddress.lookup('google.com')
           .timeout(const Duration(seconds: 4));
       return lookup.isNotEmpty && lookup.first.rawAddress.isNotEmpty;

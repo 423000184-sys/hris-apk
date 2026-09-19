@@ -1,6 +1,7 @@
 // lib/widgets/network_gate.dart
 import 'package:flutter/material.dart';
 import '../services/network_guard.dart';
+import '../services/offline_attendance_service.dart';
 
 class NetworkGate extends StatefulWidget {
   final Widget child;
@@ -37,6 +38,11 @@ class _NetworkGateState extends State<NetworkGate> {
       _online = ok;
       _checking = false;
     });
+
+    // Kapag bumalik online, trigger sync agad
+    if (ok) {
+      OfflineAttendanceService.instance.syncPending();
+    }
   }
 
   @override
@@ -105,7 +111,7 @@ class _NetworkGateState extends State<NetworkGate> {
               ),
               const SizedBox(height: 20),
               const Text(
-                'No Internet Connection',                      // ✅ English
+                'No Internet Connection',
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w700,
@@ -115,7 +121,7 @@ class _NetworkGateState extends State<NetworkGate> {
               const SizedBox(height: 8),
               const Text(
                 'An internet connection is required to continue.\n'
-                    'Please check your WiFi or mobile data.',      // ✅ English
+                    'Please check your WiFi or mobile data.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 13,
@@ -148,7 +154,7 @@ class _NetworkGateState extends State<NetworkGate> {
                   )
                       : const Icon(Icons.refresh_rounded, size: 18),
                   label: Text(
-                    _checking ? 'Checking...' : 'Try Again',    // ✅ English
+                    _checking ? 'Checking...' : 'Try Again',
                     style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
@@ -177,7 +183,7 @@ class _NetworkGateState extends State<NetworkGate> {
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
-                  'No internet connection',                     // ✅ English
+                  'No internet — records will sync later',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 13,
@@ -185,6 +191,33 @@ class _NetworkGateState extends State<NetworkGate> {
                   ),
                 ),
               ),
+
+              // ✅ Pending count badge
+              FutureBuilder<int>(
+                future: OfflineAttendanceService.instance.getPendingCount(),
+                builder: (context, snap) {
+                  final count = snap.data ?? 0;
+                  if (count == 0) return const SizedBox.shrink();
+                  return Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '$count pending',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  );
+                },
+              ),
+
               TextButton(
                 onPressed: _checking ? null : _checkNow,
                 style: TextButton.styleFrom(

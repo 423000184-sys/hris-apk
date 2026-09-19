@@ -30,7 +30,6 @@ class EmployeeNotification {
       DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? {};
 
-    // ✅ FIX: Try timestamp first, then clientTimestamp fallback
     DateTime? ts;
     final raw = d['timestamp'];
     if (raw is Timestamp) {

@@ -8,6 +8,7 @@ import 'admin_theme.dart';
 import '../widgets/bootstrap_grid.dart';
 import '../services/payroll_calculator.dart';
 import '../services/employee_notification_service.dart';
+import '../services/attendance_hours_service.dart';
 
 class AdminPayrollManagementPage extends StatefulWidget {
   final Map<String, dynamic> employeeData;
@@ -29,6 +30,7 @@ class _AdminPayrollManagementPageState
   AdminColors get tc => AdminTheme.getColors(context);
 
   PayrollBreakdown _b = PayrollBreakdown.empty;
+  EmployeeHoursSummary _hours = EmployeeHoursSummary.empty;
   bool _loading = true;
 
   String get _name {
@@ -73,6 +75,24 @@ class _AdminPayrollManagementPageState
     return '${m[s.month]} ${s.day} - ${m[e.month]} ${e.day}, ${e.year}';
   }
 
+  // 🍱 AUTO-COMPUTED OVERTIME PAY based on hours worked
+  double get _autoOvertimePay {
+    if (_hours.totalOvertimeMinutes <= 0) return 0;
+    if (_b.dailyRate <= 0) return 0;
+    // hourly rate = daily rate / 8 hours
+    final hourlyRate = _b.dailyRate / 8;
+    return (_hours.totalOvertimeMinutes / 60.0) * hourlyRate;
+  }
+
+  // 🍱 Final gross = basic + allowances + AUTO overtime
+  double get _autoGrossPay {
+    return _b.basicSalary + _b.allowances + _autoOvertimePay;
+  }
+
+  double get _autoNetPay {
+    return _autoGrossPay - _b.totalDeductions;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -81,16 +101,49 @@ class _AdminPayrollManagementPageState
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final b = await PayrollCalculator.compute(
-      employee: widget.employeeData,
-      periodStart: _periodStart,
-      periodEnd: _periodEnd,
-    );
+
+    final results = await Future.wait([
+      PayrollCalculator.compute(
+        employee: widget.employeeData,
+        periodStart: _periodStart,
+        periodEnd: _periodEnd,
+      ),
+      _loadHoursSummary(),
+    ]);
+
     if (!mounted) return;
     setState(() {
-      _b = b;
+      _b = results[0] as PayrollBreakdown;
+      _hours = results[1] as EmployeeHoursSummary;
       _loading = false;
     });
+  }
+
+  Future<EmployeeHoursSummary> _loadHoursSummary() async {
+    try {
+      final map = await AttendanceHoursService.instance.fetchHoursMap(
+        periodStart: _periodStart,
+        periodEnd: _periodEnd,
+      );
+
+      for (final k in [
+        'id',
+        'employeeId',
+        'employee_id',
+        'nfcTagId',
+        'authUid'
+      ]) {
+        final key = widget.employeeData[k]?.toString().trim();
+        if (key != null && key.isNotEmpty && map.containsKey(key)) {
+          return map[key]!;
+        }
+      }
+
+      return EmployeeHoursSummary.empty;
+    } catch (e) {
+      debugPrint('⚠️ [PayrollMgmt] Hours load error: $e');
+      return EmployeeHoursSummary.empty;
+    }
   }
 
   void _handleBack() {
@@ -122,11 +175,22 @@ class _AdminPayrollManagementPageState
                 pw.Text('Period: $_periodLabel'),
                 pw.Divider(),
                 pw.SizedBox(height: 8),
+                pw.Text('WORK HOURS',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                pw.Text('Total Raw Hours: ${_hours.rawDisplay}'),
+                pw.Text('Lunch Deducted: -${_hours.lunchDisplay}'),
+                pw.Text('Net Hours: ${_hours.netDisplay}'),
+                if (_hours.totalOvertimeMinutes > 0)
+                  pw.Text('Overtime: +${_hours.overtimeDisplay}'),
+                pw.SizedBox(height: 8),
                 pw.Text('EARNINGS',
                     style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                 pw.Text('Basic Salary: ${PayrollCalculator.peso(_b.basicSalary)}'),
                 pw.Text('Allowances: ${PayrollCalculator.peso(_b.allowances)}'),
-                pw.Text('Gross: ${PayrollCalculator.peso(_b.grossPay)}'),
+                if (_autoOvertimePay > 0)
+                  pw.Text(
+                      'Overtime (auto): ${PayrollCalculator.peso(_autoOvertimePay)}'),
+                pw.Text('Gross: ${PayrollCalculator.peso(_autoGrossPay)}'),
                 pw.SizedBox(height: 8),
                 pw.Text('DEDUCTIONS',
                     style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
@@ -138,7 +202,7 @@ class _AdminPayrollManagementPageState
                 pw.Text('Total: -${PayrollCalculator.peso(_b.totalDeductions)}'),
                 pw.SizedBox(height: 8),
                 pw.Divider(),
-                pw.Text('NET PAY: ${PayrollCalculator.peso(_b.netPay)}',
+                pw.Text('NET PAY: ${PayrollCalculator.peso(_autoNetPay)}',
                     style: pw.TextStyle(
                         fontSize: 18, fontWeight: pw.FontWeight.bold)),
               ],
@@ -156,8 +220,6 @@ class _AdminPayrollManagementPageState
       onLayout: (PdfPageFormat f) async => bytes,
       name: 'payslip_$_employeeId.pdf',
     );
-
-    // ✅ AUTO-NOTIFY EMPLOYEE
     await _notifyEmployeePayroll();
   }
 
@@ -167,19 +229,16 @@ class _AdminPayrollManagementPageState
       bytes: bytes,
       filename: 'payslip_$_employeeId.pdf',
     );
-
-    // ✅ AUTO-NOTIFY EMPLOYEE
     await _notifyEmployeePayroll();
   }
 
-  /// ✅ Send notification sa employee na may payslip na
   Future<void> _notifyEmployeePayroll() async {
     try {
       await EmployeeNotificationService.instance.sendPayrollAlert(
         employeeId: _employeeId,
         employeeName: _name,
         month: _periodLabel,
-        netPay: _b.netPay,
+        netPay: _autoNetPay,
       );
       debugPrint('✅ [PayrollMgmt] Employee notified of payslip');
     } catch (e) {
@@ -316,13 +375,13 @@ class _AdminPayrollManagementPageState
                       runSpacing: 4,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Text('🆔 $_employeeId',
+                        Text('ID: $_employeeId',
                             style: TextStyle(
                                 fontSize: 12,
                                 color: tc.muted,
                                 fontWeight: FontWeight.w600)),
                         Text('•', style: TextStyle(color: tc.muted)),
-                        Text('🛠️ $_department',
+                        Text(_department,
                             style: TextStyle(
                                 fontSize: 12,
                                 color: tc.muted,
@@ -336,7 +395,7 @@ class _AdminPayrollManagementPageState
                             borderRadius: BorderRadius.circular(6),
                             border: Border.all(color: tc.border),
                           ),
-                          child: Text('📅 $_periodLabel',
+                          child: Text(_periodLabel,
                               style: TextStyle(
                                   fontSize: 12,
                                   color: tc.text,
@@ -356,7 +415,7 @@ class _AdminPayrollManagementPageState
             children: [
               OutlinedButton.icon(
                 onPressed: _handlePrint,
-                icon: const Text('🖨️', style: TextStyle(fontSize: 14)),
+                icon: const Icon(Icons.print_rounded, size: 16),
                 label: Text('Print',
                     style: TextStyle(
                         color: tc.text, fontWeight: FontWeight.w600)),
@@ -370,7 +429,7 @@ class _AdminPayrollManagementPageState
               ),
               ElevatedButton.icon(
                 onPressed: _handleDownload,
-                icon: const Text('📥', style: TextStyle(fontSize: 14)),
+                icon: const Icon(Icons.download_rounded, size: 16),
                 label: const Text('Download Payslip',
                     style: TextStyle(
                         color: Colors.white, fontWeight: FontWeight.w600)),
@@ -413,10 +472,10 @@ class _AdminPayrollManagementPageState
         const gap = 20.0;
 
         final cards = <Widget>[
-          _buildMetricCard('NET PAY', PayrollCalculator.peso(_b.netPay),
+          _buildMetricCard('NET PAY', PayrollCalculator.peso(_autoNetPay),
               'Total take-home for this period', false),
-          _buildMetricCard('GROSS PAY', PayrollCalculator.peso(_b.grossPay),
-              'Basic + Allowances + OT', false),
+          _buildMetricCard('GROSS PAY', PayrollCalculator.peso(_autoGrossPay),
+              'Basic + Allowances + OT (auto)', false),
           _buildMetricCard('TOTAL DEDUCTIONS',
               PayrollCalculator.peso(_b.totalDeductions),
               'Absences + Govt (9%)', true),
@@ -533,10 +592,15 @@ class _AdminPayrollManagementPageState
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // EARNINGS — with AUTO overtime
+  // ═══════════════════════════════════════════════════════════════
   Widget _earningsCard() {
+    final hasOT = _autoOvertimePay > 0;
+
     return _panel(
       title: 'Earnings Breakdown',
-      badge: PayrollCalculator.peso(_b.grossPay),
+      badge: PayrollCalculator.peso(_autoGrossPay),
       badgeColor: tc.orange.withValues(alpha: 0.15),
       badgeTextColor: tc.orangeText,
       children: [
@@ -544,11 +608,37 @@ class _AdminPayrollManagementPageState
             PayrollCalculator.peso(_b.basicSalary), false),
         _item('Allowances', 'Housing / Transport / Special',
             PayrollCalculator.peso(_b.allowances), false),
-        _item('Overtime Pay', 'Additional hours',
-            PayrollCalculator.peso(_b.overtimePay), false),
+        _item(
+          'Overtime Pay',
+          hasOT
+              ? 'Auto-detected from work hours (${_hours.overtimeDisplay})'
+              : 'No overtime this period',
+          hasOT
+              ? PayrollCalculator.peso(_autoOvertimePay)
+              : PayrollCalculator.peso(0),
+          false,
+        ),
         Divider(color: tc.border, height: 20),
         _item('Total Gross', 'Sum of earnings',
-            PayrollCalculator.peso(_b.grossPay), false, bold: true),
+            PayrollCalculator.peso(_autoGrossPay), false,
+            bold: true),
+        if (hasOT) ...[
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: tc.pillGreenBg,
+              border:
+              Border(left: BorderSide(color: tc.pillGreenTx, width: 4)),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              'Auto-computed overtime: ${_hours.overtimeDisplay} beyond standard 8h/day.',
+              style: TextStyle(
+                  fontSize: 11, color: tc.pillGreenTx, height: 1.4),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -578,38 +668,93 @@ class _AdminPayrollManagementPageState
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
-            'ℹ️ Benefits are not deducted from net pay. These are additional savings received at the 13th month payout or year-end.',
-            style: TextStyle(
-                fontSize: 11, color: tc.pillGreenTx, height: 1.4),
+            'Benefits are not deducted from net pay. These are additional savings received at the 13th month payout or year-end.',
+            style:
+            TextStyle(fontSize: 11, color: tc.pillGreenTx, height: 1.4),
           ),
         ),
       ],
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ATTENDANCE — with hours info integrated
+  // ═══════════════════════════════════════════════════════════════
   Widget _absencesCard() {
+    final hasHours = _hours.totalNetMinutes > 0;
+
     return _panel(
-      title: 'Attendance & Absences',
+      title: 'Attendance & Hours',
       badge: _b.absentDays > 0
           ? '-${PayrollCalculator.peso(_b.absenceDeduction)}'
           : 'Perfect',
       badgeColor: _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
       badgeTextColor: _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
       children: [
+        // Basic attendance
         _item('Working Days', 'Weekdays in the period',
             '${_b.workingDays}', false),
         _item('Present Days', 'With clock-in logged',
             '${_b.presentDays}', false),
         _item('Absent Days', 'No clock-in on weekday',
             '${_b.absentDays}', _b.absentDays > 0),
+
+        // 🍱 Hours info (auto-detected)
+        if (hasHours) ...[
+          Divider(color: tc.border, height: 20),
+          Row(
+            children: [
+              Icon(Icons.schedule_rounded, size: 14, color: tc.orange),
+              const SizedBox(width: 6),
+              Text('HOURS SUMMARY (Auto)',
+                  style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: tc.textMuted,
+                      letterSpacing: 0.5)),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: tc.pillBlueBg,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(_hours.netDisplay,
+                    style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: tc.pillBlueTx)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _item('Total Raw Hours', 'Before lunch deduction',
+              _hours.rawDisplay, false),
+          if (_hours.totalLunchDeductedMinutes > 0)
+            _item(
+              'Lunch Deducted',
+              '${_hours.daysWithLunchApplied} day(s) applied',
+              '-${_hours.lunchDisplay}',
+              true,
+            ),
+          _item('Net Hours Worked', 'Raw − lunch deduction',
+              _hours.netDisplay, false,
+              bold: true),
+          if (_hours.totalOvertimeMinutes > 0)
+            _item('Overtime', 'Beyond standard 8h/day',
+                '+${_hours.overtimeDisplay}', false),
+        ],
+
+        Divider(color: tc.border, height: 20),
         _item('Daily Rate', 'Basic ÷ working days',
             PayrollCalculator.peso(_b.dailyRate), false),
-        Divider(color: tc.border, height: 20),
         _item('Absence Deduction',
             '${_b.absentDays} day/s × daily rate',
             '-${PayrollCalculator.peso(_b.absenceDeduction)}',
             _b.absentDays > 0,
             bold: true),
+
         const SizedBox(height: 10),
         Container(
           padding: const EdgeInsets.all(12),
@@ -617,20 +762,18 @@ class _AdminPayrollManagementPageState
             color: _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
             border: Border(
                 left: BorderSide(
-                    color: _b.absentDays > 0
-                        ? tc.pillErrTx
-                        : tc.pillGreenTx,
+                    color:
+                    _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
                     width: 4)),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
             _b.absentDays > 0
-                ? '⚠️ ${_b.absentDays} absent day(s) automatically deducted from salary based on attendance logs.'
-                : '✓ No absences this period. Full salary will be received.',
+                ? '${_b.absentDays} absent day(s) auto-deducted from salary based on attendance logs.'
+                : 'No absences this period. Full salary will be received.',
             style: TextStyle(
                 fontSize: 11,
-                color:
-                _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
+                color: _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
                 height: 1.4),
           ),
         ),
@@ -652,8 +795,7 @@ class _AdminPayrollManagementPageState
             '-${PayrollCalculator.peso(_b.philhealth)}', true),
         _item('Pag-IBIG Contribution', '2.0% Employee Share',
             '-${PayrollCalculator.peso(_b.pagibig)}', true),
-        _item('Withholding Tax',
-            'Calculated based on net taxable income',
+        _item('Withholding Tax', 'Calculated based on net taxable income',
             '-${PayrollCalculator.peso(_b.withholdingTax)}', true),
         const SizedBox(height: 16),
         Container(
@@ -664,9 +806,8 @@ class _AdminPayrollManagementPageState
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
-            'ℹ️ Total statutory deductions amount to 9% of the basic salary (${PayrollCalculator.peso(_b.basicSalary)}) for this pay period.',
-            style:
-            TextStyle(fontSize: 11, color: tc.pillWarnTx, height: 1.4),
+            'Total statutory deductions amount to 9% of the basic salary (${PayrollCalculator.peso(_b.basicSalary)}) for this pay period.',
+            style: TextStyle(fontSize: 11, color: tc.pillWarnTx, height: 1.4),
           ),
         ),
       ],
@@ -702,8 +843,8 @@ class _AdminPayrollManagementPageState
               ),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 4),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                     color: badgeColor,
                     borderRadius: BorderRadius.circular(6)),
@@ -737,8 +878,7 @@ class _AdminPayrollManagementPageState
                 Text(title,
                     style: TextStyle(
                         fontSize: 13,
-                        fontWeight:
-                        bold ? FontWeight.w700 : FontWeight.w600,
+                        fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
                         color: tc.text),
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),

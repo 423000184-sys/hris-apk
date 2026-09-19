@@ -11,14 +11,8 @@ class EmployeeNotificationService {
   FirebaseFirestore.instance.collection('employee_notifications');
 
   // ═══════════════════════════════════════════════════════════════
-  // STREAMS — Client-side sort (walang orderBy para walang issues)
+  // STREAMS — Client-side sort
   // ═══════════════════════════════════════════════════════════════
-
-  /// Stream ng notifications para sa specific employee.
-  /// Kasama ang direct (employeeId == id) at broadcast (employeeId == 'ALL').
-  ///
-  /// ✅ FIX: Walang orderBy sa Firestore query — client-side sort na lang.
-  ///         Ito ang lunas sa issue na "may unread count pero walang list".
   Stream<List<EmployeeNotification>> streamForEmployee(String employeeId) {
     return _col
         .where('employeeId', whereIn: [employeeId, 'ALL'])
@@ -26,7 +20,6 @@ class EmployeeNotificationService {
         .map((s) {
       final list = s.docs.map(EmployeeNotification.fromDoc).toList();
 
-      // ✅ Client-side sort: latest muna
       list.sort((a, b) {
         final ta = a.timestamp ?? DateTime(1970);
         final tb = b.timestamp ?? DateTime(1970);
@@ -37,7 +30,6 @@ class EmployeeNotificationService {
     });
   }
 
-  /// Stream ng unread count para sa employee.
   Stream<int> streamUnreadCount(String employeeId) {
     return _col
         .where('employeeId', whereIn: [employeeId, 'ALL'])
@@ -49,7 +41,6 @@ class EmployeeNotificationService {
   // ═══════════════════════════════════════════════════════════════
   // ACTIONS
   // ═══════════════════════════════════════════════════════════════
-
   Future<void> markAsRead(String notifId) async {
     try {
       await _col.doc(notifId).update({'read': true});
@@ -84,9 +75,8 @@ class EmployeeNotificationService {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SEND
+  // SEND — base method
   // ═══════════════════════════════════════════════════════════════
-
   Future<void> send({
     required String type,
     required String title,
@@ -97,7 +87,16 @@ class EmployeeNotificationService {
     Map<String, dynamic> metadata = const {},
   }) async {
     try {
-      await _col.add({
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('📤 [EmployeeNotif] SENDING:');
+      debugPrint('   to      : $employeeId');
+      debugPrint('   type    : $type');
+      debugPrint('   title   : $title');
+      debugPrint('   message : $message');
+      debugPrint('   sender  : $senderName');
+      debugPrint('═══════════════════════════════════════════');
+
+      final docRef = await _col.add({
         'type': type,
         'title': title,
         'message': message,
@@ -107,16 +106,19 @@ class EmployeeNotificationService {
         'read': false,
         'metadata': metadata,
         'timestamp': FieldValue.serverTimestamp(),
-        // ✅ BAGONG: client-side timestamp fallback para laging may mabasa
         'clientTimestamp': DateTime.now().toIso8601String(),
       });
-      debugPrint('✅ [EmployeeNotif] Sent to $employeeId: $title');
+
+      debugPrint('✅ [EmployeeNotif] Sent — docId: ${docRef.id}');
     } catch (e) {
-      debugPrint('❌ send error: $e');
+      debugPrint('❌ [EmployeeNotif] send error: $e');
       rethrow;
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ANNOUNCEMENT
+  // ═══════════════════════════════════════════════════════════════
   Future<void> sendAnnouncement({
     required String title,
     required String message,
@@ -132,6 +134,9 @@ class EmployeeNotificationService {
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // PAYROLL — ✅ ENGLISH
+  // ═══════════════════════════════════════════════════════════════
   Future<void> sendPayrollAlert({
     required String employeeId,
     required String employeeName,
@@ -142,13 +147,16 @@ class EmployeeNotificationService {
       type: 'payroll',
       title: 'Payslip Available',
       message:
-      'Hi $employeeName, available na ang iyong payslip for $month. Net pay: ₱${netPay.toStringAsFixed(2)}',
+      'Hi $employeeName, your payslip for $month is now available. Net pay: ₱${netPay.toStringAsFixed(2)}',
       employeeId: employeeId,
       priority: 'high',
       metadata: {'month': month, 'netPay': netPay},
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // REMINDER
+  // ═══════════════════════════════════════════════════════════════
   Future<void> sendReminder({
     required String title,
     required String message,

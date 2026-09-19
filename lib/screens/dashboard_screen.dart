@@ -82,9 +82,6 @@ class DashboardScreenState extends State<DashboardScreen> {
 
   String? _initError;
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ LOCATION / ROLE / WFH STATE (auto-detected)
-  // ══════════════════════════════════════════════════════════════
   bool _isInRange = false;
   bool _wfhAccess = false;
   bool _isDriver = false;
@@ -93,13 +90,8 @@ class DashboardScreenState extends State<DashboardScreen> {
   String _department = '';
   double? _distanceMeters;
 
-  // ✅ Pwedeng mag-clock kung nasa range OR WFH OR Driver
   bool get _canClock => _isInRange || _wfhAccess || _isDriver;
-
-  // ✅ WFH mode = naka-WFH pero wala sa office zone
   bool get _isWfhMode => _wfhAccess && !_isInRange;
-
-  // ✅ Driver mode = driver/rider pero wala sa office zone
   bool get _isDriverMode => _isDriver && !_isInRange && !_wfhAccess;
 
   final DateTime _payslipMonth =
@@ -118,10 +110,8 @@ class DashboardScreenState extends State<DashboardScreen> {
   String? get _employeeId {
     final id = _employee?.employeeId ?? widget.initialEmployee?.employeeId;
     if (id != null && id.isNotEmpty) return id;
-
     final fallback = _employee?.id ?? widget.initialEmployee?.id;
     if (fallback != null && fallback.isNotEmpty) return fallback;
-
     return null;
   }
 
@@ -137,13 +127,10 @@ class DashboardScreenState extends State<DashboardScreen> {
     try {
       _employee = widget.initialEmployee;
       _photoUrl = _employee?.photoUrl ?? widget.initialEmployee?.photoUrl;
-
-      // ✅ Seed initial values mula sa Employee model
       _role = _employee?.position ?? '';
       _department = _employee?.department ?? '';
       _wfhAccess = _readWfhFromEmployee();
       _isDriver = _isDriverRole(_role, _department);
-
       _safeInit();
     } catch (e, st) {
       debugPrint('❌ Dashboard initState error: $e\n$st');
@@ -204,15 +191,9 @@ class DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ REALTIME EMPLOYEE LISTENER
-  // ══════════════════════════════════════════════════════════════
   void _startEmployeeListener() {
     final docId = _employeeDocId;
-    if (docId == null || docId.isEmpty) {
-      debugPrint('⚠️ [Dashboard] Walang employee doc ID — skip listener');
-      return;
-    }
+    if (docId == null || docId.isEmpty) return;
 
     _employeeSub?.cancel();
     _employeeSub = FirebaseFirestore.instance
@@ -234,9 +215,6 @@ class DashboardScreenState extends State<DashboardScreen> {
         final newDept = (data['department'] ?? _department).toString();
         final newIsDriver = _isDriverRole(newRole, newDept);
 
-        debugPrint('🏠 [Dashboard] Live: wfh=$wfh, role="$newRole", '
-            'dept="$newDept", isDriver=$newIsDriver');
-
         final changed =
             wfh != _wfhAccess || newIsDriver != _isDriver || newRole != _role;
 
@@ -249,26 +227,35 @@ class DashboardScreenState extends State<DashboardScreen> {
           });
         }
       },
-      onError: (e) => debugPrint('❌ [Dashboard] Employee listener error: $e'),
+      onError: (e) => debugPrint('❌ Employee listener error: $e'),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ AUTO LOCATION CHECK
-  // ══════════════════════════════════════════════════════════════
   Future<void> _refreshLocation() async {
     if (mounted) setState(() => _checkingLocation = true);
 
     try {
-      debugPrint('📍 [Dashboard] Checking geofence...');
-      final result = await GeofenceService.instance
-          .checkGeofence()
-          .timeout(const Duration(seconds: 12));
+      // ⭐ NEW: Use checkGeofenceForEmployee() — auto WFH/Driver +
+      //    multi-location check
+      final empDocId = _employeeDocId;
+      GeofenceResult result;
+
+      if (empDocId != null && empDocId.isNotEmpty) {
+        result = await GeofenceService.instance
+            .checkGeofenceForEmployee(employeeId: empDocId)
+            .timeout(const Duration(seconds: 15));
+      } else {
+        result = await GeofenceService.instance
+            .checkGeofence()
+            .timeout(const Duration(seconds: 12));
+      }
 
       if (!mounted) return;
 
-      debugPrint('📍 [Dashboard] inside=${result.isInside}, '
-          'distance=${result.distanceMeters}m');
+      debugPrint('📍 [Dashboard] geofence: inside=${result.isInside}, '
+          'exempted=${result.isExempted}, '
+          'zone=${result.matchedLocationName}, '
+          'distance=${result.distanceMeters?.toStringAsFixed(0)}m');
 
       setState(() {
         _isInRange = result.isInside;
@@ -276,7 +263,7 @@ class DashboardScreenState extends State<DashboardScreen> {
         _checkingLocation = false;
       });
     } catch (e) {
-      debugPrint('❌ [Dashboard] Geofence error: $e');
+      debugPrint('❌ Geofence error: $e');
       if (!mounted) return;
       setState(() => _checkingLocation = false);
     }
@@ -284,14 +271,9 @@ class DashboardScreenState extends State<DashboardScreen> {
 
   void _startAttendanceStream() {
     final employeeId = _employeeId;
-    if (employeeId == null) {
-      debugPrint('⚠️ Dashboard: No employee ID — skipping attendance stream');
-      return;
-    }
+    if (employeeId == null) return;
 
     final todayStr = DateTime.now().toIso8601String().substring(0, 10);
-    debugPrint(
-        '📡 [Dashboard] Querying -> employee_id: $employeeId, date: $todayStr');
 
     _attendanceSub?.cancel();
     _attendanceSub = FirebaseFirestore.instance
@@ -302,13 +284,9 @@ class DashboardScreenState extends State<DashboardScreen> {
         .listen(
           (snapshot) {
         if (!mounted) return;
-        debugPrint(
-            '📡 [Dashboard] Live update — ${snapshot.docs.length} logs found');
         _processAttendanceDocs(snapshot.docs);
       },
-      onError: (e) {
-        debugPrint('📡 [Dashboard] Stream error: $e');
-      },
+      onError: (e) => debugPrint('📡 Stream error: $e'),
     );
   }
 
@@ -317,10 +295,8 @@ class DashboardScreenState extends State<DashboardScreen> {
     if (rawTime is String && rawTime.trim().isNotEmpty) {
       return rawTime.trim();
     }
-
     final rawTs = data['timestamp'];
     DateTime? dt;
-
     if (rawTs is Timestamp) {
       dt = rawTs.toDate().toLocal();
     } else if (rawTs is String && rawTs.trim().isNotEmpty) {
@@ -328,14 +304,12 @@ class DashboardScreenState extends State<DashboardScreen> {
     } else if (rawTs is int) {
       dt = DateTime.fromMillisecondsSinceEpoch(rawTs);
     }
-
     if (dt != null) {
       final h = dt.hour.toString().padLeft(2, '0');
       final m = dt.minute.toString().padLeft(2, '0');
       final s = dt.second.toString().padLeft(2, '0');
       return '$h:$m:$s';
     }
-
     return null;
   }
 
@@ -357,7 +331,6 @@ class DashboardScreenState extends State<DashboardScreen> {
         } catch (_) {}
       }
     }
-
     final rawTs = data['timestamp'];
     if (rawTs is Timestamp) return rawTs.toDate().toLocal();
     if (rawTs is String && rawTs.trim().isNotEmpty) {
@@ -365,17 +338,9 @@ class DashboardScreenState extends State<DashboardScreen> {
       if (parsed != null) return parsed.toLocal();
     }
     if (rawTs is int) return DateTime.fromMillisecondsSinceEpoch(rawTs);
-
     return null;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ✅ PROCESS ATTENDANCE DOCS
-  // Iterate through sorted docs (ascending). Ang PINAKAHULING event
-  // ang mag-dedetermine ng current state:
-  //   • Pinakahuling event = IN  → clocked in, _clockOutTime = '--:--'
-  //   • Pinakahuling event = OUT → clocked out
-  // ══════════════════════════════════════════════════════════════
   void _processAttendanceDocs(List<QueryDocumentSnapshot> docs) {
     if (!mounted) return;
 
@@ -401,8 +366,6 @@ class DashboardScreenState extends State<DashboardScreen> {
 
         if (type == 'IN' || type == 'CLOCK_IN') {
           latestInTime = _formatTimeTo12Hour(timeVal);
-          // ✅ FIX: reset ang lumang clock-out. Kapag naka-clock in
-          // ulit, hindi na valid yung dating OUT time — bagong session na.
           latestOutTime = null;
           clockedInState = true;
           try {
@@ -456,32 +419,21 @@ class DashboardScreenState extends State<DashboardScreen> {
   Future<void> _loadEmployeePhoto() async {
     try {
       final empId = _employee?.id ?? widget.initialEmployee?.id;
-      if (empId == null || empId.isEmpty) {
-        debugPrint('⚠️ No employee ID for photo load');
-        return;
-      }
+      if (empId == null || empId.isEmpty) return;
 
-      debugPrint('📸 Loading photo for employee: $empId');
       final doc = await FirebaseFirestore.instance
           .collection('employees')
           .doc(empId)
           .get()
           .timeout(const Duration(seconds: 10));
 
-      if (!doc.exists) {
-        debugPrint('⚠️ Employee document not found');
-        return;
-      }
-
+      if (!doc.exists) return;
       final data = doc.data();
       if (data == null) return;
 
       final url = data['photoUrl']?.toString();
       if (mounted && url != null && url.isNotEmpty && url != '—') {
         setState(() => _photoUrl = url);
-        debugPrint('✅ Photo loaded (${url.length} chars)');
-      } else {
-        debugPrint('⚠️ No photoUrl in document');
       }
     } catch (e) {
       debugPrint('❌ Error loading photo: $e');
@@ -498,9 +450,7 @@ class DashboardScreenState extends State<DashboardScreen> {
         final minutes = (difference.inMinutes % 60).toString().padLeft(2, '0');
         final seconds = (difference.inSeconds % 60).toString().padLeft(2, '0');
         if (mounted) {
-          setState(() {
-            _elapsedDuration = '$hours:$minutes:$seconds';
-          });
+          setState(() => _elapsedDuration = '$hours:$minutes:$seconds');
         }
       }
     });
@@ -509,7 +459,6 @@ class DashboardScreenState extends State<DashboardScreen> {
   Future<void> loadTodayAttendance() async => _loadTodayAttendance();
   Future<void> loadPayslipAmount() async => _loadPayslipAmount();
 
-  /// Public method para sa manual refresh mula sa MainScreen.
   Future<void> refreshAll() async {
     await _loadTodayAttendance();
     await _loadEmployeePhoto();
@@ -522,14 +471,11 @@ class DashboardScreenState extends State<DashboardScreen> {
     try {
       final employeeId = _employeeId;
       if (employeeId == null) {
-        debugPrint('⚠️ Walang employee ID — skipping attendance load');
         if (mounted) setState(() => _isLoadingAttendance = false);
         return;
       }
 
       final todayStr = DateTime.now().toIso8601String().substring(0, 10);
-      debugPrint(
-          '🔄 [Dashboard] Manual load -> employee_id: $employeeId, date: $todayStr');
 
       final snapshot = await FirebaseFirestore.instance
           .collection('attendance_logs')
@@ -538,8 +484,6 @@ class DashboardScreenState extends State<DashboardScreen> {
           .get()
           .timeout(const Duration(seconds: 10));
 
-      debugPrint(
-          '🔄 [Dashboard] Manual load found ${snapshot.docs.length} logs');
       _processAttendanceDocs(snapshot.docs);
     } catch (e) {
       debugPrint('Error loading today attendance: $e');
@@ -636,7 +580,7 @@ class DashboardScreenState extends State<DashboardScreen> {
               children: [
                 const Icon(Icons.error_outline, color: Colors.red, size: 48),
                 const SizedBox(height: 16),
-                const Text('May error sa dashboard',
+                const Text('Dashboard Error',
                     style: TextStyle(
                         fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
@@ -722,6 +666,9 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // HEADER — Inalis na ang Refresh button sa dulo
+  // ══════════════════════════════════════════════════════════════
   Widget _buildHeader(_ThemeColors tc) {
     final name =
         _employee?.firstName ?? widget.initialEmployee?.firstName ?? 'Employee';
@@ -739,9 +686,7 @@ class DashboardScreenState extends State<DashboardScreen> {
             shape: BoxShape.circle,
             border: Border.all(color: tc.darkBorder, width: 1.15),
           ),
-          child: ClipOval(
-            child: _buildAvatarContent(photo, name),
-          ),
+          child: ClipOval(child: _buildAvatarContent(photo, name)),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -833,27 +778,14 @@ class DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
         ),
-        GestureDetector(
-          onTap: refreshAll,
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: tc.cardFill,
-              border: Border.all(color: _T.orangeBorder, width: 1.15),
-            ),
-            child: const Icon(Icons.refresh_rounded,
-                color: _T.orange, size: 20),
-          ),
-        ),
+        // ❌ Inalis dito ang Refresh button (orange circle)
+        // Puwede pa ring mag-refresh sa Pull-to-Refresh (drag down)
       ],
     );
   }
 
   Widget _buildAvatarContent(String? photo, String name) {
     final hasPhoto = photo != null && photo.isNotEmpty && photo != '—';
-
     if (!hasPhoto) return _avatarFallback(name);
 
     if (photo!.startsWith('data:image')) {
@@ -867,8 +799,7 @@ class DashboardScreenState extends State<DashboardScreen> {
           fit: BoxFit.cover,
           errorBuilder: (_, __, ___) => _avatarFallback(name),
         );
-      } catch (e) {
-        debugPrint('❌ base64 decode error: $e');
+      } catch (_) {
         return _avatarFallback(name);
       }
     }
@@ -879,25 +810,6 @@ class DashboardScreenState extends State<DashboardScreen> {
         width: 45,
         height: 45,
         fit: BoxFit.cover,
-        loadingBuilder: (context, child, progress) {
-          if (progress == null) return child;
-          return Container(
-            color: _T.orange,
-            alignment: Alignment.center,
-            child: SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.white,
-                value: progress.expectedTotalBytes != null
-                    ? progress.cumulativeBytesLoaded /
-                    progress.expectedTotalBytes!
-                    : null,
-              ),
-            ),
-          );
-        },
         errorBuilder: (_, __, ___) => _avatarFallback(name),
       );
     }
@@ -927,17 +839,15 @@ class DashboardScreenState extends State<DashboardScreen> {
 
     if (_isClockedIn) {
       statusText = 'clocked in.';
-      subtitle =
-      'Our system verified your location. You are ready to go.';
+      subtitle = 'Our system verified your location. You are ready to go.';
       accentColor = _T.orange;
     } else if (_checkingLocation) {
       statusText = 'verifying...';
-      subtitle = 'Kinukuha ang iyong lokasyon. Maghintay lang.';
+      subtitle = 'Getting your location. Please wait.';
       accentColor = _T.orange;
     } else if (_isWfhMode) {
       statusText = 'on WFH mode.';
-      subtitle =
-      'Work-from-home access is active. You can clock in anytime.';
+      subtitle = 'Work-from-home access is active. You can clock in anytime.';
       accentColor = _T.green;
     } else if (_isDriverMode) {
       statusText = 'on field duty.';
@@ -1095,15 +1005,6 @@ class DashboardScreenState extends State<DashboardScreen> {
           color: active ? tc.toggleActiveBg : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
           border: active ? Border.all(color: _T.orangeBorder, width: 1) : null,
-          boxShadow: active
-              ? [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 2,
-              offset: const Offset(0, 1),
-            ),
-          ]
-              : null,
         ),
         child: Column(
           children: [
@@ -1218,7 +1119,7 @@ class DashboardScreenState extends State<DashboardScreen> {
       gradientEnd = _T.orange;
       leadingIcon = Icons.gps_fixed_rounded;
       title = 'Verifying location...';
-      subtitle = 'Kinukuha ang GPS position';
+      subtitle = 'Getting GPS position';
       subtitleColor = _T.orange;
     } else if (_isWfhMode) {
       dotColor = _T.green;
@@ -1256,7 +1157,7 @@ class DashboardScreenState extends State<DashboardScreen> {
       title = 'Outside Authorized Zone';
       subtitle = _distanceMeters != null
           ? '${_distanceMeters!.toStringAsFixed(0)}m from office'
-          : 'Hindi ka nasa work zone';
+          : 'You are not in the work zone';
       subtitleColor = _T.red;
     }
 
@@ -1471,13 +1372,13 @@ class DashboardScreenState extends State<DashboardScreen> {
     }
     if (_payslipError) {
       return const Text(
-        'Hindi makuha ang sahod ngayon',
+        'Unable to load payslip right now',
         style: TextStyle(fontSize: 12, color: Colors.redAccent),
       );
     }
     if (_payslipAmount == null) {
       return Text(
-        'Wala pang available na payslip',
+        'No payslip available yet',
         style: TextStyle(fontSize: 12, color: tc.textGray),
       );
     }
@@ -1492,10 +1393,7 @@ class DashboardScreenState extends State<DashboardScreen> {
 
     return RepaintBoundary(
       child: GestureDetector(
-        onTap: () {
-          debugPrint('🟢 Floating Clock Out button tapped!');
-          widget.onClockAction?.call();
-        },
+        onTap: () => widget.onClockAction?.call(),
         behavior: HitTestBehavior.opaque,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),

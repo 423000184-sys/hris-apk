@@ -12,6 +12,9 @@ import '../services/face_matcher.dart';
 import '../services/clock_status_service.dart';
 import '../services/geofence_service.dart';
 import '../services/admin_notification_service.dart';
+import '../services/network_guard.dart';
+import '../services/offline_attendance_service.dart';
+import '../services/device_info_service.dart';   // 🆕
 import 'main_screen.dart';
 import 'clock_in_success_screen.dart';
 
@@ -68,12 +71,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   bool _isEnrollmentMode = false;
   int _enrollCaptureCount = 0;
-  String _enrollHint = 'Tumingin ng direkta sa camera.';
+  String _enrollHint = 'Look directly at the camera.';
   static const int _requiredEnrollCaptures = 3;
   static const List<String> _enrollHints = [
-    'Tumingin ng DIREKTA sa camera.',
-    'Igalaw ang ulo pakanan (tingin sa kanan).',
-    'Igalaw ang ulo pakaliwa (tingin sa kaliwa).',
+    'Look DIRECTLY at the camera.',
+    'Turn your head to the right (look right).',
+    'Turn your head to the left (look left).',
   ];
 
   bool _isCapturing = false;
@@ -83,8 +86,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   bool _justCaptured = false;
   String? _captureFlashMessage;
 
+  // 🆕 Cached actual device model
+  String _deviceModel = 'Unknown Device';
+
   static const bool _strictFaceMatch = true;
-  static const double _matchThreshold = 0.55;
+
+  // 🎯 THRESHOLD: 80% required to pass verification
+  static const double _matchThreshold = 0.80;
 
   late final FaceDetector _faceDetector;
 
@@ -193,7 +201,21 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _ringCtrl.repeat();
     _fadeCtrl.forward();
 
+    _loadDeviceModel(); // 🆕 load actual device model
+
     debugPrint('📷 Facial recognition ready — AUTO-CAPTURE mode');
+  }
+
+  // 🆕 Load actual device model
+  Future<void> _loadDeviceModel() async {
+    try {
+      final model = await DeviceInfoService.instance.getDeviceModel();
+      if (!mounted) return;
+      setState(() => _deviceModel = model);
+      debugPrint('📱 [FacialRecognition] Device model: $model');
+    } catch (e) {
+      debugPrint('⚠️ [FacialRecognition] Device model load failed: $e');
+    }
   }
 
   @override
@@ -510,7 +532,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         if (!mounted) return;
         setState(() {
           _errorMessage =
-          '⚠️ Face not detected. Ilapit ang mukha sa camera.';
+          '⚠️ Face not detected. Move your face closer to the camera.';
         });
         _resetStability();
         _restartEnrollmentStream();
@@ -885,95 +907,45 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (mounted) setState(() => _isCheckingGeofence = true);
 
     try {
-      String role = widget.employee.position;
-      String department = widget.employee.department;
-      bool wfhAccess = widget.employee.wfhAccess;
-
       debugPrint('═══════════════════════════════════════════');
-      debugPrint('🔍 [Geofence] employee.id     = ${widget.employee.id}');
-      debugPrint('🔍 [Geofence] initial role    = "$role"');
-      debugPrint('🔍 [Geofence] initial dept    = "$department"');
-      debugPrint('🔍 [Geofence] initial wfh     = $wfhAccess');
-
-      try {
-        final doc = await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(widget.employee.id)
-            .get()
-            .timeout(const Duration(seconds: 5));
-
-        if (doc.exists) {
-          final data = doc.data();
-          if (data != null) {
-            final rawRole = data['role'] ?? data['position'];
-            if (rawRole != null && rawRole.toString().trim().isNotEmpty) {
-              role = rawRole.toString();
-            }
-
-            final rawDept = data['department'];
-            if (rawDept != null && rawDept.toString().trim().isNotEmpty) {
-              department = rawDept.toString();
-            }
-
-            final rawWfh = data['wfhAccess'];
-            if (rawWfh != null) {
-              wfhAccess = rawWfh is bool
-                  ? rawWfh
-                  : rawWfh.toString().toLowerCase() == 'true';
-            }
-          }
-        } else {
-          debugPrint(
-              '⚠️ [Geofence] Employee doc not found — using widget fallback');
-        }
-      } catch (e) {
-        debugPrint('⚠️ [Geofence] Firestore read failed: $e');
-      }
-
-      debugPrint('✅ [Geofence] resolved role       = "$role"');
-      debugPrint('✅ [Geofence] resolved department = "$department"');
-      debugPrint('✅ [Geofence] resolved wfh        = $wfhAccess');
-
-      if (wfhAccess) {
-        debugPrint('🏠 [Geofence] WFH ENABLED → bypassing geofence');
-        if (mounted) setState(() => _isCheckingGeofence = false);
-        return true;
-      }
-
-      final roleLower = role.toLowerCase().trim();
-      final deptLower = department.toLowerCase().trim();
-      final isDriver = roleLower.contains('driver') ||
-          deptLower.contains('driver') ||
-          roleLower.contains('rider') ||
-          deptLower.contains('rider');
-
-      if (isDriver) {
-        debugPrint('🚗 [Geofence] DRIVER/RIDER detected '
-            '(role="$role", dept="$department") → bypassing geofence');
-        if (mounted) setState(() => _isCheckingGeofence = false);
-        return true;
-      }
-
-      debugPrint('📍 [Geofence] Checking regular employee location...');
+      debugPrint('🔍 [Geofence] employee.id = ${widget.employee.id}');
+      debugPrint('🔍 [Geofence] employee.employeeId = '
+          '${widget.employee.employeeId}');
+      debugPrint('🔍 [Geofence] employee.position = '
+          '${widget.employee.position}');
+      debugPrint('🔍 [Geofence] employee.department = '
+          '${widget.employee.department}');
+      debugPrint('🔍 [Geofence] employee.wfhAccess = '
+          '${widget.employee.wfhAccess}');
 
       GeofenceResult? geoResult;
       bool geofenceFailed = false;
 
       try {
         geoResult = await GeofenceService.instance
-            .checkGeofence()
-            .timeout(const Duration(seconds: 12));
+            .checkGeofenceForEmployee(
+          employeeId: widget.employee.id,
+        )
+            .timeout(const Duration(seconds: 15));
       } catch (e) {
-        debugPrint('❌ [Geofence] checkGeofence error: $e');
+        debugPrint('❌ [Geofence] checkGeofenceForEmployee error: $e');
         geofenceFailed = true;
       }
 
-      final isInside = geoResult?.isInside ?? false;
+      final isAllowed = geoResult?.isAllowed ?? false;
+      final isExempted = geoResult?.isExempted ?? false;
       final distance = geoResult?.distanceMeters;
+      final matchedZone = geoResult?.matchedLocationName;
 
-      debugPrint('📍 [Geofence] inside=$isInside, distance=${distance}m');
+      debugPrint('📍 [Geofence] allowed=$isAllowed, exempted=$isExempted, '
+          'distance=${distance?.toStringAsFixed(0)}m, zone=$matchedZone');
 
-      if (isInside) {
+      if (isAllowed) {
+        if (isExempted) {
+          debugPrint('🏠 [Geofence] EXEMPTED → bypass granted');
+        } else if (matchedZone != null) {
+          debugPrint('✅ [Geofence] Inside zone "$matchedZone" → granted');
+        }
         if (mounted) setState(() => _isCheckingGeofence = false);
         return true;
       }
@@ -981,20 +953,33 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       String distanceText;
       if (geofenceFailed) {
         distanceText =
-        'Hindi ma-verify ang location (GPS error o walang signal).';
+        'Unable to verify location (GPS error or no signal).';
       } else if (distance != null) {
-        distanceText = '${distance.toStringAsFixed(0)} meters from office';
+        distanceText = '${distance.toStringAsFixed(0)} meters away.';
       } else {
-        distanceText = 'Location outside authorized zone';
+        distanceText = 'Location outside authorized zone.';
       }
+
+      final zoneText = (matchedZone != null && matchedZone.isNotEmpty)
+          ? 'Nearest zone: $matchedZone'
+          : 'No active clock-in zones.';
+
+      _notifyOutOfRangeFromFacial(
+        employeeId: _employeeIdForAttendance,
+        employeeName: widget.employee.fullName,
+        distanceMeters: distance ?? 0,
+        role: widget.employee.position,
+        department: widget.employee.department,
+      );
 
       if (mounted) {
         setState(() {
           _faceState = _FaceState.error;
           _errorMessage = 'You are outside the work zone.\n\n'
-              'Role: $role\n'
-              'Department: $department\n'
-              'Distance: $distanceText\n\n'
+              'Role: ${widget.employee.position}\n'
+              'Department: ${widget.employee.department}\n'
+              '$distanceText\n'
+              '$zoneText\n\n'
               'If you are on WFH, ask Admin to enable WFH access.';
           _isCheckingGeofence = false;
         });
@@ -1007,9 +992,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         setState(() {
           _faceState = _FaceState.error;
           _errorMessage = 'Location verification failed.\n\n'
-              'Hindi ma-verify kung nasa work zone ka. '
-              'Paki-check ang GPS at internet connection, '
-              'o mag-request ng WFH access sa admin.';
+              'Could not verify if you are in the work zone. '
+              'Please check your GPS and internet connection, '
+              'or request WFH access from the admin.';
           _isCheckingGeofence = false;
         });
         _shakeCtrl.forward(from: 0);
@@ -1018,17 +1003,57 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
+  Future<void> _notifyOutOfRangeFromFacial({
+    required String employeeId,
+    required String employeeName,
+    required double distanceMeters,
+    required String role,
+    required String department,
+  }) async {
+    if (employeeId.isEmpty) {
+      debugPrint('⚠️ [_notifyOutOfRangeFromFacial] Walang employee ID — skip');
+      return;
+    }
+
+    final now = DateTime.now();
+    final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}:'
+        '${now.second.toString().padLeft(2, '0')}';
+
+    debugPrint('═══════════════════════════════════════════');
+    debugPrint('🚨 [Facial] OUT OF RANGE — notifying admin');
+    debugPrint('   employee: $employeeName ($employeeId)');
+    debugPrint('   distance: ${distanceMeters.toStringAsFixed(0)}m');
+    debugPrint('   role: $role | dept: $department');
+    debugPrint('═══════════════════════════════════════════');
+
+    try {
+      await AdminNotificationService.instance
+          .notifyGeofenceAlertThrottled(
+        employeeId: employeeId,
+        employeeName: employeeName,
+        timeStr: timeStr,
+        distanceMeters: distanceMeters,
+        action: 'face_clock_in_attempt',
+      );
+
+      debugPrint('✅ [Facial] Admin notified (out of range)');
+    } catch (e) {
+      debugPrint('❌ [Facial] notify failed: $e');
+    }
+  }
+
   Color _matchColor(double percent) {
-    if (percent >= 95) return const Color(0xFF16A34A);
-    if (percent >= 75) return const Color(0xFF3B82F6);
-    if (percent >= 55) return const Color(0xFFF59E0B);
-    return const Color(0xFFEF4444);
+    if (percent >= 95) return const Color(0xFF16A34A);   // green
+    if (percent >= 80) return const Color(0xFF3B82F6);   // blue
+    if (percent >= 65) return const Color(0xFFF59E0B);   // amber
+    return const Color(0xFFEF4444);                       // red
   }
 
   String _matchLabel(double percent) {
     if (percent >= 95) return 'EXCELLENT MATCH';
-    if (percent >= 75) return 'STRONG MATCH';
-    if (percent >= 55) return 'ACCEPTABLE MATCH';
+    if (percent >= 80) return 'STRONG MATCH';
+    if (percent >= 65) return 'ACCEPTABLE MATCH';
     return 'WEAK MATCH';
   }
 
@@ -1036,6 +1061,28 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final empId = widget.employee.employeeId;
     if (empId.isNotEmpty) return empId;
     return widget.employee.id;
+  }
+
+  String _computeZoneType() {
+    final role = widget.employee.position.toLowerCase();
+    final dept = widget.employee.department.toLowerCase();
+
+    final isDriver = role.contains('driver') ||
+        role.contains('rider') ||
+        dept.contains('driver') ||
+        dept.contains('rider');
+    if (isDriver) {
+      debugPrint('📍 [Zone] DRIVER detected → zone=driver');
+      return 'driver';
+    }
+
+    if (widget.employee.wfhAccess) {
+      debugPrint('📍 [Zone] WFH enabled → zone=wfh');
+      return 'wfh';
+    }
+
+    debugPrint('📍 [Zone] Regular (inside) → zone=inside');
+    return 'inside';
   }
 
   Future<void> _writeAttendanceLog() async {
@@ -1058,95 +1105,166 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           '${now.second.toString().padLeft(2, '0')}';
 
       final employeeName = widget.employee.fullName;
-      final deviceName = kIsWeb ? 'Web Browser' : 'Mobile App';
+      final employeeEmail = widget.employee.email;
+      // 🆕 Use actual device model (cached from initState)
+      final deviceName = _deviceModel;
+      final zoneType = _computeZoneType();
 
-      final attendancePayload = <String, dynamic>{
-        'employee_id': employeeId,
-        'employee_name': employeeName,
-        'date': todayStr,
-        'type': attendanceType,
-        'time': timeStr,
-        'timestamp': FieldValue.serverTimestamp(),
-        'created_at': now.toIso8601String(),
-        'verification_method':
-        _isEnrollmentMode ? 'face_enrollment' : 'face_match',
-        'face_match_percent': _matchPercent,
-        'device': deviceName,
-      };
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('💾 [FacialRecognition] Offline-first save');
+      debugPrint('   zone: $zoneType');
+      debugPrint('   type: $attendanceType');
+      debugPrint('   device: $deviceName');
+      debugPrint('═══════════════════════════════════════════');
 
-      debugPrint('💾 [attendance_logs] Saving: $attendancePayload');
+      final result = await OfflineAttendanceService.instance.logAttendance(
+        employeeId: employeeId,
+        employeeName: employeeName,
+        employeeEmail: employeeEmail,
+        type: attendanceType,
+        timestamp: now,
+        device: deviceName,
+        remarks: _isEnrollmentMode
+            ? 'face_enrollment'
+            : 'face_match:${_matchPercent.toStringAsFixed(0)}',
+        zoneType: zoneType,
+      );
 
-      final docRef = await FirebaseFirestore.instance
-          .collection('attendance_logs')
-          .add(attendancePayload);
+      if (!result.success) {
+        debugPrint('❌ [FacialRecognition] Local save failed');
+        return;
+      }
 
       debugPrint(
-          '✅ [attendance_logs] Saved (${docRef.id}) — type=$attendanceType');
+          '✅ [FacialRecognition] Saved locally — queued=${result.queued}');
 
-      final activityLogPayload = <String, dynamic>{
-        'type': _isEnrollmentMode
-            ? 'face_enrollment_complete'
-            : (isClockIn ? 'clock_in' : 'clock_out'),
-        'action': _isEnrollmentMode
-            ? 'Face Enrollment Complete'
-            : (isClockIn ? 'Clocked In (Face)' : 'Clocked Out (Face)'),
-        'employeeId': widget.employee.id,
-        'employee_id': employeeId,
-        'employee_name': employeeName,
-        'email': widget.employee.email,
-        'face_match_score': _matchScore,
-        'face_match_percent': _matchPercent,
-        'face_matched': _faceMatched,
-        'liveness_passed':
-        _isEnrollmentMode ? false : (_blinkDone && _smileDone),
-        'enrollment_mode': _isEnrollmentMode,
-        'enrolled_angles': _isEnrollmentMode ? _enrollCaptureCount : 0,
-        'time': timeStr,
-        'date': todayStr,
-        'device': deviceName,
-        'platform': deviceName,
-        'timestamp': FieldValue.serverTimestamp(),
-      };
+      if (NetworkGuard.instance.isOnline) {
+        final activityLogPayload = <String, dynamic>{
+          'type': _isEnrollmentMode
+              ? 'face_enrollment_complete'
+              : (isClockIn ? 'clock_in' : 'clock_out'),
+          'action': _isEnrollmentMode
+              ? 'Face Enrollment Complete'
+              : (isClockIn ? 'Clocked In (Face)' : 'Clocked Out (Face)'),
+          'employeeId': widget.employee.id,
+          'employee_id': employeeId,
+          'employee_name': employeeName,
+          'email': employeeEmail,
+          'face_match_score': _matchScore,
+          'face_match_percent': _matchPercent,
+          'face_matched': _faceMatched,
+          'liveness_passed':
+          _isEnrollmentMode ? false : (_blinkDone && _smileDone),
+          'enrollment_mode': _isEnrollmentMode,
+          'enrolled_angles': _isEnrollmentMode ? _enrollCaptureCount : 0,
+          'zone_type': zoneType,
+          'time': timeStr,
+          'date': todayStr,
+          'device': deviceName,
+          'deviceName': deviceName,
+          'deviceModel': deviceName,
+          'platform': deviceName,
+          'timestamp': FieldValue.serverTimestamp(),
+        };
 
-      final historyLogPayload = <String, dynamic>{
-        'type': isClockIn ? 'login' : 'logout',
-        'employee_id': employeeId,
-        'employee_name': employeeName,
-        'device': deviceName,
-        'timestamp': FieldValue.serverTimestamp(),
-      };
+        final historyLogPayload = <String, dynamic>{
+          'type': isClockIn ? 'login' : 'logout',
+          'employee_id': employeeId,
+          'employee_name': employeeName,
+          'device': deviceName,
+          'deviceName': deviceName,
+          'zone_type': zoneType,
+          'timestamp': FieldValue.serverTimestamp(),
+        };
 
-      Future.wait([
         FirebaseFirestore.instance
             .collection('activity logs')
             .add(activityLogPayload)
-            .then((ref) =>
-            debugPrint('✅ [activity logs] written: ${ref.id}'))
-            .catchError((e) {
-          debugPrint('⚠️ [activity logs] FAILED (non-critical): $e');
-        }),
+            .then((ref) => debugPrint('✅ activity logs: ${ref.id}'))
+            .catchError((e) => debugPrint('⚠️ activity logs FAILED: $e'));
+
         FirebaseFirestore.instance
             .collection('activity_logs')
             .add(historyLogPayload)
-            .then((ref) =>
-            debugPrint('✅ [activity_logs] written: ${ref.id}'))
-            .catchError((e) {
-          debugPrint('⚠️ [activity_logs] FAILED (non-critical): $e');
-        }),
-      ]).whenComplete(() {
-        debugPrint('🎉 [FacialRecognition] All secondary writes settled');
-      });
+            .then((ref) => debugPrint('✅ activity_logs: ${ref.id}'))
+            .catchError((e) => debugPrint('⚠️ activity_logs FAILED: $e'));
 
-      await FirebaseFirestore.instance.waitForPendingWrites();
-      debugPrint('✅ [attendance_logs] Server sync confirmed!');
+        try {
+          if (_isEnrollmentMode) {
+            AdminNotificationService.instance.notifyFaceEnrollment(
+              employeeId: employeeId,
+              employeeName: employeeName,
+              enrolledAngles: _enrollCaptureCount,
+            );
+          } else if (isClockIn) {
+            switch (zoneType) {
+              case 'wfh':
+                AdminNotificationService.instance.notifyWFHClockIn(
+                  employeeId: employeeId,
+                  employeeName: employeeName,
+                  timeStr: timeStr,
+                  faceMatchPercent: _matchPercent,
+                );
+                break;
+              case 'driver':
+                AdminNotificationService.instance.notifyDriverClockIn(
+                  employeeId: employeeId,
+                  employeeName: employeeName,
+                  timeStr: timeStr,
+                  faceMatchPercent: _matchPercent,
+                );
+                break;
+              default:
+                AdminNotificationService.instance.notifyClockIn(
+                  employeeId: employeeId,
+                  employeeName: employeeName,
+                  timeStr: timeStr,
+                  faceMatchPercent: _matchPercent,
+                  wfh: widget.employee.wfhAccess,
+                  inRange: true,
+                  zoneType: zoneType,
+                );
+            }
+          } else {
+            switch (zoneType) {
+              case 'wfh':
+                AdminNotificationService.instance.notifyWFHClockOut(
+                  employeeId: employeeId,
+                  employeeName: employeeName,
+                  timeStr: timeStr,
+                );
+                break;
+              case 'driver':
+                AdminNotificationService.instance.notifyDriverClockOut(
+                  employeeId: employeeId,
+                  employeeName: employeeName,
+                  timeStr: timeStr,
+                );
+                break;
+              default:
+                AdminNotificationService.instance.notifyClockOut(
+                  employeeId: employeeId,
+                  employeeName: employeeName,
+                  timeStr: timeStr,
+                  faceMatchPercent: _matchPercent,
+                  wfh: widget.employee.wfhAccess,
+                  inRange: true,
+                  zoneType: zoneType,
+                );
+            }
+          }
+        } catch (e) {
+          debugPrint('⚠️ Admin notification failed: $e');
+        }
+      } else {
+        debugPrint(
+            '📥 [FacialRecognition] Offline — skipped secondary logs (will sync later)');
+      }
     } catch (e) {
       debugPrint('❌ [attendance_logs] Write failed: $e');
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ON SUCCESS — FULL REPLACEMENT (walang overlay)
-  // ══════════════════════════════════════════════════════════════
   Future<void> _onSuccess() async {
     if (!mounted) return;
 
@@ -1166,41 +1284,31 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     await _writeAttendanceLog();
 
-    // ✅ ADMIN NOTIFICATION
-    try {
-      final nowNotif = DateTime.now();
-      final timeStrNotif = '${nowNotif.hour.toString().padLeft(2, '0')}:'
-          '${nowNotif.minute.toString().padLeft(2, '0')}';
-      AdminNotificationService.instance.notifyClockIn(
-        employeeId: _employeeIdForAttendance,
-        employeeName: widget.employee.fullName,
-        timeStr: timeStrNotif,
-        faceMatchPercent: _matchPercent,
-      );
-    } catch (e) {
-      debugPrint('⚠️ Admin notification failed: $e');
-    }
-
-    try {
-      await FirebaseFirestore.instance.collection('activity logs').add({
-        'type': _isEnrollmentMode
-            ? 'face_enrollment_complete'
-            : 'facial_recognition_verified',
-        'employeeId': widget.employee.id,
-        'employee_name': widget.employee.fullName,
-        'email': widget.employee.email,
-        'face_match_score': _matchScore,
-        'face_match_percent': _matchPercent,
-        'face_matched': _faceMatched,
-        'liveness_passed':
-        _isEnrollmentMode ? false : (_blinkDone && _smileDone),
-        'enrollment_mode': _isEnrollmentMode,
-        'enrolled_angles': _isEnrollmentMode ? _enrollCaptureCount : 0,
-        'timestamp': FieldValue.serverTimestamp(),
-        'device': kIsWeb ? 'Web Browser' : 'Mobile App',
-      });
-    } catch (e) {
-      debugPrint('⚠️ Log save failed: $e');
+    if (NetworkGuard.instance.isOnline) {
+      try {
+        await FirebaseFirestore.instance.collection('activity logs').add({
+          'type': _isEnrollmentMode
+              ? 'face_enrollment_complete'
+              : 'facial_recognition_verified',
+          'employeeId': widget.employee.id,
+          'employee_name': widget.employee.fullName,
+          'email': widget.employee.email,
+          'face_match_score': _matchScore,
+          'face_match_percent': _matchPercent,
+          'face_matched': _faceMatched,
+          'liveness_passed':
+          _isEnrollmentMode ? false : (_blinkDone && _smileDone),
+          'enrollment_mode': _isEnrollmentMode,
+          'enrolled_angles': _isEnrollmentMode ? _enrollCaptureCount : 0,
+          'timestamp': FieldValue.serverTimestamp(),
+          // 🆕 Use actual device model
+          'device': _deviceModel,
+          'deviceName': _deviceModel,
+          'deviceModel': _deviceModel,
+        });
+      } catch (e) {
+        debugPrint('⚠️ Log save failed: $e');
+      }
     }
 
     await Future.delayed(const Duration(milliseconds: 2000));
@@ -1245,16 +1353,109 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     });
   }
 
-  void _goBack() => Navigator.of(context).pop();
+  Future<void> _stopAllCameraOperations() async {
+    debugPrint('🛑 [FacialRecognition] Stopping all camera operations...');
 
-  void _onCancelTapped() async {
+    _isScanning = false;
+    _isEnrollmentMode = false;
+    _isProcessing = false;
+    _isCapturing = false;
+    _stableStartTime = null;
+
+    try {
+      if (_camCtrl?.value.isStreamingImages == true) {
+        await _camCtrl!.stopImageStream();
+        debugPrint('✅ [FacialRecognition] Image stream stopped');
+      }
+    } catch (e) {
+      debugPrint('⚠️ stopImageStream failed: $e');
+    }
+
+    _scanLineCtrl.stop();
+    _warningCtrl.stop();
+    _pulseCtrl.stop();
+    _ringCtrl.stop();
+  }
+
+  Future<void> _goBack() async {
+    debugPrint('🔙 [FacialRecognition] Back pressed — cleaning up...');
+
+    await _stopAllCameraOperations();
+
+    if (!mounted) return;
+
+    setState(() {
+      _faceState = _FaceState.idle;
+      _errorMessage = null;
+      _facePresent = false;
+      _faceMatched = false;
+      _faceWarning = _FaceWarning.none;
+      _matchScore = 0.0;
+      _matchPercent = 0.0;
+      _blinkDone = false;
+      _smileDone = false;
+      _enrollCaptureCount = 0;
+      _livenessStep = _LivenessStep.waitingForFace;
+      _isCheckingGeofence = false;
+      _isCheckingTemplate = false;
+    });
+
+    if (Navigator.of(context).canPop()) {
+      debugPrint('✅ [FacialRecognition] Popping back to previous screen');
+      Navigator.of(context).pop();
+    } else {
+      debugPrint(
+          '⚠️ [FacialRecognition] Walang babalikan — fallback sa MainScreen');
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => MainScreen(employee: widget.employee),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onCancelTapped() async {
+    debugPrint('❌ [FacialRecognition] Cancel Authentication tapped');
+
+    await _stopAllCameraOperations();
+
+    if (!mounted) return;
+
     setState(() => _cancelPressed = true);
     await Future.delayed(const Duration(milliseconds: 200));
     if (!mounted) return;
     setState(() => _cancelPressed = false);
     await Future.delayed(const Duration(milliseconds: 100));
     if (!mounted) return;
-    Navigator.of(context).pop();
+
+    setState(() {
+      _faceState = _FaceState.idle;
+      _errorMessage = null;
+      _facePresent = false;
+      _faceMatched = false;
+      _faceWarning = _FaceWarning.none;
+      _matchScore = 0.0;
+      _matchPercent = 0.0;
+      _blinkDone = false;
+      _smileDone = false;
+      _enrollCaptureCount = 0;
+      _livenessStep = _LivenessStep.waitingForFace;
+      _isCheckingGeofence = false;
+      _isCheckingTemplate = false;
+    });
+
+    if (Navigator.of(context).canPop()) {
+      debugPrint('✅ [FacialRecognition] Cancel → popping back');
+      Navigator.of(context).pop();
+    } else {
+      debugPrint(
+          '⚠️ [FacialRecognition] Cancel → walang babalikan, fallback sa MainScreen');
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => MainScreen(employee: widget.employee),
+        ),
+      );
+    }
   }
 
   @override
@@ -1483,7 +1684,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             child: Text(
               _stateTitle.replaceAll('\n', ' '),
               key: ValueKey(
-                  'title_${_faceState}_${_isEnrollmentMode}_${_enrollCaptureCount}'),
+                  'title_${_faceState}_${_isEnrollmentMode}_$_enrollCaptureCount'),
               textAlign: TextAlign.center,
               style: const TextStyle(
                   color: _white, fontSize: 20, fontWeight: FontWeight.w700),
@@ -1578,8 +1779,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   Flexible(
                     child: Text(
                       _facePresent && _autoCaptureProgress > 0
-                          ? 'Huwag gumalaw... auto-capturing'
-                          : 'I-center ang mukha para mag-auto-capture',
+                          ? 'Hold still... auto-capturing'
+                          : 'Center your face to auto-capture',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                           color: Colors.white,
@@ -1967,7 +2168,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
-                            'Huwag gumalaw (${(_autoCaptureProgress * 100).toInt()}%)',
+                            'Hold still (${(_autoCaptureProgress * 100).toInt()}%)',
                             style: const TextStyle(
                                 color: _enrollBlue,
                                 fontSize: 8,
@@ -2006,7 +2207,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                             color: Colors.black.withValues(alpha: 0.55),
                             borderRadius: BorderRadius.circular(20),
                           ),
-                          child: Text('I-center ang mukha',
+                          child: Text('Center your face',
                               style: TextStyle(
                                   color: _white.withValues(alpha: 0.75),
                                   fontSize: 8,
@@ -2218,14 +2419,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   String get _stateSubtitle {
     if (_isCheckingTemplate) {
-      return 'Nagsusuri kung may naka-enroll nang face data...';
+      return 'Checking if face data is already enrolled...';
     }
     if (_isEnrollmentMode) {
       if (_justCaptured) {
         return _captureFlashMessage ?? 'Saved! Proceed to next angle.';
       }
-      return 'First-time login mo ito. I-center ang mukha mo — kusang\n'
-          'mag-capture (1.5s stable) para sa 3 angles.';
+      return 'This is your first-time login. Center your face — it will\n'
+          'auto-capture (1.5s stable) for 3 angles.';
     }
     if (_isCheckingGeofence) {
       return 'Checking your role and location\nto verify clock-in permissions...';

@@ -2,15 +2,43 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:intl/intl.dart';
+import 'package:syncfusion_flutter_datepicker/datepicker.dart';
 import 'admin_database.dart';
 import 'admin_theme.dart';
 import '../services/face_matcher.dart';
 import '../widgets/bootstrap_grid.dart';
 
+// ══════════════════════════════════════════════════════════════
+// 💰 ROLE-BASED SALARY MATRIX (DEFAULT PRESETS ONLY)
+// ══════════════════════════════════════════════════════════════
+const int kWorkingDaysPerMonth = 22;
+
+const Map<String, Map<String, double>> kRoleSalaryMatrix = {
+  'Employee': {'basicSalary': 18000.0, 'allowances': 2000.0},
+  'Driver':   {'basicSalary': 16000.0, 'allowances': 1500.0},
+  'Admin':    {'basicSalary': 25000.0, 'allowances': 3000.0},
+  'Manager':  {'basicSalary': 45000.0, 'allowances': 5000.0},
+};
+
+double _basicSalaryForRole(String role) =>
+    kRoleSalaryMatrix[role]?['basicSalary'] ?? 0.0;
+
+double _allowancesForRole(String role) =>
+    kRoleSalaryMatrix[role]?['allowances'] ?? 0.0;
+
+double _dailyRateForRole(String role) =>
+    _basicSalaryForRole(role) / kWorkingDaysPerMonth;
+
+double _parseMoneyStr(String s) => double.tryParse(
+  s.replaceAll(',', '').replaceAll('₱', '').trim(),
+) ??
+    0.0;
+
 class AdminAddEmployeePage extends StatefulWidget {
   final VoidCallback onRefreshNeeded;
-
   const AdminAddEmployeePage({super.key, required this.onRefreshNeeded});
 
   @override
@@ -21,18 +49,15 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   final _fKey = GlobalKey<FormState>();
   bool _saving = false;
 
-  // ✅ Role Selection
   String _selectedRole = 'Employee';
   final List<String> _roleOptions = ['Employee', 'Driver', 'Admin', 'Manager'];
 
   Uint8List? _profileImageBytes;
 
-  AdminColors get tc => AdminTheme.getColors(context);
+  // 🆕 Date range filter state
+  DateTimeRange? _selectedDateRange;
 
-  @override
-  void initState() {
-    super.initState();
-  }
+  AdminColors get tc => AdminTheme.getColors(context);
 
   void _snack(String msg, {bool error = false}) {
     if (!mounted) return;
@@ -48,6 +73,240 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     String f = firstName.isNotEmpty ? firstName[0].toUpperCase() : '';
     String l = lastName.isNotEmpty ? lastName[0].toUpperCase() : '';
     return '$f$l'.isEmpty ? 'E' : '$f$l';
+  }
+
+  // 🆕 Convert any timestamp-like value to DateTime
+  DateTime? _toDateTime(dynamic v) {
+    if (v == null) return null;
+    if (v is Timestamp) return v.toDate();
+    if (v is DateTime) return v;
+    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+    if (v is String) return DateTime.tryParse(v);
+    return null;
+  }
+
+  // 🆕 Get the "date to filter by" from employee record
+  DateTime? _employeeDate(Map<String, dynamic> emp) {
+    return _toDateTime(
+      emp['joiningDate'] ??
+          emp['createdAt'] ??
+          emp['created_at'] ??
+          emp['timestamp'] ??
+          emp['dateCreated'],
+    );
+  }
+
+  // 🆕 Filter employees by date range
+  List<Map<String, dynamic>> _filterByDate(List<Map<String, dynamic>> list) {
+    if (_selectedDateRange == null) return list;
+    return list.where((emp) {
+      final dt = _employeeDate(emp);
+      if (dt == null) return true; // keep those without date
+      final start = DateTime(
+        _selectedDateRange!.start.year,
+        _selectedDateRange!.start.month,
+        _selectedDateRange!.start.day,
+      );
+      final end = DateTime(
+        _selectedDateRange!.end.year,
+        _selectedDateRange!.end.month,
+        _selectedDateRange!.end.day,
+        23, 59, 59,
+      );
+      return dt.isAfter(start.subtract(const Duration(seconds: 1))) &&
+          dt.isBefore(end.add(const Duration(seconds: 1)));
+    }).toList();
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🆕 ACTUAL DATE RANGE PICKER — Syncfusion (custom dialog)
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _pickDateRange() async {
+    DateTimeRange? tempRange = _selectedDateRange;
+
+    final applied = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogCtx) {
+        return Dialog(
+          backgroundColor: tc.card,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          insetPadding: const EdgeInsets.all(24),
+          child: Container(
+            width: 640,
+            height: 620,
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+            child: Column(
+              children: [
+                // ─── HEADER ───
+                Row(
+                  children: [
+                    Icon(Icons.date_range_rounded,
+                        color: tc.orange, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Select Date Range',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: tc.text,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.close_rounded,
+                          color: tc.muted, size: 20),
+                      onPressed: () => Navigator.pop(dialogCtx, false),
+                      tooltip: 'Close',
+                    ),
+                  ],
+                ),
+                Divider(color: tc.border, height: 20),
+
+                // ─── DATE PICKER ───
+                Expanded(
+                  child: SfDateRangePicker(
+                    view: DateRangePickerView.month,
+                    selectionMode: DateRangePickerSelectionMode.range,
+                    initialSelectedRange: _selectedDateRange != null
+                        ? PickerDateRange(
+                      _selectedDateRange!.start,
+                      _selectedDateRange!.end,
+                    )
+                        : null,
+                    minDate: DateTime(2020),
+                    maxDate: DateTime.now(),
+                    showActionButtons: false,
+                    enablePastDates: true,
+                    onSelectionChanged:
+                        (DateRangePickerSelectionChangedArgs args) {
+                      if (args.value is PickerDateRange) {
+                        final range = args.value as PickerDateRange;
+                        if (range.startDate != null) {
+                          tempRange = DateTimeRange(
+                            start: range.startDate!,
+                            end: range.endDate ?? range.startDate!,
+                          );
+                        }
+                      }
+                    },
+                    backgroundColor: tc.card,
+                    headerStyle: DateRangePickerHeaderStyle(
+                      backgroundColor: tc.card,
+                      textStyle: TextStyle(
+                        color: tc.text,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                    monthCellStyle: DateRangePickerMonthCellStyle(
+                      textStyle: TextStyle(
+                        color: tc.text,
+                        fontSize: 13,
+                      ),
+                      todayTextStyle: TextStyle(
+                        color: tc.orange,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      trailingDatesTextStyle: TextStyle(
+                        color: tc.muted.withValues(alpha: 0.5),
+                      ),
+                      leadingDatesTextStyle: TextStyle(
+                        color: tc.muted.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    monthViewSettings: DateRangePickerMonthViewSettings(
+                      viewHeaderStyle: DateRangePickerViewHeaderStyle(
+                        textStyle: TextStyle(
+                          color: tc.muted,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    rangeSelectionColor:
+                    tc.orange.withValues(alpha: 0.25),
+                    startRangeSelectionColor: tc.orange,
+                    endRangeSelectionColor: tc.orange,
+                    todayHighlightColor: tc.orange,
+                    selectionColor: tc.orange,
+                    selectionTextStyle: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Divider(color: tc.border, height: 20),
+
+                // ─── ACTIONS ───
+                Row(
+                  children: [
+                    if (_selectedDateRange != null)
+                      TextButton.icon(
+                        onPressed: () {
+                          setState(() => _selectedDateRange = null);
+                          Navigator.pop(dialogCtx, false);
+                        },
+                        icon: Icon(Icons.clear_rounded,
+                            size: 14, color: tc.muted),
+                        label: Text(
+                          'CLEAR',
+                          style: TextStyle(
+                            color: tc.muted,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogCtx, false),
+                      child: Text(
+                        'CANCEL',
+                        style: TextStyle(
+                          color: tc.muted,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(dialogCtx, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: tc.orange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 22, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        'APPLY',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (applied == true && tempRange != null) {
+      setState(() => _selectedDateRange = tempRange);
+    }
   }
 
   @override
@@ -134,11 +393,9 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         final exportBtn = OutlinedButton.icon(
           onPressed: () => _snack('CSV Exported'),
           icon: Icon(Icons.download_rounded, size: 16, color: tc.text),
-          label: Text(
-            'Export CSV',
-            style: TextStyle(
-                color: tc.text, fontWeight: FontWeight.w700, fontSize: 14),
-          ),
+          label: Text('Export CSV',
+              style: TextStyle(
+                  color: tc.text, fontWeight: FontWeight.w700, fontSize: 14)),
           style: OutlinedButton.styleFrom(
             backgroundColor: tc.card,
             side: BorderSide(color: tc.border),
@@ -152,11 +409,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         final manualBtn = ElevatedButton.icon(
           onPressed: _openAddDialog,
           icon: Icon(Icons.add_rounded, size: 16, color: tc.onOrange),
-          label: Text(
-            'Manual Entry',
-            style: TextStyle(
-                color: tc.onOrange, fontWeight: FontWeight.w700, fontSize: 14),
-          ),
+          label: Text('Manual Entry',
+              style: TextStyle(
+                  color: tc.onOrange,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14)),
           style: ElevatedButton.styleFrom(
             backgroundColor: tc.orange,
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -172,13 +429,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
             children: [
               title,
               const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(child: exportBtn),
-                  const SizedBox(width: 12),
-                  Expanded(child: manualBtn),
-                ],
-              ),
+              Row(children: [
+                Expanded(child: exportBtn),
+                const SizedBox(width: 12),
+                Expanded(child: manualBtn),
+              ]),
             ],
           );
         }
@@ -188,13 +443,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(child: title),
-            Row(
-              children: [
-                exportBtn,
-                const SizedBox(width: 12),
-                manualBtn,
-              ],
-            ),
+            Row(children: [
+              exportBtn,
+              const SizedBox(width: 12),
+              manualBtn,
+            ]),
           ],
         );
       },
@@ -202,9 +455,15 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // FILTER CARD
+  // 🆕 FILTER CARD — ACTUAL DATE RANGE PICKER
   // ══════════════════════════════════════════════════════════════
   Widget _buildFilterCard() {
+    final hasRange = _selectedDateRange != null;
+    final rangeText = hasRange
+        ? '${DateFormat('MMM d, yyyy').format(_selectedDateRange!.start)} - '
+        '${DateFormat('MMM d, yyyy').format(_selectedDateRange!.end)}'
+        : 'Select date range to filter employees';
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -215,38 +474,82 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'DATE RANGE',
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: tc.textMuted,
-                letterSpacing: 0.5),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              color: tc.surface,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: tc.border),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
+          Row(
+            children: [
+              Text('DATE RANGE',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: tc.textMuted,
+                      letterSpacing: 0.5)),
+              if (hasRange) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: tc.orange.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
                   child: Text(
-                    'Sept 1, 2025 - Sept 16, 2025',
+                    'FILTER ACTIVE',
                     style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: tc.text),
-                    overflow: TextOverflow.ellipsis,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      color: tc.orange,
+                      letterSpacing: 0.5,
+                    ),
                   ),
                 ),
-                Icon(Icons.calendar_month_rounded,
-                    size: 20, color: tc.textMuted),
               ],
+            ],
+          ),
+          const SizedBox(height: 12),
+          InkWell(
+            onTap: _pickDateRange,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: tc.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: hasRange ? tc.orange : tc.border,
+                  width: hasRange ? 1.5 : 1,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      rangeText,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: hasRange ? FontWeight.w600 : FontWeight.w500,
+                        color: hasRange ? tc.text : tc.muted,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (hasRange)
+                    InkWell(
+                      onTap: () {
+                        setState(() => _selectedDateRange = null);
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Icon(Icons.clear_rounded,
+                            size: 18, color: tc.muted),
+                      ),
+                    )
+                  else
+                    Icon(Icons.calendar_month_rounded,
+                        size: 20, color: tc.textMuted),
+                ],
+              ),
             ),
           ),
         ],
@@ -285,30 +588,60 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                   if (snapshot.hasError) {
                     return Padding(
                       padding: const EdgeInsets.all(24.0),
-                      child: Text(
-                          'Error loading employees: ${snapshot.error}',
+                      child: Text('Error loading employees: ${snapshot.error}',
                           style: TextStyle(color: tc.red)),
                     );
                   }
-                  final employees = snapshot.data ?? [];
+
+                  final allEmployees = snapshot.data ?? [];
+
+                  // 🆕 Apply date range filter
+                  final employees = _filterByDate(allEmployees);
+
                   if (employees.isEmpty) {
                     return Padding(
                       padding: const EdgeInsets.all(48.0),
                       child: Center(
                         child: Column(
                           children: [
-                            Icon(Icons.people_outline_rounded,
-                                size: 48, color: tc.muted),
+                            Icon(
+                              _selectedDateRange == null
+                                  ? Icons.people_outline_rounded
+                                  : Icons.filter_alt_off_rounded,
+                              size: 48,
+                              color: tc.muted,
+                            ),
                             const SizedBox(height: 12),
                             Text(
-                                'No registered employees found in database.',
-                                style: TextStyle(
-                                    color: tc.muted, fontSize: 14)),
+                              _selectedDateRange == null
+                                  ? 'No registered employees found in database.'
+                                  : 'No employees match the selected date range.',
+                              style: TextStyle(
+                                  color: tc.muted, fontSize: 14),
+                              textAlign: TextAlign.center,
+                            ),
+                            if (_selectedDateRange != null) ...[
+                              const SizedBox(height: 12),
+                              TextButton.icon(
+                                onPressed: () =>
+                                    setState(() => _selectedDateRange = null),
+                                icon: Icon(Icons.clear_rounded,
+                                    size: 16, color: tc.orange),
+                                label: Text(
+                                  'Clear filter',
+                                  style: TextStyle(
+                                    color: tc.orange,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
                     );
                   }
+
                   return Column(
                     children: employees.asMap().entries.map((entry) {
                       final index = entry.key;
@@ -412,7 +745,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         ? (emp['name'] ?? 'Unknown Staff')
         : '$firstName $lastName';
 
-    // ✅ PRIORITY: employeeId field muna, tapos id (doc ID)
     final empId = emp['employeeId'] ?? emp['id'] ?? 'N/A';
     final displayId = empId.toString().length > 16
         ? '${empId.toString().substring(0, 16)}...'
@@ -436,11 +768,10 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
             child: Row(
               children: [
                 _buildAvatar(
-                  photoUrl: photoUrl,
-                  initials: initials,
-                  size: 40,
-                  fontSize: 13,
-                ),
+                    photoUrl: photoUrl,
+                    initials: initials,
+                    size: 40,
+                    fontSize: 13),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -465,8 +796,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                       ),
                       const SizedBox(height: 2),
                       Text('ID: $displayId',
-                          style: TextStyle(
-                              fontSize: 12, color: tc.textMuted),
+                          style:
+                          TextStyle(fontSize: 12, color: tc.textMuted),
                           overflow: TextOverflow.ellipsis),
                     ],
                   ),
@@ -499,8 +830,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     final fullName = '$firstName $lastName'.trim().isEmpty
         ? (emp['name'] ?? 'Unknown Staff')
         : '$firstName $lastName';
-
-    // ✅ PRIORITY: employeeId field muna
     final empId = emp['employeeId'] ?? emp['id'] ?? 'N/A';
     final displayId = empId.toString().length > 16
         ? '${empId.toString().substring(0, 16)}...'
@@ -521,11 +850,10 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildAvatar(
-            photoUrl: photoUrl,
-            initials: initials,
-            size: 44,
-            fontSize: 14,
-          ),
+              photoUrl: photoUrl,
+              initials: initials,
+              size: 44,
+              fontSize: 14),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -580,8 +908,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(
-              color: tc.orange.withValues(alpha: 0.3), width: 1.5),
+          border:
+          Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1.5),
           color: tc.orange.withValues(alpha: 0.15),
         ),
         child: ClipOval(
@@ -609,14 +937,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
             },
             errorBuilder: (context, error, stackTrace) {
               return Center(
-                child: Text(
-                  initials,
-                  style: TextStyle(
-                    color: tc.orangeText,
-                    fontSize: fontSize,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+                child: Text(initials,
+                    style: TextStyle(
+                        color: tc.orangeText,
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.w700)),
               );
             },
           ),
@@ -630,18 +955,15 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       decoration: BoxDecoration(
         color: tc.orange.withValues(alpha: 0.15),
         shape: BoxShape.circle,
-        border: Border.all(
-            color: tc.orange.withValues(alpha: 0.3), width: 1),
+        border:
+        Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1),
       ),
       child: Center(
-        child: Text(
-          initials,
-          style: TextStyle(
-            color: tc.orangeText,
-            fontSize: fontSize,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        child: Text(initials,
+            style: TextStyle(
+                color: tc.orangeText,
+                fontSize: fontSize,
+                fontWeight: FontWeight.w700)),
       ),
     );
   }
@@ -709,7 +1031,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   );
 
   // ══════════════════════════════════════════════════════════════
-  // ADD DIALOG
+  // ADD DIALOG — EDITABLE SALARY
   // ══════════════════════════════════════════════════════════════
   void _openAddDialog() {
     _profileImageBytes = null;
@@ -724,7 +1046,32 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     final idCtrl = TextEditingController();
     final nfcCtrl = TextEditingController();
     final pinCtrl = TextEditingController();
-    final salaryCtrl = TextEditingController();
+    final deviceNameCtrl = TextEditingController();
+
+    // ─── SALARY — EDITABLE ─────────────────────────────────────
+    final basicSalaryCtrl = TextEditingController();
+    final allowancesCtrl = TextEditingController();
+    final dailyRateCtrl = TextEditingController();
+    final bankNameCtrl = TextEditingController();
+    final accountNumberCtrl = TextEditingController();
+
+    // ✅ Recompute daily rate = basic / 22
+    void _recomputeDaily() {
+      final basic = _parseMoneyStr(basicSalaryCtrl.text);
+      final daily = basic / kWorkingDaysPerMonth;
+      dailyRateCtrl.text = daily.toStringAsFixed(2);
+    }
+
+    // ✅ Prefill from role (called on open + role change)
+    void _refreshFromRole() {
+      basicSalaryCtrl.text =
+          _basicSalaryForRole(_selectedRole).toStringAsFixed(2);
+      allowancesCtrl.text =
+          _allowancesForRole(_selectedRole).toStringAsFixed(2);
+      _recomputeDaily();
+    }
+
+    _refreshFromRole();
 
     showDialog(
       context: context,
@@ -782,18 +1129,26 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                 _buildProfileCard(ctx, setS, dialogTc),
                                 const SizedBox(height: 20),
                                 _buildRightColumn(
-                                    ctx,
-                                    setS,
-                                    dialogTc,
-                                    nameCtrl,
-                                    emailCtrl,
-                                    birthdayCtrl,
-                                    phoneCtrl,
-                                    deptCtrl,
-                                    idCtrl,
-                                    nfcCtrl,
-                                    pinCtrl,
-                                    salaryCtrl),
+                                  ctx,
+                                  setS,
+                                  dialogTc,
+                                  nameCtrl,
+                                  emailCtrl,
+                                  birthdayCtrl,
+                                  phoneCtrl,
+                                  deptCtrl,
+                                  idCtrl,
+                                  nfcCtrl,
+                                  pinCtrl,
+                                  deviceNameCtrl,
+                                  basicSalaryCtrl,
+                                  allowancesCtrl,
+                                  dailyRateCtrl,
+                                  bankNameCtrl,
+                                  accountNumberCtrl,
+                                  _refreshFromRole,
+                                  _recomputeDaily,
+                                ),
                               ],
                             );
                           }
@@ -802,22 +1157,32 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                             children: [
                               SizedBox(
                                   width: 280,
-                                  child: _buildProfileCard(ctx, setS, dialogTc)),
+                                  child:
+                                  _buildProfileCard(ctx, setS, dialogTc)),
                               const SizedBox(width: 20),
                               Expanded(
-                                  child: _buildRightColumn(
-                                      ctx,
-                                      setS,
-                                      dialogTc,
-                                      nameCtrl,
-                                      emailCtrl,
-                                      birthdayCtrl,
-                                      phoneCtrl,
-                                      deptCtrl,
-                                      idCtrl,
-                                      nfcCtrl,
-                                      pinCtrl,
-                                      salaryCtrl)),
+                                child: _buildRightColumn(
+                                  ctx,
+                                  setS,
+                                  dialogTc,
+                                  nameCtrl,
+                                  emailCtrl,
+                                  birthdayCtrl,
+                                  phoneCtrl,
+                                  deptCtrl,
+                                  idCtrl,
+                                  nfcCtrl,
+                                  pinCtrl,
+                                  deviceNameCtrl,
+                                  basicSalaryCtrl,
+                                  allowancesCtrl,
+                                  dailyRateCtrl,
+                                  bankNameCtrl,
+                                  accountNumberCtrl,
+                                  _refreshFromRole,
+                                  _recomputeDaily,
+                                ),
+                              ),
                             ],
                           );
                         },
@@ -854,7 +1219,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                 return;
                               }
 
-                              // ✅ VALIDATE: Employee ID is required
                               final typedEmployeeId = idCtrl.text.trim();
                               if (typedEmployeeId.isEmpty) {
                                 _snack(
@@ -863,7 +1227,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                 return;
                               }
 
-                              // ✅ VALIDATE: No special characters
                               if (typedEmployeeId.contains('/') ||
                                   typedEmployeeId.contains('~') ||
                                   typedEmployeeId.contains('*') ||
@@ -875,6 +1238,21 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                     error: true);
                                 return;
                               }
+
+                              final basicSalary =
+                              _parseMoneyStr(basicSalaryCtrl.text);
+                              if (basicSalary <= 0) {
+                                _snack(
+                                    '⚠️ Basic Salary must be > 0.',
+                                    error: true);
+                                return;
+                              }
+                              final allowances =
+                              _parseMoneyStr(allowancesCtrl.text);
+                              final dailyRate = basicSalary /
+                                  kWorkingDaysPerMonth;
+                              final monthlyTotal =
+                                  basicSalary + allowances;
 
                               if (!ctx.mounted) return;
                               setS(() => _saving = true);
@@ -891,7 +1269,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
 
                                 final err =
                                 await AdminDatabase.addEmployee(
-                                  employeeId: typedEmployeeId, // ✅ Employee ID as doc ID
+                                  employeeId: typedEmployeeId,
                                   firstName: firstName,
                                   lastName: lastName,
                                   email: emailCtrl.text.trim(),
@@ -910,23 +1288,40 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                   return;
                                 }
 
-                                final capturedEmail = emailCtrl.text.trim();
-                                final salaryValue = double.tryParse(
-                                    salaryCtrl.text
-                                        .replaceAll(',', '')
-                                        .trim()) ??
-                                    0.0;
+                                final capturedEmail =
+                                emailCtrl.text.trim();
 
-                                // ✅ Save extra fields — Employee ID is now the doc ID
                                 try {
-                                  final docRef = FirebaseFirestore.instance
+                                  final docRef = FirebaseFirestore
+                                      .instance
                                       .collection('employees')
                                       .doc(typedEmployeeId);
 
                                   final extraData = <String, dynamic>{
                                     'employeeId': typedEmployeeId,
-                                    'basicSalary': salaryValue,
+                                    'role': _selectedRole,
+                                    if (deviceNameCtrl.text.trim().isNotEmpty)
+                                      'deviceName':
+                                      deviceNameCtrl.text.trim(),
+                                    'basicSalary': basicSalary,
+                                    'allowances': allowances,
+                                    'basicAllowance': allowances,
+                                    'housingAllowance': 0.0,
+                                    'transportAllowance': 0.0,
+                                    'specialAllowance': 0.0,
+                                    'dailyRate': dailyRate,
+                                    'monthlyTotal': monthlyTotal,
+                                    'workingDaysPerMonth':
+                                    kWorkingDaysPerMonth,
+                                    'salarySource': 'manual',
+                                    'bankName':
+                                    bankNameCtrl.text.trim(),
+                                    'accountNumber':
+                                    accountNumberCtrl.text.trim(),
                                     'payrollStatus': 'Processed',
+                                    'salaryConfigured': true,
+                                    'salaryUpdatedAt':
+                                    FieldValue.serverTimestamp(),
                                   };
 
                                   final phone = phoneCtrl.text.trim();
@@ -942,10 +1337,12 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                   debugPrint(
                                       '✅ Extra data saved to $typedEmployeeId: $extraData');
                                 } catch (e) {
-                                  debugPrint('⚠️ Extra data save failed: $e');
+                                  debugPrint(
+                                      '⚠️ Extra data save failed: $e');
                                 }
 
-                                final capturedBytes = _profileImageBytes;
+                                final capturedBytes =
+                                    _profileImageBytes;
                                 Navigator.pop(ctx);
                                 if (mounted) {
                                   _snack(capturedBytes != null
@@ -1024,7 +1421,12 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       idCtrl.dispose();
       nfcCtrl.dispose();
       pinCtrl.dispose();
-      salaryCtrl.dispose();
+      deviceNameCtrl.dispose();
+      basicSalaryCtrl.dispose();
+      allowancesCtrl.dispose();
+      dailyRateCtrl.dispose();
+      bankNameCtrl.dispose();
+      accountNumberCtrl.dispose();
     });
   }
 
@@ -1060,8 +1462,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
               .update({'photoUrl': photoUrl})
               .timeout(const Duration(seconds: 10));
           debugPrint('✅ Photo uploaded and saved to Firestore: $photoUrl');
-        } else {
-          debugPrint('⚠️ Photo upload returned null — skipping save');
         }
       } catch (e) {
         debugPrint('⚠️ Photo upload failed: $e');
@@ -1188,7 +1588,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    "Ensure the employee's name matches their government-issued ID. Photo will be used for biometric verification.",
+                    "Ensure the employee's name matches their government-issued ID.",
                     style: TextStyle(
                         fontSize: 10,
                         color: dialogTc.pillWarnTx,
@@ -1205,7 +1605,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // RIGHT COLUMN
+  // RIGHT COLUMN — EDITABLE SALARY
   // ══════════════════════════════════════════════════════════════
   Widget _buildRightColumn(
       BuildContext ctx,
@@ -1219,10 +1619,18 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       TextEditingController idCtrl,
       TextEditingController nfcCtrl,
       TextEditingController pinCtrl,
-      TextEditingController salaryCtrl,
+      TextEditingController deviceNameCtrl,
+      TextEditingController basicSalaryCtrl,
+      TextEditingController allowancesCtrl,
+      TextEditingController dailyRateCtrl,
+      TextEditingController bankNameCtrl,
+      TextEditingController accountNumberCtrl,
+      VoidCallback refreshFromRole,
+      VoidCallback recomputeDaily,
       ) {
     return Column(
       children: [
+        // ─── PERSONAL INFO ─────────────────────────────────
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -1248,7 +1656,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                   if (narrow) {
                     return Column(
                       children: [
-                        _buildInput('FULL NAME', nameCtrl, 'Full Name', dialogTc),
+                        _buildInput(
+                            'FULL NAME', nameCtrl, 'Full Name', dialogTc),
                         const SizedBox(height: 12),
                         _buildInput('EMAIL ADDRESS', emailCtrl,
                             'Email Address', dialogTc),
@@ -1265,11 +1674,14 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                         _buildInput('EMPLOYEE ID', idCtrl,
                             'e.g., emp-01-2026', dialogTc),
                         const SizedBox(height: 12),
-                        _buildRoleDropdown(dialogTc, setS),
-                        const SizedBox(height: 12),
-                        _buildInput('BASIC SALARY (₱)', salaryCtrl,
-                            'e.g. 25000', dialogTc,
-                            keyboardType: TextInputType.number),
+                        _buildRoleDropdown(
+                          dialogTc,
+                          setS,
+                          onRoleChanged: () {
+                            refreshFromRole();
+                            recomputeDaily();
+                          },
+                        ),
                       ],
                     );
                   }
@@ -1300,7 +1712,16 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                             child: _buildInput('DEPARTMENT', deptCtrl,
                                 'Department', dialogTc)),
                         const SizedBox(width: 12),
-                        Expanded(child: _buildRoleDropdown(dialogTc, setS))
+                        Expanded(
+                          child: _buildRoleDropdown(
+                            dialogTc,
+                            setS,
+                            onRoleChanged: () {
+                              refreshFromRole();
+                              recomputeDaily();
+                            },
+                          ),
+                        ),
                       ]),
                       const SizedBox(height: 12),
                       Row(children: [
@@ -1308,10 +1729,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                             child: _buildInput('EMPLOYEE ID', idCtrl,
                                 'e.g., emp-01-2026', dialogTc)),
                         const SizedBox(width: 12),
-                        Expanded(
-                            child: _buildInput('BASIC SALARY (₱)', salaryCtrl,
-                                'e.g. 25000', dialogTc,
-                                keyboardType: TextInputType.number))
+                        const Expanded(child: SizedBox()),
                       ]),
                     ],
                   );
@@ -1321,6 +1739,164 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
           ),
         ),
         const SizedBox(height: 16),
+
+        // ─── 💰 COMPENSATION & PAYROLL ─────────────────────
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+              color: dialogTc.card,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: dialogTc.border)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.payments_outlined,
+                    size: 16, color: dialogTc.orange),
+                const SizedBox(width: 8),
+                Text('Compensation & Payroll',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: dialogTc.text)),
+              ]),
+              const SizedBox(height: 6),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: dialogTc.pillWarnBg,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                      color: dialogTc.pillWarnTx.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.edit_note,
+                        size: 14, color: dialogTc.pillWarnTx),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Pwede mong i-edit ang Basic Salary at Allowances. Ang DAILY RATE ay auto-computed (Basic ÷ 22 days).',
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: dialogTc.pillWarnTx,
+                            fontWeight: FontWeight.w600,
+                            height: 1.3),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              LayoutBuilder(builder: (context, c) {
+                final narrow = c.maxWidth < 500;
+                if (narrow) {
+                  return Column(children: [
+                    _buildMoneyInput(
+                      'BASIC SALARY (₱/month)',
+                      basicSalaryCtrl,
+                      dialogTc,
+                      required: true,
+                      onChanged: (_) => setS(() => recomputeDaily()),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildMoneyInput(
+                      'ALLOWANCES (₱/month)',
+                      allowancesCtrl,
+                      dialogTc,
+                      onChanged: (_) => setS(() {}),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildReadOnlyMoney(
+                        'DAILY RATE (₱/day)', dailyRateCtrl, dialogTc,
+                        highlight: true),
+                    const SizedBox(height: 12),
+                    _buildInput('BANK NAME', bankNameCtrl, 'e.g. BPI', dialogTc),
+                    const SizedBox(height: 12),
+                    _buildInput('ACCOUNT NUMBER', accountNumberCtrl,
+                        'e.g. 1234567890', dialogTc,
+                        keyboardType: TextInputType.number),
+                  ]);
+                }
+                return Column(children: [
+                  Row(children: [
+                    Expanded(
+                      child: _buildMoneyInput(
+                        'BASIC SALARY (₱/month)',
+                        basicSalaryCtrl,
+                        dialogTc,
+                        required: true,
+                        onChanged: (_) => setS(() => recomputeDaily()),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildMoneyInput(
+                        'ALLOWANCES (₱/month)',
+                        allowancesCtrl,
+                        dialogTc,
+                        onChanged: (_) => setS(() {}),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(
+                      child: _buildReadOnlyMoney(
+                          'DAILY RATE (₱/day)', dailyRateCtrl, dialogTc,
+                          highlight: true),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: dialogTc.surface,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: dialogTc.border),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text('WORKING DAYS',
+                                style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    color: dialogTc.muted,
+                                    letterSpacing: 0.5)),
+                            Text('$kWorkingDaysPerMonth days',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: dialogTc.text)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(
+                      child: _buildInput(
+                          'BANK NAME', bankNameCtrl, 'e.g. BPI', dialogTc),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildInput('ACCOUNT NUMBER', accountNumberCtrl,
+                          'e.g. 1234567890', dialogTc,
+                          keyboardType: TextInputType.number),
+                    ),
+                  ]),
+                ]);
+              }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // ─── BIOMETRIC ─────────────────────────────────────
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -1353,20 +1929,36 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                         _buildInput('4-DIGIT PIN', pinCtrl, '4-Digit PIN',
                             dialogTc,
                             obscure: true),
+                        const SizedBox(height: 12),
+                        _buildInput(
+                            'REGISTERED DEVICE', deviceNameCtrl,
+                            'e.g. Samsung A54, Redmi Note 12',
+                            dialogTc,
+                            suffixIcon: Icons.smartphone),
                       ],
                     );
                   }
-                  return Row(
+                  return Column(
                     children: [
-                      Expanded(
-                          child: _buildInput('KEYFOB SERIAL', nfcCtrl,
-                              'Keyfob Serial', dialogTc,
-                              suffixIcon: Icons.wifi)),
-                      const SizedBox(width: 12),
-                      Expanded(
-                          child: _buildInput(
-                              '4-DIGIT PIN', pinCtrl, '4-Digit PIN', dialogTc,
-                              obscure: true)),
+                      Row(
+                        children: [
+                          Expanded(
+                              child: _buildInput('KEYFOB SERIAL', nfcCtrl,
+                                  'Keyfob Serial', dialogTc,
+                                  suffixIcon: Icons.wifi)),
+                          const SizedBox(width: 12),
+                          Expanded(
+                              child: _buildInput('4-DIGIT PIN', pinCtrl,
+                                  '4-Digit PIN', dialogTc,
+                                  obscure: true)),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _buildInput(
+                          'REGISTERED DEVICE', deviceNameCtrl,
+                          'e.g. Samsung A54, Redmi Note 12, iPhone 13',
+                          dialogTc,
+                          suffixIcon: Icons.smartphone),
                     ],
                   );
                 },
@@ -1378,6 +1970,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                 children: [
                   _buildBadge('NFC Ready', dialogTc),
                   _buildBadge('Pin-pad Enabled', dialogTc),
+                  if (deviceNameCtrl.text.trim().isNotEmpty)
+                    _buildBadge('Device Bound', dialogTc),
                 ],
               ),
             ],
@@ -1387,7 +1981,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     );
   }
 
-  Widget _buildRoleDropdown(AdminColors dialogTc, StateSetter setS) {
+  Widget _buildRoleDropdown(
+      AdminColors dialogTc,
+      StateSetter setS, {
+        VoidCallback? onRoleChanged,
+      }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1425,9 +2023,127 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
               onChanged: (val) {
                 if (val != null) {
                   setS(() => _selectedRole = val);
+                  if (onRoleChanged != null) onRoleChanged();
                 }
               },
             ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── Editable money input ─────────────────────────────────
+  Widget _buildMoneyInput(
+      String label,
+      TextEditingController controller,
+      AdminColors dialogTc, {
+        ValueChanged<String>? onChanged,
+        bool required = false,
+      }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Text(label,
+              style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: dialogTc.muted,
+                  letterSpacing: 0.5)),
+          if (required) ...[
+            const SizedBox(width: 4),
+            Text('*',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: dialogTc.orange)),
+          ],
+        ]),
+        const SizedBox(height: 4),
+        TextFormField(
+          controller: controller,
+          keyboardType:
+          const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [
+            FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+          ],
+          onChanged: onChanged,
+          style: TextStyle(
+              fontSize: 12, color: dialogTc.text, fontWeight: FontWeight.w600),
+          decoration: InputDecoration(
+            hintText: '0.00',
+            hintStyle: TextStyle(color: dialogTc.muted),
+            prefixText: '₱ ',
+            prefixStyle: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: dialogTc.orange),
+            filled: true,
+            fillColor: dialogTc.surface,
+            contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: BorderSide(color: dialogTc.border)),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: BorderSide(color: dialogTc.orange, width: 1.5)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── Read-only money display ──────────────────────────────
+  Widget _buildReadOnlyMoney(
+      String label,
+      TextEditingController controller,
+      AdminColors dialogTc, {
+        bool highlight = false,
+      }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+                color: dialogTc.muted,
+                letterSpacing: 0.5)),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            color: highlight
+                ? dialogTc.orange.withValues(alpha: 0.08)
+                : dialogTc.surface,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+                color: highlight
+                    ? dialogTc.orange.withValues(alpha: 0.5)
+                    : dialogTc.border),
+          ),
+          child: Row(
+            children: [
+              Text('₱ ',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: highlight ? dialogTc.orange : dialogTc.muted)),
+              Expanded(
+                child: Text(
+                  controller.text.isEmpty ? '0.00' : controller.text,
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: highlight ? dialogTc.orange : dialogTc.text),
+                ),
+              ),
+              Icon(Icons.calculate_outlined,
+                  size: 12,
+                  color: highlight ? dialogTc.orange : dialogTc.muted),
+            ],
           ),
         ),
       ],

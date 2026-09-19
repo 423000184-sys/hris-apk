@@ -1,11 +1,7 @@
+// lib/screens/clock_in_success_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/employee.dart';
-
-/// Reference frame width used in the original HTML/Figma design
-/// (the mockup phone frame was 399.99px wide with 6.93px border,
-/// giving an inner content width of 386.13px).
-const double _kDesignFrameWidth = 386.13;
 
 class ClockInSuccessScreen extends StatefulWidget {
   final Employee? employee;
@@ -42,7 +38,9 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   Timer? _redirectTimer;
   bool _didRedirect = false;
 
-  // ---- Exact colors from the HTML design ----
+  // ══════════════════════════════════════════════════════════════
+  // COLORS — exact from HTML design
+  // ══════════════════════════════════════════════════════════════
   static const _neonGreen = Color(0xFF51FF00);
   static const _cardBorder = Color(0xFF27272A);
   static const _subtitleColor = Color(0xFFDFDFDF);
@@ -54,10 +52,16 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   static const _gradMid = Color(0xFFFA6A00);
   static const _gradEnd = Color(0xFFF54900);
 
-  // ---- Design-frame (399.99px mockup) reference measurements ----
-  // These are the RAW numbers from the HTML. We no longer use them
-  // directly as pixel values — instead everything is scaled against
-  // _kDesignFrameWidth so the card looks identical on any real device.
+  // Background header colors (behind dim overlay)
+  static const _headerStart = Color(0xFFFF8A00);
+  static const _headerMid = Color(0xFFFF6B00);
+  static const _headerEnd = Color(0xFFF54900);
+  static const _cardBorderLight = Color(0xFFFDBA74);
+  static const _optionOrange = Color(0xFFF97316);
+
+  // ══════════════════════════════════════════════════════════════
+  // DESIGN FRAME MEASUREMENTS — from HTML mockup
+  // ══════════════════════════════════════════════════════════════
   static const double _designCardW = 338.14;
   static const double _designCardH = 343.03;
   static const double _designIconSize = 112.0;
@@ -75,21 +79,17 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   static const double _designBorderWidth = 1.15;
   static const double _designRadius = 16.0;
 
-  // ---- Colors for the dimmed background behind the modal ----
-  static const _headerStart = Color(0xFFFF8A00);
-  static const _headerMid = Color(0xFFFF6B00);
-  static const _headerEnd = Color(0xFFF54900);
-  static const _cardBorderLight = Color(0xFFFDBA74);
-  static const _optionOrange = Color(0xFFF97316);
-
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 500));
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
     _fadeAnim = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _scaleAnim = Tween<double>(begin: 0.92, end: 1.0)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
+    _scaleAnim = Tween<double>(begin: 0.92, end: 1.0).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack),
+    );
     _ctrl.forward();
     _redirectTimer = Timer(widget.autoRedirectDelay, _handleContinue);
   }
@@ -120,11 +120,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         backgroundColor: Colors.white,
         body: Stack(
           children: [
-            // "Auth & Clock In" screen recreated as a static, dimmed
-            // background — since ClockInSuccessScreen is usually reached
-            // via pushReplacement, there's nothing left underneath it.
-            // This matches the HTML design where the previous screen is
-            // still visible (dimmed) behind the success overlay.
+            // Dimmed background — recreates previous screen
             Positioned.fill(
               child: Opacity(
                 opacity: 0.55,
@@ -147,14 +143,10 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    // Available width after the 24px horizontal padding
-                    // on each side (matches the HTML's own padding).
                     final availableWidth = constraints.maxWidth.isFinite
                         ? constraints.maxWidth
                         : MediaQuery.of(context).size.width - 48;
 
-                    // Scale factor relative to the original design frame.
-                    // Cap it so the card doesn't blow up on tablets/web.
                     double scale = availableWidth / _designCardW;
                     if (scale > 1.25) scale = 1.25;
                     if (scale <= 0) scale = 1.0;
@@ -179,11 +171,9 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     );
   }
 
-  /// Recreates the "Auth & Clock In" header + "Step 1: Initial Login"
-  /// card, purely as decorative background content. It is not tappable
-  /// (wrapped in IgnorePointer by the caller) — its only job is to make
-  /// the success screen look like it's overlaid on top of the previous
-  /// step, matching the HTML design.
+  // ══════════════════════════════════════════════════════════════
+  // DIMMED BACKGROUND — recreates "Auth & Clock In" screen
+  // ══════════════════════════════════════════════════════════════
   Widget _buildDimmedBackground() {
     return Container(
       color: Colors.white,
@@ -304,6 +294,9 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // SUCCESS CARD
+  // ══════════════════════════════════════════════════════════════
   Widget _buildSuccessCard(double scale) {
     final isClockIn = widget.type.toUpperCase() == 'IN';
     final accent = isClockIn ? _neonGreen : const Color(0xFFC4FF0A);
@@ -395,9 +388,9 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   }
 }
 
-/// Renders the exact SVG check icon from the HTML design:
-/// white rounded box, neon-green rounded border, neon-green
-/// circle + checkmark inside.
+// ══════════════════════════════════════════════════════════════
+// CHECK ICON PAINTER — exact SVG from HTML design
+// ══════════════════════════════════════════════════════════════
 class _CheckIconPainter extends CustomPainter {
   final Color color;
   const _CheckIconPainter({required this.color});

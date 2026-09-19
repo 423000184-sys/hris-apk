@@ -11,6 +11,7 @@ import '../models/employee.dart';
 import '../services/clock_status_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/bootstrap_grid.dart';
 
 enum _SplashState { loading, networkError, navigating }
 
@@ -419,11 +420,11 @@ class _SplashScreenState extends State<SplashScreen>
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // BUILD — Bootstrap-style responsive layout
+  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    const double designW = 400;
-    const double designH = 850;
-
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final palette = context.palette;
 
@@ -439,285 +440,406 @@ class _SplashScreenState extends State<SplashScreen>
       backgroundColor: palette.bg,
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final double w = constraints.maxWidth;
-          final double h = constraints.maxHeight;
-          final double sx = w / designW;
-          final double sy = h / designH;
+          final w = constraints.maxWidth;
+          final responsive = BsResponsive(w);
 
-          return Container(
-            width: w,
-            height: h,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: bgGradientColors,
-                stops: const [0.0, 0.45, 1.0],
+          // Cap the "design width" so the layout doesn't get absurd
+          // on very wide screens — content stays centered at 480 max.
+          final contentW = w > 480 ? 480.0 : w;
+          final scale = (contentW / 400).clamp(0.75, 1.20);
+
+          return Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              // ── Background gradient ──
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: bgGradientColors,
+                      stops: const [0.0, 0.45, 1.0],
+                    ),
+                  ),
+                ),
               ),
-            ),
-            child: Stack(
-              clipBehavior: Clip.hardEdge,
-              children: [
-                Positioned(
-                  top: -180 * sy,
-                  right: -200 * sx,
-                  child: Transform.rotate(
-                    angle: _degToRad(270),
-                    child: Opacity(
-                      opacity: isDark ? 0.12 : 0.25,
+
+              // ── Decorative logos (kept absolute, scaled) ──
+              Positioned(
+                top: -180 * scale,
+                right: -200 * scale,
+                child: Transform.rotate(
+                  angle: _degToRad(270),
+                  child: Opacity(
+                    opacity: isDark ? 0.12 : 0.25,
+                    child: Image.asset(_logoAsset,
+                        width: 600 * scale,
+                        height: 600 * scale,
+                        fit: BoxFit.contain),
+                  ),
+                ),
+              ),
+              Positioned(
+                bottom: -130 * scale,
+                left: -150 * scale,
+                child: Transform.rotate(
+                  angle: _degToRad(425),
+                  child: Opacity(
+                    opacity: 0.80,
+                    child: ColorFiltered(
+                      colorFilter: const ColorFilter.mode(
+                          Color.fromRGBO(255, 138, 0, 0.10),
+                          BlendMode.srcIn),
                       child: Image.asset(_logoAsset,
-                          width: 600 * sx,
-                          height: 600 * sy,
+                          width: 500 * scale,
+                          height: 500 * scale,
                           fit: BoxFit.contain),
                     ),
                   ),
                 ),
-                Positioned(
-                  bottom: -130 * sy,
-                  left: -150 * sx,
-                  child: Transform.rotate(
-                    angle: _degToRad(425),
-                    child: Opacity(
-                      opacity: 0.80,
-                      child: ColorFiltered(
-                        colorFilter: const ColorFilter.mode(
-                            Color.fromRGBO(255, 138, 0, 0.10),
-                            BlendMode.srcIn),
-                        child: Image.asset(_logoAsset,
-                            width: 500 * sx,
-                            height: 500 * sy,
-                            fit: BoxFit.contain),
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  left: 128.24 * sx,
-                  top: 289.26 * sy,
-                  child: FadeTransition(
-                    opacity: _logoOpacity,
-                    child: ScaleTransition(
-                      scale: _logoScale,
-                      child: Container(
-                        width: 128 * sx,
-                        height: 128 * sy,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: iconOuterGradient),
-                          borderRadius: BorderRadius.circular(32 * sx),
-                        ),
-                        alignment: Alignment.center,
-                        child: Container(
-                          width: 95.99 * sx,
-                          height: 95.99 * sy,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [
-                                  Color(0xFFFF8A00),
-                                  Color(0xFFF97316)
-                                ]),
-                            borderRadius: BorderRadius.circular(24 * sx),
-                            boxShadow: [
-                              BoxShadow(
-                                  color: const Color(0xFFF97316)
-                                      .withOpacity(0.2),
-                                  blurRadius: 10,
-                                  offset: Offset(0, 12.5 * sy))
-                            ],
-                          ),
-                          alignment: Alignment.center,
-                          child: ColorFiltered(
-                            colorFilter: const ColorFilter.mode(
-                                Colors.white, BlendMode.srcIn),
-                            child: Image.asset(_logoAsset,
-                                width: 58 * sx,
-                                height: 58 * sy,
-                                fit: BoxFit.contain),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  left: 100.99 * sx,
-                  top: 417.24 * sy,
-                  width: 182.47 * sx,
-                  child: FadeTransition(
-                    opacity: _textOpacity,
+              ),
+
+              // ── Centered main content (Bootstrap container) ──
+              Positioned.fill(
+                child: SafeArea(
+                  child: BsContainer(
+                    maxWidth: 480,
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Column(
-                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Text('R.A.C.O.M.A',
-                            textAlign: TextAlign.center,
-                            softWrap: false,
-                            style: TextStyle(
-                                fontSize: 30 * sx,
-                                fontWeight: FontWeight.w700,
-                                color: palette.textPrimary)),
-                        SizedBox(height: 8 * sy),
-                        Text('Smart HR Information System',
-                            textAlign: TextAlign.center,
-                            softWrap: false,
-                            style: TextStyle(
-                                fontSize: 14 * sx,
-                                fontWeight: FontWeight.w500,
-                                color: palette.textSecondary)),
+                        const Spacer(flex: 3),
+
+                        // Logo
+                        FadeTransition(
+                          opacity: _logoOpacity,
+                          child: ScaleTransition(
+                            scale: _logoScale,
+                            child: _buildLogo(responsive, iconOuterGradient),
+                          ),
+                        ),
+
+                        SizedBox(
+                          height: responsive.responsive<double>(
+                            xs: 24,
+                            sm: 28,
+                            md: 32,
+                            lg: 32,
+                          ),
+                        ),
+
+                        // Title + subtitle
+                        FadeTransition(
+                          opacity: _textOpacity,
+                          child: _buildTitle(responsive, palette),
+                        ),
+
+                        const Spacer(flex: 4),
+
+                        // Progress bar
+                        AnimatedBuilder(
+                          animation: _controller,
+                          builder: (context, _) =>
+                              _buildProgress(responsive, palette),
+                        ),
+
+                        const Spacer(flex: 2),
                       ],
                     ),
                   ),
                 ),
-                Positioned(
-                  left: 92.22 * sx,
-                  top: 720.47 * sy,
-                  width: 200 * sx,
-                  child: AnimatedBuilder(
-                    animation: _controller,
-                    builder: (context, _) {
-                      final label = _state == _SplashState.networkError
-                          ? 'Offline'
-                          : 'Initializing...';
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Text(label,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                  fontSize: 12 * sx,
-                                  color: palette.textSecondary)),
-                          SizedBox(height: 12 * sy),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(999),
-                            child: Container(
-                              width: 200 * sx,
-                              height: 3.99 * sy,
-                              color: palette.fill,
-                              child: FractionallySizedBox(
-                                alignment: Alignment.centerLeft,
-                                widthFactor:
-                                _state == _SplashState.networkError
-                                    ? 0.0
-                                    : _progressValue.value,
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                      color: const Color(0xFFF97316),
-                                      borderRadius:
-                                      BorderRadius.circular(999)),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
+              ),
+
+              // ── Network error overlay ──
+              if (_state == _SplashState.networkError)
+                Positioned.fill(
+                  child: _buildNetworkErrorOverlay(
+                    palette: palette,
+                    isDark: isDark,
                   ),
                 ),
-                if (_state == _SplashState.networkError)
-                  Positioned.fill(
-                    child: _buildNetworkErrorOverlay(
-                      palette: palette,
-                      isDark: isDark,
-                    ),
-                  ),
-              ],
-            ),
+            ],
           );
         },
       ),
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // LOGO BLOCK (Bootstrap-sized)
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildLogo(BsResponsive responsive, List<Color> outerGradient) {
+    final double size = responsive.responsive<double>(
+      xs: 96,
+      sm: 112,
+      md: 128,
+      lg: 128,
+    );
+    final double inner = size * 0.75;
+    final double icon = size * 0.45;
+    final double outerRadius = size * 0.25;
+    final double innerRadius = inner * 0.25;
+
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: outerGradient),
+        borderRadius: BorderRadius.circular(outerRadius),
+      ),
+      alignment: Alignment.center,
+      child: Container(
+        width: inner,
+        height: inner,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFFFF8A00), Color(0xFFF97316)]),
+          borderRadius: BorderRadius.circular(innerRadius),
+          boxShadow: [
+            BoxShadow(
+                color: const Color(0xFFF97316).withOpacity(0.2),
+                blurRadius: 10,
+                offset: const Offset(0, 12.5))
+          ],
+        ),
+        alignment: Alignment.center,
+        child: ColorFiltered(
+          colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+          child: Image.asset(_logoAsset,
+              width: icon, height: icon, fit: BoxFit.contain),
+        ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // TITLE BLOCK (Bootstrap typography)
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildTitle(BsResponsive responsive, dynamic palette) {
+    final double titleSize = responsive.responsive<double>(
+      xs: 24,
+      sm: 27,
+      md: 30,
+      lg: 30,
+    );
+    final double subSize = responsive.responsive<double>(
+      xs: 12,
+      sm: 13,
+      md: 14,
+      lg: 14,
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'R.A.C.O.M.A',
+          textAlign: TextAlign.center,
+          softWrap: false,
+          style: TextStyle(
+            fontSize: titleSize,
+            fontWeight: FontWeight.w700,
+            color: palette.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Smart HR Information System',
+          textAlign: TextAlign.center,
+          softWrap: false,
+          style: TextStyle(
+            fontSize: subSize,
+            fontWeight: FontWeight.w500,
+            color: palette.textSecondary,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PROGRESS BLOCK (Bootstrap-sized)
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildProgress(BsResponsive responsive, dynamic palette) {
+    final String label = _state == _SplashState.networkError
+        ? 'Offline'
+        : 'Initializing...';
+    final double barWidth = responsive.responsive<double>(
+      xs: 180,
+      sm: 200,
+      md: 200,
+      lg: 200,
+    );
+    final double labelSize = responsive.responsive<double>(
+      xs: 11,
+      sm: 12,
+      md: 12,
+      lg: 12,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: labelSize, color: palette.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            width: barWidth,
+            height: 4,
+            color: palette.fill,
+            child: FractionallySizedBox(
+              alignment: Alignment.centerLeft,
+              widthFactor: _state == _SplashState.networkError
+                  ? 0.0
+                  : _progressValue.value,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF97316),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // NETWORK ERROR OVERLAY (Bootstrap-sized)
+  // ══════════════════════════════════════════════════════════════
   Widget _buildNetworkErrorOverlay({
     required dynamic palette,
     required bool isDark,
   }) {
-    return Container(
-      color: palette.bg.withValues(alpha: 0.94),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 88,
-                height: 88,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFFFF8A00).withValues(alpha: 0.12),
-                  border: Border.all(
-                    color: const Color(0xFFFF8A00).withValues(alpha: 0.35),
-                    width: 1.5,
-                  ),
-                ),
-                child: const Icon(
-                  Icons.wifi_off_rounded,
-                  color: Color(0xFFFF8A00),
-                  size: 40,
-                ),
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'No Connection',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: palette.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                _errorMessage,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: palette.textSecondary,
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 28),
-              SizedBox(
-                width: 180,
-                child: ElevatedButton.icon(
-                  onPressed: _retryBootstrap,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF8A00),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final responsive = BsResponsive(constraints.maxWidth);
+
+        final double iconCircle = responsive.responsive<double>(
+          xs: 72,
+          sm: 80,
+          md: 88,
+          lg: 88,
+        );
+        final double iconSize = responsive.responsive<double>(
+          xs: 32,
+          sm: 36,
+          md: 40,
+          lg: 40,
+        );
+        final double titleSize = responsive.responsive<double>(
+          xs: 18,
+          sm: 19,
+          md: 20,
+          lg: 20,
+        );
+        final double bodySize = responsive.responsive<double>(
+          xs: 12,
+          sm: 13,
+          md: 13,
+          lg: 13,
+        );
+
+        return Container(
+          color: palette.bg.withValues(alpha: 0.94),
+          child: Center(
+            child: BsContainer(
+              maxWidth: 420,
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: iconCircle,
+                    height: iconCircle,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color:
+                      const Color(0xFFFF8A00).withValues(alpha: 0.12),
+                      border: Border.all(
+                        color: const Color(0xFFFF8A00)
+                            .withValues(alpha: 0.35),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.wifi_off_rounded,
+                      color: const Color(0xFFFF8A00),
+                      size: iconSize,
                     ),
                   ),
-                  icon: const Icon(Icons.refresh_rounded, size: 18),
-                  label: const Text(
-                    'Try Again',
+                  const SizedBox(height: 24),
+                  Text(
+                    'No Connection',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 15,
+                      fontSize: titleSize,
                       fontWeight: FontWeight.w700,
+                      color: palette.textPrimary,
                     ),
                   ),
-                ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _errorMessage,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: bodySize,
+                      color: palette.textSecondary,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+                  SizedBox(
+                    width: 180,
+                    child: ElevatedButton.icon(
+                      onPressed: _retryBootstrap,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF8A00),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      icon: const Icon(Icons.refresh_rounded, size: 18),
+                      label: const Text(
+                        'Try Again',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Automatically retries when network returns.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: palette.textMuted ?? palette.textSecondary,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 14),
-              Text(
-                'Automatically retries when network returns.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: palette.textMuted ?? palette.textSecondary,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 

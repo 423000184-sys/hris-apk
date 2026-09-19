@@ -17,9 +17,16 @@ import 'admin_payroll_page.dart';
 import 'admin_payroll_management_page.dart';
 import 'admin_create_leave_request_page.dart';
 
+
 // widgets notification
 import '../widgets/admin_notification_bell.dart';
 import '../services/employee_notification_service.dart';
+
+// 🆕 DEBUG IMPORTS — presence + backup
+import '../services/presence_monitor_service.dart';
+import '../services/presence_backup_service.dart';
+import '../services/notification_backup_service.dart';
+import 'notification_backup_list_page.dart';
 
 class _AdminNavItem {
   final int index;
@@ -74,6 +81,7 @@ class AdminDashboardState extends State<AdminDashboard>
   static const double officeLng = 120.9936;
   static const double radiusLimit = 1500.0;
 
+  // ❌ REMOVED: Work Hours nav item
   static const List<_AdminNavItem> _navItems = [
     _AdminNavItem(0, 'Overview', Icons.grid_view_rounded),
     _AdminNavItem(1, 'Employees', Icons.people_alt_rounded),
@@ -175,7 +183,7 @@ class AdminDashboardState extends State<AdminDashboard>
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ✅ SEND UPDATE DIALOG (FIXED - text visible in all modes)
+  // ✅ SEND UPDATE DIALOG
   // ══════════════════════════════════════════════════════════════
   void _openSendUpdateDialog(BuildContext context, AdminColors c) {
     final titleCtrl = TextEditingController();
@@ -184,7 +192,6 @@ class AdminDashboardState extends State<AdminDashboard>
     String selectedRecipient = 'ALL';
     String selectedPriority = 'normal';
 
-    // ✅ Common dropdown decoration
     InputDecoration dropDeco(String hint) => InputDecoration(
       filled: true,
       fillColor: c.surface,
@@ -206,29 +213,28 @@ class AdminDashboardState extends State<AdminDashboard>
       ),
     );
 
-    // ✅ Common text style for dropdown items
     TextStyle itemStyle() => TextStyle(color: c.text, fontSize: 14);
 
-    // ✅ Common text field decoration
-    InputDecoration fieldDeco(String hint, {int? maxLines}) => InputDecoration(
-      filled: true,
-      fillColor: c.surface,
-      hintText: hint,
-      hintStyle: TextStyle(color: c.muted),
-      contentPadding: const EdgeInsets.all(12),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: c.border),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: c.border),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: c.orange, width: 1.5),
-      ),
-    );
+    InputDecoration fieldDeco(String hint, {int? maxLines}) =>
+        InputDecoration(
+          filled: true,
+          fillColor: c.surface,
+          hintText: hint,
+          hintStyle: TextStyle(color: c.muted),
+          contentPadding: const EdgeInsets.all(12),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: c.border),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: c.border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: c.orange, width: 1.5),
+          ),
+        );
 
     showDialog(
       context: context,
@@ -258,7 +264,6 @@ class AdminDashboardState extends State<AdminDashboard>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── TYPE ──
                   Text('Type',
                       style: TextStyle(
                           fontSize: 12,
@@ -290,8 +295,6 @@ class AdminDashboardState extends State<AdminDashboard>
                         setDlgState(() => selectedType = v ?? 'announcement'),
                   ),
                   const SizedBox(height: 12),
-
-                  // ── RECIPIENT ──
                   Text('Recipient',
                       style: TextStyle(
                           fontSize: 12,
@@ -331,8 +334,6 @@ class AdminDashboardState extends State<AdminDashboard>
                         setDlgState(() => selectedRecipient = v ?? 'ALL'),
                   ),
                   const SizedBox(height: 12),
-
-                  // ── PRIORITY ──
                   Text('Priority',
                       style: TextStyle(
                           fontSize: 12,
@@ -360,8 +361,6 @@ class AdminDashboardState extends State<AdminDashboard>
                             () => selectedPriority = v ?? 'normal'),
                   ),
                   const SizedBox(height: 12),
-
-                  // ── TITLE ──
                   Text('Title',
                       style: TextStyle(
                           fontSize: 12,
@@ -375,8 +374,6 @@ class AdminDashboardState extends State<AdminDashboard>
                     decoration: fieldDeco('e.g. Team Meeting Tomorrow'),
                   ),
                   const SizedBox(height: 12),
-
-                  // ── MESSAGE ──
                   Text('Message',
                       style: TextStyle(
                           fontSize: 12,
@@ -407,8 +404,7 @@ class AdminDashboardState extends State<AdminDashboard>
                 if (title.isEmpty || message.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content:
-                      Text('Please fill in both title and message.'),
+                      content: Text('Please fill in both title and message.'),
                       backgroundColor: Color(0xFFEF4444),
                     ),
                   );
@@ -462,6 +458,238 @@ class AdminDashboardState extends State<AdminDashboard>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🛰️ PRESENCE / BACKUP DIALOG
+  // ══════════════════════════════════════════════════════════════
+  void _showPresenceDialog(BuildContext context, AdminColors c) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: c.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: c.border,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Icon(Icons.location_searching_rounded,
+                        color: c.orange, size: 22),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Presence & Backup',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: c.text,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'I-test ang presence monitor at backup system',
+                  style: TextStyle(fontSize: 12, color: c.textMuted),
+                ),
+                const SizedBox(height: 20),
+
+                _debugTile(
+                  c: c,
+                  icon: Icons.info_outline_rounded,
+                  title: 'Print Debug Info',
+                  subtitle: 'Ipakita sa console ang current presence state',
+                  color: c.orange,
+                  onTap: () {
+                    PresenceMonitorService.instance.printDebugInfo();
+                    Navigator.pop(ctx);
+                    _showSnack('ℹ️ Debug info printed sa console');
+                  },
+                ),
+
+                _debugTile(
+                  c: c,
+                  icon: Icons.gps_fixed_rounded,
+                  title: 'Force Presence Check',
+                  subtitle:
+                  'Agad na check ng geofence + notify kung may change',
+                  color: const Color(0xFF3B82F6),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    _showSnack('🛰️ Force check...');
+                    try {
+                      await PresenceMonitorService.instance
+                          .checkNow(forceNotify: true);
+                      _showSnack(
+                          '✅ Presence check complete — tingnan console');
+                    } catch (e) {
+                      _showSnack('❌ Failed: $e');
+                    }
+                  },
+                ),
+
+                _debugTile(
+                  c: c,
+                  icon: Icons.backup_rounded,
+                  title: 'Force Backup Now',
+                  subtitle: 'I-append ang latest 20 notifications sa log',
+                  color: const Color(0xFF16A34A),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    _showSnack('💾 Creating backup...');
+                    try {
+                      final count = await NotificationBackupService
+                          .instance
+                          .forceBackupNow(limit: 20);
+                      _showSnack(
+                        count > 0
+                            ? '✅ $count entries added to log!'
+                            : '⚠️ Walang bagong notification na i-backup',
+                      );
+                    } catch (e) {
+                      _showSnack('❌ Backup failed: $e');
+                    }
+                  },
+                ),
+
+                _debugTile(
+                  c: c,
+                  icon: Icons.play_circle_outline_rounded,
+                  title: 'Run Full Test',
+                  subtitle: 'Check + Backup (recommended for testing)',
+                  color: const Color(0xFF8B5CF6),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    _showSnack('🧪 Running full test...');
+                    try {
+                      await PresenceMonitorService.instance
+                          .checkNow(forceNotify: true);
+                      await Future.delayed(
+                          const Duration(milliseconds: 1500));
+                      final count = await NotificationBackupService
+                          .instance
+                          .forceBackupNow(limit: 20);
+                      _showSnack(
+                        count > 0
+                            ? '✅ Full test complete — $count entries'
+                            : '⚠️ Test done pero walang backup',
+                      );
+                    } catch (e) {
+                      _showSnack('❌ Failed: $e');
+                    }
+                  },
+                ),
+
+                const SizedBox(height: 12),
+                Text(
+                  '💡 Tip: Buksan ang 📁 folder icon sa AppBar para makita ang notification log.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: c.textMuted,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _debugTile({
+    required AdminColors c,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, color: color, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: c.text,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: c.textMuted,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: c.muted,
+                  size: 20,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }
@@ -757,6 +985,33 @@ class AdminDashboardState extends State<AdminDashboard>
           tooltip: 'Send Update to Employees',
           onPressed: () => _openSendUpdateDialog(context, c),
           icon: Icon(Icons.campaign_rounded, size: 21, color: c.accent),
+        ),
+
+        // 🆕 PRESENCE / BACKUP button
+        IconButton(
+          tooltip: 'Presence & Backup',
+          onPressed: () => _showPresenceDialog(context, c),
+          icon: Icon(
+            Icons.location_searching_rounded,
+            size: 21,
+            color: c.accent,
+          ),
+        ),
+
+        // 📁 NOTIFICATION BACKUPS button
+        IconButton(
+          tooltip: 'Notification Backups',
+          onPressed: () {
+            Navigator.push(
+              context,
+              adminRoute(const NotificationBackupListPage()),
+            );
+          },
+          icon: Icon(
+            Icons.folder_special_rounded,
+            size: 21,
+            color: c.accent,
+          ),
         ),
 
         IconButton(
@@ -1180,6 +1435,9 @@ class AdminDashboardState extends State<AdminDashboard>
           userLogs: _userLogs,
           onSelectEmployee: (emp) => openPayrollManagement(emp),
         );
+
+    // ❌ REMOVED: case 7 — Work Hours Config
+
       default:
         return const Center(child: Text('View not found'));
     }

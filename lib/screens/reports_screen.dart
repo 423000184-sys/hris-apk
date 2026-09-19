@@ -1,8 +1,9 @@
 // lib/screens/reports_screen.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../theme/app_theme.dart';
 import '../services/database_service.dart';
 import '../services/security_service.dart';
@@ -10,8 +11,15 @@ import '../services/payroll_calculator.dart';
 import '../services/payroll_pdf_service.dart';
 import '../models/employee.dart';
 
+// ══════════════════════════════════════════════════════════════
+// 💰 SALARY CONFIG
+// ══════════════════════════════════════════════════════════════
+const int kWorkingDaysPerMonth = 22;
+
 class _Mock {
   static const Color orange = Color(0xFFFF8A00);
+  static const Color orangeMid = Color(0xFFFA6A00);
+  static const Color orangeDark = Color(0xFFF54900);
   static const Color lime = Color(0xFFC4FF0A);
   static const Color paidBg = Color(0x1AC4FF0A);
   static const Color paidBorder = Color(0x33C4FF0A);
@@ -23,28 +31,16 @@ class _ThemeColors {
 
   Color get bg => isDark ? const Color(0xFF0F0F10) : Colors.white;
   Color get cardBg =>
-      isDark ? const Color(0xFF18181B) : const Color(0xFFF8F8F8);
+      isDark ? const Color(0xFF18181B) : Colors.white;
   Color get cardBorder =>
-      isDark ? const Color(0xFF27272A) : const Color(0xFF27272A);
+      isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
   Color get textPrimary => isDark ? Colors.white : Colors.black;
   Color get textGrayDark =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF52525B);
   Color get printButtonBg =>
       isDark ? const Color(0xFF27272A) : Colors.white;
   Color get printButtonBorder =>
-      isDark ? const Color(0xFF3F3F46) : const Color(0xFF27272A);
-  Color get pillGreenBg =>
-      isDark ? const Color(0x1AC4FF0A) : const Color(0x1A16A34A);
-  Color get pillGreenTx =>
-      isDark ? const Color(0xFFC4FF0A) : const Color(0xFF16A34A);
-  Color get pillRedBg =>
-      isDark ? const Color(0x1AFF4D6D) : const Color(0x1ADC2626);
-  Color get pillRedTx =>
-      isDark ? const Color(0xFFFF4D6D) : const Color(0xFFDC2626);
-  Color get pillWarnBg =>
-      isDark ? const Color(0x1AFFA500) : const Color(0x1AD97706);
-  Color get pillWarnTx =>
-      isDark ? const Color(0xFFFFA500) : const Color(0xFFD97706);
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFF3F3F46);
 }
 
 class ReportsScreen extends StatefulWidget {
@@ -67,6 +63,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
   String _department = '—';
   String _designation = '—';
 
+  double _basicSalary = 0;
+  double _allowances = 0;
+  double _dailyRate = 0;
+  int _workingDaysPerMonth = kWorkingDaysPerMonth;
+  String _salarySource = 'manual';
+  String _role = '';
+
+  String _displayName = '—';
+  String _displayEmpId = '—';
+
   DateTime get _periodStart {
     final n = DateTime.now();
     return DateTime(n.year, n.month, 1);
@@ -83,43 +89,131 @@ class _ReportsScreenState extends State<ReportsScreen> {
     _loadData();
   }
 
+  double _num(dynamic v, [double fallback = 0]) {
+    if (v == null) return fallback;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? fallback;
+  }
+
+  int _int(dynamic v, [int fallback = 0]) {
+    if (v == null) return fallback;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString()) ?? fallback;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🔍 FETCH
+  // ══════════════════════════════════════════════════════════════
+  Future<Map<String, dynamic>?> _fetchByRawId(String rawId) async {
+    final fs = FirebaseFirestore.instance;
+    debugPrint('🔍 [_fetchByRawId] rawId = "$rawId"');
+
+    try {
+      final doc = await fs.collection('employees').doc(rawId).get();
+      if (doc.exists) {
+        debugPrint('✅ [raw-1] FOUND via doc(rawId)');
+        return doc.data();
+      }
+    } catch (e) {
+      debugPrint('⚠️ [raw-1] failed: $e');
+    }
+
+    try {
+      final snap = await fs
+          .collection('employees')
+          .where('employeeId', isEqualTo: rawId)
+          .limit(1)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        debugPrint('✅ [raw-2] FOUND via query(employeeId)');
+        return snap.docs.first.data();
+      }
+    } catch (e) {
+      debugPrint('⚠️ [raw-2] failed: $e');
+    }
+
+    try {
+      final snap = await fs
+          .collection('employees')
+          .where('id', isEqualTo: rawId)
+          .limit(1)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        debugPrint('✅ [raw-3] FOUND via query(id)');
+        return snap.docs.first.data();
+      }
+    } catch (e) {
+      debugPrint('⚠️ [raw-3] failed: $e');
+    }
+
+    try {
+      final all = await fs.collection('employees').limit(50).get();
+      final target = rawId.toLowerCase().trim();
+      for (final d in all.docs) {
+        final data = d.data();
+        final docId = d.id.toLowerCase().trim();
+        final empIdField =
+        (data['employeeId'] ?? '').toString().toLowerCase().trim();
+        if (docId == target || empIdField == target) {
+          debugPrint('✅ [raw-4] FOUND case-insensitive');
+          return data;
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ [raw-4] failed: $e');
+    }
+
+    return null;
+  }
+
   Future<void> _loadData() async {
     if (!mounted) return;
     setState(() => _loading = true);
 
     try {
-      Employee? emp = widget.initialEmployee;
+      String? rawEmpId;
       if (!kIsWeb) {
-        final empId = await SecurityService.instance.getCurrentEmployeeId();
-        if (empId != null) {
-          emp = await DatabaseService.instance.getEmployeeById(empId);
-        }
+        rawEmpId = await SecurityService.instance.getCurrentEmployeeId();
+      }
+
+      Employee? emp = widget.initialEmployee;
+      if (emp == null && rawEmpId != null && rawEmpId.isNotEmpty) {
+        try {
+          emp = await DatabaseService.instance.getEmployeeById(rawEmpId);
+        } catch (_) {}
       }
 
       Map<String, dynamic>? data;
-      if (emp != null) {
-        try {
-          QuerySnapshot? snap;
-          if (emp.employeeId.isNotEmpty) {
-            snap = await FirebaseFirestore.instance
+      if (rawEmpId != null && rawEmpId.isNotEmpty) {
+        data = await _fetchByRawId(rawEmpId);
+      }
+      if (data == null && emp != null) {
+        for (final id in <String>{emp.employeeId, emp.id}) {
+          if (id.isEmpty) continue;
+          data = await _fetchByRawId(id);
+          if (data != null) break;
+        }
+      }
+      if (data == null) {
+        final authUser = FirebaseAuth.instance.currentUser;
+        if (authUser != null && authUser.email != null) {
+          try {
+            final all = await FirebaseFirestore.instance
                 .collection('employees')
-                .where('employeeId', isEqualTo: emp.employeeId)
-                .limit(1)
+                .limit(50)
                 .get();
-          }
-          if ((snap == null || snap.docs.isEmpty) && emp.id.isNotEmpty) {
-            final doc = await FirebaseFirestore.instance
-                .collection('employees')
-                .doc(emp.id)
-                .get();
-            if (doc.exists) {
-              data = doc.data();
+            final targetEmail = authUser.email!.toLowerCase().trim();
+            for (final d in all.docs) {
+              final dd = d.data();
+              final docEmail =
+              (dd['email'] ?? '').toString().toLowerCase().trim();
+              if (docEmail == targetEmail) {
+                data = dd;
+                break;
+              }
             }
-          } else if (snap != null && snap.docs.isNotEmpty) {
-            data = snap.docs.first.data() as Map<String, dynamic>?;
-          }
-        } catch (e) {
-          debugPrint('⚠️ ReportsScreen fetch: $e');
+          } catch (_) {}
         }
       }
 
@@ -128,6 +222,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         final empData = {
           ...data,
           if (emp != null && emp.id.isNotEmpty) 'id': emp.id,
+          if (rawEmpId != null) 'employeeId': rawEmpId,
         };
         b = await PayrollCalculator.compute(
           employee: empData,
@@ -135,6 +230,34 @@ class _ReportsScreenState extends State<ReportsScreen> {
           periodEnd: _periodEnd,
         );
       }
+
+      final basicFromData = _num(data?['basicSalary']);
+      final basicAllow = _num(data?['basicAllowance'] ?? data?['allowances']);
+      final housingAllow = _num(data?['housingAllowance']);
+      final transportAllow = _num(data?['transportAllowance']);
+      final specialAllow = _num(data?['specialAllowance']);
+      final allowancesFromData =
+          basicAllow + housingAllow + transportAllow + specialAllow;
+
+      final dailyFromData = _num(data?['dailyRate']);
+      final workingDays = _int(data?['workingDaysPerMonth'], 22);
+      final salarySource = (data?['salarySource'] as String?) ?? 'manual';
+      final roleFromData = (data?['role'] as String?) ?? '';
+
+      final effectiveDaily = dailyFromData > 0
+          ? dailyFromData
+          : (basicFromData > 0 && workingDays > 0
+          ? basicFromData / workingDays
+          : 0.0);
+
+      final displayName = emp?.fullName ??
+          (data?['name'] as String?) ??
+          '${data?['firstName'] ?? ''} ${data?['lastName'] ?? ''}'.trim();
+
+      final displayId = emp?.employeeId ??
+          rawEmpId ??
+          (data?['employeeId'] as String?) ??
+          '—';
 
       if (!mounted) return;
       setState(() {
@@ -145,39 +268,102 @@ class _ReportsScreenState extends State<ReportsScreen> {
         _accountNumber = (data?['accountNumber'] as String?) ?? '—';
         _department = (data?['department'] as String?) ?? '—';
         _designation = (data?['designation'] as String?) ??
+            (data?['role'] as String?) ??
             emp?.position ??
             '—';
+
+        _basicSalary = basicFromData > 0
+            ? basicFromData
+            : (b.basicSalary > 0 ? b.basicSalary : 0);
+        _allowances = allowancesFromData > 0
+            ? allowancesFromData
+            : (b.allowances > 0 ? b.allowances : 0);
+        _dailyRate = effectiveDaily > 0
+            ? effectiveDaily
+            : (b.dailyRate > 0 ? b.dailyRate : 0);
+        _workingDaysPerMonth = workingDays > 0 ? workingDays : 22;
+        _salarySource = salarySource;
+        _role = roleFromData;
+
+        _displayName = displayName.isNotEmpty ? displayName : '—';
+        _displayEmpId = displayId.isNotEmpty ? displayId : '—';
+
         _loading = false;
       });
-    } catch (e) {
-      debugPrint('❌ ReportsScreen._loadData: $e');
+    } catch (e, stack) {
+      debugPrint('❌ _loadData ERROR: $e');
+      debugPrint('$stack');
       if (mounted) setState(() => _loading = false);
     }
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 📄 GENERATE PDF
+  // ══════════════════════════════════════════════════════════════
   Future<void> _generatePdf() async {
     final emp = _employee ?? widget.initialEmployee;
-    if (emp == null) {
-      _showSnack('No employee session. Please log in again.', error: true);
+
+    Employee effectiveEmp;
+    if (emp != null) {
+      effectiveEmp = emp;
+    } else if (_rawData != null) {
+      final now = DateTime.now();
+      effectiveEmp = Employee(
+        id: (_rawData!['id'] ?? _displayEmpId).toString(),
+        employeeId: (_rawData!['employeeId'] ?? _displayEmpId).toString(),
+        firstName: (_rawData!['firstName'] ?? '').toString(),
+        lastName: (_rawData!['lastName'] ?? '').toString(),
+        email: (_rawData!['email'] ?? '').toString(),
+        department: _department,
+        position: _designation,
+        createdAt: now,
+        updatedAt: now,
+      );
+    } else {
+      _showSnack('No employee data.', error: true);
       return;
     }
-    if (_breakdown.basicSalary <= 0) {
+
+    if (_basicSalary <= 0 && _breakdown.basicSalary <= 0) {
       _showSnack('No salary configured. Please contact HR.', error: true);
       return;
     }
 
     setState(() => _exporting = true);
     try {
+      final basicToUse =
+      _basicSalary > 0 ? _basicSalary : _breakdown.basicSalary;
+      final allowancesToUse =
+      _allowances > 0 ? _allowances : _breakdown.allowances;
+      final dailyToUse = _dailyRate > 0
+          ? _dailyRate
+          : (basicToUse /
+          (_workingDaysPerMonth > 0 ? _workingDaysPerMonth : 22));
+
       final savedPath = await PayrollPdfService.generate(
         context,
-        employee: emp,
+        employee: effectiveEmp,
         month: DateTime.now(),
-        basicSalary: _breakdown.basicSalary,
+        basicSalary: basicToUse,
+        allowances: allowancesToUse,
+        dailyRate: dailyToUse,
+        workingDaysPerMonth: _workingDaysPerMonth,
+        salarySource: _salarySource,
         sss: _breakdown.sss,
         philhealth: _breakdown.philhealth,
         pagibig: _breakdown.pagibig,
         absenceDeduction: _breakdown.absenceDeduction,
         absentDays: _breakdown.absentDays,
+        workingDays: _breakdown.workingDays,
+        presentDays: _breakdown.presentDays,
+        workRawMinutes: _breakdown.workRawMinutes,
+        workLunchMinutes: _breakdown.workLunchMinutes,
+        workNetMinutes: _breakdown.workNetMinutes,
+        workOvertimeMinutes: _breakdown.workOvertimeMinutes,
+        daysWithLogs: _breakdown.daysWithLogs,
+        daysWithLunchApplied: _breakdown.daysWithLunchApplied,
+        overtimePay: _breakdown.overtimePay,
+        grossPay: _breakdown.grossPay,
         thirteenthMonth: _breakdown.thirteenthMonth,
         silCredits: _breakdown.silCredits,
         bankName: _bankName,
@@ -188,11 +374,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
       try {
         await FirebaseFirestore.instance.collection('pdf_exports').add({
-          'employee_id': emp.employeeId,
-          'employee_name': emp.fullName,
+          'employee_id': effectiveEmp.employeeId,
+          'employee_name': effectiveEmp.fullName,
           'report_type': 'Payslip PDF',
           'month': DateFormat('yyyy-MM').format(DateTime.now()),
           'net_pay': _breakdown.netPay,
+          'basic_salary': basicToUse,
+          'allowances': allowancesToUse,
+          'daily_rate': dailyToUse,
+          'salary_source': _salarySource,
           'absent_days': _breakdown.absentDays,
           'exported_at': FieldValue.serverTimestamp(),
           'platform': kIsWeb ? 'Web' : 'Mobile',
@@ -219,20 +409,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       margin: const EdgeInsets.all(16),
+      duration: const Duration(seconds: 4),
     ));
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 🎨 BUILD
+  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
-
     final thisMonth = DateFormat('MMMM yyyy').format(DateTime.now());
-    final empName =
-        _employee?.fullName ?? widget.initialEmployee?.fullName ?? '—';
-    final empId = _employee?.employeeId ??
-        widget.initialEmployee?.employeeId ??
-        '—';
 
     return Scaffold(
       backgroundColor: tc.bg,
@@ -250,22 +438,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 color: _Mock.orange,
                 child: SingleChildScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
+                  padding:
+                  const EdgeInsets.fromLTRB(20, 24, 20, 40),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _buildPayslipCard(tc, thisMonth),
-                      const SizedBox(height: 12),
-                      _buildEmployeeInfo(tc, empName, empId),
-                      const SizedBox(height: 16),
-                      _buildAttendanceCard(tc),
-                      const SizedBox(height: 16),
-                      _buildSalaryBreakdown(tc),
-                      const SizedBox(height: 16),
-                      _buildGovernmentCard(tc),
-                      const SizedBox(height: 16),
-                      _buildNetPayCard(tc),
-                      const SizedBox(height: 16),
-                      _buildBenefitsCard(tc),
                       const SizedBox(height: 20),
                       _buildDownloadButton(),
                     ],
@@ -279,17 +457,29 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 🎨 HEADER
+  // ══════════════════════════════════════════════════════════════
   Widget _buildHeader(_ThemeColors tc, String thisMonth) {
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
-        gradient: AppColors.gradientOrange,
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFFFF8A00),
+            Color(0xFFFA6A00),
+            Color(0xFFF54900),
+          ],
+          stops: [0.0, 0.5, 1.0],
+        ),
         borderRadius: BorderRadius.only(
           bottomLeft: Radius.circular(16),
           bottomRight: Radius.circular(16),
         ),
       ),
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -297,15 +487,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
             children: [
               GestureDetector(
                 onTap: () => Navigator.maybePop(context),
+                behavior: HitTestBehavior.opaque,
                 child: const Row(
                   children: [
                     Icon(Icons.chevron_left_rounded,
-                        color: Colors.white, size: 22),
-                    Text('Back',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500)),
+                        color: Colors.white, size: 20),
+                    SizedBox(width: 2),
+                    Text(
+                      'Back',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -332,7 +527,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 40),
           const Text(
             'Payslip Details',
             style: TextStyle(
@@ -344,13 +539,19 @@ class _ReportsScreenState extends State<ReportsScreen> {
           const SizedBox(height: 6),
           Text(
             'Salary slip for $thisMonth',
-            style: const TextStyle(color: Colors.white, fontSize: 14),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+            ),
           ),
         ],
       ),
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 💳 PAYSLIP CARD (Company + Paid Badge + Month)
+  // ══════════════════════════════════════════════════════════════
   Widget _buildPayslipCard(_ThemeColors tc, String thisMonth) {
     return Container(
       width: double.infinity,
@@ -361,442 +562,98 @@ class _ReportsScreenState extends State<ReportsScreen> {
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 10,
+            blurRadius: 20,
             offset: const Offset(0, 12),
           ),
         ],
       ),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('R.A.C.O.M.A',
-                      style: TextStyle(
-                          color: _Mock.orange,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 8),
-                  Text('Smart HR Information System',
-                      style: TextStyle(color: tc.textPrimary, fontSize: 12)),
-                  const SizedBox(height: 8),
-                  Text('Jumbo HQ, Manila, Philippines',
-                      style: TextStyle(color: tc.textGrayDark, fontSize: 10)),
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Container(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _Mock.paidBg,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _Mock.paidBorder),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.check_circle_rounded,
-                          color: _Mock.lime, size: 14),
-                      SizedBox(width: 6),
-                      Text('Paid',
-                          style: TextStyle(
-                              color: _Mock.lime,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500)),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'Payslip for\n$thisMonth',
-                  textAlign: TextAlign.right,
-                  style: TextStyle(
-                      color: tc.textPrimary,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      height: 1.3),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEmployeeInfo(
-      _ThemeColors tc, String empName, String empId) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-      decoration: BoxDecoration(
-        color: tc.cardBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: tc.cardBorder.withValues(alpha: 0.5)),
-      ),
+      padding: const EdgeInsets.all(24),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ─── Company Info (left) ────────────────────
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Employee',
-                    style: TextStyle(
-                        color: tc.textGrayDark,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(empName,
-                    style: TextStyle(
-                        color: tc.textPrimary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600),
-                    overflow: TextOverflow.ellipsis),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text('Employee ID',
-                    style: TextStyle(
-                        color: tc.textGrayDark,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(empId,
-                    style: TextStyle(
-                        color: tc.textPrimary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600),
-                    overflow: TextOverflow.ellipsis),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAttendanceCard(_ThemeColors tc) {
-    final b = _breakdown;
-    final isPerfect = b.absentDays == 0;
-
-    return _panel(
-      tc: tc,
-      title: 'Attendance',
-      icon: Icons.calendar_today_rounded,
-      badge: isPerfect ? 'Perfect' : '${b.absentDays} absence(s)',
-      badgeColor: isPerfect ? tc.pillGreenBg : tc.pillRedBg,
-      badgeText: isPerfect ? tc.pillGreenTx : tc.pillRedTx,
-      children: [
-        _row(tc, 'Working Days', '${b.workingDays}', false),
-        const SizedBox(height: 8),
-        _row(tc, 'Present Days', '${b.presentDays}', false),
-        const SizedBox(height: 8),
-        _row(tc, 'Absent Days', '${b.absentDays}', b.absentDays > 0),
-        const SizedBox(height: 8),
-        _row(tc, 'Daily Rate',
-            PayrollCalculator.peso(b.dailyRate), false),
-        const SizedBox(height: 12),
-        Divider(color: tc.cardBorder, height: 1),
-        const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('Absence Deduction',
-                style: TextStyle(
-                    color: tc.textPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600)),
-            Text('-${PayrollCalculator.peso(b.absenceDeduction)}',
-                style: TextStyle(
-                    color: b.absentDays > 0
-                        ? const Color(0xFFFF4D6D)
-                        : tc.textPrimary,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700)),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: isPerfect ? tc.pillGreenBg : tc.pillRedBg,
-            border: Border(
-                left: BorderSide(
-                    color: isPerfect ? tc.pillGreenTx : tc.pillRedTx,
-                    width: 4)),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            isPerfect
-                ? '✓ No absences this period. Full salary will be received.'
-                : '⚠️ ${b.absentDays} absent day(s) automatically deducted from salary based on your attendance logs.',
-            style: TextStyle(
-                fontSize: 11,
-                color: isPerfect ? tc.pillGreenTx : tc.pillRedTx,
-                height: 1.4),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSalaryBreakdown(_ThemeColors tc) {
-    final b = _breakdown;
-    return _panel(
-      tc: tc,
-      title: 'Earnings Breakdown',
-      icon: Icons.trending_up_rounded,
-      badge: PayrollCalculator.peso(b.grossPay),
-      badgeColor: _Mock.orange.withValues(alpha: 0.15),
-      badgeText: _Mock.orange,
-      children: [
-        _row(tc, 'Basic Salary', PayrollCalculator.peso(b.basicSalary), false),
-        const SizedBox(height: 8),
-        _row(tc, 'Allowances', PayrollCalculator.peso(b.allowances), false),
-        const SizedBox(height: 8),
-        _row(tc, 'Overtime Pay', PayrollCalculator.peso(b.overtimePay), false),
-        const SizedBox(height: 12),
-        Divider(color: tc.cardBorder, height: 1),
-        const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('Total Gross',
-                style: TextStyle(
-                    color: tc.textPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700)),
-            Text(PayrollCalculator.peso(b.grossPay),
-                style: TextStyle(
-                    color: tc.textPrimary,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800)),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildGovernmentCard(_ThemeColors tc) {
-    final b = _breakdown;
-    final govtTotal = b.sss + b.philhealth + b.pagibig + b.withholdingTax;
-
-    return _panel(
-      tc: tc,
-      title: 'Government Remittances',
-      icon: Icons.account_balance_rounded,
-      badge: '-${PayrollCalculator.peso(govtTotal)}',
-      badgeColor: tc.pillRedBg,
-      badgeText: tc.pillRedTx,
-      children: [
-        _row(tc, 'SSS Contribution', '-${PayrollCalculator.peso(b.sss)}', true),
-        const SizedBox(height: 8),
-        _row(tc, 'PhilHealth Contribution',
-            '-${PayrollCalculator.peso(b.philhealth)}', true),
-        const SizedBox(height: 8),
-        _row(tc, 'Pag-IBIG Contribution',
-            '-${PayrollCalculator.peso(b.pagibig)}', true),
-        const SizedBox(height: 8),
-        _row(tc, 'Withholding Tax',
-            '-${PayrollCalculator.peso(b.withholdingTax)}', true),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: tc.pillWarnBg,
-            border: Border(
-                left: BorderSide(color: tc.pillWarnTx, width: 4)),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            'ℹ️ Total statutory deductions = 9% of basic salary (${PayrollCalculator.peso(b.basicSalary)}).',
-            style: TextStyle(
-                fontSize: 11, color: tc.pillWarnTx, height: 1.4),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildNetPayCard(_ThemeColors tc) {
-    final b = _breakdown;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        gradient: AppColors.gradientOrange,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: _Mock.orange.withValues(alpha: 0.3),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('NET PAY',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.0)),
-          const SizedBox(height: 8),
-          Text(PayrollCalculator.peso(b.netPay),
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 32,
-                  fontWeight: FontWeight.w800)),
-          const SizedBox(height: 4),
-          Text(
-              'Basic ${PayrollCalculator.peso(b.basicSalary)} − Deductions ${PayrollCalculator.peso(b.totalDeductions)}',
-              style: const TextStyle(color: Colors.white70, fontSize: 11)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBenefitsCard(_ThemeColors tc) {
-    final b = _breakdown;
-    return _panel(
-      tc: tc,
-      title: 'Benefits (Accrued)',
-      icon: Icons.card_giftcard_rounded,
-      badge: PayrollCalculator.peso(b.totalBenefits),
-      badgeColor: tc.pillGreenBg,
-      badgeText: tc.pillGreenTx,
-      children: [
-        _row(tc, '13th Month Pay',
-            PayrollCalculator.peso(b.thirteenthMonth), false),
-        const SizedBox(height: 8),
-        _row(tc, 'SIL Credits (5 days)',
-            PayrollCalculator.peso(b.silCredits), false),
-        const SizedBox(height: 12),
-        Divider(color: tc.cardBorder, height: 1),
-        const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('Total Benefits',
-                style: TextStyle(
-                    color: tc.textPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700)),
-            Text(PayrollCalculator.peso(b.totalBenefits),
-                style: TextStyle(
-                    color: tc.pillGreenTx,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800)),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: tc.pillGreenBg,
-            border: Border(
-                left: BorderSide(color: tc.pillGreenTx, width: 4)),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            'ℹ️ Benefits are not deducted from net pay. These are additional savings received at 13th month payout or year-end.',
-            style: TextStyle(
-                fontSize: 11, color: tc.pillGreenTx, height: 1.4),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _panel({
-    required _ThemeColors tc,
-    required String title,
-    required IconData icon,
-    required String badge,
-    required Color badgeColor,
-    required Color badgeText,
-    required List<Widget> children,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: tc.cardBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: tc.cardBorder.withValues(alpha: 0.5)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 16, color: _Mock.orange),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(title,
-                    style: TextStyle(
-                        color: tc.textPrimary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700),
-                    overflow: TextOverflow.ellipsis),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: badgeColor,
-                  borderRadius: BorderRadius.circular(20),
+                const Text(
+                  'R.A.C.O.M.A',
+                  style: TextStyle(
+                    color: _Mock.orange,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-                child: Text(badge,
-                    style: TextStyle(
-                        color: badgeText,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                Text(
+                  'Smart HR Information System',
+                  style: TextStyle(
+                    color: tc.textPrimary,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Jumbo HQ, Manila, Philippines',
+                  style: TextStyle(
+                    color: tc.textGrayDark,
+                    fontSize: 10,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          // ─── Paid badge + month (right) ─────────────
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _Mock.paidBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _Mock.paidBorder),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.check_circle_rounded,
+                        color: _Mock.lime, size: 14),
+                    SizedBox(width: 6),
+                    Text(
+                      'Paid',
+                      style: TextStyle(
+                        color: _Mock.lime,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Payslip for\n$thisMonth',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  color: tc.textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  height: 1.3,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          ...children,
         ],
       ),
     );
   }
 
-  Widget _row(_ThemeColors tc, String label, String value, bool negative) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(
-          child: Text(label,
-              style: TextStyle(color: tc.textGrayDark, fontSize: 12),
-              overflow: TextOverflow.ellipsis),
-        ),
-        const SizedBox(width: 8),
-        Text(value,
-            style: TextStyle(
-                color: negative ? const Color(0xFFFF4D6D) : tc.textPrimary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600)),
-      ],
-    );
-  }
-
+  // ══════════════════════════════════════════════════════════════
+  // ⬇️ DOWNLOAD BUTTON
+  // ══════════════════════════════════════════════════════════════
   Widget _buildDownloadButton() {
     return GestureDetector(
       onTap: _exporting ? null : _generatePdf,
@@ -804,7 +661,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
         width: double.infinity,
         height: 48,
         decoration: BoxDecoration(
-          gradient: AppColors.gradientOrange,
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFFFF8A00),
+              Color(0xFFFA6A00),
+              Color(0xFFF54900),
+            ],
+            stops: [0.0, 0.5, 1.0],
+          ),
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
@@ -831,9 +697,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
               Text(
                 'Download as PDF / Print',
                 style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500),
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ],
           ),

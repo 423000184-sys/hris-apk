@@ -8,8 +8,8 @@
 
     <!-- ═══ CAMERA ═══ -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera"           android:required="false" />
-    <uses-feature android:name="android.hardware.camera.front"     android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <!-- ═══ LOCATION ═══ -->
@@ -20,38 +20,36 @@
     <!-- ═══ BACKGROUND SERVICE ═══ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
-    <!-- ✅ NOTIFICATIONS ──────────────────────────────────── -->
+    <!-- ═══ NOTIFICATIONS ═══ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- ═══ NETWORK ═══ -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- ═══ STORAGE — para sa PDF download sa Downloads folder ═══ -->
+    <!-- ═══ STORAGE ═══ -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"
         tools:ignore="ScopedStorage" />
-
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
-
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
     <!-- ═══ NFC ═══ -->
     <uses-permission android:name="android.permission.NFC" />
-    <uses-feature
-        android:name="android.hardware.nfc"
-        android:required="false" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
 
     <application
         android:label="(R.A.C.O.M.A) Real-time Attendance Capture and Online Monitoring Application"
@@ -64,6 +62,7 @@
         android:preserveLegacyExternalStorage="true"
         tools:targetApi="34">
 
+        <!-- ═══ SPLASH SCREEN ═══ -->
         <meta-data
             android:name="android.window.SPLASH_SCREEN_BACKGROUND_COLOR"
             android:value="#0A0A0A" />
@@ -71,34 +70,41 @@
             android:name="android.window.SPLASH_SCREEN_ICON"
             android:resource="@mipmap/ic_launcher" />
 
+        <!-- ═══ GOOGLE MAPS ═══ -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="YOUR_GOOGLE_MAPS_API_KEY" />
 
-        <!-- ✅ NOTIFICATION DEFAULTS — para sa FCM/local notifications -->
+        <!-- ═══ NOTIFICATION DEFAULTS ═══ -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@mipmap/ic_launcher" />
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="employee_notifications_channel" />
+            android:value="work_reminder_channel" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
 
-        <!-- ✅ Background service para sa location tracking -->
+        <!-- ═══ BACKGROUND SERVICE ═══ -->
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location|dataSync" />
 
         <uses-library
             android:name="org.apache.http.legacy"
             android:required="false" />
 
-        <!-- ✅ flutter_local_notifications receivers ──────────── -->
+        <!-- ═══════════════════════════════════════════════════════
+             flutter_local_notifications RECEIVERS
+        ════════════════════════════════════════════════════════════ -->
         <receiver
-            android:exported="false"
-            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
+            android:exported="false" />
+
         <receiver
-            android:exported="false"
-            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
@@ -107,6 +113,11 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
+            android:exported="false" />
+
+        <!-- ═══ MAIN ACTIVITY ═══ -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -115,7 +126,9 @@
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
 
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
@@ -162,17 +175,14 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="http" />
         </intent>
-
         <intent>
             <action android:name="android.intent.action.SENDTO" />
             <data android:scheme="mailto" />
         </intent>
-
         <intent>
             <action android:name="android.intent.action.DIAL" />
             <data android:scheme="tel" />
         </intent>
-
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:mimeType="application/pdf" />

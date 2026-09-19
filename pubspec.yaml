@@ -1,7 +1,7 @@
 name: hris_biometrics
 description: A next-gen HRIS Biometrics application with smart innovation.
 publish_to: 'none'
-version: 1.0.2+3
+version: 1.0.3+4
 
 environment:
   sdk: '>=3.6.0 <4.0.0'
@@ -40,7 +40,7 @@ dependencies:
   sqflite: ^2.3.3
   path: ^1.9.0
   path_provider: ^2.1.4
-  shared_preferences: ^2.3.4
+  shared_preferences: ^2.5.5
 
   # ─── Biometrics & Security ────────────────────────────────────────
   local_auth: ^2.3.0
@@ -69,14 +69,14 @@ dependencies:
   intl: ^0.19.0
   uuid: ^4.5.1
   qr_flutter: ^4.1.0
-  device_info_plus: ^10.1.0
+  device_info_plus: ^10.1.2     # 🆕 updated from ^10.1.0 (compatible, safer)
   connectivity_plus: ^6.1.1
   url_launcher: ^6.2.5
 
   # ─── Exporting (PDF, Excel, CSV) ──────────────────────────────────
   pdf: ^3.10.8
   printing: ^5.13.1
-  syncfusion_flutter_pdf: ^25.2.7   # ✅ Tugma sa datepicker version
+  syncfusion_flutter_pdf: ^25.2.7
   excel: ^4.0.6
   csv: ^5.0.0
 
@@ -88,6 +88,8 @@ dependencies:
   flutter_ringtone_player: ^4.0.0+4
   flutter_background_service: ^5.0.10
   flutter_local_notifications: ^17.2.3
+  timezone: ^0.9.4
+  flutter_timezone: ^3.0.1
 
   # ─── Video & Map ──────────────────────────────────────────────────
   video_player: ^2.8.6
@@ -97,6 +99,9 @@ dependencies:
   # ─── Additional UI Enhancements ───────────────────────────────────
   syncfusion_flutter_datepicker: ^25.1.35
   dropdown_search: ^5.0.6
+
+  # ─── 🔊 Audio (para sa admin notification sounds) ────────────────
+  audioplayers: ^6.1.0
 
 dev_dependencies:
   flutter_test:
@@ -109,6 +114,7 @@ flutter:
     - assets/
     - assets/images/
     - assets/icons/
+    - assets/sounds/
     - assets/models/mobilefacenet.tflite
     - assets/videos/hris.mp4
     - assets/images/logo1.png

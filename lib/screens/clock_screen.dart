@@ -8,12 +8,11 @@ import 'package:flutter/foundation.dart'
     show debugPrint, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import '../models/employee.dart';
 import '../services/geofence_service.dart';
-import 'clock_in_success_screen.dart';
-
-// admin notifications
+import '../services/network_guard.dart';
+import '../services/offline_attendance_service.dart';
+import '../services/presence_monitor_service.dart';
+import '../services/device_info_service.dart';
 import '../services/admin_notification_service.dart';
-
-// ✅ BAGONG: employee notification bell
 import '../widgets/employee_notification_bell.dart';
 
 class _ThemeColors {
@@ -22,8 +21,7 @@ class _ThemeColors {
 
   Color get bg => isDark ? const Color(0xFF0F0F10) : Colors.white;
   Color get navBg => isDark ? const Color(0xFF18181B) : const Color(0xFFF8F8F8);
-  Color get navBorder =>
-      isDark ? const Color(0xFF27272A) : const Color(0xFF27272A);
+  Color get navBorder => const Color(0xFF27272A);
   Color get textPrimary => isDark ? Colors.white : Colors.black;
   Color get textSecondary =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF71717A);
@@ -37,8 +35,6 @@ class _ThemeColors {
       isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
   Color get avatarBorder =>
       isDark ? const Color(0xFF3F3F46) : const Color(0xFF27272A);
-  Color get checkingBg =>
-      isDark ? const Color(0xFF1F1F23) : const Color(0xFFF3F4F6);
 }
 
 class ClockScreen extends StatefulWidget {
@@ -52,7 +48,6 @@ class ClockScreen extends StatefulWidget {
   final VoidCallback? onShortcutProfile;
   final VoidCallback? onShortcutLeaves;
   final ValueChanged<int>? onNavTap;
-
   final bool initialInRange;
   final bool initialWfhAccess;
 
@@ -106,6 +101,9 @@ class _ClockScreenState extends State<ClockScreen> {
 
   Employee? _liveEmployee;
 
+  // 🆕 Actual device model
+  String _deviceModel = 'Unknown Device';
+
   StreamSubscription<QuerySnapshot>? _attendanceSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
 
@@ -136,10 +134,30 @@ class _ClockScreenState extends State<ClockScreen> {
     _startClock();
     _startAttendanceStream();
     _startEmployeeListener();
+    _loadDeviceModel(); // 🆕
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    final emp = _employee;
+    if (emp != null) {
+      PresenceMonitorService.instance.start(employee: emp);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       _refreshGeofence(silent: true);
+      await Future.delayed(const Duration(seconds: 1));
+      await OfflineAttendanceService.instance.dumpAll();
     });
+  }
+
+  // 🆕 Load actual device model
+  Future<void> _loadDeviceModel() async {
+    try {
+      final model = await DeviceInfoService.instance.getDeviceModel();
+      if (!mounted) return;
+      setState(() => _deviceModel = model);
+      debugPrint('📱 [ClockScreen] Device model: $model');
+    } catch (e) {
+      debugPrint('⚠️ [ClockScreen] Device model load failed: $e');
+    }
   }
 
   bool _readWfhFromEmployee() {
@@ -189,7 +207,12 @@ class _ClockScreenState extends State<ClockScreen> {
         '${n.day.toString().padLeft(2, '0')}';
   }
 
+  // 🆕 Returns cached device model (from DeviceInfoService)
   String _deviceName() {
+    if (_deviceModel.isNotEmpty && _deviceModel != 'Unknown Device') {
+      return _deviceModel;
+    }
+    // Fallback kung hindi pa na-load
     if (kIsWeb) return 'Web Browser';
     try {
       if (Platform.isAndroid) return 'Android App';
@@ -201,22 +224,48 @@ class _ClockScreenState extends State<ClockScreen> {
     return defaultTargetPlatform.name;
   }
 
+  String _computeZoneType() {
+    final role = (_employee?.position ?? '').toLowerCase();
+    final dept = (_employee?.department ?? '').toLowerCase();
+
+    final isDriver = role.contains('driver') ||
+        role.contains('rider') ||
+        dept.contains('driver') ||
+        dept.contains('rider');
+    if (isDriver) return 'driver';
+    if (_isInRange) return 'inside';
+    if (_wfhAccess) return 'wfh';
+    return 'outside';
+  }
+
   Future<void> _refreshGeofence({bool silent = false}) async {
     if (_checkingGeofence) return;
     if (mounted) setState(() => _checkingGeofence = true);
 
     try {
-      debugPrint('📍 [ClockScreen] Checking geofence...');
-      final result = await GeofenceService.instance
-          .checkGeofence()
-          .timeout(const Duration(seconds: 12));
+      final empDocId = _employeeDocId;
+      GeofenceResult result;
+
+      if (empDocId != null && empDocId.isNotEmpty) {
+        result = await GeofenceService.instance
+            .checkGeofenceForEmployee(employeeId: empDocId)
+            .timeout(const Duration(seconds: 15));
+      } else {
+        result = await GeofenceService.instance
+            .checkGeofence()
+            .timeout(const Duration(seconds: 12));
+      }
 
       final inside = result.isInside;
       final distance = result.distanceMeters;
 
-      debugPrint('📍 [ClockScreen] inside=$inside, distance=${distance}m');
-
       if (!mounted) return;
+
+      debugPrint('📍 [ClockScreen] geofence: inside=$inside, '
+          'exempted=${result.isExempted}, '
+          'zone=${result.matchedLocationName}, '
+          'distance=${distance?.toStringAsFixed(0)}m');
+
       final changed = inside != _isInRange;
 
       setState(() {
@@ -233,7 +282,7 @@ class _ClockScreenState extends State<ClockScreen> {
         );
       }
     } catch (e) {
-      debugPrint('❌ [ClockScreen] Geofence error: $e');
+      debugPrint('❌ Geofence error: $e');
       if (!mounted) return;
       setState(() => _checkingGeofence = false);
       if (!silent) {
@@ -245,12 +294,15 @@ class _ClockScreenState extends State<ClockScreen> {
   }
 
   Future<void> _handlePullRefresh() async {
-    debugPrint('🔄 [ClockScreen] Pull-to-refresh triggered');
+    await OfflineAttendanceService.instance.dumpAll();
     await Future.wait([
       _refreshGeofence(silent: true),
       _reloadAttendanceOnce(),
       _reloadEmployeeOnce(),
+      OfflineAttendanceService.instance.syncPending(),
+      PresenceMonitorService.instance.checkNow(),
     ]);
+    await OfflineAttendanceService.instance.dumpAll();
   }
 
   Future<void> _reloadAttendanceOnce() async {
@@ -264,10 +316,9 @@ class _ClockScreenState extends State<ClockScreen> {
           .get()
           .timeout(const Duration(seconds: 10));
       if (!mounted) return;
-      debugPrint('🔄 [ClockScreen] Reloaded ${snap.docs.length} attendance logs');
       _processAttendance(snap.docs);
     } catch (e) {
-      debugPrint('⚠️ [ClockScreen] _reloadAttendanceOnce error: $e');
+      debugPrint('⚠️ _reloadAttendanceOnce error: $e');
     }
   }
 
@@ -285,18 +336,14 @@ class _ClockScreenState extends State<ClockScreen> {
       if (data == null || !mounted) return;
       final updated = Employee.fromFirestore(data, docId);
       setState(() => _liveEmployee = updated);
-      debugPrint('🔄 [ClockScreen] Reloaded employee: ${updated.fullName}');
     } catch (e) {
-      debugPrint('⚠️ [ClockScreen] _reloadEmployeeOnce error: $e');
+      debugPrint('⚠️ _reloadEmployeeOnce error: $e');
     }
   }
 
   void _startAttendanceStream() {
     final empId = _employeeId;
-    if (empId == null) {
-      debugPrint('⚠️ ClockScreen: walang employee ID — skip attendance stream');
-      return;
-    }
+    if (empId == null) return;
     _attendanceSub?.cancel();
     _attendanceSub = FirebaseFirestore.instance
         .collection('attendance_logs')
@@ -306,7 +353,6 @@ class _ClockScreenState extends State<ClockScreen> {
         .listen(
           (snap) {
         if (!mounted) return;
-        debugPrint('📡 [ClockScreen] Stream update: ${snap.docs.length} docs');
         _processAttendance(snap.docs);
       },
       onError: (e) => debugPrint('❌ ClockScreen stream error: $e'),
@@ -315,11 +361,7 @@ class _ClockScreenState extends State<ClockScreen> {
 
   void _startEmployeeListener() {
     final empDocId = _employeeDocId;
-    if (empDocId == null || empDocId.isEmpty) {
-      debugPrint(
-          '⚠️ [ClockScreen] Walang employee doc ID — skip employee listener');
-      return;
-    }
+    if (empDocId == null || empDocId.isEmpty) return;
     _employeeSub?.cancel();
     _employeeSub = FirebaseFirestore.instance
         .collection('employees')
@@ -335,12 +377,11 @@ class _ClockScreenState extends State<ClockScreen> {
         try {
           updated = Employee.fromFirestore(data, empDocId);
         } catch (e) {
-          debugPrint('⚠️ [ClockScreen] Employee parse error: $e');
+          debugPrint('⚠️ Employee parse error: $e');
         }
         if (updated != null) {
           setState(() => _liveEmployee = updated);
-          debugPrint('👤 [ClockScreen] Profile live: '
-              'name="${updated.fullName}", role="${updated.position}"');
+          PresenceMonitorService.instance.start(employee: updated);
         }
 
         final raw = data['wfhAccess'];
@@ -437,7 +478,6 @@ class _ClockScreenState extends State<ClockScreen> {
   }) async {
     final empId = _employeeId;
     if (empId == null || empId.isEmpty) {
-      debugPrint('❌ ERROR: employee_id is null or empty!');
       _showSnack('Hindi makuha ang employee ID. Pakisuri ang login.');
       return false;
     }
@@ -447,23 +487,67 @@ class _ClockScreenState extends State<ClockScreen> {
         '${time.second.toString().padLeft(2, '0')}';
 
     final employeeName = _employee?.fullName ?? 'Unknown';
-    final deviceName = _deviceName();
+    final employeeEmail = _employee?.email ?? '';
+    final deviceName = _deviceName(); // 🆕 actual device model
     final isClockIn = type == 'IN';
+    final zoneType = _computeZoneType();
 
-    final attendancePayload = <String, dynamic>{
-      'employee_id': empId,
-      'employee_name': employeeName,
-      'date': _todayStr,
-      'type': type,
-      'time': timeStr,
-      'timestamp': FieldValue.serverTimestamp(),
-      'created_at': DateTime.now().toIso8601String(),
-      'wfh': _wfhAccess,
-      'in_range': _isInRange,
-      'wfh_mode': _isWfhMode,
-      'device': deviceName,
-    };
+    double? distanceMeters;
+    if (zoneType == 'outside' || zoneType == 'inside') {
+      try {
+        final geo = await GeofenceService.instance
+            .checkGeofence()
+            .timeout(const Duration(seconds: 8));
+        distanceMeters = geo.distanceMeters;
+      } catch (e) {
+        debugPrint('⚠️ distance capture failed: $e');
+      }
+    }
 
+    final result = await OfflineAttendanceService.instance.logAttendance(
+      employeeId: empId,
+      employeeName: employeeName,
+      employeeEmail: employeeEmail,
+      type: type,
+      timestamp: time,
+      device: deviceName,
+      remarks: zoneType,
+      zoneType: zoneType,
+    );
+
+    if (!result.success) {
+      _showSnack('Error saving attendance. Please try again.');
+      return false;
+    }
+
+    if (result.queued) {
+      _showSnack('💾 Saved offline. Auto-sync pagbalik ng internet.');
+    }
+
+    _writeSecondaryLogs(
+      empId: empId,
+      employeeName: employeeName,
+      timeStr: timeStr,
+      isClockIn: isClockIn,
+      deviceName: deviceName,
+      zoneType: zoneType,
+      distanceMeters: distanceMeters,
+    );
+
+    PresenceMonitorService.instance.checkNow();
+
+    return true;
+  }
+
+  void _writeSecondaryLogs({
+    required String empId,
+    required String employeeName,
+    required String timeStr,
+    required bool isClockIn,
+    required String deviceName,
+    required String zoneType,
+    double? distanceMeters,
+  }) {
     final activityLogPayload = <String, dynamic>{
       'type': isClockIn ? 'clock_in' : 'clock_out',
       'action': isClockIn ? 'Clocked In' : 'Clocked Out',
@@ -474,7 +558,10 @@ class _ClockScreenState extends State<ClockScreen> {
       'date': _todayStr,
       'wfh': _wfhAccess,
       'in_range': _isInRange,
+      'zone_type': zoneType,
       'device': deviceName,
+      'deviceName': deviceName,   // 🆕 explicit key
+      'deviceModel': deviceName,  // 🆕 explicit key
       'platform': deviceName,
       'timestamp': FieldValue.serverTimestamp(),
     };
@@ -484,73 +571,121 @@ class _ClockScreenState extends State<ClockScreen> {
       'employee_id': empId,
       'employee_name': employeeName,
       'device': deviceName,
+      'deviceName': deviceName,   // 🆕
       'wfh': _wfhAccess,
       'in_range': _isInRange,
+      'zone_type': zoneType,
       'timestamp': FieldValue.serverTimestamp(),
     };
 
-    debugPrint('═══════════════════════════════════════════');
-    debugPrint('💾 [ClockScreen] Saving $type for $empId');
-    debugPrint('═══════════════════════════════════════════');
+    FirebaseFirestore.instance
+        .collection('activity logs')
+        .add(activityLogPayload)
+        .catchError((e) => debugPrint('⚠️ activity logs FAILED: $e'));
+
+    FirebaseFirestore.instance
+        .collection('activity_logs')
+        .add(historyLogPayload)
+        .catchError((e) => debugPrint('⚠️ activity_logs FAILED: $e'));
 
     try {
-      await FirebaseFirestore.instance.enableNetwork();
-      final docRef = await FirebaseFirestore.instance
-          .collection('attendance_logs')
-          .add(attendancePayload);
-      debugPrint('✅ [ClockScreen] attendance_logs written: ${docRef.id}');
-
-      Future.wait([
-        FirebaseFirestore.instance
-            .collection('activity logs')
-            .add(activityLogPayload)
-            .then((ref) =>
-            debugPrint('✅ [ClockScreen] activity logs written: ${ref.id}'))
-            .catchError((e) {
-          debugPrint('⚠️ activity logs FAILED: $e');
-        }),
-        FirebaseFirestore.instance
-            .collection('activity_logs')
-            .add(historyLogPayload)
-            .then((ref) =>
-            debugPrint('✅ [ClockScreen] activity_logs written: ${ref.id}'))
-            .catchError((e) {
-          debugPrint('⚠️ activity_logs FAILED: $e');
-        }),
-      ]).whenComplete(() {
-        debugPrint('🎉 [ClockScreen] All secondary writes settled');
-      });
-
-      await FirebaseFirestore.instance.waitForPendingWrites();
-      debugPrint('✅ [ClockScreen] Server sync confirmed!');
-
-      // ✅ ADMIN NOTIFICATION
-      try {
-        if (isClockIn) {
-          AdminNotificationService.instance.notifyClockIn(
-            employeeId: empId,
-            employeeName: employeeName,
-            timeStr: timeStr,
-            wfh: _wfhAccess,
-            inRange: _isInRange,
-          );
-        } else {
-          AdminNotificationService.instance.notifyClockOut(
-            employeeId: empId,
-            employeeName: employeeName,
-            timeStr: timeStr,
-            wfh: _wfhAccess,
-          );
+      if (isClockIn) {
+        switch (zoneType) {
+          case 'wfh':
+            AdminNotificationService.instance.notifyWFHClockIn(
+              employeeId: empId,
+              employeeName: employeeName,
+              timeStr: timeStr,
+            );
+            break;
+          case 'driver':
+            AdminNotificationService.instance.notifyDriverClockIn(
+              employeeId: empId,
+              employeeName: employeeName,
+              timeStr: timeStr,
+            );
+            break;
+          case 'outside':
+            AdminNotificationService.instance.notifyGeofenceAlert(
+              employeeId: empId,
+              employeeName: employeeName,
+              timeStr: timeStr,
+              distanceMeters: distanceMeters ?? 0,
+              action: 'clock_in',
+            );
+            break;
+          default:
+            AdminNotificationService.instance.notifyClockIn(
+              employeeId: empId,
+              employeeName: employeeName,
+              timeStr: timeStr,
+              wfh: _wfhAccess,
+              inRange: _isInRange,
+              zoneType: zoneType,
+              distanceMeters: distanceMeters,
+            );
         }
-      } catch (e) {
-        debugPrint('⚠️ Admin notification failed: $e');
+      } else {
+        switch (zoneType) {
+          case 'wfh':
+            AdminNotificationService.instance.notifyWFHClockOut(
+              employeeId: empId,
+              employeeName: employeeName,
+              timeStr: timeStr,
+            );
+            break;
+          case 'driver':
+            AdminNotificationService.instance.notifyDriverClockOut(
+              employeeId: empId,
+              employeeName: employeeName,
+              timeStr: timeStr,
+            );
+            break;
+          default:
+            AdminNotificationService.instance.notifyClockOut(
+              employeeId: empId,
+              employeeName: employeeName,
+              timeStr: timeStr,
+              wfh: _wfhAccess,
+              inRange: _isInRange,
+              zoneType: zoneType,
+              distanceMeters: distanceMeters,
+            );
+        }
       }
-
-      return true;
     } catch (e) {
-      debugPrint('❌ [ClockScreen] Save attendance error: $e');
-      _showSnack('Error saving: $e');
-      return false;
+      debugPrint('⚠️ Admin notification failed: $e');
+    }
+  }
+
+  Future<void> _notifyBlockedAttempt(String action) async {
+    final empId = _employeeId;
+    final empName = _employee?.fullName ?? 'Unknown';
+    if (empId == null || empId.isEmpty) return;
+
+    double distance = 0;
+    try {
+      final geo = await GeofenceService.instance.checkGeofence();
+      distance = geo.distanceMeters ?? 0;
+    } catch (e) {
+      debugPrint('⚠️ BlockedAttempt geofence check failed: $e');
+    }
+
+    final now = DateTime.now();
+    final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}:'
+        '${now.second.toString().padLeft(2, '0')}';
+
+    try {
+      await AdminNotificationService.instance.notifyGeofenceAlertThrottled(
+        employeeId: empId,
+        employeeName: empName,
+        timeStr: timeStr,
+        distanceMeters: distance,
+        action: action,
+      );
+    } catch (e) {
+      debugPrint('❌ BlockedAttempt notify failed: $e');
     }
   }
 
@@ -572,7 +707,9 @@ class _ClockScreenState extends State<ClockScreen> {
 
   Future<void> _handleClockIn() async {
     if (_saving) return;
+
     if (!_canClock) {
+      _notifyBlockedAttempt('clock_in');
       _showSnack(
         'Wala ka sa authorized location. Hindi ka makakapag-clock in. '
             'Pakisuyo sa admin na i-enable ang WFH access kung remote ka.',
@@ -594,16 +731,15 @@ class _ClockScreenState extends State<ClockScreen> {
     });
     if (!ok) return;
 
-    _showSuccessOverlay(
-      type: 'IN',
-      time: now,
-      onDone: () => widget.onClockIn?.call(),
-    );
+    _showSnack('✅ Clocked IN at ${_formatTime(now)}');
+    widget.onClockIn?.call();
   }
 
   Future<void> _handleClockOut() async {
     if (_saving) return;
+
     if (!_canClock) {
+      _notifyBlockedAttempt('clock_out');
       _showSnack(
         'Wala ka sa authorized location. Hindi ka makakapag-clock out. '
             'Pakisuyo sa admin na i-enable ang WFH access kung remote ka.',
@@ -629,36 +765,8 @@ class _ClockScreenState extends State<ClockScreen> {
     });
     if (!ok) return;
 
-    _showSuccessOverlay(
-      type: 'OUT',
-      time: now,
-      onDone: () => widget.onClockOut?.call(),
-    );
-  }
-
-  void _showSuccessOverlay({
-    required String type,
-    required DateTime time,
-    required VoidCallback onDone,
-  }) {
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: false,
-      barrierLabel: 'ClockSuccess',
-      barrierColor: Colors.transparent,
-      transitionDuration: const Duration(milliseconds: 200),
-      pageBuilder: (dialogCtx, _, __) {
-        return ClockInSuccessScreen(
-          employee: _employee,
-          arrivalTime: time,
-          type: type,
-          onContinue: () {
-            Navigator.of(dialogCtx).pop();
-            onDone();
-          },
-        );
-      },
-    );
+    _showSnack('✅ Clocked OUT at ${_formatTime(now)}');
+    widget.onClockOut?.call();
   }
 
   void _showSnack(String msg) {
@@ -701,8 +809,6 @@ class _ClockScreenState extends State<ClockScreen> {
                       const SizedBox(height: 24),
                       _buildHeroCard(),
                       const SizedBox(height: 21),
-                      _buildLocationStatusSection(tc),
-                      const SizedBox(height: 21),
                       _buildClockInOutSection(),
                       const SizedBox(height: 23),
                       _buildClockOutSection(tc),
@@ -721,9 +827,6 @@ class _ClockScreenState extends State<ClockScreen> {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // ✅ HEADER — may Employee Notification Bell
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildHeader(_ThemeColors tc, String name) {
     final initials = name.trim().isEmpty
         ? '?'
@@ -776,7 +879,7 @@ class _ClockScreenState extends State<ClockScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
-                          color: isDarkSafe(tc)
+                          color: tc.isDark
                               ? const Color(0xFF14371F)
                               : const Color(0xFFDCFCE7),
                           borderRadius: BorderRadius.circular(999),
@@ -787,7 +890,7 @@ class _ClockScreenState extends State<ClockScreen> {
                           children: [
                             Icon(Icons.home_work_rounded,
                                 size: 10,
-                                color: isDarkSafe(tc)
+                                color: tc.isDark
                                     ? const Color(0xFF86EFAC)
                                     : _greenDeep),
                             const SizedBox(width: 4),
@@ -796,7 +899,7 @@ class _ClockScreenState extends State<ClockScreen> {
                               style: TextStyle(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w800,
-                                color: isDarkSafe(tc)
+                                color: tc.isDark
                                     ? const Color(0xFF86EFAC)
                                     : _greenDeep,
                                 letterSpacing: 0.4,
@@ -811,16 +914,12 @@ class _ClockScreenState extends State<ClockScreen> {
               ],
             ),
           ),
-
-          // ✅ BAGONG: Employee Notification Bell
           if (empId.isNotEmpty)
             EmployeeNotificationBell(
               employeeId: empId,
               iconColor: tc.textPrimary,
               size: 22,
             ),
-
-          // Geofence checking indicator
           if (_checkingGeofence)
             const Padding(
               padding: EdgeInsets.only(left: 4),
@@ -837,8 +936,6 @@ class _ClockScreenState extends State<ClockScreen> {
       ),
     );
   }
-
-  bool isDarkSafe(_ThemeColors tc) => tc.isDark;
 
   Widget _buildHeaderAvatar(_ThemeColors tc, String initials) {
     final photoUrl = _employee?.photoUrl;
@@ -889,21 +986,6 @@ class _ClockScreenState extends State<ClockScreen> {
         fit: BoxFit.cover,
         width: 40,
         height: 40,
-        loadingBuilder: (context, child, progress) {
-          if (progress == null) return child;
-          return Container(
-            color: _orange,
-            alignment: Alignment.center,
-            child: const SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                color: Colors.white,
-                strokeWidth: 2,
-              ),
-            ),
-          );
-        },
         errorBuilder: (_, __, ___) => _avatarFallbackText(tc, initials),
       );
     }
@@ -1061,137 +1143,6 @@ class _ClockScreenState extends State<ClockScreen> {
     );
   }
 
-  Widget _buildLocationStatusSection(_ThemeColors tc) {
-    final Color accent;
-    final String label;
-    final String subLabel;
-    final IconData trailingIcon;
-    final String trailingLabel;
-
-    if (_checkingGeofence) {
-      accent = const Color(0xFFA1A1AA);
-      label = 'Checking location...';
-      subLabel = 'Kinukuha ang GPS position';
-      trailingIcon = Icons.gps_fixed_rounded;
-      trailingLabel = 'Verifying';
-    } else if (_isWfhMode) {
-      accent = const Color(0xFF4ADE80);
-      label = 'Work From Home — Allowed';
-      subLabel = 'Remote Zone (Outside Geofence)';
-      trailingIcon = Icons.home_work_rounded;
-      trailingLabel = 'Remote GPS';
-    } else if (_isInRange) {
-      accent = _green;
-      label = 'Inside Authorized Zone';
-      subLabel = 'HQ Main Office';
-      trailingIcon = Icons.send_rounded;
-      trailingLabel = 'Live GPS';
-    } else {
-      accent = _red;
-      label = 'Outside Authorized Zone';
-      subLabel = 'HQ Main Office';
-      trailingIcon = Icons.send_rounded;
-      trailingLabel = 'Live GPS';
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Location Status',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: tc.textPrimary,
-                ),
-              ),
-              Row(
-                children: [
-                  Icon(trailingIcon, size: 12, color: tc.textPrimary),
-                  const SizedBox(width: 4),
-                  Text(
-                    trailingLabel,
-                    style: TextStyle(fontSize: 12, color: tc.textPrimary),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Container(
-            height: 117,
-            decoration: BoxDecoration(
-              gradient: _orangeGradient,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: _orangeBorder, width: 1.15),
-            ),
-            child: Stack(
-              children: [
-                Positioned(
-                  left: 17,
-                  top: 17,
-                  child: _GpsPinIcon(accent: accent),
-                ),
-                Positioned(
-                  left: 81,
-                  top: 13,
-                  right: 20,
-                  bottom: 13,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: accent,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      const Text(
-                        'HQ Main Office',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        _isWfhMode
-                            ? 'WFH access is enabled by admin.\nYou can clock in/out from anywhere.'
-                            : '1245 Paz Street, 1007 Manila,\nMetro Manila - Philippines',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.white,
-                          height: 1.25,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildClockInOutSection() {
     final clockedIn = _clockInTime != null;
     final canClock = _canClock;
@@ -1220,13 +1171,6 @@ class _ClockScreenState extends State<ClockScreen> {
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: _orangeBorder, width: 1),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 2,
-                          offset: const Offset(0, 1),
-                        ),
-                      ],
                     ),
                     alignment: Alignment.center,
                     child: Column(
@@ -1315,7 +1259,8 @@ class _ClockScreenState extends State<ClockScreen> {
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.white.withValues(alpha: 0.2))
         : (_isWfhMode
-        ? const Color(0xFF22C55E).withValues(alpha: tc.isDark ? 0.2 : 0.15)
+        ? const Color(0xFF22C55E)
+        .withValues(alpha: tc.isDark ? 0.2 : 0.15)
         : (tc.isDark
         ? const Color(0xFF1F1F23)
         : const Color(0xFF838383).withValues(alpha: 0.28)));
@@ -1425,7 +1370,8 @@ class _ClockScreenState extends State<ClockScreen> {
           if (_isWfhMode) ...[
             const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: tc.isDark
                     ? const Color(0xFF14371F)
@@ -1438,8 +1384,7 @@ class _ClockScreenState extends State<ClockScreen> {
                   Icon(
                     Icons.home_work_rounded,
                     size: 16,
-                    color:
-                    tc.isDark ? const Color(0xFF86EFAC) : _greenDeep,
+                    color: tc.isDark ? const Color(0xFF86EFAC) : _greenDeep,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -1632,51 +1577,6 @@ class _ShortcutCard extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _GpsPinIcon extends StatelessWidget {
-  final Color accent;
-  const _GpsPinIcon({required this.accent});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 48,
-      height: 48,
-      child: Stack(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-            ),
-          ),
-          const Center(
-            child: Icon(
-              Icons.location_on_rounded,
-              color: _ClockScreenState._orange,
-              size: 26,
-            ),
-          ),
-          Positioned(
-            right: 4,
-            top: 4,
-            child: Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(
-                color: accent,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 1.5),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

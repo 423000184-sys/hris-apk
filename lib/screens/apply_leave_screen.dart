@@ -3,6 +3,52 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import '../services/admin_notification_service.dart';
+import 'itinerary_screen.dart';
+
+// ═══════════════════════════════════════════════════════════════
+// ⭐ ROBUST FETCH — para siguradong mag-match kahit anong ID
+//    ang ginagamit ng mobile (doc ID / auth UID / typed ID / email)
+// ═══════════════════════════════════════════════════════════════
+Future<List<Map<String, dynamic>>> _fetchEmployeeLeaves(
+    String empKey) async {
+  final key = empKey.trim();
+  if (key.isEmpty) return [];
+
+  final firestore = FirebaseFirestore.instance;
+  final uniqueDocs = <String, Map<String, dynamic>>{};
+
+  const identifierFields = [
+    'employeeId',
+    'employee_id',
+    'employeeDocId',
+    'employeeCode',
+    'employeeAuthUid',
+    'employeeEmail',
+  ];
+
+  for (final field in identifierFields) {
+    try {
+      final snap = await firestore
+          .collection('leave_applications')
+          .where(field, isEqualTo: key)
+          .get();
+
+      for (var doc in snap.docs) {
+        uniqueDocs.putIfAbsent(
+          doc.id,
+              () => <String, dynamic>{...doc.data(), 'id': doc.id},
+        );
+      }
+    } catch (e) {
+      debugPrint('⚠️ [LeaveFetch] Query by "$field" failed: $e');
+    }
+  }
+
+  debugPrint(
+      '📋 [LeaveFetch] empKey="$key" → ${uniqueDocs.length} unique leave doc(s)');
+
+  return uniqueDocs.values.toList();
+}
 
 class _ThemeColors {
   final bool isDark;
@@ -27,6 +73,11 @@ class _ThemeColors {
   Color get navBg => isDark ? const Color(0xFF18181B) : Colors.white;
   Color get navUnselected =>
       isDark ? const Color(0xFF888888) : const Color(0xFF71717A);
+
+  Color get softCard =>
+      isDark ? const Color(0xFF1F1F23) : const Color(0xFFF8F8F8);
+  Color get softBorder =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFA500);
 }
 
 // ─── BRAND COLORS ─────────────────────────────────────────────
@@ -35,7 +86,7 @@ class _T {
   static const Color orangeBorder = Color(0xFFFFA500);
   static const Color orangeLight = Color(0xFFFA6A00);
   static const Color orangeHot = Color(0xFFF54900);
-  static const Color neonGreen = Color(0xFF51FF00);
+  static const Color neonGreen = Color(0xFFC4FF0A);
 
   static const Color green = Color(0xFF16A34A);
   static const Color warning = Color(0xFFF59E0B);
@@ -56,9 +107,10 @@ class _T {
   static const double r20 = 20;
 }
 
-// ─── LEAVE CREDIT POLICY (SHARED WITH ADMIN) ─────────────────
+// ─── LEAVE CREDIT POLICY ──────────────────────────────────────
 const int kAnnualLeaveTotal = 18;
 const int kSickLeaveTotal = 18;
+const int kTotalLeaveCredits = kAnnualLeaveTotal + kSickLeaveTotal;
 
 bool _isAnnual(String code) => code.toUpperCase() == 'VL';
 bool _isSick(String code) => code.toUpperCase() == 'SL';
@@ -94,11 +146,9 @@ class _LeaveStats {
   int usedOther = 0;
   int pendingCount = 0;
 
-  int get annualRemaining =>
-      (kAnnualLeaveTotal - usedAnnual).clamp(0, kAnnualLeaveTotal);
-  int get sickRemaining =>
-      (kSickLeaveTotal - usedSick).clamp(0, kSickLeaveTotal);
-  int get totalUsed => usedAnnual + usedSick + usedOther;
+  int get totalCredits => kTotalLeaveCredits;
+  int get usedTotal => usedAnnual + usedSick + usedOther;
+  int get remaining => (totalCredits - usedTotal).clamp(0, totalCredits);
 }
 
 _LeaveStats _computeStats(List<Map<String, dynamic>> history) {
@@ -124,7 +174,7 @@ _LeaveStats _computeStats(List<Map<String, dynamic>> history) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  LEAVE APPLICATION FORM (dashboard)
+//  LEAVE APPLICATION FORM
 // ═══════════════════════════════════════════════════════════════
 class LeaveApplicationFormScreen extends StatefulWidget {
   final String employeeId;
@@ -143,7 +193,8 @@ class LeaveApplicationFormScreen extends StatefulWidget {
       _LeaveApplicationFormScreenState();
 }
 
-class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen> {
+class _LeaveApplicationFormScreenState
+    extends State<LeaveApplicationFormScreen> {
   int _selectedBottomIndex = 2;
   _LeaveStats _stats = _LeaveStats();
   List<Map<String, dynamic>> _leaveHistory = [];
@@ -160,23 +211,21 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
     _fetchLeaveData();
   }
 
+  // ⭐ UPDATED — gamit ang robust fetch
   Future<void> _fetchLeaveData() async {
+    if (!mounted) return;
     setState(() {
       _loading = true;
       _error = null;
     });
 
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('leave_applications')
-          .where('employeeId', isEqualTo: widget.employeeId)
-          .get();
+      final rawDocs = await _fetchEmployeeLeaves(widget.employeeId);
 
       final List<Map<String, dynamic>> history = [];
-      for (var doc in snapshot.docs) {
-        final data = doc.data();
+      for (var data in rawDocs) {
         history.add({
-          'id': doc.id,
+          'id': data['id'],
           'leaveType': data['leaveType'] ?? 'SL',
           'startDate': data['startDate'],
           'endDate': data['endDate'],
@@ -198,6 +247,7 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
 
       final stats = _computeStats(history);
 
+      if (!mounted) return;
       setState(() {
         _leaveHistory = history;
         _stats = stats;
@@ -205,6 +255,7 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
       });
     } catch (e) {
       debugPrint('Error fetching leave history: $e');
+      if (!mounted) return;
       setState(() {
         _loading = false;
         _error = 'Failed to load leave data. Please try again.';
@@ -239,11 +290,11 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
     return map[code] ?? code;
   }
 
-  void _openLeaveHistory() {
+  void _openLeaveForm() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => LeaveHistoryScreen(
+        builder: (context) => LeaveFormScreen(
           employeeId: widget.employeeId,
           employeeName: widget.employeeName,
           onGoHome: () {
@@ -255,11 +306,11 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
     ).then((_) => refreshData());
   }
 
-  void _openLeaveForm() {
+  void _openItinerary() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => LeaveFormScreen(
+        builder: (context) => ItineraryScreen(
           employeeId: widget.employeeId,
           employeeName: widget.employeeName,
           onGoHome: () {
@@ -283,11 +334,14 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
           children: [
             Container(
               padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 gradient: _T.brandGradient,
-                borderRadius: BorderRadius.only(
+                borderRadius: const BorderRadius.only(
                   bottomLeft: Radius.circular(16),
                   bottomRight: Radius.circular(16),
+                ),
+                border: Border(
+                  bottom: BorderSide(color: tc.darkBorder, width: 1.11),
                 ),
               ),
               child: Row(
@@ -305,52 +359,34 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
                   ),
                   const SizedBox(width: 16),
                   const Expanded(
-                    child: Text('Leave Application Form',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w500)),
-                  ),
-                  GestureDetector(
-                    onTap: _openLeaveHistory,
-                    behavior: HitTestBehavior.opaque,
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      margin: const EdgeInsets.only(right: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF27272A).withValues(alpha: 0.3),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.3),
-                            width: 1.1),
-                      ),
-                      child: const Icon(Icons.assignment_rounded,
-                          color: Colors.white, size: 18),
+                    child: Text(
+                      'Leave Application Form',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w500),
                     ),
                   ),
                   GestureDetector(
-                    onTap: _openLeaveForm,
+                    onTap: _openItinerary,
                     behavior: HitTestBehavior.opaque,
                     child: Container(
                       width: 32,
                       height: 32,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF27272A).withValues(alpha: 0.3),
+                        color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.3),
-                            width: 1.1),
+                            color: _T.orangeBorder, width: 1.11),
                       ),
-                      child: const Icon(Icons.add_rounded,
-                          color: Colors.white, size: 20),
+                      child: const Icon(Icons.assignment_rounded,
+                          color: _T.orange, size: 18),
                     ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 20),
-
             if (_loading)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 24),
@@ -377,21 +413,34 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Row(
                   children: [
-                    _statCard(tc, 'Annual Left',
-                        '${_stats.annualRemaining}', _T.orange,
-                        subtitle: 'of $kAnnualLeaveTotal'),
+                    _statCard(
+                      tc,
+                      label: 'Total',
+                      value: '${_stats.totalCredits}',
+                      valueColor: tc.textBlack,
+                      labelColor: tc.textGray,
+                    ),
                     const SizedBox(width: 12),
-                    _statCard(tc, 'Sick Left',
-                        '${_stats.sickRemaining}', _T.green,
-                        subtitle: 'of $kSickLeaveTotal'),
+                    _statCard(
+                      tc,
+                      label: 'Used',
+                      value: '${_stats.usedTotal}',
+                      valueColor: _T.neonGreen,
+                      labelColor: tc.textGray,
+                    ),
                     const SizedBox(width: 12),
-                    _statCard(tc, 'Total Used',
-                        '${_stats.totalUsed}', _T.orange),
+                    _statCard(
+                      tc,
+                      label: 'Remaining',
+                      value: '${_stats.remaining}',
+                      valueColor: _T.orange,
+                      labelColor: _T.orange,
+                      isHighlighted: true,
+                    ),
                   ],
                 ),
               ),
             const SizedBox(height: 20),
-
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Align(
@@ -404,7 +453,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
               ),
             ),
             const SizedBox(height: 10),
-
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -431,38 +479,39 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
                     final isPending = statusLower == 'pending';
 
                     final badgeBg = isApproved
-                        ? _T.green.withValues(alpha: 0.1)
+                        ? _T.neonGreen.withValues(alpha: 0.1)
                         : (isPending
                         ? _T.orange.withValues(alpha: 0.1)
                         : _T.error.withValues(alpha: 0.1));
                     final badgeBorder = isApproved
-                        ? _T.green.withValues(alpha: 0.2)
+                        ? _T.neonGreen.withValues(alpha: 0.2)
                         : (isPending
                         ? _T.orange.withValues(alpha: 0.2)
                         : _T.error.withValues(alpha: 0.2));
                     final badgeText = isApproved
-                        ? _T.green
+                        ? _T.neonGreen
                         : (isPending ? _T.orange : _T.error);
 
                     return Container(
                       margin: const EdgeInsets.only(bottom: 12),
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: tc.cardBg,
+                        color: tc.softCard,
                         borderRadius: BorderRadius.circular(16),
-                        border:
-                        Border.all(color: tc.border, width: 1),
+                        border: Border.all(
+                            color: tc.softBorder, width: 1.11),
                         boxShadow: [
                           BoxShadow(
-                            color:
-                            Colors.black.withValues(alpha: 0.05),
+                            color: Colors.black
+                                .withValues(alpha: 0.05),
                             blurRadius: 4,
                             offset: const Offset(0, 2),
                           ),
                         ],
                       ),
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment:
+                        CrossAxisAlignment.start,
                         children: [
                           Row(
                             mainAxisAlignment:
@@ -481,7 +530,8 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
                                   borderRadius:
                                   BorderRadius.circular(12),
                                   border: Border.all(
-                                      color: badgeBorder),
+                                      color: badgeBorder,
+                                      width: 1.11),
                                 ),
                                 child: Text(
                                   isApproved
@@ -545,15 +595,27 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
     );
   }
 
-  Widget _statCard(_ThemeColors tc, String label, String value, Color valueColor,
-      {String? subtitle}) {
+  Widget _statCard(
+      _ThemeColors tc, {
+        required String label,
+        required String value,
+        required Color valueColor,
+        required Color labelColor,
+        bool isHighlighted = false,
+      }) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         decoration: BoxDecoration(
-          color: tc.cardBg,
+          color:
+          isHighlighted ? _T.orange.withValues(alpha: 0.2) : tc.softCard,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: tc.border, width: 1),
+          border: Border.all(
+            color: isHighlighted
+                ? _T.orange.withValues(alpha: 0.2)
+                : tc.softBorder,
+            width: 1.11,
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.05),
@@ -572,12 +634,9 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
             const SizedBox(height: 2),
             Text(label,
                 style: TextStyle(
-                    color: tc.textGray,
+                    color: labelColor,
                     fontSize: 10,
-                    fontWeight: FontWeight.w600)),
-            if (subtitle != null)
-              Text(subtitle,
-                  style: TextStyle(color: tc.textMuted, fontSize: 9)),
+                    fontWeight: FontWeight.w500)),
           ],
         ),
       ),
@@ -586,7 +645,7 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  LEAVE HISTORY FORM (Dashboard with Stats & History)
+//  LEAVE HISTORY SCREEN
 // ═══════════════════════════════════════════════════════════════
 class LeaveHistoryScreen extends StatefulWidget {
   final String employeeId;
@@ -601,8 +660,7 @@ class LeaveHistoryScreen extends StatefulWidget {
   });
 
   @override
-  State<LeaveHistoryScreen> createState() =>
-      _LeaveHistoryScreenState();
+  State<LeaveHistoryScreen> createState() => _LeaveHistoryScreenState();
 }
 
 class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
@@ -617,23 +675,21 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
     _fetchLeaveData();
   }
 
+  // ⭐ UPDATED — gamit ang robust fetch
   Future<void> _fetchLeaveData() async {
+    if (!mounted) return;
     setState(() {
       _loading = true;
       _error = null;
     });
 
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('leave_applications')
-          .where('employeeId', isEqualTo: widget.employeeId)
-          .get();
+      final rawDocs = await _fetchEmployeeLeaves(widget.employeeId);
 
       final List<Map<String, dynamic>> history = [];
-      for (var doc in snapshot.docs) {
-        final data = doc.data();
+      for (var data in rawDocs) {
         history.add({
-          'id': doc.id,
+          'id': data['id'],
           'leaveType': data['leaveType'] ?? 'SL',
           'startDate': data['startDate'],
           'endDate': data['endDate'],
@@ -655,6 +711,7 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
 
       final stats = _computeStats(history);
 
+      if (!mounted) return;
       setState(() {
         _leaveHistory = history;
         _stats = stats;
@@ -662,6 +719,7 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
       });
     } catch (e) {
       debugPrint('Error fetching leave history: $e');
+      if (!mounted) return;
       setState(() {
         _loading = false;
         _error = 'Failed to load leave data. Please try again.';
@@ -708,7 +766,7 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
           },
         ),
       ),
-    );
+    ).then((_) => _fetchLeaveData());
   }
 
   @override
@@ -748,16 +806,30 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
                     else
                       Row(
                         children: [
-                          _statCard(tc, 'Annual Left',
-                              '${_stats.annualRemaining}', _T.orange,
-                              subtitle: 'of $kAnnualLeaveTotal'),
+                          _statCard(
+                            tc,
+                            label: 'Total',
+                            value: '${_stats.totalCredits}',
+                            valueColor: tc.textBlack,
+                            labelColor: tc.textGray,
+                          ),
                           const SizedBox(width: 12),
-                          _statCard(tc, 'Sick Left',
-                              '${_stats.sickRemaining}', _T.green,
-                              subtitle: 'of $kSickLeaveTotal'),
+                          _statCard(
+                            tc,
+                            label: 'Used',
+                            value: '${_stats.usedTotal}',
+                            valueColor: _T.neonGreen,
+                            labelColor: tc.textGray,
+                          ),
                           const SizedBox(width: 12),
-                          _statCard(tc, 'Total Used',
-                              '${_stats.totalUsed}', _T.orange),
+                          _statCard(
+                            tc,
+                            label: 'Remaining',
+                            value: '${_stats.remaining}',
+                            valueColor: _T.orange,
+                            labelColor: _T.orange,
+                            isHighlighted: true,
+                          ),
                         ],
                       ),
                     const SizedBox(height: 20),
@@ -805,29 +877,31 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
                             final isApproved = statusLower == 'approved';
                             final isPending = statusLower == 'pending';
                             final badgeBg = isApproved
-                                ? _T.green.withValues(alpha: 0.1)
+                                ? _T.neonGreen.withValues(alpha: 0.1)
                                 : (isPending
                                 ? _T.orange.withValues(alpha: 0.1)
                                 : _T.error.withValues(alpha: 0.1));
                             final badgeBorder = isApproved
-                                ? _T.green.withValues(alpha: 0.2)
+                                ? _T.neonGreen.withValues(alpha: 0.2)
                                 : (isPending
                                 ? _T.orange.withValues(alpha: 0.2)
                                 : _T.error.withValues(alpha: 0.2));
                             final badgeText = isApproved
-                                ? _T.green
+                                ? _T.neonGreen
                                 : (isPending ? _T.orange : _T.error);
 
                             return Container(
                               margin: const EdgeInsets.only(bottom: 12),
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
-                                color: tc.cardBg,
+                                color: tc.softCard,
                                 borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: tc.border, width: 1),
+                                border: Border.all(
+                                    color: tc.softBorder, width: 1.11),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.05),
+                                    color:
+                                    Colors.black.withValues(alpha: 0.05),
                                     blurRadius: 4,
                                     offset: const Offset(0, 2),
                                   ),
@@ -850,9 +924,10 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
                                             horizontal: 10, vertical: 4),
                                         decoration: BoxDecoration(
                                           color: badgeBg,
-                                          borderRadius: BorderRadius.circular(12),
-                                          border:
-                                          Border.all(color: badgeBorder),
+                                          borderRadius:
+                                          BorderRadius.circular(12),
+                                          border: Border.all(
+                                              color: badgeBorder, width: 1.11),
                                         ),
                                         child: Text(
                                           isApproved
@@ -902,11 +977,14 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
   Widget _buildHeader(_ThemeColors tc) {
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: _T.brandGradient,
-        borderRadius: BorderRadius.only(
+        borderRadius: const BorderRadius.only(
           bottomLeft: Radius.circular(16),
           bottomRight: Radius.circular(16),
+        ),
+        border: Border(
+          bottom: BorderSide(color: tc.darkBorder, width: 1.11),
         ),
       ),
       child: Row(
@@ -937,13 +1015,12 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
               width: 32,
               height: 32,
               decoration: BoxDecoration(
-                color: const Color(0xFF27272A).withValues(alpha: 0.3),
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.3), width: 1.1),
+                border: Border.all(color: _T.orangeBorder, width: 1.11),
               ),
-              child:
-              const Icon(Icons.add_rounded, color: Colors.white, size: 20),
+              child: const Icon(Icons.add_rounded,
+                  color: _T.orange, size: 20),
             ),
           ),
         ],
@@ -951,15 +1028,27 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
     );
   }
 
-  Widget _statCard(_ThemeColors tc, String label, String value, Color valueColor,
-      {String? subtitle}) {
+  Widget _statCard(
+      _ThemeColors tc, {
+        required String label,
+        required String value,
+        required Color valueColor,
+        required Color labelColor,
+        bool isHighlighted = false,
+      }) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         decoration: BoxDecoration(
-          color: tc.cardBg,
+          color:
+          isHighlighted ? _T.orange.withValues(alpha: 0.2) : tc.softCard,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: tc.border, width: 1),
+          border: Border.all(
+            color: isHighlighted
+                ? _T.orange.withValues(alpha: 0.2)
+                : tc.softBorder,
+            width: 1.11,
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.05),
@@ -978,12 +1067,9 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
             const SizedBox(height: 2),
             Text(label,
                 style: TextStyle(
-                    color: tc.textGray,
+                    color: labelColor,
                     fontSize: 10,
-                    fontWeight: FontWeight.w600)),
-            if (subtitle != null)
-              Text(subtitle,
-                  style: TextStyle(color: tc.textMuted, fontSize: 9)),
+                    fontWeight: FontWeight.w500)),
           ],
         ),
       ),
@@ -992,7 +1078,7 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  LEAVE FORM WITH STEPPER
+//  LEAVE FORM SCREEN
 // ═══════════════════════════════════════════════════════════════
 class LeaveFormScreen extends StatefulWidget {
   final String employeeId;
@@ -1153,17 +1239,16 @@ class _LeaveFormScreenState extends State<LeaveFormScreen> {
     });
   }
 
+  // ⭐ UPDATED — gamit ang robust fetch
   Future<bool> _hasEnoughBalance() async {
     if (_selectedLeaveType == null || _leaveDays <= 0) return true;
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('leave_applications')
-          .where('employeeId', isEqualTo: widget.employeeId)
-          .get();
+      final rawDocs = await _fetchEmployeeLeaves(widget.employeeId);
+
       int usedAnnual = 0, usedSick = 0;
-      for (final doc in snap.docs) {
-        final data = doc.data();
-        final status = (data['status'] ?? 'pending').toString().toLowerCase();
+      for (final data in rawDocs) {
+        final status =
+        (data['status'] ?? 'pending').toString().toLowerCase();
         if (status != 'approved') continue;
         final code = (data['leaveType'] ?? '').toString();
         final days = _safeInt(data['days'], 1);
@@ -1177,7 +1262,8 @@ class _LeaveFormScreenState extends State<LeaveFormScreen> {
       final sickRemaining = kSickLeaveTotal - usedSick;
       if (_isAnnual(_selectedLeaveType!) && _leaveDays > annualRemaining) {
         _showToast(
-            'Insufficient Annual Leave. Remaining: $annualRemaining', _T.error);
+            'Insufficient Annual Leave. Remaining: $annualRemaining',
+            _T.error);
         return false;
       }
       if (_isSick(_selectedLeaveType!) && _leaveDays > sickRemaining) {
@@ -1258,11 +1344,16 @@ class _LeaveFormScreenState extends State<LeaveFormScreen> {
         return;
       }
 
+      // ⭐ Save with multiple identifier fields
       await FirebaseFirestore.instance
           .collection('leave_applications')
           .add({
         'employeeId': widget.employeeId,
+        'employee_id': widget.employeeId,
+        'employeeDocId': widget.employeeId,
+        'employeeAuthUid': widget.employeeId,
         'employeeName': widget.employeeName,
+        'employee_name': widget.employeeName,
         'leaveType': _selectedLeaveType,
         'startDate': _startDate?.toIso8601String(),
         'endDate': _endDate?.toIso8601String(),
@@ -1270,10 +1361,11 @@ class _LeaveFormScreenState extends State<LeaveFormScreen> {
         'reason': _reasonCtrl.text.trim(),
         'status': 'pending',
         'certified': _isCertified,
+        'createdBy': 'employee',
+        'source': 'employee',
         'createdAt': FieldValue.serverTimestamp(),
       }).timeout(const Duration(seconds: 30));
 
-      // ✅ ADMIN NOTIFICATION
       try {
         AdminNotificationService.instance.notifyLeaveRequest(
           employeeId: widget.employeeId,
@@ -1332,7 +1424,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen> {
                   shape: BoxShape.circle,
                   border: Border.all(color: _T.neonGreen, width: 3),
                 ),
-                child: Icon(Icons.check_circle_rounded,
+                child: const Icon(Icons.check_circle_rounded,
                     color: _T.neonGreen, size: 72),
               ),
               const SizedBox(height: 24),
@@ -1400,7 +1492,8 @@ class _LeaveFormScreenState extends State<LeaveFormScreen> {
           const TextStyle(color: _T.white, fontWeight: FontWeight.w600)),
       backgroundColor: color.withValues(alpha: 0.9),
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_T.r12)),
+      shape:
+      RoundedRectangleBorder(borderRadius: BorderRadius.circular(_T.r12)),
       margin: const EdgeInsets.all(16),
       duration: const Duration(seconds: 3),
     ));
@@ -1478,12 +1571,13 @@ class _LeaveFormScreenState extends State<LeaveFormScreen> {
                   width: 28,
                   height: 28,
                   decoration: BoxDecoration(
-                    gradient: _T.brandGradient,
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: _T.orangeBorder, width: 1),
+                    border:
+                    Border.all(color: _T.orangeBorder, width: 1.11),
                   ),
                   child: const Icon(Icons.add_rounded,
-                      color: Colors.white, size: 18),
+                      color: _T.orange, size: 18),
                 ),
               ),
             ],
@@ -2165,9 +2259,8 @@ class _LeaveFormScreenState extends State<LeaveFormScreen> {
     return Column(
       children: [
         GestureDetector(
-          onTap: isLastStep
-              ? (_isSubmitting ? null : _submitApplication)
-              : _goNext,
+          onTap:
+          isLastStep ? (_isSubmitting ? null : _submitApplication) : _goNext,
           behavior: HitTestBehavior.opaque,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
