@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import '../services/notification_backup_service.dart';
+import '../utils/file_download.dart';
 import 'admin_theme.dart';
 
 class NotificationBackupListPage extends StatefulWidget {
@@ -41,13 +42,52 @@ class _NotificationBackupListPageState
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // DOWNLOAD
+  // ═══════════════════════════════════════════════════════════════
+  Future<void> _downloadFile(
+      AdminColors tc, NotificationBackupInfo file) async {
+    final content =
+    await NotificationBackupService.instance.readBackup(file.path);
+
+    if (!mounted) return;
+    if (content == null || content.isEmpty) {
+      _snack('❌ No content to download', error: true);
+      return;
+    }
+
+    final result = await downloadTextFile(
+      filename: file.filename,
+      content: content,
+    );
+
+    if (!mounted) return;
+    if (result == null) {
+      _snack('❌ Download failed', error: true);
+    } else if (kIsWeb) {
+      _snack('✅ Download started: ${file.filename}');
+    } else {
+      _snack('✅ Saved to: $result');
+    }
+  }
+
+  void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: error ? const Color(0xFFA02020) : null,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // ✅ Use AnimatedBuilder para live update kapag nag-toggle ng theme
     return AnimatedBuilder(
       animation: ThemeProvider.instance,
       builder: (context, _) {
-        // ✅ Use ThemeProvider directly — hindi nag-follow sa system theme
         final tc = ThemeProvider.instance.colors;
 
         return Scaffold(
@@ -73,13 +113,20 @@ class _NotificationBackupListPageState
                     color: tc.textMuted, size: 20),
                 onPressed: _load,
               ),
-              if (_backups.isNotEmpty)
+              if (_backups.isNotEmpty) ...[
+                IconButton(
+                  tooltip: 'Download .txt',
+                  icon: Icon(Icons.download_rounded,
+                      color: tc.orange, size: 22),
+                  onPressed: () => _downloadFile(tc, _backups.first),
+                ),
                 IconButton(
                   tooltip: 'Delete all',
                   icon: Icon(Icons.delete_sweep_rounded,
                       color: tc.red, size: 20),
                   onPressed: () => _confirmDeleteAll(tc),
                 ),
+              ],
               const SizedBox(width: 8),
             ],
             bottom: PreferredSize(
@@ -99,16 +146,14 @@ class _NotificationBackupListPageState
                   color: tc.orange,
                   onRefresh: _load,
                   child: ListView.separated(
-                    padding:
-                    const EdgeInsets.symmetric(vertical: 8),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
                     itemCount: _backups.length,
                     separatorBuilder: (_, __) => Divider(
                       height: 1,
                       color: tc.border,
                       indent: 16,
                     ),
-                    itemBuilder: (_, i) =>
-                        _tile(tc, _backups[i]),
+                    itemBuilder: (_, i) => _tile(tc, _backups[i]),
                   ),
                 ),
               ),
@@ -123,6 +168,9 @@ class _NotificationBackupListPageState
   // SUMMARY CARD
   // ═══════════════════════════════════════════════════════════════
   Widget _summaryCard(AdminColors tc) {
+    final entryCount =
+    _backups.isEmpty ? 0 : _backups.first.entryCount;
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
       padding: const EdgeInsets.all(14),
@@ -139,7 +187,7 @@ class _NotificationBackupListPageState
               Icon(Icons.backup_rounded, color: tc.orange, size: 18),
               const SizedBox(width: 8),
               Text(
-                '${_backups.length} backup file${_backups.length == 1 ? "" : "s"}',
+                '$entryCount entr${entryCount == 1 ? "y" : "ies"}',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
@@ -183,8 +231,8 @@ class _NotificationBackupListPageState
           const SizedBox(height: 4),
           Text(
             kIsWeb
-                ? '💡 Naka-save sa browser localStorage'
-                : '💡 Single file log — append kada may bagong notification',
+                ? '💡 Saved to browser localStorage'
+                : '💡 Single file log — appends with each new notification',
             style: TextStyle(
               fontSize: 10,
               color: tc.muted,
@@ -197,7 +245,7 @@ class _NotificationBackupListPageState
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // TILE
+  // TILE — with inline download
   // ═══════════════════════════════════════════════════════════════
   Widget _tile(AdminColors tc, NotificationBackupInfo file) {
     return InkWell(
@@ -211,7 +259,7 @@ class _NotificationBackupListPageState
               width: 42,
               height: 42,
               decoration: BoxDecoration(
-                color: tc.orange.withValues(alpha: 0.15),
+                color: tc.orange.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(
@@ -261,6 +309,12 @@ class _NotificationBackupListPageState
                 ],
               ),
             ),
+            IconButton(
+              tooltip: 'Download .txt',
+              icon: Icon(Icons.download_rounded,
+                  color: tc.orange, size: 20),
+              onPressed: () => _downloadFile(tc, file),
+            ),
             Icon(Icons.chevron_right_rounded,
                 color: tc.muted, size: 20),
           ],
@@ -278,12 +332,7 @@ class _NotificationBackupListPageState
 
     if (!mounted) return;
     if (content == null || content.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('❌ Walang content'),
-          backgroundColor: Color(0xFFEF4444),
-        ),
-      );
+      _snack('❌ No content', error: true);
       return;
     }
 
@@ -301,7 +350,6 @@ class _NotificationBackupListPageState
         expand: false,
         builder: (_, scrollCtrl) => Column(
           children: [
-            // Handle bar
             Container(
               margin: const EdgeInsets.symmetric(vertical: 12),
               width: 40,
@@ -311,7 +359,6 @@ class _NotificationBackupListPageState
                 borderRadius: BorderRadius.circular(999),
               ),
             ),
-            // Header
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
@@ -346,7 +393,8 @@ class _NotificationBackupListPageState
                           ),
                         ),
                         Text(
-                          '${_fmtTime(file.savedAt)} · ${_fmtSize(file.sizeBytes)}',
+                          '${file.entryCount} entries · '
+                              '${_fmtSize(file.sizeBytes)}',
                           style: TextStyle(
                             fontSize: 10,
                             color: tc.textMuted,
@@ -355,19 +403,21 @@ class _NotificationBackupListPageState
                       ],
                     ),
                   ),
+                  IconButton(
+                    icon: Icon(Icons.close_rounded, color: tc.muted),
+                    onPressed: () => Navigator.pop(context),
+                  ),
                 ],
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             Divider(height: 1, color: tc.border),
-
-            // Content
             Expanded(
               child: Container(
                 width: double.infinity,
                 color: tc.isDark
-                    ? const Color(0xFF0F0F10)
-                    : const Color(0xFFF5F5F5),
+                    ? const Color(0xFF121212)
+                    : const Color(0xFFF5F4F0),
                 child: SingleChildScrollView(
                   controller: scrollCtrl,
                   padding: const EdgeInsets.all(16),
@@ -383,8 +433,6 @@ class _NotificationBackupListPageState
                 ),
               ),
             ),
-
-            // Footer buttons
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(12),
@@ -407,21 +455,25 @@ class _NotificationBackupListPageState
                         ),
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(color: tc.border),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          padding:
+                          const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: FilledButton(
-                        onPressed: () => Navigator.pop(context),
+                      child: FilledButton.icon(
+                        onPressed: () => _downloadFile(tc, file),
+                        icon: const Icon(Icons.download_rounded,
+                            size: 16),
+                        label: const Text(
+                          'Download',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
                         style: FilledButton.styleFrom(
                           backgroundColor: tc.orange,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                        child: const Text(
-                          'Close',
-                          style: TextStyle(fontWeight: FontWeight.w700),
+                          padding:
+                          const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
@@ -460,6 +512,15 @@ class _NotificationBackupListPageState
               },
             ),
             ListTile(
+              leading: Icon(Icons.download_rounded, color: tc.orange),
+              title: Text('Download .txt',
+                  style: TextStyle(color: tc.text)),
+              onTap: () {
+                Navigator.pop(context);
+                _downloadFile(tc, file);
+              },
+            ),
+            ListTile(
               leading: Icon(Icons.delete_outline_rounded, color: tc.red),
               title: Text('Delete', style: TextStyle(color: tc.text)),
               onTap: () {
@@ -475,7 +536,7 @@ class _NotificationBackupListPageState
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // CONFIRM DIALOGS
+  // DIALOGS
   // ═══════════════════════════════════════════════════════════════
   Future<void> _confirmDelete(
       AdminColors tc, NotificationBackupInfo file) async {
@@ -526,7 +587,7 @@ class _NotificationBackupListPageState
             style: TextStyle(
                 color: tc.text, fontWeight: FontWeight.w800)),
         content: Text(
-          'Burahin lahat ng ${_backups.length} files? Hindi na maibabalik.',
+          'Delete all ${_backups.length} files? This cannot be undone.',
           style: TextStyle(color: tc.textMuted, fontSize: 13),
         ),
         actions: [
@@ -572,14 +633,14 @@ class _NotificationBackupListPageState
                   size: 32, color: tc.orange),
             ),
             const SizedBox(height: 16),
-            Text('Walang backups pa',
+            Text('No backups yet',
                 style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
                     color: tc.text)),
             const SizedBox(height: 6),
             Text(
-              'Auto-save kada may bagong notification.\nMag-clock in ang employee para mag-test.',
+              'Auto-saves whenever a new notification arrives.\nHave an employee clock in to test.',
               textAlign: TextAlign.center,
               style: TextStyle(
                   fontSize: 13, color: tc.textMuted, height: 1.5),
@@ -596,7 +657,7 @@ class _NotificationBackupListPageState
   String _fmtTime(DateTime d) {
     final now = DateTime.now();
     final diff = now.difference(d);
-    if (diff.inMinutes < 1) return 'Ngayon lang';
+    if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     if (diff.inDays < 7) return '${diff.inDays}d ago';

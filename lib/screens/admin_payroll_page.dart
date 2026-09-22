@@ -1,7 +1,9 @@
 // lib/screens/admin_payroll_page.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart'; // ✅ NEW — para sa date formatting sa export
 import 'admin_theme.dart';
+import '../utils/file_download.dart'; // ✅ NEW — CSV export helper
 import '../widgets/bootstrap_grid.dart';
 import '../services/payroll_calculator.dart';
 import '../services/attendance_hours_service.dart';
@@ -34,6 +36,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   Map<String, int> _presentDaysMap = {};
   Map<String, EmployeeHoursSummary> _hoursMap = {};
   bool _loadingAttendance = true;
+  bool _exporting = false; // ✅ NEW
 
   DateTime get _periodStart {
     final n = DateTime.now();
@@ -97,9 +100,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ✅ FIXED: _computeForEmp
-  //    - daysWithLogs: p       (non-nullable int, hindi present)
-  //    - daysWithLunchApplied: lunchMinutes > 0 ? p : 0
+  // ✅ _computeForEmp
   // ══════════════════════════════════════════════════════════════
   PayrollBreakdown _computeForEmp(Map<String, dynamic> emp) {
     // ─── Present days lookup ────────────────────────────────
@@ -192,8 +193,8 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
       workLunchMinutes: lunchMinutes,
       workNetMinutes: netMinutes,
       workOvertimeMinutes: otMinutes,
-      daysWithLogs: p, // ✅ FIXED: p (int) hindi present (int?)
-      daysWithLunchApplied: lunchMinutes > 0 ? p : 0, // ✅ FIXED: p (int)
+      daysWithLogs: p,
+      daysWithLunchApplied: lunchMinutes > 0 ? p : 0,
       // Salary metadata
       salarySource: salarySource,
       // Government
@@ -205,6 +206,227 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
       totalDeductions: totalDed,
       netPay: net,
     );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 📤 CSV EXPORT — LAHAT NG PAYROLL DETAILS PER EMPLOYEE
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _exportPayrollToCsv() async {
+    if (_exporting) return;
+
+    // Respects search + department filters
+    final departments = <String>['All Departments'];
+    for (var emp in widget.employees) {
+      final dept = emp['department']?.toString();
+      if (dept != null && dept.isNotEmpty && !departments.contains(dept)) {
+        departments.add(dept);
+      }
+    }
+
+    final filtered = widget.employees.where((emp) {
+      final name = (emp['name'] ??
+          '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}')
+          .toString()
+          .toLowerCase();
+      final id =
+      (emp['id'] ?? emp['employeeId'] ?? '').toString().toLowerCase();
+      final dept = (emp['department'] ?? '').toString();
+
+      final matchesSearch = _searchQuery.isEmpty ||
+          name.contains(_searchQuery.toLowerCase()) ||
+          id.contains(_searchQuery.toLowerCase());
+      final matchesDept = _selectedDepartment == 'All Departments' ||
+          dept == _selectedDepartment;
+
+      return matchesSearch && matchesDept;
+    }).toList();
+
+    if (filtered.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('No employees to export.'),
+        backgroundColor: tc.red,
+      ));
+      return;
+    }
+
+    setState(() => _exporting = true);
+
+    try {
+      // ─── Column headers ───
+      const headers = <String>[
+        // Employee
+        'employee_id',
+        'document_id',
+        'name',
+        'first_name',
+        'last_name',
+        'email',
+        'department',
+        'role',
+        'device_name',
+        'bank_name',
+        'account_number',
+        'payroll_status',
+        'salary_source',
+        // Pay period
+        'pay_period',
+        'period_start',
+        'period_end',
+        // Earnings
+        'basic_salary',
+        'allowances',
+        'overtime_pay',
+        'gross_pay',
+        // Benefits
+        'thirteenth_month',
+        'sil_credits',
+        'total_benefits',
+        // Attendance
+        'working_days',
+        'working_days_per_month',
+        'present_days',
+        'absent_days',
+        'daily_rate',
+        'absence_deduction',
+        // Work hours
+        'work_raw_hours',
+        'work_lunch_hours',
+        'work_net_hours',
+        'work_overtime_hours',
+        'days_with_logs',
+        'days_with_lunch_applied',
+        // Government
+        'sss',
+        'philhealth',
+        'pagibig',
+        'withholding_tax',
+        // Totals
+        'total_deductions',
+        'net_pay',
+      ];
+
+      final buffer = StringBuffer();
+      buffer.write('\uFEFF'); // UTF-8 BOM para tama sa Excel
+      buffer.write(headers.map(_csvEscape).join(','));
+      buffer.write('\r\n');
+
+      for (final emp in filtered) {
+        final b = _computeForEmp(emp);
+        final hrs = _getHoursFor(emp);
+
+        final fullName = (emp['name'] ??
+            '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}')
+            .toString()
+            .trim();
+
+        final row = <String>[
+          // Employee
+          (emp['employeeId'] ?? emp['employee_id'] ?? '').toString(),
+          (emp['id'] ?? '').toString(),
+          fullName,
+          (emp['firstName'] ?? '').toString(),
+          (emp['lastName'] ?? '').toString(),
+          (emp['email'] ?? '').toString(),
+          (emp['department'] ?? '').toString(),
+          (emp['role'] ?? '').toString(),
+          (emp['deviceName'] ?? '').toString(),
+          (emp['bankName'] ?? '').toString(),
+          (emp['accountNumber'] ?? '').toString(),
+          (emp['payrollStatus'] ?? 'Processed').toString(),
+          (emp['salarySource'] ?? 'manual').toString(),
+          // Pay period
+          _selectedPayPeriod,
+          DateFormat('yyyy-MM-dd').format(_periodStart),
+          DateFormat('yyyy-MM-dd').format(_periodEnd),
+          // Earnings
+          b.basicSalary.toStringAsFixed(2),
+          b.allowances.toStringAsFixed(2),
+          b.overtimePay.toStringAsFixed(2),
+          b.grossPay.toStringAsFixed(2),
+          // Benefits
+          b.thirteenthMonth.toStringAsFixed(2),
+          b.silCredits.toStringAsFixed(2),
+          b.totalBenefits.toStringAsFixed(2),
+          // Attendance
+          b.workingDays.toString(),
+          b.workingDaysPerMonth.toString(),
+          b.presentDays.toString(),
+          b.absentDays.toString(),
+          b.dailyRate.toStringAsFixed(2),
+          b.absenceDeduction.toStringAsFixed(2),
+          // Work hours (converted to decimal hours)
+          _minutesToHours(b.workRawMinutes),
+          _minutesToHours(b.workLunchMinutes),
+          _minutesToHours(b.workNetMinutes),
+          _minutesToHours(b.workOvertimeMinutes),
+          b.daysWithLogs.toString(),
+          b.daysWithLunchApplied.toString(),
+          // Government
+          b.sss.toStringAsFixed(2),
+          b.philhealth.toStringAsFixed(2),
+          b.pagibig.toStringAsFixed(2),
+          b.withholdingTax.toStringAsFixed(2),
+          // Totals
+          b.totalDeductions.toStringAsFixed(2),
+          b.netPay.toStringAsFixed(2),
+        ];
+
+        buffer.write(row.map(_csvEscape).join(','));
+        buffer.write('\r\n');
+      }
+
+      // ─── Filename ───
+      final tsStr = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final periodTag = _selectedPayPeriod.replaceAll(' ', '_').toLowerCase();
+      final fileName = 'payroll_${periodTag}_$tsStr.csv';
+
+      // ─── Save via shared helper ───
+      final savedPath = await downloadTextFile(
+        filename: fileName,
+        content: buffer.toString(),
+      );
+
+      if (!mounted) return;
+
+      if (savedPath != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Exported ${filtered.length} employee(s) → $fileName'),
+          backgroundColor: tc.green,
+        ));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Export failed or cancelled.'),
+          backgroundColor: tc.red,
+        ));
+      }
+    } catch (e) {
+      debugPrint('❌ Payroll CSV export error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Export failed: $e'),
+        backgroundColor: tc.red,
+      ));
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  // ─── CSV helpers ──────────────────────────────────────────
+  String _csvEscape(String value) {
+    if (value.contains(',') ||
+        value.contains('"') ||
+        value.contains('\n') ||
+        value.contains('\r')) {
+      return '"${value.replaceAll('"', '""')}"';
+    }
+    return value;
+  }
+
+  /// Convert minutes to decimal hours (e.g. 90 → "1.50")
+  String _minutesToHours(int minutes) {
+    if (minutes <= 0) return '0.00';
+    return (minutes / 60.0).toStringAsFixed(2);
   }
 
   @override
@@ -346,16 +568,29 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
         ),
       );
 
+      // ✅ UPDATED — hooked up sa CSV export
       final export = ElevatedButton.icon(
-        onPressed: () {},
-        icon: const Icon(Icons.download, size: 16, color: Colors.white),
-        label: const Text('Export to CSV',
-            style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-                fontSize: 13)),
+        onPressed: (_exporting || _loadingAttendance)
+            ? null
+            : _exportPayrollToCsv,
+        icon: _exporting
+            ? const SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: Colors.white),
+        )
+            : const Icon(Icons.download, size: 16, color: Colors.white),
+        label: Text(
+          _exporting ? 'Exporting...' : 'Export to CSV',
+          style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              fontSize: 13),
+        ),
         style: ElevatedButton.styleFrom(
           backgroundColor: tc.orange,
+          disabledBackgroundColor: tc.orange.withValues(alpha: 0.5),
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

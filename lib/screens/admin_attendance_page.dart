@@ -8,6 +8,7 @@ import 'package:syncfusion_flutter_datepicker/datepicker.dart';
 import 'admin_theme.dart';
 import 'admin_database.dart';
 import 'admin_dashboard.dart';
+import '../utils/file_download.dart'; // ✅ NEW — CSV export
 import '../widgets/bootstrap_grid.dart';
 
 class AdminAttendancePage extends StatefulWidget {
@@ -46,6 +47,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   DateTimeRange? _selectedDateRange;
   int _currentPage = 1;
   final int _rowsPerPage = 5;
+
+  bool _exporting = false; // ✅ NEW
 
   final List<String> _eventTypes = ['All Events', 'IN', 'OUT'];
 
@@ -402,6 +405,128 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   }
 
   // ══════════════════════════════════════════════════════════════
+  // 📤 CSV EXPORT — FILTERED ATTENDANCE LOGS → save to PC/device
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _exportLogsToCsv() async {
+    if (_exporting) return;
+
+    // Respects current filters (year, event, dept, date range, search)
+    final logs = _filteredLogs;
+
+    if (logs.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('No attendance logs to export.'),
+        backgroundColor: tc.red,
+      ));
+      return;
+    }
+
+    setState(() => _exporting = true);
+
+    try {
+      // ─── Column order ───
+      const headers = <String>[
+        'log_id',
+        'employee_id',
+        'employee_name',
+        'email',
+        'department',
+        'event_type',
+        'date',
+        'time',
+        'timestamp',
+        'registered_device',
+        'photo_url',
+      ];
+
+      // ─── Build CSV ───
+      final buffer = StringBuffer();
+      buffer.write('\uFEFF'); // UTF-8 BOM para tama sa Excel
+      buffer.write(headers.map(_csvEscape).join(','));
+      buffer.write('\r\n');
+
+      for (final log in logs) {
+        final dt = _toDateTime(log['timestamp']);
+
+        final row = <String>[
+          (log['id'] ?? '').toString(),
+          (log['employee_id'] ??
+              log['employeeId'] ??
+              log['employeeID'] ??
+              '')
+              .toString(),
+          _resolveName(log),
+          _resolveEmail(log),
+          _resolveDepartment(log),
+          (log['type'] ?? 'IN').toString().toUpperCase(),
+          dt != null ? DateFormat('yyyy-MM-dd').format(dt) : '',
+          dt != null ? DateFormat('HH:mm:ss').format(dt) : '',
+          dt != null ? DateFormat('yyyy-MM-dd HH:mm:ss').format(dt) : '',
+          _resolveRegisteredDevice(log) ?? '',
+          _resolvePhotoUrl(log) ?? '',
+        ];
+
+        buffer.write(row.map(_csvEscape).join(','));
+        buffer.write('\r\n');
+      }
+
+      // ─── Filename ───
+      final tsStr = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final fileName = 'attendance_logs_$tsStr.csv';
+
+      // ─── Save via shared helper ───
+      final savedPath = await downloadTextFile(
+        filename: fileName,
+        content: buffer.toString(),
+      );
+
+      if (!mounted) return;
+
+      if (savedPath != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Exported ${logs.length} log(s) → $fileName'),
+          backgroundColor: tc.green,
+        ));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Export failed or cancelled.'),
+          backgroundColor: tc.red,
+        ));
+      }
+    } catch (e) {
+      debugPrint('❌ Attendance CSV export error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Export failed: $e'),
+        backgroundColor: tc.red,
+      ));
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  // ─── CSV helpers ──────────────────────────────────────────────
+  String _csvEscape(String value) {
+    if (value.contains(',') ||
+        value.contains('"') ||
+        value.contains('\n') ||
+        value.contains('\r')) {
+      return '"${value.replaceAll('"', '""')}"';
+    }
+    return value;
+  }
+
+  DateTime? _toDateTime(dynamic v) {
+    if (v == null) return null;
+    if (v is Timestamp) return v.toDate();
+    if (v is DateTime) return v;
+    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+    if (v is String) return DateTime.tryParse(v);
+    return null;
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // 🆕 DATE RANGE PICKER — Syncfusion (custom dialog, NOT fullscreen)
   // ══════════════════════════════════════════════════════════════
   Future<void> _pickDateRange() async {
@@ -696,13 +821,15 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         borderColor: tc.border,
       );
 
+      // ✅ UPDATED — hooked up sa CSV export
       final exportBtn = _buildActionButton(
         icon: Icons.download_rounded,
-        label: 'Export Logs',
-        onPressed: () {},
+        label: _exporting ? 'Exporting...' : 'Export Logs',
+        onPressed: _exporting ? () {} : _exportLogsToCsv,
         bgColor: tc.orange,
         textColor: tc.isDark ? tc.onOrange : Colors.white,
         borderColor: tc.orange,
+        showSpinner: _exporting,
       );
 
       if (narrow) {
@@ -1650,10 +1777,20 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     Color? bgColor,
     Color? textColor,
     Color? borderColor,
+    bool showSpinner = false, // ✅ NEW
   }) {
     return OutlinedButton.icon(
       onPressed: onPressed,
-      icon: Icon(icon, size: 14, color: textColor ?? tc.textMuted),
+      icon: showSpinner
+          ? SizedBox(
+        width: 14,
+        height: 14,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: textColor ?? tc.textMuted,
+        ),
+      )
+          : Icon(icon, size: 14, color: textColor ?? tc.textMuted),
       label: Text(
         label,
         style: TextStyle(

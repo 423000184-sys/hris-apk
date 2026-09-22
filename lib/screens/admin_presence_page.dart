@@ -118,13 +118,15 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
           ),
           Container(width: 1, height: 40, color: tc.border),
           Expanded(
+            // ⭐ Now uses theme green (warm) instead of hardcoded #16A34A
             child: _statBox(tc, '$inside', 'IN RANGE',
-                const Color(0xFF16A34A), Icons.check_circle_rounded),
+                tc.green, Icons.check_circle_rounded),
           ),
           Container(width: 1, height: 40, color: tc.border),
           Expanded(
+            // ⭐ Now uses theme red (warm) instead of hardcoded #EF4444
             child: _statBox(tc, '$outside', 'OUT',
-                const Color(0xFFEF4444), Icons.cancel_rounded),
+                tc.red, Icons.cancel_rounded),
           ),
         ],
       ),
@@ -178,9 +180,10 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
     final isStale = lastUpdated == null ||
         DateTime.now().difference(lastUpdated).inMinutes > 10;
 
+    // ⭐ Now uses theme green/red instead of hardcoded colors
     final accent = isStale
         ? tc.textMuted
-        : (inRange ? const Color(0xFF16A34A) : const Color(0xFFEF4444));
+        : (inRange ? tc.green : tc.red);
 
     return InkWell(
       onTap: () {
@@ -202,7 +205,7 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
               width: 48,
               height: 48,
               decoration: BoxDecoration(
-                color: accent.withValues(alpha: 0.15),
+                color: accent.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
                 border: Border.all(color: accent, width: 2),
               ),
@@ -240,7 +243,7 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.15),
+                          color: accent.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
@@ -289,7 +292,7 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
                   const SizedBox(height: 4),
                   Text(
                     lastUpdated == null
-                        ? 'Walang data'
+                        ? 'No data'
                         : 'Last check: ${_fmtTime(lastUpdated)}',
                     style: TextStyle(
                       fontSize: 11,
@@ -315,7 +318,7 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
   String _fmtTime(DateTime d) {
     final now = DateTime.now();
     final diff = now.difference(d);
-    if (diff.inMinutes < 1) return 'Ngayon lang';
+    if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     return DateFormat('MMM d, hh:mm a').format(d);
@@ -343,7 +346,7 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Walang presence data',
+              'No presence data',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
@@ -352,7 +355,7 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Lalabas dito ang live status ng employees\nkapag nag-on ang kanilang app.',
+              'Live employee status will appear here\nonce they open their app.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 13,

@@ -242,6 +242,8 @@ class _ClockScreenState extends State<ClockScreen> {
     if (_checkingGeofence) return;
     if (mounted) setState(() => _checkingGeofence = true);
 
+    GeofenceService.instance.invalidateCache();
+
     try {
       final empDocId = _employeeDocId;
       GeofenceResult result;

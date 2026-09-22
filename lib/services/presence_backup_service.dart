@@ -10,7 +10,7 @@ import 'network_guard.dart';
 ///
 /// Flow:
 ///   1. Generate .txt file with presence data
-///   2. Save sa device (Documents/presence_backups/)
+///   2. Save to device (Documents/presence_backups/)
 ///   3. Auto-delete files older than retentionDays (default 30)
 class PresenceBackupService {
   PresenceBackupService._();
@@ -129,7 +129,7 @@ class PresenceBackupService {
     required String filename,
     required String content,
   }) async {
-    // Web: hindi supported ang file system
+    // Web: file system is not supported
     if (kIsWeb) {
       throw Exception(
         'Local backup is not supported on web. Use a mobile device.',
@@ -275,7 +275,7 @@ class PresenceBackupService {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // GET BACKUP DIRECTORY PATH (para sa info display)
+  // GET BACKUP DIRECTORY PATH (for info display)
   // ═══════════════════════════════════════════════════════════════
   Future<String> getBackupDirectory() async {
     if (kIsWeb) return 'Web: not supported';

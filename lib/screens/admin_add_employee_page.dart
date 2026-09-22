@@ -1,4 +1,5 @@
 // lib/screens/admin_add_employee_page.dart
+import 'dart:convert'; // ✅ NEW — para sa utf8 at jsonEncode
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:syncfusion_flutter_datepicker/datepicker.dart';
 import 'admin_database.dart';
 import 'admin_theme.dart';
 import '../services/face_matcher.dart';
+import '../utils/file_download.dart'; // ✅ NEW — CSV export helpers
 import '../widgets/bootstrap_grid.dart';
 
 // ══════════════════════════════════════════════════════════════
@@ -48,6 +50,7 @@ class AdminAddEmployeePage extends StatefulWidget {
 class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   final _fKey = GlobalKey<FormState>();
   bool _saving = false;
+  bool _exporting = false; // ✅ NEW — prevent double-clicks
 
   String _selectedRole = 'Employee';
   final List<String> _roleOptions = ['Employee', 'Driver', 'Admin', 'Manager'];
@@ -116,6 +119,145 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       return dt.isAfter(start.subtract(const Duration(seconds: 1))) &&
           dt.isBefore(end.add(const Duration(seconds: 1)));
     }).toList();
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 📤 CSV EXPORT — ALL EMPLOYEE DETAILS → SAVE TO PC/DEVICE
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _exportEmployeesToCsv() async {
+    if (_exporting) return;
+    setState(() => _exporting = true);
+    _snack('Preparing CSV export...');
+
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('employees')
+          .get()
+          .timeout(const Duration(seconds: 30));
+
+      if (snapshot.docs.isEmpty) {
+        _snack('No employees to export.', error: true);
+        return;
+      }
+
+      // ─── Collect all rows + dynamic column keys ───
+      final rows = <Map<String, dynamic>>[];
+      final keySet = <String>{};
+
+      for (final doc in snapshot.docs) {
+        final data = Map<String, dynamic>.from(doc.data());
+        data['__docId'] = doc.id; // include document ID
+        rows.add(data);
+        keySet.addAll(data.keys);
+      }
+
+      // ─── Preferred column order (una dito) ───
+      const preferred = <String>[
+        '__docId',
+        'employeeId',
+        'firstName',
+        'lastName',
+        'email',
+        'role',
+        'department',
+        'phone',
+        'birthday',
+        'nfcTagId',
+        'pin',
+        'deviceName',
+        'basicSalary',
+        'allowances',
+        'basicAllowance',
+        'housingAllowance',
+        'transportAllowance',
+        'specialAllowance',
+        'dailyRate',
+        'monthlyTotal',
+        'workingDaysPerMonth',
+        'bankName',
+        'accountNumber',
+        'payrollStatus',
+        'salaryConfigured',
+        'salarySource',
+        'photoUrl',
+        'faceEmbedding',
+        'joiningDate',
+        'createdAt',
+        'salaryUpdatedAt',
+      ];
+
+      final orderedKeys = <String>[
+        ...preferred.where(keySet.contains),
+        ...(keySet.where((k) => !preferred.contains(k)).toList()..sort()),
+      ];
+
+      // ─── Build CSV string ───
+      final buffer = StringBuffer();
+      buffer.write('\uFEFF'); // BOM para tama ang UTF-8 sa Excel
+      buffer.write(orderedKeys.map(_csvEscape).join(','));
+      buffer.write('\r\n');
+
+      for (final row in rows) {
+        final line = orderedKeys
+            .map((k) => _csvEscape(_formatCsvValue(row[k])))
+            .join(',');
+        buffer.write(line);
+        buffer.write('\r\n');
+      }
+
+      // ─── Filename ───
+      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final fileName = 'employees_export_$ts.csv';
+
+      // ─── Save via existing helper ───
+      final savedPath = await downloadTextFile(
+        filename: fileName,
+        content: buffer.toString(),
+      );
+
+      if (savedPath != null) {
+        _snack('Exported ${rows.length} employee(s) → $fileName');
+      } else {
+        _snack('Export failed or cancelled.', error: true);
+      }
+    } catch (e) {
+      _snack('Export failed: $e', error: true);
+      debugPrint('❌ CSV export error: $e');
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  // ─── CSV helpers ──────────────────────────────────────────────
+  String _csvEscape(String value) {
+    if (value.contains(',') ||
+        value.contains('"') ||
+        value.contains('\n') ||
+        value.contains('\r')) {
+      return '"${value.replaceAll('"', '""')}"';
+    }
+    return value;
+  }
+
+  String _formatCsvValue(dynamic v) {
+    if (v == null) return '';
+    if (v is Timestamp) {
+      return DateFormat('yyyy-MM-dd HH:mm:ss').format(v.toDate());
+    }
+    if (v is DateTime) {
+      return DateFormat('yyyy-MM-dd HH:mm:ss').format(v);
+    }
+    if (v is List) {
+      return v.map((e) => e.toString()).join('; ');
+    }
+    if (v is Map) {
+      try {
+        return jsonEncode(v);
+      } catch (_) {
+        return v.toString();
+      }
+    }
+    return v.toString();
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -390,12 +532,23 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
           ],
         );
 
+        // ✅ UPDATED — hookup sa CSV export
         final exportBtn = OutlinedButton.icon(
-          onPressed: () => _snack('CSV Exported'),
-          icon: Icon(Icons.download_rounded, size: 16, color: tc.text),
-          label: Text('Export CSV',
-              style: TextStyle(
-                  color: tc.text, fontWeight: FontWeight.w700, fontSize: 14)),
+          onPressed: _exporting ? null : _exportEmployeesToCsv,
+          icon: _exporting
+              ? SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: tc.text))
+              : Icon(Icons.download_rounded, size: 16, color: tc.text),
+          label: Text(
+            _exporting ? 'Exporting...' : 'Export CSV',
+            style: TextStyle(
+                color: tc.text,
+                fontWeight: FontWeight.w700,
+                fontSize: 14),
+          ),
           style: OutlinedButton.styleFrom(
             backgroundColor: tc.card,
             side: BorderSide(color: tc.border),

@@ -1,5 +1,6 @@
 // lib/services/webauthn_service_web.dart
 import 'dart:js' as js;
+import 'dart:js_util' as js_util;
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -40,9 +41,15 @@ class WebAuthnService {
     final optionsJson = jsonEncode(options);
 
     // ✅ DITO LUMALABAS ANG NATIVE BIOMETRIC PROMPT
-    final credential = await js.context.callMethod('eval', [
+    // FIX: i-await nang tama ang JS Promise gamit promiseToFuture
+    final jsPromise = js.context.callMethod('eval', [
       'SimpleWebAuthnBrowser.startRegistration($optionsJson)'
     ]);
+    final jsResult = await js_util.promiseToFuture(jsPromise);
+
+    // FIX: i-convert ang JS object pabalik sa Dart-readable (JSON string) form
+    final credentialJsonString = js.context['JSON'].callMethod('stringify', [jsResult]);
+    final credential = jsonDecode(credentialJsonString);
 
     final verifyResponse = await http.post(
       Uri.parse("$supabaseUrl/webauthn-verify-registration"),
@@ -77,9 +84,14 @@ class WebAuthnService {
     final optionsJson = jsonEncode(options);
 
     // ✅ DITO LUMALABAS ANG NATIVE BIOMETRIC PROMPT
-    final credential = await js.context.callMethod('eval', [
+    // FIX: i-await nang tama ang JS Promise
+    final jsPromise = js.context.callMethod('eval', [
       'SimpleWebAuthnBrowser.startAuthentication($optionsJson)'
     ]);
+    final jsResult = await js_util.promiseToFuture(jsPromise);
+
+    final credentialJsonString = js.context['JSON'].callMethod('stringify', [jsResult]);
+    final credential = jsonDecode(credentialJsonString);
 
     final verifyResponse = await http.post(
       Uri.parse("$supabaseUrl/webauthn-verify-auth"),

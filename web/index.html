@@ -25,6 +25,59 @@
 
   <!-- ✅ ITO ANG NAGBIBIGAY NG WebAuthn SUPPORT -->
   <script src="https://unpkg.com/@simplewebauthn/browser@10/dist/bundle/index.umd.min.js"></script>
+
+  <!-- ✅ ITO ANG NAGBIBIGAY NG FACE LIVENESS SUPPORT (blink + smile) -->
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script>
+    window.faceApiReady = false;
+    window.faceApiError = null;
+
+    window.faceApiLoading = (async () => {
+      try {
+        const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
+          faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
+        ]);
+        window.faceApiReady = true;
+        console.log('✅ face-api.js models loaded');
+      } catch (err) {
+        window.faceApiError = err;
+        console.error('❌ face-api.js model load failed:', err);
+      }
+    })();
+
+    function _ear(eye) {
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const v1 = dist(eye[1], eye[5]);
+      const v2 = dist(eye[2], eye[4]);
+      const h = dist(eye[0], eye[3]);
+      return (v1 + v2) / (2.0 * h);
+    }
+
+    window.detectFaceLiveness = async function (videoEl) {
+      if (!window.faceApiReady || !videoEl) return null;
+      const result = await faceapi
+        .detectSingleFace(videoEl, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks(true)
+        .withFaceExpressions();
+
+      if (!result) return { facePresent: false };
+
+      const lm = result.landmarks.positions;
+      const leftEye = lm.slice(36, 42);
+      const rightEye = lm.slice(42, 48);
+      const avgEar = (_ear(leftEye) + _ear(rightEye)) / 2;
+      const happy = result.expressions.happy || 0;
+
+      return {
+        facePresent: true,
+        eyeOpenScore: avgEar,
+        smileScore: happy,
+      };
+    };
+  </script>
 </head>
 <body>
 <div id="loading">Initializing HRIS Engine...</div>

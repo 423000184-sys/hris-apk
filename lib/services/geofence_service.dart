@@ -89,20 +89,32 @@ class GeofenceService {
   GeofenceService._();
   static final GeofenceService instance = GeofenceService._();
 
-  // ✅ Legacy fallback (kung walang locations sa Firestore)
+  // ✅ Legacy fallback (kung talagang walang locations sa Firestore)
   static const double _officeLat = 14.59805;
   static const double _officeLng = 120.98917;
   static const String _officeAddress =
       '629 J. Nepomuceno St., Quiapo, Manila 1001';
-
-  // ✅ Default radius
   static const double _defaultRadiusMeters = 100.0;
 
-  // ✅ Cached values
+  // ══════════════════════════════════════════════════════════════════
+  // 🆕 CACHE STRATEGY (FIXED)
+  //
+  // Dati: 2-minute TTL — sobrang tagal, hindi nakikita ang bagong
+  //       location hanggang mag-expire ang cache.
+  //
+  // Ngayon:
+  //   • Valid zones (may laman)     → cached for 15 SECONDS
+  //   • Empty result (walang zones) → cached for 5 SECONDS (retry agad)
+  //   • Force refresh kapag nag-clock in (via `invalidateCache()`)
+  // ══════════════════════════════════════════════════════════════════
+  static const Duration _validCacheTtl = Duration(seconds: 15);
+  static const Duration _emptyCacheTtl = Duration(seconds: 5);
+
   double _currentRadiusMeters = _defaultRadiusMeters;
   List<_LocationZone> _cachedZones = [];
   DateTime? _cacheTime;
-  static const Duration _cacheTtl = Duration(minutes: 2);
+  bool _lastFetchHadZones = false;
+
   static const String _prefsRadiusKey = 'geofence_radius_cache';
 
   final _statusController = StreamController<GeofenceResult>.broadcast();
@@ -128,29 +140,36 @@ class GeofenceService {
   void invalidateCache() {
     _cacheTime = null;
     debugPrint('🔄 [Geofence] Cache invalidated — '
-        'next check will fetch fresh config from Firestore');
+        'next check will fetch fresh zones from Firestore');
   }
 
+  /// ✅ Force fetch fresh from Firestore — bypass TTL
   Future<void> forceReload() async {
     invalidateCache();
-    await _loadRadiusFromFirestore();
+    await _loadRadiusFromFirestore(forceRefresh: true);
   }
 
   // ══════════════════════════════════════════════════════════════════
   // LOAD ZONES FROM FIRESTORE (MULTI-LOCATION)
   // ══════════════════════════════════════════════════════════════════
-  Future<void> _loadRadiusFromFirestore() async {
-    // Cache TTL check
-    if (_cacheTime != null &&
-        DateTime.now().difference(_cacheTime!) < _cacheTtl) {
-      debugPrint('💾 [Geofence] Using cached zones '
-          '(${_cachedZones.length} zone(s))');
-      return;
+  Future<void> _loadRadiusFromFirestore({bool forceRefresh = false}) async {
+    // ═══ Cache TTL check ═══
+    if (!forceRefresh && _cacheTime != null) {
+      final age = DateTime.now().difference(_cacheTime!);
+      final ttl = _lastFetchHadZones ? _validCacheTtl : _emptyCacheTtl;
+
+      if (age < ttl) {
+        debugPrint('💾 [Geofence] Using cached zones '
+            '(${_cachedZones.length} zone(s), age ${age.inSeconds}s / ${ttl.inSeconds}s)');
+        return;
+      }
+
+      debugPrint('⏰ [Geofence] Cache expired (${age.inSeconds}s) — refreshing');
     }
 
-    // 1️⃣ Primary: locations collection
+    // ═══ Primary: locations collection ═══
     try {
-      debugPrint('🌐 [Geofence] Loading locations from Firestore...');
+      debugPrint('🌐 [Geofence] Fetching locations from Firestore...');
 
       final snap = await FirebaseFirestore.instance
           .collection('locations')
@@ -158,16 +177,23 @@ class GeofenceService {
           .get()
           .timeout(const Duration(seconds: 5));
 
+      debugPrint('🌐 [Geofence] Firestore returned ${snap.docs.length} doc(s)');
+
       final zones = <_LocationZone>[];
 
       for (final doc in snap.docs) {
         final d = doc.data();
         final lat = (d['lat'] as num?)?.toDouble();
         final lng = (d['lng'] as num?)?.toDouble();
-        if (lat == null || lng == null) continue;
 
-        final radius = ((d['radius'] as num?)?.toDouble() ??
-            _defaultRadiusMeters)
+        if (lat == null || lng == null) {
+          debugPrint('⚠️ [Geofence] Skipped "${d['name']}" '
+              '(missing lat/lng: lat=$lat, lng=$lng)');
+          continue;
+        }
+
+        final radius =
+        ((d['radius'] as num?)?.toDouble() ?? _defaultRadiusMeters)
             .clamp(20.0, 5000.0);
 
         zones.add(_LocationZone(
@@ -178,25 +204,30 @@ class GeofenceService {
           lng: lng,
           radius: radius,
         ));
+
+        debugPrint('  ✅ Zone "${d['name']}" '
+            '(${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}) '
+            'r=${radius.toStringAsFixed(0)}m');
       }
 
       if (zones.isNotEmpty) {
         _cachedZones = zones;
         _cacheTime = DateTime.now();
+        _lastFetchHadZones = true;
         debugPrint('✅ [Geofence] Loaded ${zones.length} active zone(s): '
             '${zones.map((z) => z.name).join(", ")}');
         return;
       }
 
-      debugPrint('⚠️ [Geofence] Walang active locations — fallback sa legacy');
+      debugPrint('⚠️ [Geofence] Walang active locations — using legacy fallback');
+      _lastFetchHadZones = false;
     } catch (e) {
       debugPrint('⚠️ [Geofence] locations load failed: $e');
+      _lastFetchHadZones = false;
     }
 
-    // 2️⃣ Legacy: settings/geofence_config — radius lang
+    // ═══ Legacy: settings/geofence_config — radius lang ═══
     try {
-      debugPrint('🌐 [Geofence] Loading legacy config...');
-
       final doc = await FirebaseFirestore.instance
           .collection('settings')
           .doc('geofence_config')
@@ -211,7 +242,6 @@ class GeofenceService {
           _currentRadiusMeters = radius.clamp(50.0, 2000.0);
           debugPrint('✅ [Geofence] Legacy radius loaded: '
               '${_currentRadiusMeters.toStringAsFixed(0)}m');
-
           await _saveToPrefs(_currentRadiusMeters);
         }
       }
@@ -219,7 +249,7 @@ class GeofenceService {
       debugPrint('⚠️ [Geofence] legacy config load failed: $e');
     }
 
-    // 3️⃣ SharedPreferences fallback
+    // ═══ SharedPreferences fallback ═══
     try {
       final prefs = await SharedPreferences.getInstance();
       final cached = prefs.getDouble(_prefsRadiusKey);
@@ -232,7 +262,7 @@ class GeofenceService {
       debugPrint('⚠️ [Geofence] Prefs load failed: $e');
     }
 
-    // 4️⃣ Last fallback: default single office
+    // ═══ Last fallback: default legacy office ═══
     _cachedZones = [
       _LocationZone(
         id: 'legacy_office',
@@ -244,6 +274,8 @@ class GeofenceService {
       ),
     ];
     _cacheTime = DateTime.now();
+    _lastFetchHadZones = false; // ← Retry agad sa susunod na check
+
     debugPrint('🔧 [Geofence] Using legacy default office '
         '(${_currentRadiusMeters.toStringAsFixed(0)}m radius)');
   }
@@ -252,20 +284,19 @@ class GeofenceService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setDouble(_prefsRadiusKey, radius);
-      debugPrint('💾 [Geofence] Saved radius to prefs: '
-          '${radius.toStringAsFixed(0)}m');
     } catch (e) {
       debugPrint('⚠️ [Geofence] Prefs save error: $e');
     }
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // CHECK GEOFENCE — generic (no exemption check)
+  // CHECK GEOFENCE — generic
   // ══════════════════════════════════════════════════════════════════
-  Future<GeofenceResult> checkGeofence() async {
-    debugPrint('🌍 [Geofence] Starting check (isWeb=$kIsWeb)');
+  Future<GeofenceResult> checkGeofence({bool forceRefresh = false}) async {
+    debugPrint('🌍 [Geofence] Starting check (isWeb=$kIsWeb, '
+        'forceRefresh=$forceRefresh)');
 
-    await _loadRadiusFromFirestore();
+    await _loadRadiusFromFirestore(forceRefresh: forceRefresh);
 
     debugPrint('📏 [Geofence] Zones: ${_cachedZones.length} | '
         'Default radius: ${_currentRadiusMeters.toStringAsFixed(0)}m');
@@ -276,15 +307,15 @@ class GeofenceService {
 
   // ══════════════════════════════════════════════════════════════════
   // ⭐ CHECK GEOFENCE FOR EMPLOYEE — with WFH / Driver exemption
-  //    Ito ang gamitin sa attendance/clock-in flow.
   // ══════════════════════════════════════════════════════════════════
   Future<GeofenceResult> checkGeofenceForEmployee({
     required String employeeId,
+    bool forceRefresh = false,
   }) async {
     final empId = employeeId.trim();
     if (empId.isEmpty) {
       debugPrint('⚠️ [Geofence] Empty employeeId — normal check na lang');
-      return checkGeofence();
+      return checkGeofence(forceRefresh: forceRefresh);
     }
 
     // ─── 1. Check WFH / Driver exemption ───
@@ -312,8 +343,6 @@ class GeofenceService {
           exemptionReason =
           'Company driver — exempted sa geofence (mobile work)';
         }
-      } else {
-        debugPrint('⚠️ [Geofence] Employee doc not found: $empId');
       }
     } catch (e) {
       debugPrint('⚠️ [Geofence] Exemption check failed: $e');
@@ -331,14 +360,13 @@ class GeofenceService {
     }
 
     // ─── 2. Normal geofence check ───
-    return checkGeofence();
+    return checkGeofence(forceRefresh: forceRefresh);
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // NATIVE FLOW (Android / iOS)
+  // NATIVE FLOW
   // ══════════════════════════════════════════════════════════════════
   Future<GeofenceResult> _checkGeofenceNative() async {
-    // 1. Check location services
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       return _emit(const GeofenceResult(
@@ -349,7 +377,6 @@ class GeofenceService {
       ));
     }
 
-    // 2. Check at request permission
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
@@ -371,14 +398,12 @@ class GeofenceService {
       ));
     }
 
-    // 3. Loading state
     _emit(const GeofenceResult(
       isAllowed: false,
       status: GeofenceStatus.loading,
       message: 'Fetching current location...',
     ));
 
-    // 4. Get position
     try {
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
@@ -405,13 +430,12 @@ class GeofenceService {
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // WEB FLOW (Chrome / Safari / Edge)
+  // WEB FLOW
   // ══════════════════════════════════════════════════════════════════
   Future<GeofenceResult> _checkGeofenceWeb() async {
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        debugPrint('⚠️ [Geofence Web] Location service disabled');
         return _emit(const GeofenceResult(
           isAllowed: false,
           status: GeofenceStatus.serviceDisabled,
@@ -430,7 +454,6 @@ class GeofenceService {
         permission = await Geolocator.requestPermission();
       }
     } catch (e) {
-      debugPrint('⚠️ [Geofence Web] Permission check failed: $e');
       permission = LocationPermission.denied;
     }
 
@@ -481,11 +504,10 @@ class GeofenceService {
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // MONITORING (live tracking)
+  // MONITORING
   // ══════════════════════════════════════════════════════════════════
   Future<void> startMonitoring() async {
     await stopMonitoring();
-
     await _loadRadiusFromFirestore();
 
     final permission = await Geolocator.checkPermission();
@@ -514,9 +536,6 @@ class GeofenceService {
     _statusController.close();
   }
 
-  // ══════════════════════════════════════════════════════════════════
-  // LOCATION SETTINGS
-  // ══════════════════════════════════════════════════════════════════
   LocationSettings _buildLocationSettings({int distanceFilter = 0}) {
     if (kIsWeb) {
       return LocationSettings(
@@ -553,12 +572,9 @@ class GeofenceService {
 
   // ══════════════════════════════════════════════════════════════════
   // ⭐ MULTI-LOCATION EVALUATION
-  //    Check kung nasa loob ng ALINMAN sa active zones
   // ══════════════════════════════════════════════════════════════════
   GeofenceResult _evaluate(Position position) {
-    // Walang naka-set na zones
     if (_cachedZones.isEmpty) {
-      debugPrint('⚠️ [Geofence] No zones configured — cannot evaluate');
       return _emit(const GeofenceResult(
         isAllowed: false,
         status: GeofenceStatus.outside,
@@ -567,7 +583,6 @@ class GeofenceService {
       ));
     }
 
-    // Hanapin ang pinakamalapit at check kung nasa loob
     _LocationZone? best;
     double bestDist = double.infinity;
     _LocationZone? matchedZone;
@@ -589,7 +604,7 @@ class GeofenceService {
       if (d <= z.radius) {
         insideAny = true;
         matchedZone = z;
-        break; // ✅ Nasa loob na ng isang zone — ok na
+        break;
       }
     }
 
@@ -599,7 +614,6 @@ class GeofenceService {
         'accuracy:${position.accuracy.toStringAsFixed(0)}m | '
         'platform:${kIsWeb ? "WEB" : defaultTargetPlatform.name}');
 
-    // ─── INSIDE any zone ───
     if (insideAny) {
       final z = matchedZone ?? best;
       final dist = _haversineDistance(
@@ -623,7 +637,6 @@ class GeofenceService {
       ));
     }
 
-    // ─── OUTSIDE lahat ng zones ───
     return _emit(GeofenceResult(
       isAllowed: false,
       status: GeofenceStatus.outside,
@@ -639,9 +652,6 @@ class GeofenceService {
     ));
   }
 
-  // ══════════════════════════════════════════════════════════════════
-  // HELPERS
-  // ══════════════════════════════════════════════════════════════════
   GeofenceResult _emit(GeofenceResult result) {
     _lastResult = result;
     if (!_statusController.isClosed) _statusController.add(result);

@@ -118,6 +118,10 @@ class AdminDashboardState extends State<AdminDashboard>
     );
 
     ThemeProvider.instance.addListener(_onThemeChanged);
+
+    // ✅ IDINAGDAG — ito ang magsisimula ng auto-save ng LAHAT ng notifications
+    NotificationBackupService.instance.init();
+
     _loadEmployees();
     _setupStreams();
   }
@@ -386,7 +390,7 @@ class AdminDashboardState extends State<AdminDashboard>
                     style: TextStyle(color: c.text),
                     cursorColor: c.orange,
                     decoration: fieldDeco(
-                        'Isulat ang mensahe para sa employee(s)...'),
+                        'Write your message for the employee(s)...'),
                   ),
                 ],
               ),
@@ -508,7 +512,7 @@ class AdminDashboardState extends State<AdminDashboard>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'I-test ang presence monitor at backup system',
+                  'Test the presence monitor and backup system',
                   style: TextStyle(fontSize: 12, color: c.textMuted),
                 ),
                 const SizedBox(height: 20),
@@ -517,12 +521,12 @@ class AdminDashboardState extends State<AdminDashboard>
                   c: c,
                   icon: Icons.info_outline_rounded,
                   title: 'Print Debug Info',
-                  subtitle: 'Ipakita sa console ang current presence state',
+                  subtitle: 'Show current presence state in the console',
                   color: c.orange,
                   onTap: () {
                     PresenceMonitorService.instance.printDebugInfo();
                     Navigator.pop(ctx);
-                    _showSnack('ℹ️ Debug info printed sa console');
+                    _showSnack('ℹ️ Debug info printed to console');
                   },
                 ),
 
@@ -531,7 +535,7 @@ class AdminDashboardState extends State<AdminDashboard>
                   icon: Icons.gps_fixed_rounded,
                   title: 'Force Presence Check',
                   subtitle:
-                  'Agad na check ng geofence + notify kung may change',
+                  'Immediately check geofence + notify on change',
                   color: const Color(0xFF3B82F6),
                   onTap: () async {
                     Navigator.pop(ctx);
@@ -540,7 +544,7 @@ class AdminDashboardState extends State<AdminDashboard>
                       await PresenceMonitorService.instance
                           .checkNow(forceNotify: true);
                       _showSnack(
-                          '✅ Presence check complete — tingnan console');
+                          '✅ Presence check complete — see console');
                     } catch (e) {
                       _showSnack('❌ Failed: $e');
                     }
@@ -551,7 +555,7 @@ class AdminDashboardState extends State<AdminDashboard>
                   c: c,
                   icon: Icons.backup_rounded,
                   title: 'Force Backup Now',
-                  subtitle: 'I-append ang latest 20 notifications sa log',
+                  subtitle: 'Append the latest 20 notifications to the log',
                   color: const Color(0xFF16A34A),
                   onTap: () async {
                     Navigator.pop(ctx);
@@ -563,7 +567,7 @@ class AdminDashboardState extends State<AdminDashboard>
                       _showSnack(
                         count > 0
                             ? '✅ $count entries added to log!'
-                            : '⚠️ Walang bagong notification na i-backup',
+                            : '⚠️ No new notifications to back up',
                       );
                     } catch (e) {
                       _showSnack('❌ Backup failed: $e');
@@ -591,7 +595,7 @@ class AdminDashboardState extends State<AdminDashboard>
                       _showSnack(
                         count > 0
                             ? '✅ Full test complete — $count entries'
-                            : '⚠️ Test done pero walang backup',
+                            : '⚠️ Test done but no backup',
                       );
                     } catch (e) {
                       _showSnack('❌ Failed: $e');
@@ -601,7 +605,7 @@ class AdminDashboardState extends State<AdminDashboard>
 
                 const SizedBox(height: 12),
                 Text(
-                  '💡 Tip: Buksan ang 📁 folder icon sa AppBar para makita ang notification log.',
+                  '💡 Tip: Tap the 📁 folder icon in the AppBar to view the notification log.',
                   style: TextStyle(
                     fontSize: 11,
                     color: c.textMuted,

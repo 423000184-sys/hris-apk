@@ -4,21 +4,42 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
 // ══════════════════════════════════════════════════════════════
-// COLORS
+// THEME COLORS — mirrors DashboardScreen._ThemeColors
+// ══════════════════════════════════════════════════════════════
+class _ThemeColors {
+  final bool isDark;
+  const _ThemeColors(this.isDark);
+
+  Color get bg => isDark ? const Color(0xFF0F0F10) : const Color(0xFFFFFFFF);
+  Color get textBlack => isDark ? Colors.white : const Color(0xFF000000);
+  Color get textDark => isDark ? Colors.white : const Color(0xFF1A1A1A);
+  Color get textGray =>
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF71717A);
+  Color get textMuted =>
+      isDark ? const Color(0xFF888888) : const Color(0xFFA1A1AA);
+  Color get cardFill => isDark
+      ? const Color(0xFF1F1F23)
+      : const Color(0xFFF8F8F8);
+  Color get darkBorder =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFF27272A);
+}
+
+// ══════════════════════════════════════════════════════════════
+// COLORS — brand colors (theme-independent)
 // ══════════════════════════════════════════════════════════════
 class _ItinColors {
-  static const Color orange       = Color(0xFFFF8A00);
-  static const Color orangeDeep   = Color(0xFFFA6A00);
-  static const Color orangeDark   = Color(0xFFF54900);
+  static const Color orange = Color(0xFFFF8A00);
+  static const Color orangeDeep = Color(0xFFFA6A00);
+  static const Color orangeDark = Color(0xFFF54900);
   static const Color orangeBorder = Color(0xFFFFA500);
-  static const Color lime         = Color(0xFFC4FF0A);
-  static const Color limeBg       = Color(0x1AC4FF0A);
-  static const Color limeBorder   = Color(0x33C4FF0A);
-  static const Color cardBg       = Color(0xFFF8F8F8);
-  static const Color error        = Color(0xFFDC2626);
-  static const Color errorBg      = Color(0x1ADC2626);
-  static const Color errorBorder  = Color(0x33DC2626);
-  static const Color muted        = Color(0xFF71717A);
+  static const Color lime = Color(0xFFC4FF0A);
+  static const Color limeBg = Color(0x1AC4FF0A);
+  static const Color limeBorder = Color(0x33C4FF0A);
+  static const Color cardBg = Color(0xFFF8F8F8); // kept for light fallback
+  static const Color error = Color(0xFFDC2626);
+  static const Color errorBg = Color(0x1ADC2626);
+  static const Color errorBorder = Color(0x33DC2626);
+  static const Color muted = Color(0xFF71717A);
 
   static const LinearGradient headerGradient = LinearGradient(
     begin: Alignment.topCenter,
@@ -58,7 +79,8 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
   List<Map<String, dynamic>> _history = [];
   int _usedTotal = 0;
 
-  int get _remaining => (_kTotalCredits - _usedTotal).clamp(0, _kTotalCredits);
+  int get _remaining =>
+      (_kTotalCredits - _usedTotal).clamp(0, _kTotalCredits);
 
   @override
   void initState() {
@@ -169,12 +191,15 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: tc.bg,
       body: SafeArea(
         child: Column(
           children: [
-            _buildHeader(),
+            _buildHeader(tc),
             const SizedBox(height: 20),
             Expanded(
               child: RefreshIndicator(
@@ -186,21 +211,21 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildStatCards(),
+                      _buildStatCards(tc),
                       const SizedBox(height: 28),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 24),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
                         child: Text(
                           'Client Meeting History',
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w500,
-                            color: Colors.black,
+                            color: tc.textBlack,
                           ),
                         ),
                       ),
                       const SizedBox(height: 12),
-                      _buildHistoryList(),
+                      _buildHistoryList(tc),
                     ],
                   ),
                 ),
@@ -213,7 +238,7 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
   }
 
   // ─── HEADER ─────────────────────────────────────────────
-  Widget _buildHeader() {
+  Widget _buildHeader(_ThemeColors tc) {
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
       decoration: const BoxDecoration(
@@ -252,7 +277,8 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
               width: 32,
               height: 32,
               decoration: BoxDecoration(
-                color: _ItinColors.cardBg,
+                // ⭐ Theme-aware refresh button bg
+                color: tc.isDark ? const Color(0xFF1F1F23) : _ItinColors.cardBg,
                 borderRadius: BorderRadius.circular(12),
                 border:
                 Border.all(color: _ItinColors.orangeBorder, width: 1.11),
@@ -270,7 +296,7 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
   }
 
   // ─── STAT CARDS ────────────────────────────────────────
-  Widget _buildStatCards() {
+  Widget _buildStatCards(_ThemeColors tc) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Row(
@@ -279,9 +305,9 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
             child: _StatCard(
               value: '$_kTotalCredits',
               label: 'Total',
-              valueColor: Colors.black,
-              labelColor: _ItinColors.muted,
-              bgColor: _ItinColors.cardBg,
+              valueColor: tc.textBlack,
+              labelColor: tc.textMuted,
+              bgColor: tc.cardFill,
             ),
           ),
           const SizedBox(width: 12),
@@ -290,8 +316,8 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
               value: '$_usedTotal',
               label: 'Used',
               valueColor: _ItinColors.lime,
-              labelColor: _ItinColors.muted,
-              bgColor: _ItinColors.cardBg,
+              labelColor: tc.textMuted,
+              bgColor: tc.cardFill,
             ),
           ),
           const SizedBox(width: 12),
@@ -311,7 +337,7 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
   }
 
   // ─── HISTORY LIST ──────────────────────────────────────
-  Widget _buildHistoryList() {
+  Widget _buildHistoryList(_ThemeColors tc) {
     if (_loading) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 40),
@@ -344,22 +370,23 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
     }
 
     if (_history.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
         child: Center(
           child: Column(
             children: [
-              Icon(Icons.event_busy_rounded, size: 40, color: _ItinColors.muted),
-              SizedBox(height: 12),
+              Icon(Icons.event_busy_rounded,
+                  size: 40, color: tc.textMuted),
+              const SizedBox(height: 12),
               Text(
                 'No client meeting records yet.',
-                style: TextStyle(color: _ItinColors.muted, fontSize: 13),
+                style: TextStyle(color: tc.textMuted, fontSize: 13),
               ),
-              SizedBox(height: 4),
+              const SizedBox(height: 4),
               Text(
                 'Pumunta sa Login → Client Meeting para mag-check in.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: _ItinColors.muted, fontSize: 11),
+                style: TextStyle(color: tc.textMuted, fontSize: 11),
               ),
             ],
           ),
@@ -370,12 +397,12 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(
-        children: _history.map(_historyCard).toList(),
+        children: _history.map((item) => _historyCard(item, tc)).toList(),
       ),
     );
   }
 
-  Widget _historyCard(Map<String, dynamic> item) {
+  Widget _historyCard(Map<String, dynamic> item, _ThemeColors tc) {
     final status = (item['status'] ?? 'pending_hr_approval')
         .toString()
         .toLowerCase();
@@ -405,12 +432,14 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: _ItinColors.cardBg,
+        // ⭐ Theme-aware card bg
+        color: tc.cardFill,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _ItinColors.orangeBorder, width: 1.11),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
+            color: Colors.black
+                .withValues(alpha: tc.isDark ? 0.25 : 0.06),
             blurRadius: 4,
             offset: const Offset(0, 2),
           ),
@@ -423,12 +452,12 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
+              Text(
                 'Client Meeting',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
-                  color: Colors.black,
+                  color: tc.textBlack,
                 ),
               ),
               Container(
@@ -464,9 +493,9 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
               Expanded(
                 child: Text(
                   item['location'].toString(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: _ItinColors.muted,
+                    color: tc.textMuted,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -474,10 +503,10 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
               const SizedBox(width: 8),
               Text(
                 '${_fmt(item['date'])} · ${_fmtTime(item['date'])}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w500,
-                  color: Colors.black,
+                  color: tc.textBlack,
                 ),
               ),
             ],
@@ -510,6 +539,8 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 8),
       decoration: BoxDecoration(
@@ -518,7 +549,8 @@ class _StatCard extends StatelessWidget {
         border: Border.all(color: borderColor, width: 1.11),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
+            color: Colors.black
+                .withValues(alpha: isDark ? 0.25 : 0.05),
             blurRadius: 3,
             offset: const Offset(0, 2),
           ),

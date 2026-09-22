@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:local_auth/local_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/employee.dart';
-import '../services/webauthn_service.dart';
 import '../widgets/bootstrap_grid.dart';
 import 'facial_recognition_screen.dart';
 
@@ -42,15 +41,12 @@ class FingerprintScreen extends StatefulWidget {
 class _FingerprintScreenState extends State<FingerprintScreen>
     with TickerProviderStateMixin {
   final LocalAuthentication _localAuth = LocalAuthentication();
-  final WebAuthnService _webauthnService = WebAuthnService();
 
   _FpState _fpState = _FpState.idle;
   String? _errorMessage;
   bool _cancelPressed = false;
 
-  Timer? _webAutoProceedTimer;
-  Timer? _navTimer;             // ✅ NEW — para sa delayed navigation
-  int _webCountdown = 5;
+  Timer? _navTimer;
 
   late AnimationController _pulseCtrl;
   late AnimationController _ringCtrl;
@@ -117,48 +113,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     _pulseCtrl.repeat(reverse: true);
     _ringCtrl.repeat();
     _fadeCtrl.forward();
-
-    if (kIsWeb) {
-      _startWebAutoProceed();
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // WEB AUTO-PROCEED — 5-second countdown tapos deretso sa next page
-  // ═══════════════════════════════════════════════════════════════
-  void _startWebAutoProceed() {
-    debugPrint('🌐 [FingerprintScreen] Web: auto-proceed in 5 seconds');
-    _webCountdown = 5;
-
-    _webAutoProceedTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-
-      setState(() {
-        _webCountdown--;
-      });
-
-      debugPrint('⏱️ [FingerprintScreen] Web countdown: $_webCountdown');
-
-      if (_webCountdown <= 0) {
-        t.cancel();
-        debugPrint('✅ [FingerprintScreen] Web: auto-proceeding to facial');
-        _navigateToFacialRecognition();
-      }
-    });
-  }
-
-  void _cancelWebAutoProceed() {
-    _webAutoProceedTimer?.cancel();
-    _webAutoProceedTimer = null;
   }
 
   @override
   void dispose() {
-    _webAutoProceedTimer?.cancel();
-    _navTimer?.cancel();        // ✅ NEW
+    _navTimer?.cancel();
     _pulseCtrl.dispose();
     _ringCtrl.dispose();
     _fadeCtrl.dispose();
@@ -167,17 +126,28 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     super.dispose();
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // AUTHENTICATE
+  //  • Web  → tap = proceed to facial recognition (walang biometrics)
+  //  • Native → trigger real biometric, auto-proceed if not available
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _authenticate() async {
     if (!mounted) return;
 
     if (kIsWeb) {
-      debugPrint('🌐 Web: manual tap → auto-proceed agad');
-      _cancelWebAutoProceed();
+      debugPrint('🌐 [Web] Tap → proceeding to facial recognition');
+      setState(() {
+        _fpState = _FpState.scanning;
+        _errorMessage = null;
+      });
+
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
       _navigateToFacialRecognition();
       return;
     }
 
-    debugPrint('👆 _authenticate called (native)');
+    debugPrint('👆 [Native] _authenticate called');
 
     setState(() {
       _fpState = _FpState.scanning;
@@ -197,11 +167,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       debugPrint('📱 canCheck=$canCheck, isSupported=$isSupported');
 
       if (!canCheck || !isSupported) {
-        debugPrint('❌ Device hindi supported ang biometric');
+        debugPrint('❌ Device not supported for biometrics');
         if (!mounted) return;
         await _autoProceedToFaceScan(
-            'Hindi supported ng device ang fingerprint sensor.\n'
-                'Dumiretso na sa facial recognition...');
+            'This device does not support fingerprint sensors.\n'
+                'Proceeding to facial recognition...');
         return;
       }
 
@@ -209,18 +179,18 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       debugPrint('📱 Enrolled biometrics: $enrolled');
 
       if (enrolled.isEmpty) {
-        debugPrint('❌ Walang enrolled na fingerprint');
+        debugPrint('❌ No enrolled fingerprints');
         if (!mounted) return;
         await _autoProceedToFaceScan(
-            'Walang naka-enroll na fingerprint sa device settings.\n'
-                'Dumiretso na sa facial recognition...');
+            'No fingerprint enrolled in device settings.\n'
+                'Proceeding to facial recognition...');
         return;
       }
 
       debugPrint('📱 Triggering native biometric prompt...');
 
       final authenticated = await _localAuth.authenticate(
-        localizedReason: 'I-scan ang fingerprint para mag-clock in',
+        localizedReason: 'Scan your fingerprint to clock in',
         options: const AuthenticationOptions(
           biometricOnly: true,
           stickyAuth: true,
@@ -249,13 +219,13 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           msg.contains('NotEnrolled')) {
         if (!mounted) return;
         await _autoProceedToFaceScan(
-            'Hindi available ang fingerprint.\n'
-                'Dumiretro na sa facial recognition...');
+            'Fingerprint not available.\n'
+                'Proceeding to facial recognition...');
       } else if (msg.contains('LockedOut') ||
           msg.contains('PermanentlyLockedOut')) {
         _onFailure(
-          'Masyadong maraming attempts.\n'
-              'Subukan mamaya o gamitin ang ibang method.',
+          'Too many attempts.\n'
+              'Try again later or use another method.',
         );
       } else if (msg.contains('UserCancel') || msg.contains('canceled')) {
         if (!mounted) return;
@@ -282,9 +252,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // ✅ FIX — Reset state BEFORE navigating
-  //    para kung bumalik ka sa FingerprintScreen (via Back sa Facial),
-  //    naka-IDLE na — pwede nang mag-scan ulit.
+  // SUCCESS — reset state BEFORE navigating
   // ═══════════════════════════════════════════════════════════════
   Future<void> _onSuccess() async {
     if (!mounted) return;
@@ -311,12 +279,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     if (!mounted) return;
 
-    // ✅ Gamit ang cancellable timer imbes na Future.delayed
     _navTimer?.cancel();
     _navTimer = Timer(const Duration(milliseconds: 1400), () {
       if (!mounted) return;
 
-      // 🔑 FIX: I-reset ang state pabalik sa IDLE bago mag-navigate
       setState(() {
         _fpState = _FpState.idle;
         _errorMessage = null;
@@ -330,8 +296,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // ✅ FIX — Push (hindi pushReplacement)
-  //    Para may babalikan ang user: FingerprintScreen (in idle state)
+  // NAVIGATION — push so user can go back
   // ═══════════════════════════════════════════════════════════════
   void _navigateToFacialRecognition() {
     if (!mounted) return;
@@ -365,14 +330,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // ✅ FIX — `_goBack()` — cancel timer + reset state + safe pop
+  // BACK
   // ═══════════════════════════════════════════════════════════════
   void _goBack() {
-    _cancelWebAutoProceed();
     _navTimer?.cancel();
     _navTimer = null;
 
-    // Kung naka-success state, i-reset muna — para hindi stuck
     if (_fpState == _FpState.success) {
       debugPrint('🔄 [FingerprintScreen] Resetting success state on Back');
       setState(() {
@@ -387,22 +350,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     } else {
-      debugPrint('⚠️ [FingerprintScreen] Walang pwedeng balikan');
+      debugPrint('⚠️ [FingerprintScreen] Nothing to go back to');
     }
-  }
-
-  void _onCancelTapped() async {
-    _cancelWebAutoProceed();
-    _navTimer?.cancel();
-    _navTimer = null;
-
-    setState(() => _cancelPressed = true);
-    await Future.delayed(const Duration(milliseconds: 200));
-    if (!mounted) return;
-    setState(() => _cancelPressed = false);
-    await Future.delayed(const Duration(milliseconds: 100));
-    if (!mounted) return;
-    _navigateToFacialRecognition();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -637,7 +586,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 300),
           child: Text(_stateTitle,
-              key: ValueKey('${_fpState}_$_webCountdown'),
+              key: ValueKey(_fpState),
               textAlign: TextAlign.center,
               style: const TextStyle(
                   color: _white,
@@ -649,61 +598,16 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 300),
           child: Text(_errorMessage ?? _stateSubtitle,
-              key: ValueKey('sub_${_errorMessage ?? _fpState}_$_webCountdown'),
+              key: ValueKey('sub_${_errorMessage ?? _fpState}'),
               textAlign: TextAlign.center,
               style: const TextStyle(
                   color: _white70, fontSize: 14, height: 1.4)),
         ),
         const SizedBox(height: 28),
 
-        if (kIsWeb) ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.3),
-                width: 1.15,
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.timer_rounded,
-                        color: _white, size: 16),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Auto-proceeding in $_webCountdown...',
-                      style: const TextStyle(
-                        color: _white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
-                  child: LinearProgressIndicator(
-                    value: (5 - _webCountdown) / 5,
-                    minHeight: 4,
-                    backgroundColor: Colors.white.withValues(alpha: 0.2),
-                    valueColor:
-                    const AlwaysStoppedAnimation<Color>(_white),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-        ],
-
-        if (_fpState == _FpState.idle || _fpState == _FpState.error)
+        // ✅ Cancel button — native lang (sa web, tap lang ang icon)
+        if (!kIsWeb &&
+            (_fpState == _FpState.idle || _fpState == _FpState.error))
           _buildCancelButton(),
       ]),
     );
@@ -726,8 +630,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     final ringAnim = _ringAnim ?? const AlwaysStoppedAnimation(0.0);
     final successAnim = _successAnim ?? const AlwaysStoppedAnimation(0.0);
     final shakeAnim = _shakeAnim ?? const AlwaysStoppedAnimation(0.0);
-    final canTap = !kIsWeb &&
-        (_fpState == _FpState.idle || _fpState == _FpState.error);
+
+    final canTap =
+    (_fpState == _FpState.idle || _fpState == _FpState.error);
 
     return AnimatedBuilder(
       animation:
@@ -814,7 +719,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         ),
         child: Center(
           child: Text(
-            kIsWeb ? 'Skip — Proceed Now' : 'Cancel Authentication',
+            'Cancel Authentication',
             style: const TextStyle(
               color: _cancelText,
               fontSize: 14,
@@ -826,10 +731,23 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     );
   }
 
+  void _onCancelTapped() async {
+    _navTimer?.cancel();
+    _navTimer = null;
+
+    setState(() => _cancelPressed = true);
+    await Future.delayed(const Duration(milliseconds: 200));
+    if (!mounted) return;
+    setState(() => _cancelPressed = false);
+    await Future.delayed(const Duration(milliseconds: 100));
+    if (!mounted) return;
+    _navigateToFacialRecognition();
+  }
+
   String get _stateTitle {
     switch (_fpState) {
       case _FpState.idle:
-        return kIsWeb ? 'Fingerprint Skipped' : 'Fingerprint Required';
+        return 'Fingerprint Required';
       case _FpState.scanning:
         return 'Scanning\nFingerprint...';
       case _FpState.success:
@@ -842,11 +760,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   String get _stateSubtitle {
     switch (_fpState) {
       case _FpState.idle:
-        return kIsWeb
-            ? 'Hindi available ang fingerprint sa web.\nAwtomatikong dadalhin sa facial recognition...'
-            : 'Tap the scanner icon to verify your fingerprint';
+        return 'Tap the scanner icon to proceed';
       case _FpState.scanning:
-        return 'Analyzing biometric data...';
+        return kIsWeb
+            ? 'Preparing camera...'
+            : 'Analyzing biometric data...';
       case _FpState.success:
         return 'Biometric match confirmed. Preparing\ncamera...';
       case _FpState.error:

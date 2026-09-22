@@ -14,7 +14,8 @@ import '../services/geofence_service.dart';
 import '../services/admin_notification_service.dart';
 import '../services/network_guard.dart';
 import '../services/offline_attendance_service.dart';
-import '../services/device_info_service.dart';   // 🆕
+import '../services/device_info_service.dart';
+import '../services/face_liveness.dart';   // ✅ NEW
 import 'main_screen.dart';
 import 'clock_in_success_screen.dart';
 
@@ -86,12 +87,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   bool _justCaptured = false;
   String? _captureFlashMessage;
 
-  // 🆕 Cached actual device model
   String _deviceModel = 'Unknown Device';
 
   static const bool _strictFaceMatch = true;
 
-  // 🎯 THRESHOLD: 80% required to pass verification
+  /// 🎯 80% required to pass verification
   static const double _matchThreshold = 0.80;
 
   late final FaceDetector _faceDetector;
@@ -116,6 +116,15 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   static const _minFaceCoverage = 0.18;
 
   static const double _cameraBoxSize = 300.0;
+
+  // ✅ NEW — Web liveness detection (face-api.js via JS interop)
+  final FaceLivenessService _webLiveness = FaceLivenessService();
+
+  // ✅ NEW — Web thresholds (EAR values from face-api.js)
+  static const double _webEyeClosedThreshold = 0.24;
+  static const double _webEyeOpenThreshold = 0.30;
+  static const double _webSmileThreshold = 0.55;
+  static const int _webDetectIntervalMs = 150;
 
   late AnimationController _pulseCtrl;
   late AnimationController _ringCtrl;
@@ -201,12 +210,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _ringCtrl.repeat();
     _fadeCtrl.forward();
 
-    _loadDeviceModel(); // 🆕 load actual device model
+    _loadDeviceModel();
 
     debugPrint('📷 Facial recognition ready — AUTO-CAPTURE mode');
   }
 
-  // 🆕 Load actual device model
   Future<void> _loadDeviceModel() async {
     try {
       final model = await DeviceInfoService.instance.getDeviceModel();
@@ -368,6 +376,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!_camReady) await _initCamera();
     if (!mounted) return;
 
+    // On web, use face-api.js — no image stream needed
     if (!_camReady || kIsWeb) {
       _scanLineCtrl.repeat(reverse: true);
       await _runMockScan();
@@ -606,26 +615,86 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ WEB FACE LIVENESS — real detection via face-api.js
+  //    Blink detection via EAR (Eye Aspect Ratio)
+  //    Smile detection via expression classifier ("happy")
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _runMockScan() async {
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (!mounted || !_isScanning) return;
-    setState(() => _facePresent = true);
-    _livenessStep = _LivenessStep.blink;
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted || !_isScanning) return;
-    setState(() => _blinkDone = true);
-    _livenessStep = _LivenessStep.smile;
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted || !_isScanning) return;
-    setState(() => _smileDone = true);
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
-    _isScanning = false;
-    _scanLineCtrl.stop();
-    _faceMatched = true;
-    _matchScore = 1.0;
-    _matchPercent = 100.0;
-    await _onSuccess();
+    debugPrint('🌐 [Web] Starting face-api.js liveness detection loop');
+    bool eyesWereClosed = false;
+    bool warnedNoFace = false;
+
+    while (mounted && _isScanning) {
+      await Future.delayed(const Duration(milliseconds: _webDetectIntervalMs));
+      if (!mounted || !_isScanning) return;
+
+      final videoEl = _webLiveness.getVideoElement();
+      if (videoEl == null) {
+        if (!warnedNoFace) {
+          debugPrint('⚠️ [Web] No <video> element found yet');
+          warnedNoFace = true;
+        }
+        continue;
+      }
+
+      final result = await _webLiveness.detect(videoEl);
+
+      if (result == null) {
+        // face-api.js not ready yet — wait for models
+        continue;
+      }
+
+      if (!result.facePresent) {
+        if (mounted && _facePresent) {
+          setState(() => _facePresent = false);
+        } else if (mounted && !_facePresent && _livenessStep != _LivenessStep.waitingForFace) {
+          // no change
+        }
+        continue;
+      }
+
+      // Face is present
+      if (mounted && !_facePresent) {
+        setState(() => _facePresent = true);
+        _livenessStep = _LivenessStep.blink;
+        debugPrint('👤 [Web] Face detected');
+      }
+
+      // ── BLINK DETECTION ──
+      if (!_blinkDone) {
+        final ear = result.eyeOpenScore;
+        if (ear < _webEyeClosedThreshold) {
+          eyesWereClosed = true;
+        } else if (ear > _webEyeOpenThreshold && eyesWereClosed) {
+          if (mounted) setState(() => _blinkDone = true);
+          eyesWereClosed = false;
+          _livenessStep = _LivenessStep.smile;
+          debugPrint('✅ [Web] Blink detected (EAR=$ear)');
+        }
+        continue;
+      }
+
+      // ── SMILE DETECTION ──
+      if (!_smileDone) {
+        if (result.smileScore > _webSmileThreshold) {
+          if (mounted) setState(() => _smileDone = true);
+          debugPrint('✅ [Web] Smile detected (${result.smileScore.toStringAsFixed(2)})');
+        }
+        continue;
+      }
+
+      // ── BOTH DONE → proceed to success ──
+      debugPrint('✅ [Web] Liveness passed — proceeding');
+      _isScanning = false;
+      _scanLineCtrl.stop();
+      _faceMatched = true;
+      _matchScore = 1.0;
+      _matchPercent = 100.0;
+      await _onSuccess();
+      return;
+    }
+    debugPrint('🌐 [Web] Liveness loop ended');
   }
 
   Future<void> _onCameraImage(CameraImage image) async {
@@ -906,6 +975,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   Future<bool> _checkRoleAndGeofence() async {
     if (mounted) setState(() => _isCheckingGeofence = true);
 
+    GeofenceService.instance.invalidateCache();
+
     try {
       debugPrint('═══════════════════════════════════════════');
       debugPrint('🔍 [Geofence] employee.id = ${widget.employee.id}');
@@ -1011,7 +1082,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     required String department,
   }) async {
     if (employeeId.isEmpty) {
-      debugPrint('⚠️ [_notifyOutOfRangeFromFacial] Walang employee ID — skip');
+      debugPrint('⚠️ [_notifyOutOfRangeFromFacial] No employee ID — skip');
       return;
     }
 
@@ -1044,10 +1115,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Color _matchColor(double percent) {
-    if (percent >= 95) return const Color(0xFF16A34A);   // green
-    if (percent >= 80) return const Color(0xFF3B82F6);   // blue
-    if (percent >= 65) return const Color(0xFFF59E0B);   // amber
-    return const Color(0xFFEF4444);                       // red
+    if (percent >= 95) return const Color(0xFF16A34A);
+    if (percent >= 80) return const Color(0xFF3B82F6);
+    if (percent >= 65) return const Color(0xFFF59E0B);
+    return const Color(0xFFEF4444);
   }
 
   String _matchLabel(double percent) {
@@ -1089,7 +1160,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     try {
       final employeeId = _employeeIdForAttendance;
       if (employeeId.isEmpty) {
-        debugPrint('❌ [attendance_logs] Walang employee ID — hindi maisusulat');
+        debugPrint('❌ [attendance_logs] No employee ID — cannot write');
         return;
       }
 
@@ -1106,7 +1177,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
       final employeeName = widget.employee.fullName;
       final employeeEmail = widget.employee.email;
-      // 🆕 Use actual device model (cached from initState)
       final deviceName = _deviceModel;
       final zoneType = _computeZoneType();
 
@@ -1258,7 +1328,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         }
       } else {
         debugPrint(
-            '📥 [FacialRecognition] Offline — skipped secondary logs (will sync later)');
+            '📥 [FacialRecognition] Offline — skipped secondary logs');
       }
     } catch (e) {
       debugPrint('❌ [attendance_logs] Write failed: $e');
@@ -1301,7 +1371,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           'enrollment_mode': _isEnrollmentMode,
           'enrolled_angles': _isEnrollmentMode ? _enrollCaptureCount : 0,
           'timestamp': FieldValue.serverTimestamp(),
-          // 🆕 Use actual device model
           'device': _deviceModel,
           'deviceName': _deviceModel,
           'deviceModel': _deviceModel,
@@ -1405,7 +1474,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       Navigator.of(context).pop();
     } else {
       debugPrint(
-          '⚠️ [FacialRecognition] Walang babalikan — fallback sa MainScreen');
+          '⚠️ [FacialRecognition] Nothing to pop — fallback to MainScreen');
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (_) => MainScreen(employee: widget.employee),
@@ -1449,7 +1518,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       Navigator.of(context).pop();
     } else {
       debugPrint(
-          '⚠️ [FacialRecognition] Cancel → walang babalikan, fallback sa MainScreen');
+          '⚠️ [FacialRecognition] Cancel → nothing to pop, fallback MainScreen');
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (_) => MainScreen(employee: widget.employee),

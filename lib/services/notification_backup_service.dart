@@ -1,6 +1,5 @@
 // lib/services/notification_backup_service.dart
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
@@ -12,75 +11,63 @@ import '../models/admin_notification.dart';
 
 /// 💾 Notification Backup Service — SINGLE FILE MODE
 ///
-/// Lahat ng notifications ay naka-append sa ISANG .txt file lang.
-///   - Native: Documents/notification_backups/notifications_backup.txt
-///   - Web:    localStorage key "notif_backup_single_v1"
+/// Auto-saves EVERY notification from `admin_notifications` into ONE
+/// .txt file. No filtering. Uses Firestore `doc.id` for dedup.
 class NotificationBackupService {
   NotificationBackupService._();
   static final instance = NotificationBackupService._();
 
-  // ─── SINGLE FILE CONFIG ────────────────────────────────────────
   static const String _localFolder = 'notification_backups';
   static const String _singleFileName = 'notifications_backup.txt';
   static const String _webPrefsKey = 'notif_backup_single_v1';
-  static const int retentionDays = 30;
 
-  StreamSubscription<List<AdminNotification>>? _sub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _sub;
   final Set<String> _processedIds = {};
   bool _initialized = false;
   int _backupCount = 0;
 
-  // Memory cache of the single file content (para hindi laging file read)
   String? _cachedContent;
 
   int get backupCount => _backupCount;
+  int get trackedCount => _processedIds.length;
 
   // ═══════════════════════════════════════════════════════════════
-  // INIT — tawagin sa main.dart
+  // INIT — call from admin_dashboard initState
   // ═══════════════════════════════════════════════════════════════
   Future<void> init() async {
     if (_initialized) return;
     _initialized = true;
 
-    debugPrint('💾 [NotifBackup] Initializing (single-file mode, web=$kIsWeb)...');
+    debugPrint('💾 [NotifBackup] Initializing (web=$kIsWeb)...');
 
-    // Load existing content para may cache
     await _loadCache();
 
-    // Seed existing IDs
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('admin_notifications')
-          .orderBy('timestamp', descending: true)
-          .limit(50)
-          .get();
-
-      for (final doc in snap.docs) {
-        _processedIds.add(doc.id);
+      final caught = await forceBackupNow(limit: 200);
+      if (caught > 0) {
+        debugPrint('💾 [NotifBackup] Catch-up: $caught new');
+      } else {
+        debugPrint('💾 [NotifBackup] Catch-up: none new (already synced)');
       }
-      debugPrint(
-          '💾 [NotifBackup] Seeded ${_processedIds.length} existing IDs');
     } catch (e) {
-      debugPrint('💾 [NotifBackup] Seed error: $e');
+      debugPrint('💾 [NotifBackup] Catch-up error: $e');
     }
 
-    // Listen for new notifications
     _sub = FirebaseFirestore.instance
         .collection('admin_notifications')
         .orderBy('timestamp', descending: true)
         .limit(20)
         .snapshots()
-        .map((s) => s.docs.map(AdminNotification.fromDoc).toList())
         .listen(
-      _onNewNotifications,
+      _onSnapshot,
       onError: (e) => debugPrint('💾 [NotifBackup] Stream error: $e'),
     );
 
-    debugPrint('💾 [NotifBackup] READY — listening for notifications');
+    debugPrint('💾 [NotifBackup] READY — ${_processedIds.length} tracked IDs');
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // LOAD CACHE — basahin yung existing file content
+  // LOAD CACHE
   // ═══════════════════════════════════════════════════════════════
   Future<void> _loadCache() async {
     try {
@@ -90,25 +77,32 @@ class NotificationBackupService {
       } else {
         final dir = await getApplicationDocumentsDirectory();
         final file = File(p.join(dir.path, _localFolder, _singleFileName));
-        if (await file.exists()) {
-          _cachedContent = await file.readAsString();
-        } else {
-          _cachedContent = '';
-        }
+        _cachedContent =
+        await file.exists() ? await file.readAsString() : '';
       }
-      debugPrint(
-          '💾 [NotifBackup] Cache loaded (${_cachedContent?.length ?? 0} chars)');
+
+      _processedIds.clear();
+      final content = _cachedContent ?? '';
+      final regex = RegExp(r'^ID\s+:\s+(.+?)\s*$', multiLine: true);
+      for (final m in regex.allMatches(content)) {
+        final id = m.group(1);
+        if (id != null && id.isNotEmpty) _processedIds.add(id);
+      }
+
+      debugPrint('💾 [NotifBackup] Cache: ${content.length} chars, '
+          '${_processedIds.length} tracked IDs');
     } catch (e) {
-      debugPrint('💾 [NotifBackup] Load cache error: $e');
+      debugPrint('💾 [NotifBackup] Load error: $e');
       _cachedContent = '';
+      _processedIds.clear();
     }
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // FORCE BACKUP NOW — append lahat ng latest notifications
+  // FORCE BACKUP NOW — uses doc.id for dedup
   // ═══════════════════════════════════════════════════════════════
   Future<int> forceBackupNow({int limit = 20}) async {
-    debugPrint('💾 [NotifBackup] Force backup requested (limit=$limit)...');
+    debugPrint('💾 [NotifBackup] Force backup (limit=$limit)...');
 
     try {
       final snap = await FirebaseFirestore.instance
@@ -118,146 +112,121 @@ class NotificationBackupService {
           .get();
 
       if (snap.docs.isEmpty) {
-        debugPrint('💾 [NotifBackup] Walang notifications — skip');
+        debugPrint('💾 [NotifBackup] No notifications in Firestore');
         return 0;
       }
 
-      // Prepare entries
-      final List<String> newEntries = [];
-      for (final doc in snap.docs) {
+      final docs = [...snap.docs];
+      docs.sort((a, b) {
+        final at = a.data()['timestamp'];
+        final bt = b.data()['timestamp'];
+        if (at is Timestamp && bt is Timestamp) return at.compareTo(bt);
+        return 0;
+      });
+
+      final buf = StringBuffer();
+      int added = 0;
+
+      for (final doc in docs) {
+        if (_processedIds.contains(doc.id)) continue;
+        _processedIds.add(doc.id);
+
         final n = AdminNotification.fromDoc(doc);
-
-        // Skip kung na-process na (para hindi mag-duplicate)
-        if (_processedIds.contains(n.id)) continue;
-        _processedIds.add(n.id);
-
-        newEntries.add(_buildEntry(n));
+        buf.write(_buildEntry(doc.id, n));
         _backupCount++;
+        added++;
       }
 
-      if (newEntries.isEmpty) {
-        debugPrint('💾 [NotifBackup] All notifications already backed up');
+      if (added == 0) {
+        debugPrint('💾 [NotifBackup] All ${snap.docs.length} already saved');
         return 0;
       }
 
-      // Ensure header exists
       if ((_cachedContent ?? '').isEmpty) {
         _cachedContent = _buildHeader();
       }
+      _cachedContent = (_cachedContent ?? '') + buf.toString();
 
-      // Append new entries
-      _cachedContent = (_cachedContent ?? '') + newEntries.join('\n');
-
-      // Save to storage
       await _saveToStorage();
 
-      debugPrint(
-          '💾 [NotifBackup] Force complete — appended ${newEntries.length}/${snap.docs.length}');
-      return newEntries.length;
+      debugPrint('💾 [NotifBackup] Appended $added/${snap.docs.length}');
+      return added;
     } catch (e) {
-      debugPrint('💾 [NotifBackup] Force backup error: $e');
+      debugPrint('💾 [NotifBackup] Force error: $e');
       return 0;
     }
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // HANDLER — for auto-backup on new notifications
+  // CLEAR + REBUILD — wipe log then re-save ALL from Firestore
   // ═══════════════════════════════════════════════════════════════
-  void _onNewNotifications(List<AdminNotification> items) {
-    for (final n in items) {
-      if (_processedIds.contains(n.id)) continue;
-      _processedIds.add(n.id);
-
-      if (!_shouldBackup(n)) continue;
-
-      debugPrint('💾 [NotifBackup] Backing up: ${n.type} — ${n.title}');
-      _appendEntry(n);
-    }
-  }
-
-  bool _shouldBackup(AdminNotification n) {
-    if (n.read) return false;
-
-    if (n.timestamp != null) {
-      final age = DateTime.now().difference(n.timestamp!).inMinutes;
-      if (age > 5) return false;
-    }
-
-    switch (n.type) {
-      case 'geofence_alert':
-      case 'clock_in':
-      case 'clock_out':
-      case 'wfh_toggle':
-      case 'face_enrollment':
-      case 'leave_request':
-        return true;
-      case 'presence_update':
-        final changed = n.metadata['changed'] == true;
-        final reason = n.metadata['notify_reason']?.toString() ?? '';
-        final isInitial = reason == 'initial';
-        return changed || isInitial;
-      default:
-        return false;
-    }
+  Future<int> rebuildLog({int limit = 500}) async {
+    debugPrint('🔄 [NotifBackup] Rebuilding log...');
+    await deleteAll();
+    await _loadCache();
+    final count = await forceBackupNow(limit: limit);
+    debugPrint('🔄 [NotifBackup] Rebuilt — $count entries');
+    return count;
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // APPEND ENTRY — add notification to single file
+  // LIVE SNAPSHOT HANDLER
   // ═══════════════════════════════════════════════════════════════
-  Future<void> _appendEntry(AdminNotification n) async {
+  Future<void> _onSnapshot(QuerySnapshot<Map<String, dynamic>> snap) async {
+    for (final doc in snap.docs) {
+      if (_processedIds.contains(doc.id)) continue;
+      _processedIds.add(doc.id);
+
+      final n = AdminNotification.fromDoc(doc);
+      debugPrint('💾 [NotifBackup] Auto-save: ${n.type} — ${n.title}');
+      await _appendEntry(doc.id, n);
+    }
+  }
+
+  Future<void> _appendEntry(String docId, AdminNotification n) async {
     try {
-      // Ensure header exists
       if ((_cachedContent ?? '').isEmpty) {
         _cachedContent = _buildHeader();
       }
-
-      // Append new entry
-      _cachedContent = (_cachedContent ?? '') + _buildEntry(n);
-
-      // Save
+      _cachedContent = (_cachedContent ?? '') + _buildEntry(docId, n);
       await _saveToStorage();
-
       _backupCount++;
-      debugPrint(
-          '💾 [NotifBackup] Appended: ${n.type} (total entries: $_backupCount)');
     } catch (e) {
       debugPrint('💾 [NotifBackup] Append error: $e');
     }
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // BUILD HEADER
+  // BUILDERS
   // ═══════════════════════════════════════════════════════════════
   String _buildHeader() {
     final buf = StringBuffer();
     buf.writeln('═══════════════════════════════════════════════');
     buf.writeln('📄 NOTIFICATIONS BACKUP LOG');
     buf.writeln('═══════════════════════════════════════════════');
-    buf.writeln(
-        'Created   : ${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())}');
+    buf.writeln('Created   : '
+        '${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())}');
     buf.writeln('Source    : HRIS Biometrics Admin');
-    buf.writeln('Version   : 1.0.2+3');
-    buf.writeln('Storage   : ${kIsWeb ? "browser localStorage" : "local device"}');
+    buf.writeln('Storage   : '
+        '${kIsWeb ? "browser localStorage" : "local device"}');
     buf.writeln('═══════════════════════════════════════════════');
     buf.writeln('');
     return buf.toString();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // BUILD ENTRY — one notification block
-  // ═══════════════════════════════════════════════════════════════
-  String _buildEntry(AdminNotification n) {
+  String _buildEntry(String docId, AdminNotification n) {
     final now = DateTime.now();
     final buf = StringBuffer();
     buf.writeln('───────────────────────────────────────────────');
-    buf.writeln(
-        '📌 [${DateFormat('yyyy-MM-dd HH:mm:ss').format(now)}] ${n.type.toUpperCase()}');
+    buf.writeln('📌 [${DateFormat('yyyy-MM-dd HH:mm:ss').format(now)}] '
+        '${n.type.toUpperCase()}');
     buf.writeln('───────────────────────────────────────────────');
+    buf.writeln('ID         : $docId');
     buf.writeln('Type       : ${n.type}');
     buf.writeln('Priority   : ${n.priority}');
     if (n.timestamp != null) {
-      buf.writeln(
-          'Timestamp  : ${DateFormat('yyyy-MM-dd HH:mm:ss').format(n.timestamp!)}');
+      buf.writeln('Timestamp  : '
+          '${DateFormat('yyyy-MM-dd HH:mm:ss').format(n.timestamp!)}');
     }
     buf.writeln('Title      : ${n.title}');
     buf.writeln('Message    : ${n.message}');
@@ -278,7 +247,7 @@ class NotificationBackupService {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SAVE TO STORAGE — writes the cached content
+  // STORAGE
   // ═══════════════════════════════════════════════════════════════
   Future<void> _saveToStorage() async {
     try {
@@ -295,12 +264,12 @@ class NotificationBackupService {
         await file.writeAsString(_cachedContent ?? '', flush: true);
       }
     } catch (e) {
-      debugPrint('💾 [NotifBackup] Save storage error: $e');
+      debugPrint('💾 [NotifBackup] Save error: $e');
     }
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // LIST BACKUPS — laging 1 file lang
+  // PUBLIC API
   // ═══════════════════════════════════════════════════════════════
   Future<List<NotificationBackupInfo>> listBackups() async {
     await _loadCache();
@@ -308,6 +277,7 @@ class NotificationBackupService {
     if (content.isEmpty) return [];
 
     final savedAt = await _getFileModifiedTime();
+    final entryCount = '📌 ['.allMatches(content).length;
 
     return [
       NotificationBackupInfo(
@@ -315,6 +285,7 @@ class NotificationBackupService {
         path: kIsWeb ? 'web://$_singleFileName' : await _getFilePath(),
         savedAt: savedAt,
         sizeBytes: content.length,
+        entryCount: entryCount,
       ),
     ];
   }
@@ -337,17 +308,11 @@ class NotificationBackupService {
     return DateTime.now();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // READ
-  // ═══════════════════════════════════════════════════════════════
   Future<String?> readBackup(String path) async {
     await _loadCache();
     return _cachedContent;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // DELETE — clear the single file
-  // ═══════════════════════════════════════════════════════════════
   Future<bool> deleteBackup(String path) async {
     return await deleteAll() > 0;
   }
@@ -359,6 +324,7 @@ class NotificationBackupService {
         final had = (prefs.getString(_webPrefsKey) ?? '').isNotEmpty;
         await prefs.remove(_webPrefsKey);
         _cachedContent = '';
+        _processedIds.clear();
         return had ? 1 : 0;
       } else {
         final path = await _getFilePath();
@@ -366,10 +332,11 @@ class NotificationBackupService {
         if (await file.exists()) {
           await file.delete();
           _cachedContent = '';
-          debugPrint('🗑️ [NotifBackup] Deleted single file');
+          _processedIds.clear();
           return 1;
         }
         _cachedContent = '';
+        _processedIds.clear();
         return 0;
       }
     } catch (e) {
@@ -378,17 +345,11 @@ class NotificationBackupService {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // TOTAL SIZE
-  // ═══════════════════════════════════════════════════════════════
   Future<int> getTotalSize() async {
     final files = await listBackups();
     return files.fold<int>(0, (sum, f) => sum + f.sizeBytes);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // BACKUP DIRECTORY
-  // ═══════════════════════════════════════════════════════════════
   Future<String> getBackupDirectory() async {
     if (kIsWeb) return 'localStorage (browser)';
     final dir = await getApplicationDocumentsDirectory();
@@ -408,11 +369,13 @@ class NotificationBackupInfo {
   final String path;
   final DateTime savedAt;
   final int sizeBytes;
+  final int entryCount;
 
   const NotificationBackupInfo({
     required this.filename,
     required this.path,
     required this.savedAt,
     required this.sizeBytes,
+    this.entryCount = 0,
   });
 }

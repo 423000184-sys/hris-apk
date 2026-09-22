@@ -3,6 +3,27 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/employee.dart';
 
+// ══════════════════════════════════════════════════════════════
+// THEME COLORS — mirrors DashboardScreen._ThemeColors
+// ══════════════════════════════════════════════════════════════
+class _ThemeColors {
+  final bool isDark;
+  const _ThemeColors(this.isDark);
+
+  Color get bg => isDark ? const Color(0xFF0F0F10) : const Color(0xFFFFFFFF);
+  Color get textBlack => isDark ? Colors.white : const Color(0xFF000000);
+  Color get textDark => isDark ? Colors.white : const Color(0xFF1A1A1A);
+  Color get textGray =>
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF71717A);
+  Color get textMuted =>
+      isDark ? const Color(0xFF888888) : const Color(0xFFA1A1AA);
+  Color get cardFill => isDark
+      ? const Color(0xFF1F1F23)
+      : const Color.fromRGBO(131, 131, 131, 0.07);
+  Color get darkBorder =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFF27272A);
+}
+
 class ClockInSuccessScreen extends StatefulWidget {
   final Employee? employee;
   final DateTime? arrivalTime;
@@ -39,7 +60,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   bool _didRedirect = false;
 
   // ══════════════════════════════════════════════════════════════
-  // COLORS — exact from HTML design
+  // COLORS — exact from HTML design (success modal stays same)
   // ══════════════════════════════════════════════════════════════
   static const _neonGreen = Color(0xFF51FF00);
   static const _cardBorder = Color(0xFF27272A);
@@ -114,17 +135,20 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
     return PopScope(
       canPop: false,
       child: Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: tc.bg,
         body: Stack(
           children: [
             // Dimmed background — recreates previous screen
             Positioned.fill(
               child: Opacity(
                 opacity: 0.55,
-                child: IgnorePointer(child: _buildDimmedBackground()),
+                child: IgnorePointer(child: _buildDimmedBackground(tc)),
               ),
             ),
             // Dark Overlay Backdrop (rgba(9,9,11,0.44))
@@ -173,13 +197,15 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
 
   // ══════════════════════════════════════════════════════════════
   // DIMMED BACKGROUND — recreates "Auth & Clock In" screen
+  // (now theme-aware for dark mode)
   // ══════════════════════════════════════════════════════════════
-  Widget _buildDimmedBackground() {
+  Widget _buildDimmedBackground(_ThemeColors tc) {
     return Container(
-      color: Colors.white,
+      color: tc.bg,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header keeps orange gradient in both themes (brand color)
           Container(
             width: double.infinity,
             decoration: const BoxDecoration(
@@ -236,24 +262,28 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
                 width: double.infinity,
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: tc.cardFill,
                   borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: tc.darkBorder.withValues(alpha: 0.4),
+                    width: 1,
+                  ),
                 ),
                 child: Column(children: [
-                  const Text('Step 1: Initial Login',
+                  Text('Step 1: Initial Login',
                       style: TextStyle(
-                          color: Color(0xFF1F2937),
+                          color: tc.textDark,
                           fontSize: 15,
                           fontWeight: FontWeight.w700)),
                   const SizedBox(height: 20),
                   Row(children: [
                     Expanded(
                         child: _dimmedOptionPlaceholder(
-                            Icons.contactless_rounded, 'Key Fob')),
+                            tc, Icons.contactless_rounded, 'Key Fob')),
                     const SizedBox(width: 12),
                     Expanded(
                         child: _dimmedOptionPlaceholder(
-                            Icons.key_rounded, 'Use PIN')),
+                            tc, Icons.key_rounded, 'Use PIN')),
                   ]),
                 ]),
               ),
@@ -264,14 +294,18 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     );
   }
 
-  Widget _dimmedOptionPlaceholder(IconData icon, String label) {
+  Widget _dimmedOptionPlaceholder(
+      _ThemeColors tc, IconData icon, String label) {
     return AspectRatio(
       aspectRatio: 0.95,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: tc.bg,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _cardBorderLight, width: 1.5),
+          border: Border.all(
+            color: _cardBorderLight.withValues(alpha: tc.isDark ? 0.6 : 1.0),
+            width: 1.5,
+          ),
         ),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Container(
@@ -279,14 +313,17 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
             height: 48,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _cardBorderLight, width: 1.5),
+              border: Border.all(
+                color: _cardBorderLight.withValues(alpha: tc.isDark ? 0.6 : 1.0),
+                width: 1.5,
+              ),
             ),
             child: Icon(icon, color: _optionOrange, size: 24),
           ),
           const SizedBox(height: 10),
           Text(label,
-              style: const TextStyle(
-                  color: Color(0xFF1F2937),
+              style: TextStyle(
+                  color: tc.textDark,
                   fontSize: 13,
                   fontWeight: FontWeight.w700)),
         ]),
@@ -295,7 +332,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   }
 
   // ══════════════════════════════════════════════════════════════
-  // SUCCESS CARD
+  // SUCCESS CARD — stays identical in both themes (brand gradient)
   // ══════════════════════════════════════════════════════════════
   Widget _buildSuccessCard(double scale) {
     final isClockIn = widget.type.toUpperCase() == 'IN';

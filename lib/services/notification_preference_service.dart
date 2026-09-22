@@ -43,7 +43,7 @@ class NotificationPreferenceService {
           debugPrint('⚠️ [NotifPref] reschedule error: $e');
         }
       } else {
-        // ❌ Cancel lahat ng scheduled notifications
+        // ❌ Cancel all scheduled notifications
         try {
           await LocalNotificationService.instance.cancelAll();
           debugPrint('🚫 [NotifPref] All notifications CANCELLED');

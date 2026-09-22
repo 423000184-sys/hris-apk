@@ -103,7 +103,7 @@ class AdminNotificationService {
       'metadata': metadata,
     };
 
-    // ✅ Try direct write muna kung online
+    // ✅ Try a direct write first if online
     if (NetworkGuard.instance.isOnline) {
       try {
         await _col
@@ -119,7 +119,7 @@ class AdminNotificationService {
       }
     }
 
-    // ✅ Offline o nag-fail — i-queue
+    // ✅ Offline or failed — enqueue
     await AdminNotificationQueue.instance.enqueue(payload);
     debugPrint('📥 [Notify] $type — queued for sync');
   }
@@ -415,7 +415,7 @@ class AdminNotificationService {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🔐 PASSWORD CHANGE REQUEST (URGENT — admin approval needed)  (BAGO)
+  // 🔐 PASSWORD CHANGE REQUEST (URGENT — admin approval needed)  (NEW)
   // ═══════════════════════════════════════════════════════════════
   Future<void> notifyPasswordChangeRequest({
     required String employeeId,
@@ -433,7 +433,7 @@ class AdminNotificationService {
       type: 'password_change',
       title: '🔐 $employeeName — Password Change Request',
       message: parts.isEmpty
-          ? 'Humingi ng password reset. Kailangan ng admin approval.'
+          ? 'Requested a password reset. Admin approval required.'
           : parts.join(' · '),
       employeeId: employeeId,
       employeeName: employeeName,
@@ -559,7 +559,7 @@ class AdminNotificationService {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // DEBUG HELPER — clear throttle (para sa testing)
+  // DEBUG HELPER — clear throttle (for testing)
   // ═══════════════════════════════════════════════════════════════
   void clearThrottle() {
     _geofenceCooldown.clear();

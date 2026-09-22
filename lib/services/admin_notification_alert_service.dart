@@ -25,7 +25,7 @@ class AdminNotificationAlertService {
   bool get initialized => _initialized;
 
   // ═══════════════════════════════════════════════════════════════
-  // INIT — tawagin sa main.dart pagkatapos ng Firebase.initializeApp()
+  // INIT — call this in main.dart after Firebase.initializeApp()
   // ═══════════════════════════════════════════════════════════════
   Future<void> init() async {
     if (_initialized) return;
@@ -45,7 +45,7 @@ class AdminNotificationAlertService {
       debugPrint('🔔 [AlertService] player setup error: $e');
     }
 
-    // Seed current IDs para hindi tumunog ang lumang notifs sa first load
+    // Seed current IDs so old notifications don't fire on first load
     try {
       final first = await AdminNotificationService.instance
           .streamAll(limit: 50)
@@ -56,7 +56,7 @@ class AdminNotificationAlertService {
       }
       debugPrint('🔔 [AlertService] Seeded ${_seenIds.length} existing IDs');
     } catch (e) {
-      debugPrint('🔔 [AlertService] seed error (ok lang): $e');
+      debugPrint('🔔 [AlertService] seed error (non-fatal): $e');
     }
 
     // Listen to stream
@@ -79,7 +79,7 @@ class AdminNotificationAlertService {
       _seenIds.add(n.id);
       if (n.read) continue;
 
-      // Cooldown — iwas sunod-sunod na tunog kapag bulk
+      // Cooldown — prevents rapid-fire sounds during bulk events
       final now = DateTime.now();
       if (_lastAlertAt != null &&
           now.difference(_lastAlertAt!) < _cooldown) {
@@ -112,7 +112,7 @@ class AdminNotificationAlertService {
     }
 
     // 5. Face enrollment high failure? future
-    // 6. Password change request — kailangan ng admin approval  (BAGO)
+    // 6. Password change request — requires admin approval  (NEW)
     if (n.type == 'password_change') return true;
 
     return false;
@@ -174,7 +174,7 @@ class AdminNotificationAlertService {
     } catch (_) {}
   }
 
-  /// Manual test — pwede mong i-call sa debug page
+  /// Manual test — can be called from a debug page
   Future<void> testUrgent() async {
     debugPrint('🔔 [AlertService] manual test — URGENT');
     try {

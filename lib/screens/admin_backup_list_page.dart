@@ -1,29 +1,24 @@
-// lib/screens/admin_backup_list_page.dart
+// lib/screens/notification_backup_list_page.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
-import '../services/presence_backup_service.dart';
+import '../services/notification_backup_service.dart';
 import 'admin_theme.dart';
 
-class AdminBackupListPage extends StatefulWidget {
-  final String employeeId;
-  final String employeeName;
-
-  const AdminBackupListPage({
-    super.key,
-    required this.employeeId,
-    required this.employeeName,
-  });
+class NotificationBackupListPage extends StatefulWidget {
+  const NotificationBackupListPage({super.key});
 
   @override
-  State<AdminBackupListPage> createState() => _AdminBackupListPageState();
+  State<NotificationBackupListPage> createState() =>
+      _NotificationBackupListPageState();
 }
 
-class _AdminBackupListPageState extends State<AdminBackupListPage> {
-  List<BackupFileInfo> _backups = [];
+class _NotificationBackupListPageState
+    extends State<NotificationBackupListPage> {
+  List<BackupEntry> _entries = [];
   bool _loading = true;
   int _totalSizeBytes = 0;
-  String _backupDir = '';
+  String _storageLocation = '';
 
   @override
   void initState() {
@@ -33,17 +28,25 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
 
   Future<void> _loadBackups() async {
     setState(() => _loading = true);
-    final files = await PresenceBackupService.instance.listLocalBackups();
-    final size = await PresenceBackupService.instance.getTotalSizeBytes();
-    final dir = await PresenceBackupService.instance.getBackupDirectory();
+    try {
+      final entries =
+      await NotificationBackupService.instance.listBackups();
+      final size =
+      await NotificationBackupService.instance.getTotalSizeBytes();
+      final loc =
+      await NotificationBackupService.instance.getStorageLocation();
 
-    if (mounted) {
-      setState(() {
-        _backups = files;
-        _totalSizeBytes = size;
-        _backupDir = dir;
-        _loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _entries = entries;
+          _totalSizeBytes = size;
+          _storageLocation = loc;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('❌ [NotifBackupList] load error: $e');
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -59,34 +62,22 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
         elevation: 0,
         scrolledUnderElevation: 0,
         surfaceTintColor: Colors.transparent,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Local Backups',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 16,
-                color: tc.text,
-              ),
-            ),
-            Text(
-              widget.employeeName,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: tc.textMuted,
-              ),
-            ),
-          ],
+        title: Text(
+          'Notification Backups',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+            color: tc.text,
+          ),
         ),
         actions: [
           IconButton(
             tooltip: 'Refresh',
-            icon: Icon(Icons.refresh_rounded, color: tc.textMuted, size: 20),
+            icon: Icon(Icons.refresh_rounded,
+                color: tc.textMuted, size: 20),
             onPressed: _loadBackups,
           ),
-          if (_backups.isNotEmpty)
+          if (_entries.isNotEmpty)
             IconButton(
               tooltip: 'Delete all',
               icon: Icon(Icons.delete_sweep_rounded,
@@ -106,7 +97,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
         children: [
           _buildSummaryCard(tc),
           Expanded(
-            child: _backups.isEmpty
+            child: _entries.isEmpty
                 ? _emptyState(tc)
                 : RefreshIndicator(
               color: tc.orange,
@@ -114,14 +105,14 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
               child: ListView.separated(
                 padding:
                 const EdgeInsets.symmetric(vertical: 8),
-                itemCount: _backups.length,
+                itemCount: _entries.length,
                 separatorBuilder: (_, __) => Divider(
                   height: 1,
                   color: tc.border,
                   indent: 16,
                 ),
                 itemBuilder: (_, i) =>
-                    _tile(tc, _backups[i]),
+                    _tile(tc, _entries[i]),
               ),
             ),
           ),
@@ -147,7 +138,8 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
               Icon(Icons.folder_rounded, color: tc.orange, size: 18),
               const SizedBox(width: 8),
               Text(
-                '${_backups.length} backup files',
+                '${_entries.length} backup '
+                    '${_entries.length == 1 ? "file" : "files"}',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
@@ -166,19 +158,29 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            '📁 $_backupDir',
-            style: TextStyle(
-              fontSize: 10,
-              color: tc.muted,
-              fontFamily: 'monospace',
-            ),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
+          Row(
+            children: [
+              Icon(Icons.storage_rounded,
+                  size: 11, color: tc.muted),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  _storageLocation,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: tc.muted,
+                    fontFamily: 'monospace',
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 4),
+          // ⭐ ENGLISH — was "Naka-save sa browser localStorage"
           Text(
-            '💡 Local device storage only — hindi naka-sync sa cloud',
+            '💡 Saved to browser localStorage',
             style: TextStyle(
               fontSize: 10,
               color: tc.muted,
@@ -190,10 +192,10 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
     );
   }
 
-  Widget _tile(AdminColors tc, BackupFileInfo file) {
+  Widget _tile(AdminColors tc, BackupEntry entry) {
     return InkWell(
-      onTap: () => _viewFile(tc, file),
-      onLongPress: () => _showQuickActions(tc, file),
+      onTap: () => _viewFile(tc, entry),
+      onLongPress: () => _showQuickActions(tc, entry),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
@@ -202,7 +204,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
               width: 42,
               height: 42,
               decoration: BoxDecoration(
-                color: tc.orange.withValues(alpha: 0.15),
+                color: tc.orange.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(
@@ -217,7 +219,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    file.filename,
+                    entry.filename,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -234,7 +236,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
                           size: 11, color: tc.muted),
                       const SizedBox(width: 4),
                       Text(
-                        _fmtTime(file.savedAt),
+                        _fmtTime(entry.savedAt),
                         style: TextStyle(
                           fontSize: 11,
                           color: tc.textMuted,
@@ -245,7 +247,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
                           size: 11, color: tc.muted),
                       const SizedBox(width: 4),
                       Text(
-                        _formatSize(file.sizeBytes),
+                        _formatSize(entry.sizeBytes),
                         style: TextStyle(
                           fontSize: 11,
                           color: tc.textMuted,
@@ -267,9 +269,9 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
     );
   }
 
-  void _viewFile(AdminColors tc, BackupFileInfo file) async {
-    final content = await PresenceBackupService.instance
-        .readBackup(file.path);
+  void _viewFile(AdminColors tc, BackupEntry entry) async {
+    final content = await NotificationBackupService.instance
+        .readBackup(entry.filename);
 
     if (!mounted) return;
 
@@ -277,7 +279,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('❌ Cannot read file'),
-          backgroundColor: Color(0xFFEF4444),
+          backgroundColor: Color(0xFFA02020),
         ),
       );
       return;
@@ -297,7 +299,6 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
         expand: false,
         builder: (_, scrollCtrl) => Column(
           children: [
-            // Handle bar
             Container(
               margin: const EdgeInsets.symmetric(vertical: 12),
               width: 40,
@@ -307,7 +308,6 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
                 borderRadius: BorderRadius.circular(999),
               ),
             ),
-            // Header
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
@@ -317,7 +317,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      file.filename,
+                      entry.filename,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -333,13 +333,12 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
             ),
             const SizedBox(height: 8),
             Divider(height: 1, color: tc.border),
-            // Content
             Expanded(
               child: Container(
                 width: double.infinity,
                 color: tc.isDark
-                    ? const Color(0xFF1A1A1A)
-                    : const Color(0xFFF5F5F5),
+                    ? const Color(0xFF121212)
+                    : const Color(0xFFF5F4F0),
                 child: SingleChildScrollView(
                   controller: scrollCtrl,
                   padding: const EdgeInsets.all(16),
@@ -355,7 +354,6 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
                 ),
               ),
             ),
-            // Footer buttons
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(12),
@@ -365,7 +363,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
                       child: OutlinedButton.icon(
                         onPressed: () {
                           Navigator.pop(context);
-                          _confirmDelete(tc, file);
+                          _confirmDelete(tc, entry);
                         },
                         icon: Icon(Icons.delete_outline_rounded,
                             size: 16, color: tc.red),
@@ -378,7 +376,8 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
                         ),
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(color: tc.border),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 12),
                         ),
                       ),
                     ),
@@ -388,11 +387,13 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
                         onPressed: () => Navigator.pop(context),
                         style: FilledButton.styleFrom(
                           backgroundColor: tc.orange,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 12),
                         ),
                         child: const Text(
                           'Close',
-                          style: TextStyle(fontWeight: FontWeight.w700),
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700),
                         ),
                       ),
                     ),
@@ -406,7 +407,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
     );
   }
 
-  void _showQuickActions(AdminColors tc, BackupFileInfo file) {
+  void _showQuickActions(AdminColors tc, BackupEntry entry) {
     showModalBottomSheet(
       context: context,
       backgroundColor: tc.card,
@@ -419,20 +420,23 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
           children: [
             const SizedBox(height: 8),
             ListTile(
-              leading: Icon(Icons.visibility_rounded, color: tc.orange),
+              leading: Icon(Icons.visibility_rounded,
+                  color: tc.orange),
               title: Text('View content',
                   style: TextStyle(color: tc.text)),
               onTap: () {
                 Navigator.pop(context);
-                _viewFile(tc, file);
+                _viewFile(tc, entry);
               },
             ),
             ListTile(
-              leading: Icon(Icons.delete_outline_rounded, color: tc.red),
-              title: Text('Delete', style: TextStyle(color: tc.text)),
+              leading: Icon(Icons.delete_outline_rounded,
+                  color: tc.red),
+              title:
+              Text('Delete', style: TextStyle(color: tc.text)),
               onTap: () {
                 Navigator.pop(context);
-                _confirmDelete(tc, file);
+                _confirmDelete(tc, entry);
               },
             ),
           ],
@@ -441,7 +445,8 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
     );
   }
 
-  Future<void> _confirmDelete(AdminColors tc, BackupFileInfo file) async {
+  Future<void> _confirmDelete(
+      AdminColors tc, BackupEntry entry) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -452,7 +457,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
             style: TextStyle(
                 color: tc.text, fontWeight: FontWeight.w800)),
         content: Text(
-          file.filename,
+          entry.filename,
           style: TextStyle(
             color: tc.textMuted,
             fontSize: 12,
@@ -464,20 +469,24 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
             onPressed: () => Navigator.pop(context, false),
             child: Text('Cancel',
                 style: TextStyle(
-                    color: tc.textMuted, fontWeight: FontWeight.w700)),
+                    color: tc.textMuted,
+                    fontWeight: FontWeight.w700)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: tc.red),
+            style:
+            FilledButton.styleFrom(backgroundColor: tc.red),
             child: const Text('Delete',
-                style: TextStyle(fontWeight: FontWeight.w700)),
+                style:
+                TextStyle(fontWeight: FontWeight.w700)),
           ),
         ],
       ),
     );
 
     if (ok == true) {
-      await PresenceBackupService.instance.deleteBackup(file.path);
+      await NotificationBackupService.instance
+          .deleteBackup(entry.filename);
       _loadBackups();
     }
   }
@@ -493,7 +502,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
             style: TextStyle(
                 color: tc.text, fontWeight: FontWeight.w800)),
         content: Text(
-          'Burahin lahat ng ${_backups.length} files? Hindi na maibabalik.',
+          'Delete all ${_entries.length} files? This cannot be undone.',
           style: TextStyle(color: tc.textMuted, fontSize: 13),
         ),
         actions: [
@@ -501,20 +510,23 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
             onPressed: () => Navigator.pop(context, false),
             child: Text('Cancel',
                 style: TextStyle(
-                    color: tc.textMuted, fontWeight: FontWeight.w700)),
+                    color: tc.textMuted,
+                    fontWeight: FontWeight.w700)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: tc.red),
+            style:
+            FilledButton.styleFrom(backgroundColor: tc.red),
             child: const Text('Delete all',
-                style: TextStyle(fontWeight: FontWeight.w700)),
+                style:
+                TextStyle(fontWeight: FontWeight.w700)),
           ),
         ],
       ),
     );
 
     if (ok == true) {
-      await PresenceBackupService.instance.deleteAllBackups();
+      await NotificationBackupService.instance.deleteAllBackups();
       _loadBackups();
     }
   }
@@ -541,7 +553,7 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Walang local backups',
+              'No notification backups',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
@@ -551,8 +563,8 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
             const SizedBox(height: 6),
             Text(
               kIsWeb
-                  ? 'Hindi supported sa web.\nGamitin sa mobile device.'
-                  : 'Babalik ito every 1 hour.\nO i-tap yung "Force Backup Now".',
+                  ? 'Backups are stored in browser localStorage.\nThey will persist across page reloads.'
+                  : 'Backups are saved locally on this device.\nTap "Force Backup Now" to create one.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 13,
@@ -572,7 +584,8 @@ class _AdminBackupListPageState extends State<AdminBackupListPage> {
   String _fmtTime(DateTime d) {
     final now = DateTime.now();
     final diff = now.difference(d);
-    if (diff.inMinutes < 1) return 'Ngayon lang';
+    // ⭐ ENGLISH — was "Ngayon lang"
+    if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     if (diff.inDays < 7) return '${diff.inDays}d ago';

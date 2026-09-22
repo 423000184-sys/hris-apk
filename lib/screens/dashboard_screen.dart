@@ -234,9 +234,9 @@ class DashboardScreenState extends State<DashboardScreen> {
   Future<void> _refreshLocation() async {
     if (mounted) setState(() => _checkingLocation = true);
 
+    GeofenceService.instance.invalidateCache();
+
     try {
-      // ⭐ NEW: Use checkGeofenceForEmployee() — auto WFH/Driver +
-      //    multi-location check
       final empDocId = _employeeDocId;
       GeofenceResult result;
 

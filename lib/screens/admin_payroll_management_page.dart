@@ -1,10 +1,13 @@
 // lib/screens/admin_payroll_management_page.dart
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'admin_theme.dart';
+import '../utils/file_download.dart';
 import '../widgets/bootstrap_grid.dart';
 import '../services/payroll_calculator.dart';
 import '../services/employee_notification_service.dart';
@@ -32,6 +35,8 @@ class _AdminPayrollManagementPageState
   PayrollBreakdown _b = PayrollBreakdown.empty;
   EmployeeHoursSummary _hours = EmployeeHoursSummary.empty;
   bool _loading = true;
+  bool _printing = false;
+  bool _downloading = false;
 
   String get _name {
     final raw = widget.employeeData['name'];
@@ -79,12 +84,10 @@ class _AdminPayrollManagementPageState
   double get _autoOvertimePay {
     if (_hours.totalOvertimeMinutes <= 0) return 0;
     if (_b.dailyRate <= 0) return 0;
-    // hourly rate = daily rate / 8 hours
     final hourlyRate = _b.dailyRate / 8;
     return (_hours.totalOvertimeMinutes / 60.0) * hourlyRate;
   }
 
-  // 🍱 Final gross = basic + allowances + AUTO overtime
   double get _autoGrossPay {
     return _b.basicSalary + _b.allowances + _autoOvertimePay;
   }
@@ -154,82 +157,298 @@ class _AdminPayrollManagementPageState
     }
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 📄 PDF GENERATION — professional payslip look
+  // ══════════════════════════════════════════════════════════════
   Future<Uint8List> _generatePdf() async {
     final pdf = pw.Document();
+
     pdf.addPage(
-      pw.Page(
+      pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
-        build: (pw.Context c) {
-          return pw.Padding(
-            padding: const pw.EdgeInsets.all(24),
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Text('PAYSLIP',
-                    style: pw.TextStyle(
-                        fontSize: 24, fontWeight: pw.FontWeight.bold)),
-                pw.SizedBox(height: 12),
-                pw.Text('Employee: $_name'),
-                pw.Text('ID: $_employeeId'),
-                pw.Text('Department: $_department'),
-                pw.Text('Period: $_periodLabel'),
-                pw.Divider(),
-                pw.SizedBox(height: 8),
-                pw.Text('WORK HOURS',
-                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                pw.Text('Total Raw Hours: ${_hours.rawDisplay}'),
-                pw.Text('Lunch Deducted: -${_hours.lunchDisplay}'),
-                pw.Text('Net Hours: ${_hours.netDisplay}'),
-                if (_hours.totalOvertimeMinutes > 0)
-                  pw.Text('Overtime: +${_hours.overtimeDisplay}'),
-                pw.SizedBox(height: 8),
-                pw.Text('EARNINGS',
-                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                pw.Text('Basic Salary: ${PayrollCalculator.peso(_b.basicSalary)}'),
-                pw.Text('Allowances: ${PayrollCalculator.peso(_b.allowances)}'),
-                if (_autoOvertimePay > 0)
+        margin: const pw.EdgeInsets.all(36),
+        build: (pw.Context ctx) => [
+          // ─── HEADER ───
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text('PAYSLIP',
+                      style: pw.TextStyle(
+                          fontSize: 26, fontWeight: pw.FontWeight.bold)),
+                  pw.SizedBox(height: 2),
+                  pw.Text('Employee Disbursement Statement',
+                      style: const pw.TextStyle(
+                          fontSize: 10, color: PdfColors.grey700)),
+                ],
+              ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  pw.Text('Period: $_periodLabel',
+                      style: pw.TextStyle(
+                          fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                  pw.SizedBox(height: 2),
                   pw.Text(
-                      'Overtime (auto): ${PayrollCalculator.peso(_autoOvertimePay)}'),
-                pw.Text('Gross: ${PayrollCalculator.peso(_autoGrossPay)}'),
-                pw.SizedBox(height: 8),
-                pw.Text('DEDUCTIONS',
-                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                pw.Text(
-                    'Absences (${_b.absentDays} day/s): -${PayrollCalculator.peso(_b.absenceDeduction)}'),
-                pw.Text('SSS: -${PayrollCalculator.peso(_b.sss)}'),
-                pw.Text('PhilHealth: -${PayrollCalculator.peso(_b.philhealth)}'),
-                pw.Text('Pag-IBIG: -${PayrollCalculator.peso(_b.pagibig)}'),
-                pw.Text('Total: -${PayrollCalculator.peso(_b.totalDeductions)}'),
-                pw.SizedBox(height: 8),
-                pw.Divider(),
-                pw.Text('NET PAY: ${PayrollCalculator.peso(_autoNetPay)}',
-                    style: pw.TextStyle(
-                        fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                      'Generated: ${DateFormat('MMM d, yyyy • HH:mm').format(DateTime.now())}',
+                      style: const pw.TextStyle(
+                          fontSize: 9, color: PdfColors.grey700)),
+                ],
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 12),
+          pw.Container(height: 2, color: PdfColors.orange800),
+          pw.SizedBox(height: 16),
+
+          // ─── EMPLOYEE INFO ───
+          pw.Container(
+            padding: const pw.EdgeInsets.all(12),
+            decoration: pw.BoxDecoration(
+              color: PdfColors.grey100,
+              borderRadius: pw.BorderRadius.circular(6),
+            ),
+            child: pw.Row(
+              children: [
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text('EMPLOYEE',
+                          style: const pw.TextStyle(
+                              fontSize: 8, color: PdfColors.grey700)),
+                      pw.SizedBox(height: 4),
+                      pw.Text(_name,
+                          style: pw.TextStyle(
+                              fontSize: 13,
+                              fontWeight: pw.FontWeight.bold)),
+                    ],
+                  ),
+                ),
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text('EMPLOYEE ID',
+                          style: const pw.TextStyle(
+                              fontSize: 8, color: PdfColors.grey700)),
+                      pw.SizedBox(height: 4),
+                      pw.Text(_employeeId,
+                          style: const pw.TextStyle(fontSize: 11)),
+                    ],
+                  ),
+                ),
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text('DEPARTMENT',
+                          style: const pw.TextStyle(
+                              fontSize: 8, color: PdfColors.grey700)),
+                      pw.SizedBox(height: 4),
+                      pw.Text(_department,
+                          style: const pw.TextStyle(fontSize: 11)),
+                    ],
+                  ),
+                ),
               ],
             ),
-          );
-        },
+          ),
+          pw.SizedBox(height: 20),
+
+          // ─── WORK HOURS ───
+          _pdfSection('WORK HOURS', [
+            _pdfRow('Total Raw Hours', _hours.rawDisplay),
+            if (_hours.totalLunchDeductedMinutes > 0)
+              _pdfRow('Lunch Deducted', '-${_hours.lunchDisplay}'),
+            _pdfRow('Net Hours Worked', _hours.netDisplay, bold: true),
+            if (_hours.totalOvertimeMinutes > 0)
+              _pdfRow('Overtime', '+${_hours.overtimeDisplay}'),
+          ]),
+          pw.SizedBox(height: 14),
+
+          // ─── EARNINGS ───
+          _pdfSection('EARNINGS', [
+            _pdfRow('Basic Salary', PayrollCalculator.peso(_b.basicSalary)),
+            _pdfRow('Allowances', PayrollCalculator.peso(_b.allowances)),
+            if (_autoOvertimePay > 0)
+              _pdfRow('Overtime Pay (auto)',
+                  PayrollCalculator.peso(_autoOvertimePay)),
+            _pdfRow('Total Gross', PayrollCalculator.peso(_autoGrossPay),
+                bold: true),
+          ]),
+          pw.SizedBox(height: 14),
+
+          // ─── DEDUCTIONS ───
+          _pdfSection('DEDUCTIONS', [
+            if (_b.absentDays > 0)
+              _pdfRow('Absences (${_b.absentDays} day/s)',
+                  '-${PayrollCalculator.peso(_b.absenceDeduction)}'),
+            _pdfRow('SSS', '-${PayrollCalculator.peso(_b.sss)}'),
+            _pdfRow('PhilHealth', '-${PayrollCalculator.peso(_b.philhealth)}'),
+            _pdfRow('Pag-IBIG', '-${PayrollCalculator.peso(_b.pagibig)}'),
+            _pdfRow('Total Deductions',
+                '-${PayrollCalculator.peso(_b.totalDeductions)}',
+                bold: true),
+          ]),
+          pw.SizedBox(height: 24),
+
+          // ─── NET PAY ───
+          pw.Container(
+            padding: const pw.EdgeInsets.all(16),
+            decoration: pw.BoxDecoration(
+              color: PdfColors.orange50,
+              borderRadius: pw.BorderRadius.circular(6),
+              border: pw.Border.all(color: PdfColors.orange800, width: 1.5),
+            ),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text('NET PAY',
+                    style: pw.TextStyle(
+                        fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                pw.Text(PayrollCalculator.peso(_autoNetPay),
+                    style: pw.TextStyle(
+                        fontSize: 20,
+                        fontWeight: pw.FontWeight.bold,
+                        color: PdfColors.orange800)),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 20),
+          pw.Divider(color: PdfColors.grey400),
+          pw.SizedBox(height: 6),
+          pw.Text(
+            'This is a system-generated payslip. No signature required.',
+            style: const pw.TextStyle(
+                fontSize: 8,
+                color: PdfColors.grey600,
+                fontStyle: pw.FontStyle.italic),
+          ),
+        ],
       ),
     );
+
     return pdf.save();
   }
 
-  Future<void> _handlePrint() async {
-    final bytes = await _generatePdf();
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat f) async => bytes,
-      name: 'payslip_$_employeeId.pdf',
+  pw.Widget _pdfSection(String title, List<pw.Widget> rows) {
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(title,
+            style: pw.TextStyle(
+                fontSize: 10,
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColors.orange800,
+                letterSpacing: 0.5)),
+        pw.SizedBox(height: 6),
+        pw.Container(
+          padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+          decoration: pw.BoxDecoration(
+            border: pw.Border.all(color: PdfColors.grey300),
+            borderRadius: pw.BorderRadius.circular(4),
+          ),
+          child: pw.Column(children: rows),
+        ),
+      ],
     );
-    await _notifyEmployeePayroll();
   }
 
-  Future<void> _handleDownload() async {
-    final bytes = await _generatePdf();
-    await Printing.sharePdf(
-      bytes: bytes,
-      filename: 'payslip_$_employeeId.pdf',
+  pw.Widget _pdfRow(String label, String value, {bool bold = false}) {
+    final style = pw.TextStyle(
+      fontSize: 10.5,
+      fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
     );
-    await _notifyEmployeePayroll();
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 3.5),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [pw.Text(label, style: style), pw.Text(value, style: style)],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🖨️ PRINT — opens system print dialog
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _handlePrint() async {
+    if (_printing) return;
+    setState(() => _printing = true);
+
+    try {
+      final bytes = await _generatePdf();
+      final ok = await Printing.layoutPdf(
+        onLayout: (PdfPageFormat f) async => bytes,
+        name: 'payslip_$_employeeId.pdf',
+      );
+
+      if (!mounted) return;
+
+      if (ok) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Payslip sent to printer.'),
+          backgroundColor: tc.green,
+        ));
+        await _notifyEmployeePayroll();
+      }
+    } catch (e) {
+      debugPrint('❌ [PayrollMgmt] Print error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Print failed: $e'),
+        backgroundColor: tc.red,
+      ));
+    } finally {
+      if (mounted) setState(() => _printing = false);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 💾 DOWNLOAD — saves PDF to PC/device (Downloads/RACOMA_Backups)
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _handleDownload() async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+
+    try {
+      final bytes = await _generatePdf();
+      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final fileName = 'payslip_${_employeeId}_$ts.pdf';
+
+      final savedPath = await downloadBytesFile(
+        filename: fileName,
+        bytes: bytes,
+        mimeType: 'application/pdf',
+      );
+
+      if (!mounted) return;
+
+      if (savedPath != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Payslip saved → $fileName'),
+          backgroundColor: tc.green,
+        ));
+        await _notifyEmployeePayroll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Download cancelled.'),
+          backgroundColor: tc.red,
+        ));
+      }
+    } catch (e) {
+      debugPrint('❌ [PayrollMgmt] Download error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Download failed: $e'),
+        backgroundColor: tc.red,
+      ));
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
   }
 
   Future<void> _notifyEmployeePayroll() async {
@@ -414,9 +633,16 @@ class _AdminPayrollManagementPageState
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: _handlePrint,
-                icon: const Icon(Icons.print_rounded, size: 16),
-                label: Text('Print',
+                onPressed: _printing ? null : _handlePrint,
+                icon: _printing
+                    ? SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: tc.text),
+                )
+                    : const Icon(Icons.print_rounded, size: 16),
+                label: Text(_printing ? 'Printing...' : 'Print',
                     style: TextStyle(
                         color: tc.text, fontWeight: FontWeight.w600)),
                 style: OutlinedButton.styleFrom(
@@ -428,13 +654,21 @@ class _AdminPayrollManagementPageState
                 ),
               ),
               ElevatedButton.icon(
-                onPressed: _handleDownload,
-                icon: const Icon(Icons.download_rounded, size: 16),
-                label: const Text('Download Payslip',
-                    style: TextStyle(
+                onPressed: _downloading ? null : _handleDownload,
+                icon: _downloading
+                    ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                )
+                    : const Icon(Icons.download_rounded, size: 16),
+                label: Text(_downloading ? 'Downloading...' : 'Download Payslip',
+                    style: const TextStyle(
                         color: Colors.white, fontWeight: FontWeight.w600)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: tc.orange,
+                  disabledBackgroundColor: tc.orange.withValues(alpha: 0.5),
                   elevation: 0,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
@@ -691,7 +925,6 @@ class _AdminPayrollManagementPageState
       badgeColor: _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
       badgeTextColor: _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
       children: [
-        // Basic attendance
         _item('Working Days', 'Weekdays in the period',
             '${_b.workingDays}', false),
         _item('Present Days', 'With clock-in logged',
@@ -699,7 +932,6 @@ class _AdminPayrollManagementPageState
         _item('Absent Days', 'No clock-in on weekday',
             '${_b.absentDays}', _b.absentDays > 0),
 
-        // 🍱 Hours info (auto-detected)
         if (hasHours) ...[
           Divider(color: tc.border, height: 20),
           Row(
