@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ═══════════════════════════════════════════════════════
+         BASIC BUNDLE CONFIGURATION
+    ════════════════════════════════════════════════════════════ -->
+    <key>CFBundleDevelopmentRegion</key>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleDisplayName</key>
+    <string>Admin RACOMA</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Admin RACOMA</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(FLUTTER_BUILD_NAME)</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleVersion</key>
+    <string>$(FLUTTER_BUILD_VERSION)</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+    <key>UIMainStoryboardFile</key>
+    <string>Main</string>
+
+    <!-- ═══════════════════════════════════════════════════════
+         DEVICE ORIENTATION
+    ════════════════════════════════════════════════════════════ -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+
+    <!-- ═══════════════════════════════════════════════════════
+         PERFORMANCE
+    ════════════════════════════════════════════════════════════ -->
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
+    <key>UIApplicationSupportsIndirectInputEvents</key>
+    <true/>
+
+    <!-- ═══════════════════════════════════════════════════════
+         PRIVACY — BIOMETRIC AUTHENTICATION
+    ════════════════════════════════════════════════════════════ -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin uses Face ID to securely verify your identity when logging in.</string>
+
+    <!-- ═══════════════════════════════════════════════════════
+         PRIVACY — CAMERA
+    ════════════════════════════════════════════════════════════ -->
+    <key>NSCameraUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin uses the camera to capture employee photos and scan documents.</string>
+
+    <!-- ═══════════════════════════════════════════════════════
+         PRIVACY — LOCATION
+    ════════════════════════════════════════════════════════════ -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin uses your location to view employee attendance on the map and to configure geofences.</string>
+
+    <!-- ═══════════════════════════════════════════════════════
+         PRIVACY — PHOTO LIBRARY
+    ════════════════════════════════════════════════════════════ -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin needs photo library access to upload documents and images.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin needs to save exported reports to your photo library.</string>
+
+    <!-- ═══════════════════════════════════════════════════════
+         PRIVACY — NFC (para sa employee ID card scanning)
+    ════════════════════════════════════════════════════════════ -->
+    <key>NFCReaderUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin uses NFC to read employee ID cards for verification.</string>
+
+    <!-- ✅ iOS 13+ NFC + CoreNFC needs this -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin uses Bluetooth to communicate with NFC card readers.</string>
+    <!-- ✅ iOS 12 fallback -->
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin uses Bluetooth to communicate with NFC card readers.</string>
+
+    <!-- ═══════════════════════════════════════════════════════
+         PRIVACY — MICROPHONE
+         👆 Kailangan ng `noise_meter` para sa finger-snap
+         detection. Ang mic ay ginagamit LANG para sa amplitude
+         analysis (hindi nare-record at hindi nase-save ang audio).
+    ════════════════════════════════════════════════════════════ -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>R.A.C.O.M.A. uses the microphone to detect a finger-snap gesture for instant logout. No audio is recorded or stored.</string>
+
+    <!-- ═══════════════════════════════════════════════════════
+         BACKGROUND MODES
+    ════════════════════════════════════════════════════════════ -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>location</string>
+        <string>fetch</string>
+        <string>processing</string>
+        <string>remote-notification</string>
+    </array>
+
+    <!-- ═══════════════════════════════════════════════════════
+         BACKGROUND TASK IDENTIFIERS
+    ════════════════════════════════════════════════════════════ -->
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>com.racoma.hris.refresh</string>
+        <string>com.racoma.hris.processing</string>
+    </array>
+
+    <!-- ═══════════════════════════════════════════════════════
+         QUERIES / URL SCHEMES
+    ════════════════════════════════════════════════════════════ -->
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>tel</string>
+        <string>mailto</string>
+        <string>https</string>
+        <string>http</string>
+        <string>whatsapp</string>
+        <string>googlegmail</string>
+    </array>
+
+    <!-- ═══════════════════════════════════════════════════════
+         EXPORT COMPLIANCE
+    ════════════════════════════════════════════════════════════ -->
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+
+    <!-- ═══════════════════════════════════════════════════════
+         FIREBASE / GOOGLE SERVICE
+    ════════════════════════════════════════════════════════════ -->
+    <key>FirebaseAppDelegateProxyEnabled</key>
+    <true/>
+
+    <!-- ═══════════════════════════════════════════════════════
+         DEEP LINKING (para sa push notification tap → app open)
+    ════════════════════════════════════════════════════════════ -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>racoma-hris</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

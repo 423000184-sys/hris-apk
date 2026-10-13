@@ -1,0 +1,57 @@
+﻿# Flutter/Dart
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+*.g.dart
+*.freezed.dart
+
+# Android
+android/.gradle/
+android/local.properties
+android/key.properties
+android/app/debug
+android/app/profile
+android/app/release
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Env
+.env
+*.env
+
+# Firebase (sensitive)
+google-services.json
+GoogleService-Info.plist
+.firebase/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+serviceAccount.json
+*.json.key
+**/serviceAccount*.json
+
+serviceAccount.json
+*.json.key
+**/serviceAccount*.json
+
+serviceAccount.json
+*.json.key
+**/serviceAccount*.json
