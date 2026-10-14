@@ -1,4 +1,5 @@
 // lib/services/security_service.dart
+import 'dart:async';   // ✅ IDINAGDAG — para sa unawaited() at Future.wait()
 import 'dart:convert';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
@@ -26,6 +27,42 @@ class SecurityService {
   static SecurityService get instance => _instance ??= SecurityService._();
 
   // ═══════════════════════════════════════════════════════════════
+  // 🆕 SESSION MEMORY CACHE — pinabilis ang session checks
+  // ═══════════════════════════════════════════════════════════════
+  String? _cachedSessionToken;
+  String? _cachedSessionExpiry;
+  String? _cachedSessionEmployeeId;
+  bool? _cachedIsDemoSession;
+  DateTime? _cacheTime;
+  static const Duration _cacheTTL = Duration(seconds: 30);
+
+  bool get _isCacheValid {
+    if (_cacheTime == null) return false;
+    return DateTime.now().difference(_cacheTime!) < _cacheTTL;
+  }
+
+  void _invalidateCache() {
+    _cachedSessionToken = null;
+    _cachedSessionExpiry = null;
+    _cachedSessionEmployeeId = null;
+    _cachedIsDemoSession = null;
+    _cacheTime = null;
+  }
+
+  void _updateCache({
+    String? token,
+    String? expiry,
+    String? employeeId,
+    bool? isDemo,
+  }) {
+    if (token != null) _cachedSessionToken = token;
+    if (expiry != null) _cachedSessionExpiry = expiry;
+    if (employeeId != null) _cachedSessionEmployeeId = employeeId;
+    if (isDemo != null) _cachedIsDemoSession = isDemo;
+    _cacheTime = DateTime.now();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // 🔒 BOOTSTRAP — initialize security layer
   // ═══════════════════════════════════════════════════════════════
   bool _bootstrapped = false;
@@ -39,7 +76,6 @@ class SecurityService {
     try {
       debugPrint('🔒 [SecurityService] Starting bootstrap...');
 
-      // 1. Ensure device fingerprint exists sa SharedPreferences
       try {
         final prefs = await SharedPreferences.getInstance();
 
@@ -55,7 +91,6 @@ class SecurityService {
           debugPrint('🔒 [SecurityService] Device fingerprint exists');
         }
 
-        // 2. Ensure receipt signing secret exists
         final existingSecret = prefs.getString('receipt_signing_secret');
         if (existingSecret == null || existingSecret.isEmpty) {
           final rand = Random.secure();
@@ -66,7 +101,6 @@ class SecurityService {
           debugPrint('🔒 [SecurityService] Receipt signing secret created');
         }
 
-        // 3. Cleanup expired lockouts
         final pinLockoutMs = prefs.getInt('pin_lockout_until') ?? 0;
         if (pinLockoutMs > 0) {
           final lockoutUntil =
@@ -92,26 +126,28 @@ class SecurityService {
         debugPrint('⚠️ [SecurityService] SharedPrefs init warning: $e');
       }
 
-      // 4. Log bootstrap success sa Firestore (optional)
-      try {
-        await FirebaseFirestore.instance
-            .collection('security_events')
-            .add({
-          'type': 'security_bootstrap',
-          'severity': 'info',
-          'details': 'SecurityService bootstrap completed',
-          'platform': kIsWeb ? 'web' : 'mobile',
-          'timestamp': FieldValue.serverTimestamp(),
-        }).timeout(const Duration(seconds: 3));
-      } catch (e) {
-        debugPrint('⚠️ [SecurityService] Bootstrap log warning: $e');
-      }
+      // Firestore log — fire and forget (huwag hintayin)
+      unawaited(() async {
+        try {
+          await FirebaseFirestore.instance
+              .collection('security_events')
+              .add({
+            'type': 'security_bootstrap',
+            'severity': 'info',
+            'details': 'SecurityService bootstrap completed',
+            'platform': kIsWeb ? 'web' : 'mobile',
+            'timestamp': FieldValue.serverTimestamp(),
+          }).timeout(const Duration(seconds: 3));
+        } catch (e) {
+          debugPrint('⚠️ [SecurityService] Bootstrap log warning: $e');
+        }
+      }());
 
       _bootstrapped = true;
       debugPrint('✅ [SecurityService] Bootstrap complete');
     } catch (e) {
       debugPrint('❌ [SecurityService] Bootstrap error: $e');
-      _bootstrapped = true; // mark as done kahit may error, para hindi ma-block
+      _bootstrapped = true;
     }
   }
 
@@ -126,7 +162,7 @@ class SecurityService {
       await prefs.setInt('last_session_active', now);
       debugPrint('🔒 [SecurityService] Session marked active: $now');
 
-      // Throttled Firestore heartbeat (every 5 min)
+      // ✅ FAST: Gamitin ang cache-based getCurrentEmployeeId
       final lastSync = prefs.getInt('last_session_sync') ?? 0;
       final timeSinceSync = now - lastSync;
       const fiveMinutes = 5 * 60 * 1000;
@@ -135,7 +171,8 @@ class SecurityService {
         try {
           final currentUserId = await getCurrentEmployeeId();
           if (currentUserId != null && currentUserId.isNotEmpty) {
-            await FirebaseFirestore.instance
+            // Fire and forget — huwag hintayin
+            unawaited(FirebaseFirestore.instance
                 .collection('security_events')
                 .add({
               'type': 'session_active',
@@ -143,12 +180,15 @@ class SecurityService {
               'details': 'Session active heartbeat',
               'employeeId': currentUserId,
               'timestamp': FieldValue.serverTimestamp(),
-            }).timeout(const Duration(seconds: 3));
-
-            await prefs.setInt('last_session_sync', now);
+            }).timeout(const Duration(seconds: 3))
+                .then((_) async {
+              await prefs.setInt('last_session_sync', now);
+            }).catchError((e) {
+              // Silent fail — offline
+            }));
           }
         } catch (e) {
-          // Silent fail — offline
+          // Silent fail
         }
       }
     } catch (e) {
@@ -259,6 +299,8 @@ class SecurityService {
     final sessionToken = _uuid.v4();
     final expiry =
     DateTime.now().add(const Duration(hours: 8)).toIso8601String();
+
+    // ✅ Write sa secure storage (sensitive data)
     await _secureStorage.write(key: 'session_token', value: sessionToken);
     await _secureStorage.write(
         key: 'session_employee_id', value: employeeId);
@@ -268,46 +310,148 @@ class SecurityService {
     await _secureStorage.write(
         key: 'is_demo_session', value: isDemo.toString());
 
-    await logSecurityEvent(
+    // 🆕 UPDATE MEMORY CACHE — instant para sa mga susunod na read
+    _updateCache(
+      token: sessionToken,
+      expiry: expiry,
+      employeeId: employeeId,
+      isDemo: isDemo,
+    );
+
+    // Fire and forget log
+    unawaited(logSecurityEvent(
       userId: employeeId,
       action: 'SESSION_CREATED',
       details:
       'New session for employee $employeeId ${isDemo ? "(DEMO)" : ""}',
-    );
+    ));
+
     return sessionToken;
   }
 
+  // ═════════════════════════════════════════════════════════════════
+  // ✅ FIXED: isSessionValid() — cache-first para mabilis
+  // ═════════════════════════════════════════════════════════════════
   Future<bool> isSessionValid() async {
-    final token = await _secureStorage.read(key: 'session_token');
-    final expiry = await _secureStorage.read(key: 'session_expiry');
-    if (token == null || expiry == null) return false;
+    // 🆕 FAST PATH: Cache hit — instant return
+    if (_isCacheValid && _cachedSessionToken != null) {
+      final expiry = _cachedSessionExpiry;
+      if (expiry == null) return false;
+      try {
+        return DateTime.now().isBefore(DateTime.parse(expiry));
+      } catch (_) {
+        return false;
+      }
+    }
+
+    // Cache miss — read from secure storage (parallel)
     try {
-      return DateTime.now().isBefore(DateTime.parse(expiry));
+      final results = await Future.wait<String?>([
+        _secureStorage.read(key: 'session_token'),
+        _secureStorage.read(key: 'session_expiry'),
+      ]);
+
+      final token = results[0];
+      final expiry = results[1];
+
+      if (token == null || expiry == null) {
+        _updateCache(token: '', expiry: '', employeeId: '');
+        return false;
+      }
+
+      _cachedSessionToken = token;
+      _cachedSessionExpiry = expiry;
+      _cacheTime = DateTime.now();
+
+      try {
+        return DateTime.now().isBefore(DateTime.parse(expiry));
+      } catch (_) {
+        return false;
+      }
+    } catch (e) {
+      debugPrint('⚠️ [SecurityService] isSessionValid error: $e');
+      return false;
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════════════
+  // ✅ FIXED: getCurrentEmployeeId() — cache-first
+  // ═════════════════════════════════════════════════════════════════
+  Future<String?> getCurrentEmployeeId() async {
+    // 🆕 FAST PATH: Cache hit
+    if (_isCacheValid) {
+      if (_cachedSessionEmployeeId != null &&
+          _cachedSessionEmployeeId!.isNotEmpty) {
+        // Check expiry from cache
+        if (_cachedSessionExpiry != null) {
+          try {
+            if (DateTime.now().isBefore(
+                DateTime.parse(_cachedSessionExpiry!))) {
+              return _cachedSessionEmployeeId;
+            }
+          } catch (_) {}
+        }
+      }
+      // Cache present but session invalid
+      if (_cachedSessionToken == null || _cachedSessionToken!.isEmpty) {
+        return null;
+      }
+    }
+
+    // Cache miss — read from secure storage
+    final valid = await isSessionValid();
+    if (!valid) return null;
+
+    // Session valid — read employee ID (only if not cached)
+    if (_cachedSessionEmployeeId != null &&
+        _cachedSessionEmployeeId!.isNotEmpty) {
+      return _cachedSessionEmployeeId;
+    }
+
+    try {
+      final empId = await _secureStorage.read(key: 'session_employee_id');
+      _cachedSessionEmployeeId = empId;
+      _cacheTime = DateTime.now();
+      return empId;
+    } catch (e) {
+      debugPrint('⚠️ [SecurityService] getCurrentEmployeeId error: $e');
+      return null;
+    }
+  }
+
+  Future<bool> isDemoSession() async {
+    // Cache-first
+    if (_isCacheValid && _cachedIsDemoSession != null) {
+      return _cachedIsDemoSession!;
+    }
+    try {
+      final val = await _secureStorage.read(key: 'is_demo_session');
+      final isDemo = val == 'true';
+      _cachedIsDemoSession = isDemo;
+      _cacheTime = DateTime.now();
+      return isDemo;
     } catch (_) {
       return false;
     }
   }
 
-  Future<String?> getCurrentEmployeeId() async {
-    final valid = await isSessionValid();
-    if (!valid) return null;
-    return _secureStorage.read(key: 'session_employee_id');
-  }
-
-  Future<bool> isDemoSession() async {
-    final val = await _secureStorage.read(key: 'is_demo_session');
-    return val == 'true';
-  }
-
   Future<void> clearSession() async {
-    final empId = await _secureStorage.read(key: 'session_employee_id');
+    // 🆕 Invalidate cache IMMEDIATELY
+    _invalidateCache();
+
+    String? empId;
+    try {
+      empId = await _secureStorage.read(key: 'session_employee_id');
+    } catch (_) {}
+
     await _secureStorage.deleteAll();
+
     if (empId != null) {
-      await logSecurityEvent(
+      unawaited(logSecurityEvent(
         userId: empId,
         action: 'SESSION_ENDED',
         details: 'User logged out',
-      );
+      ));
     }
   }
 

@@ -169,6 +169,10 @@ class DashboardScreenState extends State<DashboardScreen>
   static const Duration _maxInactivityTime = Duration(minutes: 30);
   static const Duration _clockActionCooldown = Duration(seconds: 3);
   static const Duration _sessionCacheTTL = Duration(seconds: 5);
+
+  // ✅ BAGO: Mas mahabang timeout para sa mabagal na network
+  static const Duration _sessionCheckTimeout = Duration(seconds: 15);
+
   static const int _maxClockActionsPerSession = 20;
   static const int _maxSecurityLogsPerMinute = 20;
   static const int _maxAttendanceRetries = 3;
@@ -193,6 +197,10 @@ class DashboardScreenState extends State<DashboardScreen>
   bool _clockActionInProgress = false;
   bool? _cachedSessionValid;
   DateTime? _sessionCacheTime;
+
+  // ✅ BAGO: Track consecutive timeouts — para hindi mag-force logout
+  int _consecutiveTimeouts = 0;
+  static const int _maxTimeoutsBeforeLogout = 3;
 
   final Map<String, DateTime> _recentSecurityLogs = {};
 
@@ -383,12 +391,14 @@ class DashboardScreenState extends State<DashboardScreen>
     } catch (_) {}
 
     final valid = await _validateSession(forceRefresh: true);
+    if (!mounted) return;
     if (!valid) {
       await _handleForcedLogout('Invalid session');
       return;
     }
 
     final dataTampered = await _verifyEmployeeDataIntegrity();
+    if (!mounted) return;
     if (dataTampered) {
       _secureLog('🚨 Employee data tampered — forcing logout');
       await _handleForcedLogout('Employee data integrity failed');
@@ -404,6 +414,7 @@ class DashboardScreenState extends State<DashboardScreen>
       } catch (_) {}
     }
 
+    if (!mounted) return;
     _startSecurityMonitoring();
     _safeInit();
   }
@@ -500,6 +511,9 @@ class DashboardScreenState extends State<DashboardScreen>
     _lastUserActivityAt = DateTime.now();
   }
 
+  // ═════════════════════════════════════════════════════════════════
+  // ✅ FIXED: _validateSession() — hindi na mag-force logout sa timeout
+  // ═════════════════════════════════════════════════════════════════
   Future<bool> _validateSession({bool forceRefresh = false}) async {
     if (!forceRefresh &&
         _cachedSessionValid != null &&
@@ -522,26 +536,66 @@ class DashboardScreenState extends State<DashboardScreen>
 
     try {
       String? sessionEmpId;
+      bool hardeningTimeout = false;
       try {
         sessionEmpId = await SecurityHardeningService.instance
             .getCurrentEmployeeId()
-            .timeout(const Duration(seconds: 5));
+            .timeout(_sessionCheckTimeout);
+      } on TimeoutException {
+        _secureLog('⏱️ Hardening session check TIMEOUT — assuming valid');
+        hardeningTimeout = true;
       } catch (e) {
         _secureLog('Hardening session check failed: $e');
       }
 
       bool legacyValid = false;
       String? legacyEmpId;
+      bool legacyTimeout = false;
       try {
         legacyValid = await SecurityService.instance
             .isSessionValid()
-            .timeout(const Duration(seconds: 5));
+            .timeout(_sessionCheckTimeout);
         legacyEmpId =
         await SecurityService.instance.getCurrentEmployeeId();
+      } on TimeoutException {
+        _secureLog('⏱️ Legacy session check TIMEOUT — assuming valid');
+        legacyTimeout = true;
       } catch (e) {
         _secureLog('Legacy session check failed: $e');
       }
 
+      // ✅ FIX: Kapag BOTH may timeout → huwag mag-force logout
+      // Baka slow network lang. Assume valid at hintayin ang next check.
+      if (hardeningTimeout || legacyTimeout) {
+        _consecutiveTimeouts++;
+        _secureLog(
+            '⏱️ Timeout #$_consecutiveTimeouts/${_maxTimeoutsBeforeLogout}');
+
+        // ✅ Mag-force logout lang kung sobra-sobra na ang timeout
+        if (_consecutiveTimeouts >= _maxTimeoutsBeforeLogout) {
+          _secureLog('🚨 Too many consecutive timeouts — FAIL');
+          await _logSecurityEvent(
+            type: 'dashboard_session_timeout',
+            severity: 'medium',
+            details:
+            '$_consecutiveTimeouts consecutive timeouts on session check',
+          );
+          _cachedSessionValid = false;
+          _sessionCacheTime = DateTime.now();
+          return false;
+        }
+
+        // ✅ I-assume valid para hindi mag-force logout
+        _secureLog('✅ Assuming session VALID (timeout, will retry)');
+        _cachedSessionValid = true;
+        _sessionCacheTime = DateTime.now();
+        return true;
+      }
+
+      // ✅ Reset timeout counter kapag successful ang check
+      _consecutiveTimeouts = 0;
+
+      // Normal empty-session check (walang timeout)
       if ((sessionEmpId == null || sessionEmpId.isEmpty) && !legacyValid) {
         _secureLog('🚨 No valid session — FAIL');
         await _logSecurityEvent(
@@ -577,14 +631,15 @@ class DashboardScreenState extends State<DashboardScreen>
       return true;
     } catch (e) {
       _secureLog('⚠️ Session validation error: $e');
-      await _logSecurityEvent(
-        type: 'dashboard_session_error',
-        severity: 'high',
-        details: 'Validation error: $e',
-      );
-      _cachedSessionValid = false;
+      // ✅ Huwag mag-force logout sa general error — assume valid
+      _consecutiveTimeouts++;
+      if (_consecutiveTimeouts >= _maxTimeoutsBeforeLogout) {
+        _cachedSessionValid = false;
+      } else {
+        _cachedSessionValid = true;
+      }
       _sessionCacheTime = DateTime.now();
-      return false;
+      return _cachedSessionValid!;
     }
   }
 
@@ -788,6 +843,7 @@ class DashboardScreenState extends State<DashboardScreen>
     final startTime = DateTime.now();
 
     await _checkNetworkOnEntry();
+    if (!mounted) return;
 
     try {
       await _loadTodayAttendance().timeout(
@@ -799,23 +855,28 @@ class DashboardScreenState extends State<DashboardScreen>
     } catch (e) {
       _secureLog('❌ _loadTodayAttendance: $e');
     }
+    if (!mounted) return;
 
     _startAttendanceStream();
     _startEmployeeListener();
     await _refreshLocation();
+    if (!mounted) return;
 
     try {
       await _loadPayslipAmount();
     } catch (e) {
       _secureLog('❌ _loadPayslipAmount: $e');
     }
+    if (!mounted) return;
 
     try {
       await _loadEmployeePhoto();
     } catch (e) {
       _secureLog('❌ _loadEmployeePhoto: $e');
     }
+    if (!mounted) return;
 
+    if (!mounted) return;
     setState(() => _sessionValidated = true);
 
     _logSecurityEvent(
@@ -830,12 +891,11 @@ class DashboardScreenState extends State<DashboardScreen>
           Duration(milliseconds: 800 - elapsed.inMilliseconds));
     }
 
-    if (mounted) {
-      setState(() {
-        _isLoadingAttendance = false;
-        _checkingLocation = false;
-      });
-    }
+    if (!mounted) return;
+    setState(() {
+      _isLoadingAttendance = false;
+      _checkingLocation = false;
+    });
   }
 
   void _startEmployeeListener() {
@@ -902,7 +962,8 @@ class DashboardScreenState extends State<DashboardScreen>
   }
 
   Future<void> _refreshLocation() async {
-    if (mounted) setState(() => _checkingLocation = true);
+    if (!mounted) return;
+    setState(() => _checkingLocation = true);
 
     GeofenceService.instance.invalidateCache();
 
@@ -1374,6 +1435,10 @@ class DashboardScreenState extends State<DashboardScreen>
     _clockActionInProgress = true;
 
     _validateSession(forceRefresh: true).then((valid) async {
+      if (!mounted) {
+        _clockActionInProgress = false;
+        return;
+      }
       if (!valid) {
         _clockActionInProgress = false;
         _handleForcedLogout('Session invalidated during clock action');
@@ -2003,10 +2068,6 @@ class DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🖼️ STATUS BANNER — image + clean gradient overlay
-  // gradient: from-[#09090b] via-[#09090b]/40 to-black/0
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildStatusBanner() {
     final String statusText;
     final String subtitle;
@@ -2065,7 +2126,6 @@ class DashboardScreenState extends State<DashboardScreen>
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
-          // ═══ 1. BACKGROUND IMAGE (60% opacity, cover) ═══
           Positioned.fill(
             child: Opacity(
               opacity: 0.6,
@@ -2079,8 +2139,6 @@ class DashboardScreenState extends State<DashboardScreen>
               ),
             ),
           ),
-
-          // ═══ 2. GRADIENT OVERLAY — from-[#09090b] via-[#09090b]/40 to-black/0 ═══
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -2097,8 +2155,6 @@ class DashboardScreenState extends State<DashboardScreen>
               ),
             ),
           ),
-
-          // ═══ 3. TEXT CONTENT ═══
           Padding(
             padding: const EdgeInsets.fromLTRB(25, 32, 25, 20),
             child: Column(
@@ -2125,9 +2181,7 @@ class DashboardScreenState extends State<DashboardScreen>
                     ],
                   ),
                 ),
-
                 const Spacer(),
-
                 Text(
                   subtitle,
                   softWrap: true,

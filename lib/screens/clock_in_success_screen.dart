@@ -1,4 +1,4 @@
-// lib/screens/clock_in_success_screen.dart
+﻿// lib/screens/clock_in_success_screen.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -56,6 +56,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   StreamSubscription<bool>? _networkSub;
 
   static const String _kReceiptSecretKey = 'receipt_signing_secret';
+  static const String _logoAsset = 'assets/images/logo.png';
   late final String _sessionNonce;
   late final String _transactionId;
   String? _receiptHash;
@@ -68,9 +69,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   static const _gradMid = Color(0xFFFA6A00);
   static const _gradEnd = Color(0xFFF54900);
 
-  // ═══════════════════════════════════════════════════════════════
-  // Design tokens — mula sa HTML mockup (exact coordinates)
-  // ═══════════════════════════════════════════════════════════════
+  // Card design tokens (HTML mockup)
   static const double _designCardW = 338.14;
   static const double _designCardH = 343.03;
   static const double _designIconSize = 112.0;
@@ -79,18 +78,25 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   static const double _designSubtitleTop = 255.14;
   static const double _designBorderWidth = 1.15;
   static const double _designRadius = 16.0;
-
-  // Horizontal margins mula sa HTML (left/right ng bawat element)
   static const double _designTitleHMargin = 33.15;
   static const double _designSubtitleHMargin = 60.75;
+
+  // Auth background design tokens
+  static const double _authHeaderH = 287.13;
+  static const double _authHeaderRadius = 16.0;
+  static const double _authHeaderBorderW = 1.15;
+  static const Color _authHeaderBorderColor = Color(0xFF382A20);
+  static const Color _authOrangeBorder = Color(0xFFFFA500);
+  static const double _stepCardTop = 191.14;
+  static const double _stepCardHPad = 24.0;
 
   @override
   void initState() {
     super.initState();
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.dark,
-      statusBarBrightness: Brightness.light,
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
     ));
 
     _sessionNonce = _generateSessionNonce();
@@ -244,6 +250,11 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     super.dispose();
   }
 
+  double _degToRad(double deg) => deg * 3.1415926535 / 180;
+
+  // ═══════════════════════════════════════════════════════════════
+  // BUILD — 3 layers (HTML mockup match)
+  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -253,27 +264,284 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         _handleContinue();
       },
       child: Scaffold(
-        // Transparent — ang dark overlay ay galing sa
-        // PageRouteBuilder.barrierColor ng nag-navigate na screen
-        backgroundColor: Colors.transparent,
-        body: Center(
-          child: FadeTransition(
-            opacity: _fadeAnim,
-            child: ScaleTransition(
-              scale: _scaleAnim,
-              child: GestureDetector(
-                onTap: _handleContinue,
-                child: _buildSuccessCard(),
+        backgroundColor: Colors.white,
+        body: Stack(
+          children: [
+            // Layer 1: Auth & Clock In background (with watermark)
+            Positioned.fill(child: _buildAuthBackground()),
+
+            // Layer 2: Dark scrim (44%)
+            Positioned.fill(
+              child: Container(
+                color: const Color(0xFF09090B).withOpacity(0.44),
               ),
             ),
-          ),
+
+            // Layer 3: Success card centered
+            Center(
+              child: FadeTransition(
+                opacity: _fadeAnim,
+                child: ScaleTransition(
+                  scale: _scaleAnim,
+                  child: GestureDetector(
+                    onTap: _handleContinue,
+                    child: _buildSuccessCard(),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SUCCESS CARD — Positioned layout para tumugma sa HTML design
+  // AUTH BACKGROUND — Stack with watermark + header + step card
+  // ═══════════════════════════════════════════════════════════════
+  Widget _buildAuthBackground() {
+    return Stack(
+      clipBehavior: Clip.hardEdge,
+      children: [
+        // Base: white body
+        Positioned.fill(child: Container(color: Colors.white)),
+
+        // ═══════════════════════════════════════════════════════
+        // 🖐️ WATERMARK LOGO — "kamay" (mula sa splash screen)
+        // Top-right: rotated 270°, faded
+        // Bottom-left: rotated 425°, orange tinted (ito ang "kamay")
+        // ═══════════════════════════════════════════════════════
+        Positioned(
+          top: -180,
+          right: -200,
+          child: Transform.rotate(
+            angle: _degToRad(270),
+            child: Opacity(
+              opacity: 0.25,
+              child: Image.asset(
+                _logoAsset,
+                width: 600,
+                height: 600,
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          bottom: -130,
+          left: -150,
+          child: Transform.rotate(
+            angle: _degToRad(425),
+            child: Opacity(
+              opacity: 0.80,
+              child: ColorFiltered(
+                colorFilter: const ColorFilter.mode(
+                  Color.fromRGBO(255, 138, 0, 0.10),
+                  BlendMode.srcIn,
+                ),
+                child: Image.asset(
+                  _logoAsset,
+                  width: 500,
+                  height: 500,
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        // Orange gradient header
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: _authHeaderH,
+          child: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [_gradTop, Color(0xFFFF6B00), _gradEnd],
+                stops: [0.0001, 0.3318, 1.0],
+              ),
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(_authHeaderRadius),
+                bottomRight: Radius.circular(_authHeaderRadius),
+              ),
+              border: Border(
+                bottom: BorderSide(
+                  color: _authHeaderBorderColor,
+                  width: _authHeaderBorderW,
+                ),
+              ),
+            ),
+            child: Stack(
+              children: [
+                // Back button
+                Positioned(
+                  left: 24,
+                  top: 48,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 19.99,
+                        height: 19.99,
+                        child: CustomPaint(painter: _BackArrowPainter()),
+                      ),
+                      const SizedBox(width: 2),
+                      const Text(
+                        'Back',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          height: 0.9,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Title
+                const Positioned(
+                  left: 24,
+                  top: 95.99,
+                  child: Text(
+                    'Auth & Clock In',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 30,
+                      fontWeight: FontWeight.bold,
+                      height: 0.9,
+                    ),
+                  ),
+                ),
+
+                // Subtitle
+                const Positioned(
+                  left: 24,
+                  top: 136.99,
+                  child: Text(
+                    'Select your initial verification method',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      height: 0.9,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Step 1 card — overlapping header bottom
+        Positioned(
+          top: _stepCardTop,
+          left: _stepCardHPad,
+          right: _stepCardHPad,
+          child: _buildStep1Card(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStep1Card() {
+    return Container(
+      height: 234.38,
+      padding: const EdgeInsets.fromLTRB(25.1, 25.1, 25.1, 1.11),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _authOrangeBorder, width: 1.11),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 3,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(
+            height: 20.99,
+            child: Center(
+              child: Text(
+                'Step 1: Initial Login',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 23.99),
+          SizedBox(
+            height: 139.18,
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildMethodCard(
+                    label: 'Key Fob',
+                    icon: Icons.contactless_rounded,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildMethodCard(
+                    label: 'Use PIN',
+                    icon: Icons.key_rounded,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMethodCard({required String label, required IconData icon}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _authOrangeBorder, width: 1.11),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 55.99,
+            height: 55.99,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _authOrangeBorder, width: 1),
+            ),
+            child: Icon(icon, color: const Color(0xFFFB923C), size: 28),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF0F172A),
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SUCCESS CARD
   // ═══════════════════════════════════════════════════════════════
   Widget _buildSuccessCard() {
     final isClockIn = widget.type.toUpperCase() == 'IN';
@@ -310,7 +578,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          // ─── ICON — center horizontally, top: 33.15 ───
           Positioned(
             top: _designIconTop,
             left: 0,
@@ -325,8 +592,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
               ),
             ),
           ),
-
-          // ─── TITLE — center horizontally, top: 177.13 ───
           Positioned(
             top: _designTitleTop,
             left: _designTitleHMargin,
@@ -342,8 +607,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
               ),
             ),
           ),
-
-          // ─── SUBTITLE — center horizontally, top: 255.14 ───
           Positioned(
             top: _designSubtitleTop,
             left: _designSubtitleHMargin,
@@ -359,8 +622,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
               ),
             ),
           ),
-
-          // ─── VERIFIED badge — top-right ───
           Positioned(
             top: 8,
             right: 8,
@@ -390,8 +651,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
               ),
             ),
           ),
-
-          // ─── OFFLINE badge — bottom-center, kapag offline lang ───
           if (!_isOnline)
             Positioned(
               bottom: 12,
@@ -434,22 +693,42 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// CHECK ICON PAINTER — eksaktong tugma sa SVG sa HTML
-// ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// BACK ARROW PAINTER
+// ═══════════════════════════════════════════════════════════════
+class _BackArrowPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.66602
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final path = Path()
+      ..moveTo(size.width * 0.75, size.height * 0.75)
+      ..lineTo(size.width * 0.25, size.height * 0.5)
+      ..lineTo(size.width * 0.75, size.height * 0.25);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CHECK ICON PAINTER
+// ═══════════════════════════════════════════════════════════════
 class _CheckIconPainter extends CustomPainter {
   final Color color;
   const _CheckIconPainter({required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Ang SVG viewBox ay 112x112. Ang paths ay may bounds
-    // mula (1.5, 1.5) hanggang (110.496, 110.496). Kaya ang
-    // scale ay base sa 112 (ang viewBox).
     const svgSize = 112.0;
     final scale = size.width / svgSize;
 
-    // ─── Rounded rectangle (background + border) ───
     final fillPaint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.fill;
@@ -471,7 +750,6 @@ class _CheckIconPainter extends CustomPainter {
     canvas.drawRRect(rrect, fillPaint);
     canvas.drawRRect(rrect, borderPaint);
 
-    // ─── Circle + checkmark ───
     final strokePaint = Paint()
       ..color = color
       ..strokeWidth = 3.99965 * scale

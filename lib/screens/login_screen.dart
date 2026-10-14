@@ -2852,7 +2852,8 @@ class _LoginScreenState extends State<LoginScreen>
     _goToStep(_LoginStep.clientMeeting);
   }
 
-  Future<void> _releaseCamera() async {
+  /// Safe cleanup — walang setState. Ginagamit sa dispose() at lifecycle.
+  Future<void> _releaseCameraQuiet() async {
     final controller = _cameraController;
     _cameraController = null;
     if (controller != null) {
@@ -2860,7 +2861,20 @@ class _LoginScreenState extends State<LoginScreen>
         await controller.dispose();
       } catch (_) {}
     }
-    if (mounted) setState(() {});
+  }
+
+  /// Normal release — may setState. Ginagamit kapag buhay pa ang widget.
+  Future<void> _releaseCamera() async {
+    await _releaseCameraQuiet();
+    if (!mounted) return;
+    // Double-check na active pa ang element (hindi pa defunct)
+    try {
+      if (context.mounted) {
+        setState(() {});
+      }
+    } catch (_) {
+      // Silent — nangyayari lang ito kapag defunct na ang element
+    }
   }
 
   Future<void> _startCameraSession() async {

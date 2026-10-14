@@ -1741,17 +1741,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     Navigator.of(context).pop(true);
   }
 
-  void _proceedToNext() {
+     void _proceedToNext() {
     if (!mounted) return;
     final navigator = Navigator.of(context);
 
-    navigator.push(
-      PageRouteBuilder(
-        opaque: false,
-        barrierColor: const Color(0xFF09090B).withOpacity(0.44),
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: Duration.zero,
-        pageBuilder: (_, __, ___) => ClockInSuccessScreen(
+    navigator.pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ClockInSuccessScreen(
           employee: widget.employee,
           arrivalTime: widget.arrivalTime,
           faceMatchPercent: _matchPercent,
