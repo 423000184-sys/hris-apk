@@ -1,4 +1,6 @@
 // lib/screens/landing_screen.dart
+// v2.2: 🔒 Demo mode now REQUIRES internet connection
+//       ⚠️ Offline users cannot enter demo mode — snackbar shown
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../models/employee.dart';
+import '../services/demo_mode_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/security_service.dart';
 import '../widgets/bootstrap_grid.dart';
@@ -63,6 +66,10 @@ class _T {
 
   static const Color shieldBg = Color(0xFF0C0C0E);
   static const Color danger = Color(0xFFDC2626);
+
+  // 🎭 DEMO — orange gradient (matches app theme)
+  static const Color demoGradStart = Color(0xFFFF8A00);
+  static const Color demoGradEnd = Color(0xFFF54900);
 }
 
 class _ThemeColors {
@@ -128,9 +135,19 @@ class _LandingScreenState extends State<LandingScreen>
 
   DateTime? _lastAdminAttempt;
 
+  // ✅ 5-tap secret on the logo
+  int _logoTapCount = 0;
+  DateTime? _firstLogoTapTime;
+  static const int _logoTapRequired = 5;
+  static const Duration _logoTapResetWindow = Duration(seconds: 3);
+
   // 🔒 Device binding
   String? _deviceBinding;
   bool _deviceCompromised = false;
+
+  // 🔌 Offline banner state
+  StreamSubscription<bool>? _connectivitySub;
+  bool _isOnline = true;
 
   @override
   void initState() {
@@ -154,33 +171,62 @@ class _LandingScreenState extends State<LandingScreen>
       ));
     }
 
+    _initConnectivityListener();
     _bootstrapSecurityAndCheckSession();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🔌 CONNECTIVITY LISTENER — real-time online/offline state
+  // ═══════════════════════════════════════════════════════════════════════
+  void _initConnectivityListener() {
+    try {
+      _isOnline = ConnectivityService.instance.isOnline;
+    } catch (_) {
+      _isOnline = true;
+    }
+
+    try {
+      _connectivitySub =
+          ConnectivityService.instance.onStatusChange.listen((online) {
+            if (!mounted) return;
+            setState(() => _isOnline = online);
+            _secureLog('🔌 Connectivity changed: online=$online');
+          });
+    } catch (e) {
+      _secureLog('⚠️ connectivity listen error: $e');
+    }
+  }
+
+  bool _isOnlineSafely() {
+    try {
+      return ConnectivityService.instance.isOnline;
+    } catch (e) {
+      _secureLog('Connectivity check failed: $e');
+      return true;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════
   // 🔒 BOOTSTRAP
   // ═══════════════════════════════════════════════════════════════════════
   Future<void> _bootstrapSecurityAndCheckSession() async {
-    // ═══════════════════════════════════════════════════════════════
-    // ✅ STEP 0: CHECK MUNA kung galing sa snap logout o forced logout
-    // ═══════════════════════════════════════════════════════════════
+    // ✅ STEP 0: CHECK kung galing sa snap logout o forced logout
     try {
       final prefs = await SharedPreferences.getInstance();
       final forceShow = prefs.getBool('force_show_landing') ?? false;
       if (forceShow) {
-        // Consume the flag — isang beses lang ito applicable
         await prefs.remove('force_show_landing');
         await prefs.remove('force_show_landing_at');
         _secureLog('🚪 force_show_landing flag SET — '
             'skipping session restore (snap/forced logout)');
         if (mounted) setState(() => _checkingSession = false);
-        return; // ← HUWAG tumuloy sa _checkExistingSession()
+        return;
       }
     } catch (e) {
       _secureLog('⚠️ flag check failed: $e');
     }
 
-    // ✅ STEP 0b: Check din ang route arguments (belt + suspenders)
+    // ✅ STEP 0b: Check din ang route arguments
     try {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map && args['skipSessionRestore'] == true) {
@@ -190,10 +236,6 @@ class _LandingScreenState extends State<LandingScreen>
         return;
       }
     } catch (_) {}
-
-    // ═══════════════════════════════════════════════════════════════
-    // NORMAL BOOTSTRAP (dating code, walang binago)
-    // ═══════════════════════════════════════════════════════════════
 
     // 1. FLAG_SECURE
     try {
@@ -396,6 +438,7 @@ class _LandingScreenState extends State<LandingScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _adminHoldTimer?.cancel();
+    _connectivitySub?.cancel();
     _fadeCtrl.dispose();
     SecurityHardeningService.instance.disableSecureScreen();
     super.dispose();
@@ -409,6 +452,39 @@ class _LandingScreenState extends State<LandingScreen>
     if (shouldObscure != _obscureContent && mounted) {
       setState(() => _obscureContent = shouldObscure);
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🔔 OFFLINE SNACKBAR HELPER
+  // ═══════════════════════════════════════════════════════════════════════
+  void _showOfflineSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.cloud_off_rounded,
+                  color: Colors.white, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: _T.danger,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 3),
+        ),
+      );
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -433,23 +509,8 @@ class _LandingScreenState extends State<LandingScreen>
       if (!mounted) return;
 
       if (!online) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              content: const Text(
-                'Kailangan ng internet connection para makapag-login.',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              backgroundColor: _T.danger,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              margin: const EdgeInsets.all(16),
-              duration: const Duration(seconds: 3),
-            ),
-          );
+        _showOfflineSnack(
+            'Need a internet connection to login');
         return;
       }
 
@@ -466,12 +527,69 @@ class _LandingScreenState extends State<LandingScreen>
     }
   }
 
-  bool _isOnlineSafely() {
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🎭 DEMO MODE — REQUIRES INTERNET
+  //    • Kung offline → snackbar, hindi tuloy
+  //    • Kung online → enable demo + navigate to LOGIN SCREEN (Step 1)
+  // ═══════════════════════════════════════════════════════════════════════
+  Future<void> _openDemoMode() async {
+    if (_isNavigating) return;
+    final now = DateTime.now();
+    if (_lastNavAttempt != null &&
+        now.difference(_lastNavAttempt!) < _navCooldown) {
+      _secureLog('🎭 Demo nav throttled');
+      return;
+    }
+
+    // 🔌 CHECK INTERNET FIRST — bago mag-navigate
+    final online = _isOnlineSafely();
+    _secureLog('🎭 Demo tap — online=$online');
+
+    if (!online) {
+      _showOfflineSnack(
+          'Kailangan ng internet para magamit ang Demo Mode.');
+      _secureLog('🎭 Demo BLOCKED — no internet connection');
+      return;
+    }
+
+    _isNavigating = true;
+    _lastNavAttempt = now;
+
     try {
-      return ConnectivityService.instance.isOnline;
+      if (!kIsWeb) {
+        try {
+          HapticFeedback.mediumImpact();
+        } catch (_) {}
+      }
+
+      // ✅ Enable demo + prepare pre-auth keys
+      await DemoModeService.instance.startDemoSession();
+
+      _secureLog('🎭 Demo mode activated — routing to LOGIN SCREEN');
+
+      try {
+        await _logSecurityEvent(
+          type: 'demo_mode_activated',
+          severity: 'info',
+          details: 'User entered DEMO MODE from landing screen',
+        );
+      } catch (_) {}
+
+      if (!mounted) return;
+
+      // 🎯 Navigate to LoginScreen (Step 1)
+      //    Login screen will detect DemoModeService.isEnabled
+      //    and intercept the PIN/Key Fob taps → auto-login.
+      await Navigator.of(context, rootNavigator: true).push(
+        MaterialPageRoute(
+          builder: (_) => const LoginScreen(),
+          settings: const RouteSettings(name: '/login-demo'),
+        ),
+      );
     } catch (e) {
-      _secureLog('Connectivity check failed: $e');
-      return true;
+      _secureLog('Demo nav error: $e');
+    } finally {
+      if (mounted) _isNavigating = false;
     }
   }
 
@@ -499,6 +617,31 @@ class _LandingScreenState extends State<LandingScreen>
   void _handleAdminHoldEnd() {
     _adminHoldTimer?.cancel();
     _adminHoldActive = false;
+  }
+
+  // ✅ 5-tap secret on the logo
+  void _handleLogoTap() {
+    final now = DateTime.now();
+
+    if (_firstLogoTapTime != null &&
+        now.difference(_firstLogoTapTime!) > _logoTapResetWindow) {
+      _logoTapCount = 0;
+      _firstLogoTapTime = null;
+    }
+
+    if (_logoTapCount == 0) {
+      _firstLogoTapTime = now;
+    }
+
+    _logoTapCount++;
+    _secureLog('👆 Logo tap $_logoTapCount/$_logoTapRequired');
+
+    if (_logoTapCount >= _logoTapRequired) {
+      _logoTapCount = 0;
+      _firstLogoTapTime = null;
+      _secureLog('🎯 5-tap secret triggered — opening admin login');
+      unawaited(_openAdminLogin());
+    }
   }
 
   Future<Duration?> _checkAdminLockout() async {
@@ -628,13 +771,18 @@ class _LandingScreenState extends State<LandingScreen>
     }
   }
 
+  // ✅ Wrap logo with hidden admin (long-press + 5-tap)
   Widget _wrapLogoWithHiddenAdmin({required Widget child}) {
-    return Listener(
+    return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onPointerDown: (_) => _handleAdminHoldStart(),
-      onPointerUp: (_) => _handleAdminHoldEnd(),
-      onPointerCancel: (_) => _handleAdminHoldEnd(),
-      child: child,
+      onTap: _handleLogoTap,
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: (_) => _handleAdminHoldStart(),
+        onPointerUp: (_) => _handleAdminHoldEnd(),
+        onPointerCancel: (_) => _handleAdminHoldEnd(),
+        child: child,
+      ),
     );
   }
 
@@ -719,6 +867,7 @@ class _LandingScreenState extends State<LandingScreen>
             child: Column(
               children: [
                 _buildNavbar(useDesktop: useDesktop),
+                if (!_isOnline) _buildOfflineBanner(),
                 Expanded(
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
@@ -731,6 +880,37 @@ class _LandingScreenState extends State<LandingScreen>
             ),
           ),
           if (_obscureContent) _buildPrivacyShield(),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🔌 OFFLINE BANNER — visible kapag walang net
+  // ═══════════════════════════════════════════════════════════════════════
+  Widget _buildOfflineBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: const BoxDecoration(
+        color: _T.danger,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: const [
+          Icon(Icons.cloud_off_rounded, color: Colors.white, size: 16),
+          SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              'No internet - need a network to login or demo.',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
         ],
       ),
     );
@@ -1073,6 +1253,11 @@ class _LandingScreenState extends State<LandingScreen>
         ),
         const SizedBox(height: 32),
         _buildDesktopCTA(),
+        const SizedBox(height: 16),
+        SizedBox(
+          width: 340,
+          child: _buildDemoModeButton(),
+        ),
       ],
     );
   }
@@ -1329,6 +1514,8 @@ class _LandingScreenState extends State<LandingScreen>
           ),
           const SizedBox(height: 20),
           _buildMobileCTAButton(),
+          const SizedBox(height: 12),
+          _buildDemoModeButton(),
           const SizedBox(height: 16),
         ],
       ),
@@ -1370,6 +1557,73 @@ class _LandingScreenState extends State<LandingScreen>
               Icon(Icons.arrow_forward_rounded,
                   color: Colors.black, size: 18),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🎭 DEMO MODE BUTTON — dimmed kapag offline
+  // ═══════════════════════════════════════════════════════════════════════
+  Widget _buildDemoModeButton() {
+    final canTap = _isOnline;
+
+    return SizedBox(
+      width: double.infinity,
+      child: GestureDetector(
+        onTap: _openDemoMode,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 250),
+          opacity: canTap ? 1.0 : 0.55,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            decoration: BoxDecoration(
+              gradient: canTap
+                  ? const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [_T.demoGradStart, _T.demoGradEnd],
+              )
+                  : const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF6B6B6B), Color(0xFF3F3F3F)],
+              ),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: canTap
+                  ? [
+                BoxShadow(
+                  color: _T.demoGradStart.withValues(alpha: 0.35),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ]
+                  : [],
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  canTap
+                      ? Icons.science_rounded
+                      : Icons.cloud_off_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  canTap ? '🎭 Try Demo Mode' : 'Demo (offline)',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

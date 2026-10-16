@@ -1,12 +1,9 @@
 // lib/screens/biometric_method_screen.dart
 // ═══════════════════════════════════════════════════════════════════
-// BIOMETRIC METHOD SCREEN  v1.1
-// Updates:
-//   - FIX: Buttons get stuck disabled after returning from
-//     FingerprintScreen / FacialRecognitionScreen.
-//   - Now uses setState() for _isNavigating flag changes.
-//   - Reset _lastMethodTapAt (cooldown) on return.
-//   - Defensive reset on app resume.
+// BIOMETRIC METHOD SCREEN  v1.4
+//   - 🎭 Demo mode: navigates to the ACTUAL biometric screen (no auto clock-in)
+//   - 🔒 Requires internet connection even in Demo Mode
+//   - 🌐 All UI text in English
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:math' as math;
@@ -17,27 +14,25 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:camera/camera.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../data/local/dao/connectivity_service.dart';
 import '../models/employee.dart';
 import '../services/geofence_service.dart';
 import '../services/network_guard.dart';
 import '../services/security_service.dart';
 import '../services/security_hardening_service.dart';
+import '../services/demo_mode_service.dart';
 import 'fingerprint_screen.dart';
 import 'facial_recognition_screen.dart';
+import 'clock_in_success_screen.dart';
+import 'main_screen.dart';
 import 'login_screen.dart';
 
 void _secureLog(String message) {
   if (kDebugMode) debugPrint('[BiometricMethod] $message');
 }
 
-// ═══════════════════════════════════════════════════════════════
-// FLOW MODE
-// ═══════════════════════════════════════════════════════════════
 enum BiometricFlowMode { login, clockAction }
 
-// ═══════════════════════════════════════════════════════════════
-// THEME
-// ═══════════════════════════════════════════════════════════════
 class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
@@ -78,61 +73,52 @@ class BiometricMethodScreen extends StatefulWidget {
   });
 
   @override
-  State<BiometricMethodScreen> createState() =>
-      _BiometricMethodScreenState();
+  State<BiometricMethodScreen> createState() => _BiometricMethodScreenState();
 }
 
 class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  // ─────────────────────────────────────────────────────────────
-  // State
-  // ─────────────────────────────────────────────────────────────
   bool _isLoading = true;
   String? _errorMessage;
   bool _retryable = false;
 
-  // Availability
   bool _fingerprintAvailable = false;
   bool _facialAvailable = true;
   bool _fingerprintChecked = false;
   bool _cameraChecked = false;
 
-  // Location
   bool _checkingLocation = true;
   bool _isInsideZone = false;
   bool _isWfh = false;
   bool _isDriver = false;
   bool _geofenceExempted = false;
 
-  // Security
   bool _preAuthValid = false;
   bool _deviceCompromised = false;
   bool _obscureContent = false;
   String? _deviceBinding;
   late final String _sessionNonce;
 
-  // Session / revocation / heartbeat state
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sessionSub;
+  StreamSubscription<bool>? _connectivitySub;
   Timer? _heartbeatTimer;
   Timer? _inactivityWatchdog;
   DateTime? _lastUserActivityAt;
   bool _sessionValidated = false;
   bool _loggedOut = false;
 
-  // Rate limiting
   DateTime? _lastMethodTapAt;
   static const Duration _methodTapCooldown = Duration(seconds: 2);
 
-  // Constants
-  static const Duration _sessionCacheTTL = Duration(seconds: 5);
-  static const Duration _maxInactivityTime = Duration(minutes: 10);
   static const Duration _bootstrapTimeout = Duration(seconds: 20);
+  static const Duration _maxInactivityTime = Duration(minutes: 10);
   static const Duration _geofenceFreshTimeout = Duration(seconds: 10);
 
-  // Navigation
   bool _isNavigating = false;
 
-  // Pre-auth keys
+  // 🌐 Live connectivity state
+  bool _isOnline = true;
+
   static const String _kPreAuthEmpKey = 'fp_preauth_employee_id';
   static const String _kPreAuthTimeKey = 'fp_preauth_time';
   static const String _kPreAuthNonceKey = 'fp_preauth_nonce';
@@ -140,7 +126,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
 
   final LocalAuthentication _localAuth = LocalAuthentication();
 
-  // Header dimensions (from login_screen)
   static const double _kHeaderDesignFrameWidth = 386.13;
   static const double _kHeaderH = 287.13;
   static const double _kHeaderBorderBottom = 1.15;
@@ -161,16 +146,16 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
   static const Color _headerBorder = Color(0xFF382A20);
   static const Color _white = Color(0xFFFFFFFF);
   static const Color _orange = Color(0xFFF97316);
+  static const Color _error = Color(0xFFDC2626);
 
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
 
-  bool get _isOnline => NetworkGuard.instance.isOnline;
+  bool get _isDemo => DemoModeService.instance.isEnabled;
   bool get _canClockIn =>
       _isInsideZone || _isWfh || _isDriver || _geofenceExempted;
   bool get _isLoginMode => widget.mode == BiometricFlowMode.login;
 
-  // ─── Dynamic wordings ─────────────────────────────────────────
   String get _stepLabel =>
       _isLoginMode ? 'Step 2: Verify Identity' : 'Verify Identity to Clock';
 
@@ -178,8 +163,15 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
       ? 'Select your verification method'
       : 'Select biometric to clock in or out';
 
-  // ─── Info note text ───────────────────────────────────────────
   String get _infoText {
+    if (_isDemo && !_isOnline) {
+      return '📴 No internet connection. Demo Mode requires an active '
+          'network connection. Please connect and try again.';
+    }
+    if (_isDemo) {
+      return '🎭 DEMO MODE — Choose Fingerprint or Facial to continue '
+          'to the biometric screen.';
+    }
     if (!_fingerprintAvailable && !_facialAvailable) {
       return 'No biometric method available. Contact your administrator.';
     }
@@ -197,9 +189,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         : 'Your location will be verified automatically before clock-in.';
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // INIT
-  // ═══════════════════════════════════════════════════════════════
   @override
   void initState() {
     super.initState();
@@ -207,6 +196,25 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
 
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
+
+    // 🌐 Sync initial connectivity state
+    try {
+      _isOnline = ConnectivityService.instance.isOnline;
+    } catch (_) {
+      _isOnline = true;
+    }
+
+    // 🌐 Listen for connectivity changes (works even in demo)
+    try {
+      _connectivitySub =
+          ConnectivityService.instance.onStatusChange.listen((online) {
+            if (!mounted) return;
+            setState(() => _isOnline = online);
+            _secureLog('🌐 Connectivity changed: online=$online');
+          });
+    } catch (e) {
+      _secureLog('⚠️ connectivity listen error: $e');
+    }
 
     _fadeCtrl = AnimationController(
       vsync: this,
@@ -220,8 +228,47 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // BOOTSTRAP (with timeout + retryable errors)
+  // 🔌 OFFLINE HELPERS
   // ═══════════════════════════════════════════════════════════════
+  bool _isOnlineSafely() {
+    try {
+      return ConnectivityService.instance.isOnline;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _showOfflineSnack([String? custom]) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.cloud_off_rounded,
+                  color: Colors.white, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  custom ??
+                      'Internet connection is required to continue.',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: _error,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+  }
+
   Future<void> _bootstrap() async {
     if (mounted) {
       setState(() {
@@ -234,16 +281,56 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     try {
       await Future<void>.delayed(Duration.zero).timeout(_bootstrapTimeout);
 
+      // ═══════════════════════════════════════════════════════════
+      // 🎭 DEMO MODE — full bypass (but still requires internet)
+      // ═══════════════════════════════════════════════════════════
+      if (_isDemo) {
+        debugPrint('🎭 [DemoMode] Bootstrap — DEMO PATH');
+
+        // 🔌 Check internet FIRST — even in demo
+        if (!_isOnlineSafely()) {
+          _secureLog('🎭 [DemoMode] BLOCKED — no internet at bootstrap');
+          if (mounted) {
+            setState(() {
+              _isOnline = false;
+              _isLoading = false;
+              _errorMessage =
+              'Internet connection is required for Demo Mode.\n\n'
+                  'Please connect to the internet and try again.';
+              _retryable = true;
+            });
+          }
+          return;
+        }
+
+        _preAuthValid = true;
+        _deviceCompromised = false;
+        _determineRole();
+
+        _fingerprintAvailable = true;
+        _facialAvailable = true;
+        _fingerprintChecked = true;
+        _cameraChecked = true;
+        _isInsideZone = true;
+        _checkingLocation = false;
+
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _sessionValidated = true;
+          });
+        }
+        return;
+      }
+
       try {
         await SecurityHardeningService.instance.enableSecureScreen();
       } catch (_) {}
-
       try {
         final ok =
         await SecurityHardeningService.instance.checkDeviceIntegrity();
         _deviceCompromised = !ok;
       } catch (_) {}
-
       try {
         _deviceBinding = await SecurityHardeningService.instance
             .getDeviceBindingToken();
@@ -267,9 +354,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
       _startHeartbeat();
       _startInactivityWatchdog();
 
-      if (mounted && preAuthOk) {
-        _maybeAutoSelect();
-      }
+      if (mounted && preAuthOk) _maybeAutoSelect();
 
       if (mounted) {
         setState(() {
@@ -289,10 +374,14 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // PRE-AUTH VERIFICATION
-  // ═══════════════════════════════════════════════════════════════
   Future<bool> _verifyPreAuth() async {
+    // 🎭 DEMO MODE — bypass security (internet already checked in bootstrap)
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Pre-auth BYPASSED');
+      _preAuthValid = true;
+      return true;
+    }
+
     try {
       final secEmpId =
       await SecurityHardeningService.instance.getCurrentEmployeeId();
@@ -329,12 +418,10 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         await SecurityService.instance.getCurrentEmployeeId();
         final docId = widget.employee.id;
         final empId = widget.employee.employeeId;
-
         final matches = sessionEmpId == null ||
             sessionEmpId.isEmpty ||
             sessionEmpId == docId ||
             (empId.isNotEmpty && sessionEmpId == empId);
-
         if (!matches) {
           await _logSecurityEvent(
             type: 'method_session_mismatch',
@@ -364,51 +451,34 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
               retryable: false);
           return false;
         }
-
         if (preAuthEmpId != widget.employee.id) {
           await _logSecurityEvent(
             type: 'method_preauth_mismatch',
             severity: 'critical',
-            details:
-            'preAuth=$preAuthEmpId != screen=${widget.employee.id}',
+            details: 'preAuth=$preAuthEmpId != screen=${widget.employee.id}',
           );
           _setError('🚨 Security check failed. Please log in again.',
               retryable: false);
           return false;
         }
-
-        final preAuthTime =
-        DateTime.fromMillisecondsSinceEpoch(preAuthTimeMs);
+        final preAuthTime = DateTime.fromMillisecondsSinceEpoch(preAuthTimeMs);
         final elapsed = DateTime.now().difference(preAuthTime);
-
         if (elapsed.isNegative) {
-          await _logSecurityEvent(
-            type: 'method_preauth_future_time',
-            severity: 'high',
-            details: 'preAuthTime is in the future: ${elapsed.inSeconds}s',
-          );
           _setError('🚨 Invalid session time. Please log in again.',
               retryable: false);
           return false;
         }
-
         if (elapsed > _preAuthValidDuration) {
           _setError('🚨 Session expired. Please log in again.',
               retryable: false);
           return false;
         }
-
         await prefs.remove(_kPreAuthEmpKey);
         await prefs.remove(_kPreAuthTimeKey);
         await prefs.remove(_kPreAuthNonceKey);
       }
 
       if (!kIsWeb && _deviceCompromised) {
-        await _logSecurityEvent(
-          type: 'method_device_compromised',
-          severity: 'critical',
-          details: 'Device integrity check failed',
-        );
         _setError('🚨 This device is flagged as compromised. Access blocked.',
             retryable: false);
         return false;
@@ -444,10 +514,8 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     _isWfh = emp.wfhAccess;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SESSION REVOCATION LISTENER
-  // ═══════════════════════════════════════════════════════════════
   void _startSessionRevocationListener() {
+    if (_isDemo) return;
     final empDocId = widget.employee.id;
     if (empDocId.isEmpty) return;
 
@@ -461,26 +529,12 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         if (!mounted || _loggedOut) return;
         final data = snap.data();
         if (data == null) return;
-
         final revoked = data['revoked'] == true;
-        final serverNonce = data['sessionNonce']?.toString();
         final expiresAt = data['expiresAt'] as Timestamp?;
-
         if (revoked) {
           _forceLogout('Session revoked by admin');
           return;
         }
-
-        if (serverNonce != null &&
-            serverNonce.isNotEmpty &&
-            serverNonce != _sessionNonce) {
-          _logSecurityEvent(
-            type: 'method_nonce_mismatch',
-            severity: 'medium',
-            details: 'Server nonce != screen nonce',
-          );
-        }
-
         if (expiresAt != null &&
             expiresAt.toDate().isBefore(DateTime.now())) {
           _forceLogout('Session expired');
@@ -490,10 +544,8 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // HEARTBEAT
-  // ═══════════════════════════════════════════════════════════════
   void _startHeartbeat() {
+    if (_isDemo) return;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(minutes: 2), (_) async {
       if (!mounted || _loggedOut) return;
@@ -514,15 +566,12 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // INACTIVITY WATCHDOG
-  // ═══════════════════════════════════════════════════════════════
   void _startInactivityWatchdog() {
+    if (_isDemo) return;
     _inactivityWatchdog?.cancel();
     _inactivityWatchdog = Timer.periodic(const Duration(minutes: 1), (_) async {
       if (!mounted || _loggedOut) return;
       if (_lastUserActivityAt == null) return;
-
       final idle = DateTime.now().difference(_lastUserActivityAt!);
       if (idle > _maxInactivityTime) {
         await _forceLogout('Inactivity timeout (${idle.inMinutes}m)');
@@ -534,14 +583,13 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     _lastUserActivityAt = DateTime.now();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // FORCE LOGOUT
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _forceLogout(String reason) async {
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Force logout ignored: $reason');
+      return;
+    }
     if (_loggedOut || !mounted) return;
     _loggedOut = true;
-
-    _secureLog('🚨 Force logout: $reason');
 
     _heartbeatTimer?.cancel();
     _inactivityWatchdog?.cancel();
@@ -550,9 +598,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     try {
       await Clipboard.setData(const ClipboardData(text: ''));
     } catch (_) {}
-
     await _hardClearSession();
-
     await _logSecurityEvent(
       type: 'method_forced_logout',
       severity: 'high',
@@ -584,10 +630,12 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     } catch (_) {}
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // HARDWARE CHECKS
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _checkFingerprintHardware() async {
+    if (_isDemo) {
+      _fingerprintAvailable = true;
+      _fingerprintChecked = true;
+      return;
+    }
     if (kIsWeb) {
       _fingerprintAvailable = false;
       _fingerprintChecked = true;
@@ -611,6 +659,11 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
   }
 
   Future<void> _checkCameraAvailability() async {
+    if (_isDemo) {
+      _facialAvailable = true;
+      _cameraChecked = true;
+      return;
+    }
     if (kIsWeb) {
       _facialAvailable = true;
       _cameraChecked = true;
@@ -627,6 +680,12 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
   }
 
   Future<void> _checkLocation() async {
+    if (_isDemo) {
+      _isInsideZone = true;
+      _geofenceExempted = true;
+      if (mounted) setState(() => _checkingLocation = false);
+      return;
+    }
     try {
       final empId = widget.employee.id;
       GeofenceResult? result;
@@ -635,7 +694,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
             .checkGeofenceForEmployee(employeeId: empId)
             .timeout(const Duration(seconds: 15));
       } catch (_) {}
-
       if (!mounted) return;
       if (result != null) {
         _isInsideZone = result.isInside ||
@@ -648,10 +706,8 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // AUTO-SELECT
-  // ═══════════════════════════════════════════════════════════════
   void _maybeAutoSelect() {
+    if (_isDemo) return;
     if (_fingerprintChecked && _cameraChecked) {
       if (_fingerprintAvailable && !_facialAvailable) {
         Future.delayed(const Duration(milliseconds: 1500), () {
@@ -665,10 +721,8 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // RATE LIMIT
-  // ═══════════════════════════════════════════════════════════════
   bool _checkMethodRateLimit() {
+    if (_isDemo) return true;
     final now = DateTime.now();
     if (_lastMethodTapAt != null) {
       final elapsed = now.difference(_lastMethodTapAt!).inMilliseconds;
@@ -681,20 +735,16 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     return true;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // FRESH GEOFENCE CHECK BEFORE NAVIGATION
-  // ═══════════════════════════════════════════════════════════════
   Future<bool> _revalidateBeforeNavigation() async {
+    if (_isDemo) return true;
     final valid = await SecurityService.instance
         .isSessionValid()
         .timeout(const Duration(seconds: 5))
         .catchError((_) => false);
-
     if (!valid) {
       await _forceLogout('Session invalid on selection');
       return false;
     }
-
     if (!_isWfh && !_isDriver && !_geofenceExempted) {
       try {
         final fresh = await GeofenceService.instance
@@ -727,15 +777,25 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SELECT ACTIONS
+  // 🎭 SELECT — FINGERPRINT
+  //    • Demo: navigates to FingerprintScreen (NOT auto clock-in)
+  //    • Requires internet connection even in demo
   // ═══════════════════════════════════════════════════════════════
   Future<void> _selectFingerprint() async {
     _recordUserActivity();
     if (_isNavigating || !_preAuthValid || _loggedOut) return;
     if (!_fingerprintAvailable) return;
+
+    // 🔌 Internet check — required even in demo
+    if (!_isOnlineSafely()) {
+      _secureLog('🔌 Fingerprint selection BLOCKED — no internet');
+      _showOfflineSnack(
+          'Internet connection is required to continue.');
+      return;
+    }
+
     if (!_checkMethodRateLimit()) return;
 
-    // ✅ FIX: setState so buttons reflect disabled state
     if (mounted) {
       setState(() => _isNavigating = true);
     } else {
@@ -743,6 +803,14 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
 
     try {
+      // 🔌 Re-check internet right before navigation
+      if (!_isOnlineSafely()) {
+        _showOfflineSnack(
+            'Internet connection lost. Please reconnect and try again.');
+        return;
+      }
+
+      // ✅ Demo bypasses geofence/session revalidate
       final ok = await _revalidateBeforeNavigation();
       if (!ok || !mounted) return;
 
@@ -753,6 +821,11 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
       );
 
       if (!mounted) return;
+
+      // 🚀 Navigate to FingerprintScreen (same for demo & normal)
+      _secureLog('➡️ Navigating to FingerprintScreen '
+          '(demo=$_isDemo, standalone=true)');
+
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => FingerprintScreen(
@@ -763,7 +836,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         ),
       );
     } finally {
-      // ✅ FIX: setState so buttons re-enable after back
       if (mounted) {
         setState(() {
           _isNavigating = false;
@@ -773,6 +845,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         _isNavigating = false;
         _lastMethodTapAt = null;
       }
+      if (_isDemo) return;
       if (mounted && !_loggedOut) {
         try {
           final valid = await SecurityService.instance
@@ -786,13 +859,26 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🎭 SELECT — FACIAL
+  //    • Demo: navigates to FacialRecognitionScreen (NOT auto clock-in)
+  //    • Requires internet connection even in demo
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _selectFacial() async {
     _recordUserActivity();
     if (_isNavigating || !_preAuthValid || _loggedOut) return;
     if (!_facialAvailable) return;
+
+    // 🔌 Internet check — required even in demo
+    if (!_isOnlineSafely()) {
+      _secureLog('🔌 Facial selection BLOCKED — no internet');
+      _showOfflineSnack(
+          'Internet connection is required to continue.');
+      return;
+    }
+
     if (!_checkMethodRateLimit()) return;
 
-    // ✅ FIX: setState so buttons reflect disabled state
     if (mounted) {
       setState(() => _isNavigating = true);
     } else {
@@ -800,6 +886,14 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
 
     try {
+      // 🔌 Re-check internet right before navigation
+      if (!_isOnlineSafely()) {
+        _showOfflineSnack(
+            'Internet connection lost. Please reconnect and try again.');
+        return;
+      }
+
+      // ✅ Demo bypasses geofence/session revalidate
       final ok = await _revalidateBeforeNavigation();
       if (!ok || !mounted) return;
 
@@ -811,6 +905,11 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
       );
 
       if (!mounted) return;
+
+      // 🚀 Navigate to FacialRecognitionScreen (same for demo & normal)
+      _secureLog('➡️ Navigating to FacialRecognitionScreen '
+          '(demo=$_isDemo)');
+
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => FacialRecognitionScreen(
@@ -820,7 +919,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         ),
       );
     } finally {
-      // ✅ FIX: setState so buttons re-enable after back
       if (mounted) {
         setState(() {
           _isNavigating = false;
@@ -830,6 +928,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         _isNavigating = false;
         _lastMethodTapAt = null;
       }
+      if (_isDemo) return;
       if (mounted && !_loggedOut) {
         try {
           final valid = await SecurityService.instance
@@ -843,9 +942,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // HELPERS
-  // ═══════════════════════════════════════════════════════════════
   String _generateSessionNonce() {
     final rand = math.Random.secure();
     final bytes = List<int>.generate(16, (_) => rand.nextInt(256));
@@ -857,6 +953,10 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     required String severity,
     required String details,
   }) async {
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Security event (skipped): $type — $details');
+      return;
+    }
     try {
       if (!_isOnline) return;
       await FirebaseFirestore.instance.collection('security_events').add({
@@ -888,9 +988,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _recordUserActivity();
-
-      // ✅ FIX: Defensive reset — kung na-stuck ang _isNavigating
-      // (halimbawa dahil sa child route), i-reset on resume.
       if (mounted) {
         final needsReset = _isNavigating;
         setState(() {
@@ -901,8 +998,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
           }
         });
       }
-
-      // 🔒 Re-verify session on resume
+      if (_isDemo) return;
       if (_preAuthValid && !_loggedOut) {
         SecurityService.instance
             .isSessionValid()
@@ -929,14 +1025,14 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     _heartbeatTimer?.cancel();
     _inactivityWatchdog?.cancel();
     _sessionSub?.cancel();
+    _connectivitySub?.cancel();
     _fadeCtrl.dispose();
-    SecurityHardeningService.instance.disableSecureScreen();
+    if (!_isDemo) {
+      SecurityHardeningService.instance.disableSecureScreen();
+    }
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // BUILD
-  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1016,6 +1112,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         opacity: _fadeAnim,
         child: Column(children: [
           _buildOrangeHeader(),
+          if (!_isOnline) _buildOfflineBanner(),
           Expanded(child: _buildSelectMethodStep(tc)),
         ]),
       ),
@@ -1023,8 +1120,34 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // ORANGE HEADER
+  // 🔌 OFFLINE BANNER
   // ═══════════════════════════════════════════════════════════════
+  Widget _buildOfflineBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: _error,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: const [
+          Icon(Icons.cloud_off_rounded, color: Colors.white, size: 16),
+          SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              'No internet connection — biometric verification requires network',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildOrangeHeader() {
     return SafeArea(
       bottom: false,
@@ -1080,8 +1203,8 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
                           SizedBox(
                             width: _kBackIconSize * scale,
                             height: _kBackIconSize * scale,
-                            child: CustomPaint(
-                                painter: _BackArrowPainter()),
+                            child:
+                            CustomPaint(painter: _BackArrowPainter()),
                           ),
                           SizedBox(width: 2 * scale),
                           Text(
@@ -1123,6 +1246,66 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
                       ),
                     ),
                   ),
+                  if (_isDemo)
+                    Positioned(
+                      right: 16 * scale,
+                      top: 48 * scale,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.22),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                  width: 1),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: const [
+                                Icon(Icons.science_rounded,
+                                    color: Colors.white, size: 12),
+                                SizedBox(width: 4),
+                                Text('DEMO',
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 1.0)),
+                              ],
+                            ),
+                          ),
+                          if (!_isOnline) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: _error.withValues(alpha: 0.85),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: const [
+                                  Icon(Icons.cloud_off_rounded,
+                                      color: Colors.white, size: 11),
+                                  SizedBox(width: 4),
+                                  Text('OFFLINE',
+                                      style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: 0.5)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1132,9 +1315,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SELECT METHOD STEP
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildSelectMethodStep(_ThemeColors tc) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1212,16 +1392,17 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // METHOD BUTTONS
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildMethodButtons(_ThemeColors tc) {
+    // Methods disabled when offline OR navigating
+    final fpEnabled = _fingerprintAvailable && !_isNavigating && _isOnline;
+    final faceEnabled = _facialAvailable && !_isNavigating && _isOnline;
+
     return Row(children: [
       Expanded(
         child: _MethodButton(
           icon: Icons.fingerprint_rounded,
           label: 'Fingerprint',
-          enabled: _fingerprintAvailable && !_isNavigating,
+          enabled: fpEnabled,
           onTap: _selectFingerprint,
         ),
       ),
@@ -1230,41 +1411,56 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         child: _MethodButton(
           icon: Icons.face_retouching_natural_rounded,
           label: 'Facial',
-          enabled: _facialAvailable && !_isNavigating,
+          enabled: faceEnabled,
           onTap: _selectFacial,
         ),
       ),
     ]);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // INFO CARD
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildInfoCard(_ThemeColors tc) {
+    final isOffline = !_isOnline;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: tc.infoBg,
+        color: isOffline ? _error.withValues(alpha: 0.08) : tc.infoBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: tc.infoBorder, width: 1.5),
+        border: Border.all(
+            color: isOffline
+                ? _error.withValues(alpha: 0.6)
+                : (_isDemo
+                ? _orange.withValues(alpha: 0.6)
+                : tc.infoBorder),
+            width: 1.5),
       ),
       child: Row(children: [
-        Icon(Icons.info_outline_rounded, color: tc.infoText, size: 16),
+        Icon(
+          isOffline
+              ? Icons.cloud_off_rounded
+              : (_isDemo ? Icons.science_rounded : Icons.info_outline_rounded),
+          color: isOffline ? _error : (_isDemo ? _orange : tc.infoText),
+          size: 16,
+        ),
         const SizedBox(width: 10),
         Expanded(
           child: Text(
             _infoText,
             style: TextStyle(
-                color: tc.infoText, fontSize: 12, height: 1.4),
+                color: isOffline
+                    ? _error
+                    : (_isDemo ? _orange : tc.infoText),
+                fontSize: 12,
+                height: 1.4,
+                fontWeight: (isOffline || _isDemo)
+                    ? FontWeight.w600
+                    : FontWeight.normal),
           ),
         ),
       ]),
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // LOADING
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildLoading() {
     return const Padding(
       padding: EdgeInsets.symmetric(vertical: 40),
@@ -1281,11 +1477,9 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // ERROR (with optional retry)
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildError() {
     final isSessionError = _errorMessage?.contains('log in again') ?? false;
+    final isOfflineError = _errorMessage?.contains('Internet') ?? false;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 20),
@@ -1299,8 +1493,13 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
               shape: BoxShape.circle,
               color: Colors.red.withValues(alpha: 0.15),
             ),
-            child: const Icon(Icons.error_outline_rounded,
-                color: Colors.red, size: 30),
+            child: Icon(
+              isOfflineError
+                  ? Icons.cloud_off_rounded
+                  : Icons.error_outline_rounded,
+              color: Colors.red,
+              size: 30,
+            ),
           ),
           const SizedBox(height: 14),
           Text(
@@ -1496,7 +1695,7 @@ class _MethodButtonState extends State<_MethodButton>
 
     if (!widget.enabled) {
       return Tooltip(
-        message: 'Not available on this device',
+        message: 'Not available',
         child: button,
       );
     }

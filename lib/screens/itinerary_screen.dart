@@ -1,4 +1,7 @@
 // lib/screens/itinerary_screen.dart
+// v1.1: 🎭 DEMO MODE now shows the SAME skeleton loading screen as normal mode.
+//       Skeleton appears briefly (900ms), then fades into demo UI.
+//       Demo mode skips: security monitoring, Firestore reads, network listener.
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -7,6 +10,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/security_service.dart';
+import '../services/demo_mode_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_screens.dart';
 
@@ -60,6 +64,7 @@ String _generateSessionNonce() {
 }
 
 /// 🔒 Log security events to Firestore (GLOBAL — top-level)
+/// 🎭 DEMO MODE — skips Firestore write
 Future<void> _logSecurityEventGlobal({
   required String type,
   required String severity,
@@ -67,6 +72,10 @@ Future<void> _logSecurityEventGlobal({
   String? employeeId,
   String? sessionNonce,
 }) async {
+  if (DemoModeService.instance.isEnabled) {
+    debugPrint('🎭 [DemoMode] Security event (skipped): $type — $details');
+    return;
+  }
   try {
     await FirebaseFirestore.instance.collection('security_events').add({
       'type': type,
@@ -139,6 +148,9 @@ enum _NetworkState { online, offline, checking }
 // POLICY — Total credits
 // ══════════════════════════════════════════════════════════════
 const int _kTotalCredits = 36;
+
+// 🆕 Demo skeleton display duration
+const Duration _kDemoSkeletonDuration = Duration(milliseconds: 900);
 
 // ══════════════════════════════════════════════════════════════
 // HELPERS — date formatting
@@ -792,6 +804,9 @@ class _ItineraryScreenState extends State<ItineraryScreen>
   bool _sessionValidated = false;
   String? _verifiedEmployeeId;
 
+  // 🎭 DEMO MODE
+  bool get _isDemo => DemoModeService.instance.isEnabled;
+
   int get _remaining =>
       (_kTotalCredits - _usedTotal).clamp(0, _kTotalCredits);
 
@@ -805,6 +820,41 @@ class _ItineraryScreenState extends State<ItineraryScreen>
     _lastUserActivityAt = DateTime.now();
     _openedAt = DateTime.now();
 
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — skip network listener, security monitoring
+    //             pero IPAKITA ANG SKELETON sa simula
+    // ═══════════════════════════════════════════════════════════
+    if (_isDemo) {
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('🎭 [DemoMode] Itinerary — DEMO PATH');
+      debugPrint('   • Skipping network listener');
+      debugPrint('   • Skipping security monitoring');
+      debugPrint('   • Skipping Firestore fetch');
+      debugPrint('   • Skeleton shown for ${_kDemoSkeletonDuration.inMilliseconds}ms');
+      debugPrint('═══════════════════════════════════════════');
+
+      _networkState = _NetworkState.online;
+      _sessionValidated = true;
+      _verifiedEmployeeId = widget.employeeId;
+
+      // 🆕 Keep skeleton visible at start
+      _isInitialLoading = true;
+
+      _fetchData();
+
+      // 🆕 Hide skeleton after short delay
+      Future.delayed(_kDemoSkeletonDuration, () {
+        if (!mounted) return;
+        setState(() => _isInitialLoading = false);
+        debugPrint('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
+      });
+
+      return;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // NORMAL MODE
+    // ═══════════════════════════════════════════════════════════
     try {
       _networkSub =
           ConnectivityService.instance.onStatusChange.listen((online) {
@@ -854,6 +904,9 @@ class _ItineraryScreenState extends State<ItineraryScreen>
   // ══════════════════════════════════════════════════════════
 
   Future<bool> _validateSession() async {
+    // 🎭 DEMO — always valid
+    if (_isDemo) return true;
+
     try {
       final valid = await SecurityService.instance.isSessionValid();
       if (!valid) {
@@ -905,6 +958,9 @@ class _ItineraryScreenState extends State<ItineraryScreen>
   }
 
   void _startSecurityMonitoring() {
+    // 🎭 DEMO — skip
+    if (_isDemo) return;
+
     // Heartbeat
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(minutes: 2), (_) async {
@@ -944,6 +1000,8 @@ class _ItineraryScreenState extends State<ItineraryScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isDemo) return;
+
     if (state == AppLifecycleState.resumed) {
       _lastUserActivityAt = DateTime.now();
       _validateSession();
@@ -954,6 +1012,9 @@ class _ItineraryScreenState extends State<ItineraryScreen>
   // 🔒 RATE LIMIT
   // ══════════════════════════════════════════════════════════
   bool _checkRefreshRateLimit() {
+    // 🎭 DEMO — no rate limit
+    if (_isDemo) return true;
+
     final now = DateTime.now();
     if (_lastRefreshAt != null) {
       final elapsed = now.difference(_lastRefreshAt!).inMilliseconds;
@@ -987,6 +1048,12 @@ class _ItineraryScreenState extends State<ItineraryScreen>
   }
 
   Future<void> _checkNetworkOnEntry() async {
+    // 🎭 DEMO — always online
+    if (_isDemo) {
+      if (mounted) setState(() => _networkState = _NetworkState.online);
+      return;
+    }
+
     if (!mounted) return;
     setState(() => _networkState = _NetworkState.checking);
 
@@ -1012,6 +1079,8 @@ class _ItineraryScreenState extends State<ItineraryScreen>
   }
 
   Future<void> _retryNetworkCheck() async {
+    if (_isDemo) return;
+
     if (!mounted) return;
     _lastUserActivityAt = DateTime.now();
 
@@ -1032,10 +1101,78 @@ class _ItineraryScreenState extends State<ItineraryScreen>
   }
 
   // ══════════════════════════════════════════════════════════
+  // 🎭 DEMO DATA — fake itinerary history
+  // ══════════════════════════════════════════════════════════
+  List<Map<String, dynamic>> _buildDemoHistory() {
+    final now = DateTime.now();
+    return <Map<String, dynamic>>[
+      {
+        'id': 'DEMO_ITIN_001',
+        'location': 'BGC Corporate Center, Taguig',
+        'date': now.subtract(const Duration(hours: 3)),
+        'status': 'approved',
+      },
+      {
+        'id': 'DEMO_ITIN_002',
+        'location': 'Makati Medical Center',
+        'date': now.subtract(const Duration(days: 1)),
+        'status': 'approved',
+      },
+      {
+        'id': 'DEMO_ITIN_003',
+        'location': 'SM Mall of Asia, Pasay',
+        'date': now.subtract(const Duration(days: 2)),
+        'status': 'pending_hr_approval',
+      },
+      {
+        'id': 'DEMO_ITIN_004',
+        'location': 'Ortigas Center, Pasig',
+        'date': now.subtract(const Duration(days: 4)),
+        'status': 'approved',
+      },
+      {
+        'id': 'DEMO_ITIN_005',
+        'location': 'Quezon City Hall',
+        'date': now.subtract(const Duration(days: 6)),
+        'status': 'rejected',
+      },
+    ];
+  }
+
+  // ══════════════════════════════════════════════════════════
   // 🔒 SECURED FETCH
   // ══════════════════════════════════════════════════════════
   Future<void> _fetchData() async {
     if (!mounted) return;
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — load fake data, no Firestore
+    // ═══════════════════════════════════════════════════════════
+    if (_isDemo) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+
+      final demoList = _buildDemoHistory();
+      int used = 0;
+      for (final item in demoList) {
+        if (item['status'] == 'approved') used += 1;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _history = demoList;
+        _usedTotal = used;
+        _loading = false;
+      });
+
+      debugPrint('🎭 [DemoMode] Loaded ${demoList.length} demo itinerary items');
+      return;
+    }
 
     // 🔒 Rate limit check
     if (!_checkRefreshRateLimit()) return;
@@ -1074,7 +1211,6 @@ class _ItineraryScreenState extends State<ItineraryScreen>
 
         // 🔒 Verify viewing own data only
         if (empId != widget.employeeId) {
-          // Check if this is a cross-employee access attempt
           if (d['employee_id'] != null) {
             debugPrint('⚠️ [Itinerary] Skipping other employee: $empId');
           }
@@ -1154,6 +1290,9 @@ class _ItineraryScreenState extends State<ItineraryScreen>
     final isOffline = _networkState == _NetworkState.offline;
     final isChecking = _networkState == _NetworkState.checking;
 
+    // ═══════════════════════════════════════════════════════════
+    // 🆕 SKELETON LOADING STATE (works for demo + normal)
+    // ═══════════════════════════════════════════════════════════
     if (isOffline || isChecking || _isInitialLoading) {
       return Scaffold(
         backgroundColor: tc.bg,
@@ -1270,47 +1409,49 @@ class _ItineraryScreenState extends State<ItineraryScreen>
             ),
           ),
           const SizedBox(width: 12),
-          const Expanded(
-            child: Text(
-              'Itinerary',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w500,
-                color: Colors.white,
-              ),
-            ),
-          ),
-
-          // 🔒 SECURED badge
-          if (_sessionValidated)
-            Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.4)),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.verified_user_rounded,
-                      size: 10, color: Colors.white),
-                  SizedBox(width: 4),
-                  Text(
-                    'SECURED',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: 0.4,
+          Expanded(
+            child: Row(
+              children: [
+                const Text(
+                  'Itinerary',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white,
+                  ),
+                ),
+                // 🎭 DEMO badge
+                if (_isDemo) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          width: 1),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.science_rounded,
+                            color: Colors.white, size: 10),
+                        SizedBox(width: 3),
+                        Text('DEMO',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.6)),
+                      ],
                     ),
                   ),
                 ],
-              ),
+              ],
             ),
+          ),
 
           GestureDetector(
             onTap: _fetchData,

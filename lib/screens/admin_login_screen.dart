@@ -1,4 +1,7 @@
 // lib/screens/admin_login_screen.dart
+// v3.6: 🎭 Demo Mode support — any credentials work when demo is enabled
+//       🔒 Demo Mode requires internet connection
+//       🔘 Added "Enter Demo Mode" button for quick testing
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -12,10 +15,12 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../theme/app_theme.dart';
+import '../data/local/dao/connectivity_service.dart';
 import '../services/admin_auth_service.dart';
 import '../services/network_guard.dart';
 import '../services/security_hardening_service.dart';
 import '../services/device_info_service.dart';
+import '../services/demo_mode_service.dart';
 import 'admin_dashboard.dart';
 import 'landing_screen.dart';
 
@@ -44,8 +49,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   static const int _maxFailedAttempts = 5;
   static const int _lockoutMinutes = 15;
 
-  /// 🔑 25s — mas mahaba kaysa sa Firestore internal retry (default ~10s)
-  /// para hindi tayo mag-timeout habang nagre-retry pa ang SDK.
   static const Duration _loginTimeout = Duration(seconds: 25);
   static const Duration _probeTimeout = Duration(seconds: 5);
   static const int _minInputLength = 6;
@@ -82,6 +85,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   Timer? _autoClearTimer;
   Timer? _clockTimer;
   Timer? _tickerTimer;
+  Timer? _connectivityTimer;
 
   Timer? _holdTimer;
   bool _returningToEmployee = false;
@@ -96,6 +100,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   int _loginAttemptsThisSession = 0;
 
   bool _showSuccess = false;
+
+  /// 🌐 Live connectivity state (works even in demo)
+  bool _isOnline = true;
+  StreamSubscription<bool>? _connectivitySub;
 
   DateTime _now = DateTime.now();
 
@@ -133,11 +141,154 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   static const Color _red = Color(0xFFEF4444);
   static const Color _green = Color(0xFF16A34A);
 
+  // 🎭 DEMO
+  bool get _isDemo => DemoModeService.instance.isEnabled;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // 🌐 Sync initial connectivity
+    try {
+      _isOnline = ConnectivityService.instance.isOnline;
+    } catch (_) {
+      _isOnline = true;
+    }
+
+    // 🌐 Listen for connectivity changes (works even in demo)
+    try {
+      _connectivitySub =
+          ConnectivityService.instance.onStatusChange.listen((online) {
+            if (!mounted) return;
+            setState(() => _isOnline = online);
+            _log('🌐 connectivity changed: online=$online');
+          });
+    } catch (e) {
+      _log('⚠️ connectivity listen failed: $e');
+    }
+
     _clearSessionAndInitialize();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🎭 DEMO MODE
+  // ═══════════════════════════════════════════════════════════════
+  bool _isOnlineSafely() {
+    try {
+      return ConnectivityService.instance.isOnline;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _showOfflineSnack([String? custom]) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.cloud_off_rounded,
+                  color: Colors.white, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  custom ??
+                      'Internet connection is required to continue.',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: _red,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+  }
+
+  /// 🎭 Enter demo mode — enables DemoModeService and immediately goes to dashboard.
+  Future<void> _enterDemoMode() async {
+    if (_loading) return;
+
+    // 🔌 Internet required even for demo
+    if (!_isOnlineSafely()) {
+      _log('🎭 [DemoMode] BLOCKED — no internet');
+      _showOfflineSnack(
+          'Internet connection is required for Demo Mode.');
+      return;
+    }
+
+    _log('🎭 [DemoMode] Enabling admin demo session...');
+
+    if (!kIsWeb) {
+      try {
+        HapticFeedback.mediumImpact();
+      } catch (_) {}
+    }
+
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+      _infoMessage = null;
+    });
+
+    try {
+      // ✅ Enable demo mode globally
+      await DemoModeService.instance.startDemoSession();
+
+      // Mock a minimal session nonce for the demo run
+      _sessionNonce = _generateSessionNonce();
+
+      // Best-effort audit log (silently ignored if it fails)
+      _fireAndForget(() async {
+        await FirebaseFirestore.instance
+            .collection('admin_login_logs')
+            .add({
+          'emailMasked': 'demo@racoma.com',
+          'success': true,
+          'reason': 'demo_mode',
+          'deviceFingerprint': _deviceFingerprint,
+          'deviceCompromised': false,
+          'sessionNonce': _sessionNonce,
+          'platform': kIsWeb ? 'web' : 'mobile',
+          'timestamp': FieldValue.serverTimestamp(),
+        }).timeout(const Duration(seconds: 3));
+      }, tag: 'demoAuditLog');
+
+      // Clear sensitive input just in case
+      _passCtrl.clear();
+
+      if (!mounted) return;
+
+      // Show success overlay
+      setState(() => _showSuccess = true);
+      _successCtrl.forward(from: 0);
+
+      await Future.delayed(const Duration(milliseconds: 900));
+      if (!mounted) return;
+
+      // 🚀 Navigate to dashboard
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AdminDashboard()),
+            (_) => false,
+      );
+    } catch (e) {
+      _log('❌ [DemoMode] Failed: $e');
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _showSuccess = false;
+        _errorMessage = 'Failed to start Demo Mode. Please try again.';
+      });
+      _successCtrl.reset();
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -229,6 +380,18 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   // AUTH RESTORE
   // ═══════════════════════════════════════════════════════════════
   Future<void> _waitForAuthRestore() async {
+    // 🎭 In demo mode, skip restore — go straight to form
+    if (_isDemo) {
+      _log('🎭 [DemoMode] Skipping auth restore');
+      if (mounted) {
+        setState(() {
+          _authReady = true;
+          _restoredUser = null;
+        });
+      }
+      return;
+    }
+
     if (widget.forceLogout) {
       if (mounted) {
         setState(() {
@@ -265,7 +428,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   }
 
   Future<void> _attemptAutoRedirect(User user) async {
-    if (_redirecting || widget.forceLogout) return;
+    if (_redirecting || widget.forceLogout || _isDemo) return;
 
     _redirecting = true;
     _log('🔍 Auto-redirect check for ${user.uid}');
@@ -391,6 +554,8 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     _autoClearTimer?.cancel();
     _clockTimer?.cancel();
     _tickerTimer?.cancel();
+    _connectivityTimer?.cancel();
+    _connectivitySub?.cancel();
 
     if (_sessionCleared) {
       _ctrl.dispose();
@@ -413,8 +578,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   // ═══════════════════════════════════════════════════════════════
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 🔑 `paused` at `hidden` lang — HUWAG `inactive` (notification shade,
-    // biometric prompt, at system dialogs ay nagpapa-inactive).
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       if (_passCtrl.text.isNotEmpty) _passCtrl.clear();
@@ -437,7 +600,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     if (kDebugMode) debugPrint('[AdminLogin] $message');
   }
 
-  /// 🔑 Fire-and-forget async helper na may error swallowing PERO logged.
   void _fireAndForget(
       Future<void> Function() action, {
         String tag = 'async',
@@ -496,9 +658,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   // CLOUD RATE LIMIT
   // ═══════════════════════════════════════════════════════════════
   Future<Map<String, dynamic>> _checkCloudRateLimit(String email) async {
-    // 🔑 HUWAG mag-block sa `isOnline`. Subukan pa rin — ang Firestore
-    // ay may offline cache, at kung talagang offline, mag-t-throw ito at
-    // hahawakan namin sa catch.
     try {
       final hash = _hashEmail(email);
       final now = DateTime.now();
@@ -535,7 +694,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       }
       return {'allowed': true};
     } catch (e) {
-      // Fail-open: kung hindi ma-check, hayaan ang login.
       if (kDebugMode) debugPrint('[AdminLogin] cloud rate check: $e');
       return {'allowed': true, 'reason': 'check_failed'};
     }
@@ -847,6 +1005,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   // ADMIN VERIFICATION
   // ═══════════════════════════════════════════════════════════════
   Future<bool> _checkEmailVerified() async {
+    // 🎭 Demo mode — always verified
+    if (_isDemo) {
+      _log('🎭 [DemoMode] Auto-verified');
+      return true;
+    }
+
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return false;
@@ -870,7 +1034,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
           return false;
         }
       } catch (_) {
-        // 🔑 Firestore check failed — fall back sa emailVerified check.
+        // Firestore check failed — fall back to emailVerified
       }
 
       if (!user.emailVerified) {
@@ -894,18 +1058,105 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   Future<void> _handleLogin() async {
     FocusScope.of(context).unfocus();
 
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — accept ANY credentials (requires internet)
+    // ═══════════════════════════════════════════════════════════
+    if (_isDemo) {
+      _log('🎭 [DemoMode] _handleLogin — DEMO PATH');
+
+      // 🔌 Internet required even in demo
+      if (!_isOnlineSafely()) {
+        _showOfflineSnack(
+            'Internet connection is required for Demo Mode.');
+        return;
+      }
+
+      final email = _emailCtrl.text.trim().toLowerCase();
+      final password = _passCtrl.text;
+
+      // Basic validation — still need "something" typed
+      if (email.isEmpty || password.isEmpty) {
+        setState(() {
+          _errorMessage =
+          'Enter any email and password (demo accepts anything).';
+        });
+        return;
+      }
+
+      if (_loading) return;
+      setState(() {
+        _loading = true;
+        _errorMessage = null;
+        _infoMessage = null;
+      });
+
+      await Future.delayed(const Duration(milliseconds: 700));
+      if (!mounted) return;
+
+      _sessionNonce = _generateSessionNonce();
+      _passCtrl.clear();
+
+      try {
+        await Clipboard.setData(const ClipboardData(text: ''));
+      } catch (_) {}
+
+      // Best-effort audit log (ignored on failure)
+      _fireAndForget(() async {
+        await FirebaseFirestore.instance
+            .collection('admin_login_logs')
+            .add({
+          'emailMasked': _maskEmail(email),
+          'success': true,
+          'reason': 'demo_mode_any_credentials',
+          'deviceFingerprint': _deviceFingerprint,
+          'deviceCompromised': false,
+          'sessionNonce': _sessionNonce,
+          'platform': kIsWeb ? 'web' : 'mobile',
+          'timestamp': FieldValue.serverTimestamp(),
+        }).timeout(const Duration(seconds: 3));
+      }, tag: 'demoAuditLog');
+
+      if (!mounted) return;
+
+      setState(() {
+        _loading = false;
+        _showSuccess = true;
+      });
+      _successCtrl.forward(from: 0);
+
+      if (!kIsWeb) {
+        try {
+          HapticFeedback.mediumImpact();
+        } catch (_) {}
+      }
+
+      await Future.delayed(const Duration(milliseconds: 900));
+      if (!mounted) return;
+
+      if (widget.onLoginSuccess != null) {
+        widget.onLoginSuccess!();
+        return;
+      }
+
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AdminDashboard()),
+            (_) => false,
+      );
+      return;
+    }
+
     // ─── Local gates ─────────────────────────────────────────
     if (_isLockedOut) {
       setState(() => _errorMessage =
-      'Account locked. Subukan ulit sa ${_remainingLockoutText()}.');
+      'Account locked. Try again in ${_remainingLockoutText()}.');
       return;
     }
     if (_authBackoffUntil != null &&
         _authBackoffUntil!.isAfter(DateTime.now())) {
       final remaining =
           _authBackoffUntil!.difference(DateTime.now()).inSeconds;
-      setState(
-              () => _errorMessage = 'Please wait ${remaining}s before trying again.');
+      setState(() =>
+      _errorMessage = 'Please wait ${remaining}s before trying again.');
       return;
     }
     if (_loading) return;
@@ -933,19 +1184,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       return;
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // 🔑 HUWAG I-BLOCK ANG LOGIN BASE SA `NetworkGuard.isOnline`
-    //    Hayaan ang aktwal na FirebaseAuth call ang mag-decide.
-    //    Naka-fail-open na ang NetworkGuard, pero doble-sigurdo pa rin.
-    // ═══════════════════════════════════════════════════════════
-
     setState(() {
       _loading = true;
       _errorMessage = null;
       _infoMessage = null;
     });
 
-    // ─── Cloud rate limit check (may maikling timeout) ───────
     final cloudCheck = await _checkCloudRateLimit(email);
     if (!mounted) return;
     if (cloudCheck['allowed'] != true) {
@@ -962,7 +1206,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       return;
     }
 
-    // ─── Timeout guard (single source of truth) ──────────────
     bool timedOut = false;
     _loginGuardTimer?.cancel();
     _loginGuardTimer = Timer(_loginTimeout, () {
@@ -1002,7 +1245,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
 
     _loginAttemptsThisSession++;
 
-    // ─── Failure path ────────────────────────────────────────
     if (error != null) {
       await _recordFailedAttempt();
       _fireAndForget(() => _logCloudFailedAttempt(email, _classifyError(error!)),
@@ -1038,7 +1280,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       return;
     }
 
-    // ─── Verify admin status ─────────────────────────────────
     final verified = await _checkEmailVerified();
     if (!verified) {
       try {
@@ -1048,11 +1289,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
           email: email, success: false, reason: 'not_verified_or_revoked');
       if (!mounted) return;
       setState(() => _errorMessage =
-      'Hindi ka na-admin o revoked na ang access. Contact IT.');
+      'You are not an admin or your access has been revoked. Contact IT.');
       return;
     }
 
-    // ─── Success path ────────────────────────────────────────
     _sessionNonce = _generateSessionNonce();
     _fireAndForget(() => _logNewDeviceLogin(email), tag: 'newDeviceLog');
     _passCtrl.clear();
@@ -1216,6 +1456,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                 return _buildFormSide();
               },
             ),
+            if (!_isOnline) _buildOfflineBanner(),
             if (_showSuccess) _buildSuccessOverlay(),
           ],
         ),
@@ -1223,7 +1464,39 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     );
   }
 
+  // 🌐 Offline banner
+  Widget _buildOfflineBanner() {
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        color: _red,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: const [
+            Icon(Icons.cloud_off_rounded, color: Colors.white, size: 16),
+            SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                'No internet connection — login requires network',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSuccessOverlay() {
+    final isDemoSuccess = _isDemo;
     return Positioned.fill(
       child: Container(
         color: Colors.white.withValues(alpha: 0.95),
@@ -1253,18 +1526,32 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                         ),
                       ],
                     ),
-                    child: const Icon(Icons.check_rounded,
-                        color: Colors.white, size: 56),
+                    child: Icon(
+                      isDemoSuccess
+                          ? Icons.science_rounded
+                          : Icons.check_rounded,
+                      color: Colors.white,
+                      size: 56,
+                    ),
                   ),
                   const SizedBox(height: 20),
-                  const Text('Login Successful',
-                      style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                          color: _textPrimary)),
+                  Text(
+                    isDemoSuccess
+                        ? 'Demo Mode Active'
+                        : 'Login Successful',
+                    style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: _textPrimary),
+                  ),
                   const SizedBox(height: 6),
-                  const Text('Redirecting to dashboard...',
-                      style: TextStyle(fontSize: 13, color: _textMuted)),
+                  Text(
+                    isDemoSuccess
+                        ? 'Entering admin dashboard (demo)...'
+                        : 'Redirecting to dashboard...',
+                    style: const TextStyle(
+                        fontSize: 13, color: _textMuted),
+                  ),
                 ],
               ),
             ),
@@ -1373,6 +1660,8 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                           )),
                     ],
                   ),
+                  const Spacer(),
+                  if (_isDemo) _demoBadge(),
                 ],
               ),
             ),
@@ -1386,9 +1675,13 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                   height: 1.15,
                 )),
             const SizedBox(height: 8),
-            const Text('Enter your admin credentials to continue.',
-                style: TextStyle(
-                    fontSize: 13, color: _textMuted, height: 1.4)),
+            Text(
+              _isDemo
+                  ? 'Demo mode is active — any email and password will work.'
+                  : 'Enter your admin credentials to continue.',
+              style: const TextStyle(
+                  fontSize: 13, color: _textMuted, height: 1.4),
+            ),
             const SizedBox(height: 20),
             _buildDeviceInfoCard(),
             const SizedBox(height: 20),
@@ -1411,6 +1704,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                       icon: Icons.warning_amber_rounded,
                       label: 'UNSAFE DEVICE',
                       color: _red),
+                if (_isDemo)
+                  _securityBadge(
+                      icon: Icons.science_rounded,
+                      label: 'DEMO',
+                      color: _orange),
               ],
             ),
             const SizedBox(height: 20),
@@ -1418,7 +1716,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
               _buildLockedBanner(),
               const SizedBox(height: 16),
             ],
-            if (_deviceCompromised) ...[
+            if (_deviceCompromised && !_isDemo) ...[
               _banner(
                 icon: Icons.security_rounded,
                 title: 'Unsafe Device Detected',
@@ -1428,7 +1726,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
               ),
               const SizedBox(height: 16),
             ],
-            if (_errorMessage != null && !locked && !_deviceCompromised) ...[
+            if (_errorMessage != null && !locked) ...[
               _banner(
                   icon: Icons.error_outline_rounded,
                   message: _errorMessage!,
@@ -1450,7 +1748,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
               child: TextFormField(
                 controller: _emailCtrl,
                 focusNode: _emailFocus,
-                enabled: !locked && !_loading && !_deviceCompromised,
+                enabled: !locked && !_loading,
                 keyboardType: TextInputType.emailAddress,
                 textInputAction: TextInputAction.next,
                 autocorrect: false,
@@ -1473,7 +1771,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                   return null;
                 },
                 decoration: _inputDeco(
-                    hint: 'admin@racoma.com',
+                    hint: _isDemo ? 'any@email.com' : 'admin@racoma.com',
                     icon: Icons.email_outlined),
               ),
             ),
@@ -1486,7 +1784,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
               child: TextFormField(
                 controller: _passCtrl,
                 focusNode: _passFocus,
-                enabled: !locked && !_loading && !_deviceCompromised,
+                enabled: !locked && !_loading,
                 obscureText: _obscure,
                 textInputAction: TextInputAction.done,
                 autofillHints: const [AutofillHints.password],
@@ -1503,11 +1801,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                   return null;
                 },
                 decoration: _inputDeco(
-                    hint: '••••••••',
+                    hint: _isDemo ? 'any password' : '••••••••',
                     icon: Icons.lock_outline_rounded)
                     .copyWith(
                   suffixIcon: IconButton(
-                    onPressed: locked || _loading || _deviceCompromised
+                    onPressed: locked || _loading
                         ? null
                         : () => setState(() => _obscure = !_obscure),
                     icon: AnimatedSwitcher(
@@ -1555,7 +1853,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                 ),
               ),
             ],
-            if (_passCtrl.text.isNotEmpty) ...[
+            if (_passCtrl.text.isNotEmpty && !_isDemo) ...[
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -1590,7 +1888,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                   height: 20,
                   child: Checkbox(
                     value: _rememberMe,
-                    onChanged: locked || _loading || _deviceCompromised
+                    onChanged: locked || _loading
                         ? null
                         : (v) => setState(() => _rememberMe = v ?? false),
                     activeColor: _orange,
@@ -1602,7 +1900,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                 ),
                 const SizedBox(width: 8),
                 GestureDetector(
-                  onTap: locked || _loading || _deviceCompromised
+                  onTap: locked || _loading
                       ? null
                       : () => setState(() => _rememberMe = !_rememberMe),
                   child: const Text('Remember Me',
@@ -1617,9 +1915,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
             SizedBox(
               height: 52,
               child: ElevatedButton(
-                onPressed: (_loading || locked || _deviceCompromised)
-                    ? null
-                    : _handleLogin,
+                onPressed: (_loading || locked) ? null : _handleLogin,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.transparent,
                   foregroundColor: Colors.white,
@@ -1632,7 +1928,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                 ),
                 child: Ink(
                   decoration: BoxDecoration(
-                    gradient: (locked || _deviceCompromised)
+                    gradient: locked
                         ? const LinearGradient(
                         colors: [_cardBorder, _cardBorder])
                         : const LinearGradient(
@@ -1641,7 +1937,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                       end: Alignment.centerRight,
                     ),
                     borderRadius: BorderRadius.circular(10),
-                    boxShadow: (_loading || locked || _deviceCompromised)
+                    boxShadow: (_loading || locked)
                         ? null
                         : [
                       BoxShadow(
@@ -1665,19 +1961,16 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                         Text(
                           locked
                               ? 'Locked (${_remainingLockoutText()})'
-                              : _deviceCompromised
-                              ? 'Device Blocked'
-                              : 'Log In',
+                              : (_isDemo
+                              ? 'Enter Dashboard (Demo)'
+                              : 'Log In'),
                           style: const TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
                               letterSpacing: 0.3,
                               color: Colors.white),
                         ),
-                        if (!locked &&
-                            !_deviceCompromised &&
-                            !_loading &&
-                            kIsWeb) ...[
+                        if (!locked && !_loading && kIsWeb) ...[
                           const SizedBox(width: 10),
                           Container(
                             padding: const EdgeInsets.symmetric(
@@ -1699,6 +1992,63 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                 ),
               ),
             ),
+            const SizedBox(height: 12),
+
+            // ═══════════════════════════════════════════════════════════
+            // 🎭 DEMO MODE BUTTON
+            // ═══════════════════════════════════════════════════════════
+            if (!_isDemo) ...[
+              SizedBox(
+                height: 46,
+                child: OutlinedButton.icon(
+                  onPressed: _loading ? null : _enterDemoMode,
+                  icon: const Icon(Icons.science_rounded, size: 18),
+                  label: const Text('Enter Demo Mode'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _orange,
+                    side: BorderSide(
+                        color: _orange.withValues(alpha: 0.5), width: 1.3),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Center(
+                child: Text(
+                  'Skip login — for testing and demos only',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: _textMuted,
+                      fontStyle: FontStyle.italic),
+                ),
+              ),
+            ] else ...[
+              Container(
+                padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: _orange.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _orange.withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.science_rounded, size: 16, color: _orange),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Demo Mode active — any credentials will be accepted.',
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: _orange),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
             _buildTrustFooter(),
             const SizedBox(height: 24),
@@ -1710,6 +2060,30 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _demoBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: _orange.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _orange.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          Icon(Icons.science_rounded, size: 12, color: _orange),
+          SizedBox(width: 5),
+          Text('DEMO',
+              style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: _orange,
+                  letterSpacing: 0.8)),
+        ],
       ),
     );
   }
@@ -2600,7 +2974,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// PAINTERS (unchanged)
+// PAINTERS
 // ═══════════════════════════════════════════════════════════════════
 
 class _GridPainter extends CustomPainter {

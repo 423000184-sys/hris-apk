@@ -1,4 +1,10 @@
 ﻿// lib/screens/clock_in_success_screen.dart
+// ═══════════════════════════════════════════════════════════════════
+// CLOCK IN SUCCESS SCREEN  v1.3
+//   - Demo mode: walang Firestore write, DEMO badge
+//   - onContinue() navigation ang tumatawag (hindi auto-pop)
+//   - ✅ v1.3: Adaptive Light/Dark mode support
+// ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -10,6 +16,37 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/employee.dart';
 import '../data/local/dao/connectivity_service.dart';
+import '../services/demo_mode_service.dart';
+
+// ═══════════════════════════════════════════════════════════════════
+// 🎨 ADAPTIVE THEME COLORS
+// ═══════════════════════════════════════════════════════════════════
+class _ThemeColors {
+  final bool isDark;
+  const _ThemeColors(this.isDark);
+
+  // Backgrounds
+  Color get scaffoldBg => isDark ? const Color(0xFF0A0A0A) : Colors.white;
+  Color get bgLayer => isDark ? const Color(0xFF0F0D0B) : Colors.white;
+  Color get scrim =>
+      isDark ? Colors.black.withOpacity(0.55) : const Color(0xFF09090B).withOpacity(0.44);
+
+  // Cards
+  Color get cardBg => isDark ? const Color(0xFF18181B) : Colors.white;
+  Color get cardBorder =>
+      isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFA500);
+  Color get methodIconBg =>
+      isDark ? const Color(0xFF27272A) : const Color(0xFFF8FAFC);
+
+  // Text
+  Color get textDark => isDark ? Colors.white : const Color(0xFF0F172A);
+  Color get textMuted =>
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
+
+  // Watermark
+  double get watermarkOpacity => isDark ? 0.15 : 0.80;
+  double get topWatermarkOpacity => isDark ? 0.08 : 0.25;
+}
 
 class ClockInSuccessScreen extends StatefulWidget {
   final Employee? employee;
@@ -69,7 +106,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   static const _gradMid = Color(0xFFFA6A00);
   static const _gradEnd = Color(0xFFF54900);
 
-  // Card design tokens (HTML mockup)
   static const double _designCardW = 338.14;
   static const double _designCardH = 343.03;
   static const double _designIconSize = 112.0;
@@ -81,7 +117,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   static const double _designTitleHMargin = 33.15;
   static const double _designSubtitleHMargin = 60.75;
 
-  // Auth background design tokens
   static const double _authHeaderH = 287.13;
   static const double _authHeaderRadius = 16.0;
   static const double _authHeaderBorderW = 1.15;
@@ -89,6 +124,8 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   static const Color _authOrangeBorder = Color(0xFFFFA500);
   static const double _stepCardTop = 191.14;
   static const double _stepCardHPad = 24.0;
+
+  bool get _isDemo => DemoModeService.instance.isEnabled;
 
   @override
   void initState() {
@@ -112,15 +149,20 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     );
     _ctrl.forward();
 
-    try {
-      _isOnline = ConnectivityService.instance.isOnline;
-      _networkSub =
-          ConnectivityService.instance.onStatusChange.listen((online) {
-            if (!mounted) return;
-            setState(() => _isOnline = online);
-          });
-    } catch (e) {
-      debugPrint('⚠️ connectivity listen failed: $e');
+    if (_isDemo) {
+      _isOnline = true;
+      debugPrint('🎭 [DemoMode] ClockInSuccess — DEMO, txn=$_transactionId');
+    } else {
+      try {
+        _isOnline = ConnectivityService.instance.isOnline;
+        _networkSub =
+            ConnectivityService.instance.onStatusChange.listen((online) {
+              if (!mounted) return;
+              setState(() => _isOnline = online);
+            });
+      } catch (e) {
+        debugPrint('⚠️ connectivity listen failed: $e');
+      }
     }
 
     _bootstrap();
@@ -142,7 +184,8 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     final ts = DateTime.now().millisecondsSinceEpoch;
     final rand = math.Random.secure();
     final randHex = rand.nextInt(0xFFFFFF).toRadixString(16).padLeft(6, '0');
-    return 'TXN-$ts-$randHex';
+    final prefix = _isDemo ? 'DEMO-TXN' : 'TXN';
+    return '$prefix-$ts-$randHex';
   }
 
   Future<void> _generateReceipt() async {
@@ -163,9 +206,15 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         'location': widget.locationName ?? '',
         'arrivalMs': widget.arrivalTime?.millisecondsSinceEpoch ?? 0,
         'generatedMs': _receiptGeneratedAt!.millisecondsSinceEpoch,
+        'demoMode': _isDemo,
       };
       _receiptHash =
           sha256.convert(utf8.encode(jsonEncode(payload))).toString();
+
+      if (_isDemo || DemoModeService.instance.shouldSkipDbWrite) {
+        debugPrint('🎭 [DemoMode] Receipt local only — $_transactionId');
+        return;
+      }
 
       if (_isOnline && widget.employee != null) {
         try {
@@ -208,6 +257,10 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   }
 
   Future<void> _logConfirm() async {
+    if (_isDemo || DemoModeService.instance.shouldSkipDbWrite) {
+      debugPrint('🎭 [DemoMode] Confirm skipped: $_transactionId');
+      return;
+    }
     if (!_isOnline || widget.employee == null) return;
     try {
       await FirebaseFirestore.instance.collection('security_events').add({
@@ -252,11 +305,11 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
 
   double _degToRad(double deg) => deg * 3.1415926535 / 180;
 
-  // ═══════════════════════════════════════════════════════════════
-  // BUILD — 3 layers (HTML mockup match)
-  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -264,20 +317,13 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         _handleContinue();
       },
       child: Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: tc.scaffoldBg,
         body: Stack(
           children: [
-            // Layer 1: Auth & Clock In background (with watermark)
-            Positioned.fill(child: _buildAuthBackground()),
-
-            // Layer 2: Dark scrim (44%)
+            Positioned.fill(child: _buildAuthBackground(tc)),
             Positioned.fill(
-              child: Container(
-                color: const Color(0xFF09090B).withOpacity(0.44),
-              ),
+              child: Container(color: tc.scrim),
             ),
-
-            // Layer 3: Success card centered
             Center(
               child: FadeTransition(
                 opacity: _fadeAnim,
@@ -290,67 +336,94 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
                 ),
               ),
             ),
+            if (_isDemo)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 12,
+                left: 0,
+                right: 0,
+                child: Center(child: _buildDemoBadge()),
+              ),
           ],
         ),
       ),
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // AUTH BACKGROUND — Stack with watermark + header + step card
-  // ═══════════════════════════════════════════════════════════════
-  Widget _buildAuthBackground() {
+  Widget _buildDemoBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF54900),
+        borderRadius: BorderRadius.circular(20),
+        border:
+        Border.all(color: Colors.white.withOpacity(0.55), width: 1.3),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.35),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          Icon(Icons.science_rounded, color: Colors.white, size: 14),
+          SizedBox(width: 6),
+          Text(
+            'DEMO MODE — No DB Write',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAuthBackground(_ThemeColors tc) {
     return Stack(
       clipBehavior: Clip.hardEdge,
       children: [
-        // Base: white body
-        Positioned.fill(child: Container(color: Colors.white)),
+        // ✅ Adaptive background
+        Positioned.fill(child: Container(color: tc.scaffoldBg)),
 
-        // ═══════════════════════════════════════════════════════
-        // 🖐️ WATERMARK LOGO — "kamay" (mula sa splash screen)
-        // Top-right: rotated 270°, faded
-        // Bottom-left: rotated 425°, orange tinted (ito ang "kamay")
-        // ═══════════════════════════════════════════════════════
+        // Top watermark — subtle in both modes
         Positioned(
           top: -180,
           right: -200,
           child: Transform.rotate(
             angle: _degToRad(270),
             child: Opacity(
-              opacity: 0.25,
-              child: Image.asset(
-                _logoAsset,
-                width: 600,
-                height: 600,
-                fit: BoxFit.contain,
-              ),
+              opacity: tc.topWatermarkOpacity,
+              child: Image.asset(_logoAsset,
+                  width: 600, height: 600, fit: BoxFit.contain),
             ),
           ),
         ),
+
+        // Bottom watermark — orange tinted
         Positioned(
           bottom: -130,
           left: -150,
           child: Transform.rotate(
             angle: _degToRad(425),
             child: Opacity(
-              opacity: 0.80,
+              opacity: tc.watermarkOpacity,
               child: ColorFiltered(
                 colorFilter: const ColorFilter.mode(
-                  Color.fromRGBO(255, 138, 0, 0.10),
-                  BlendMode.srcIn,
-                ),
-                child: Image.asset(
-                  _logoAsset,
-                  width: 500,
-                  height: 500,
-                  fit: BoxFit.contain,
-                ),
+                    Color.fromRGBO(255, 138, 0, 0.10), BlendMode.srcIn),
+                child: Image.asset(_logoAsset,
+                    width: 500, height: 500, fit: BoxFit.contain),
               ),
             ),
           ),
         ),
 
-        // Orange gradient header
+        // Orange auth header — SAME in both modes
         Positioned(
           top: 0,
           left: 0,
@@ -370,14 +443,12 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
               ),
               border: Border(
                 bottom: BorderSide(
-                  color: _authHeaderBorderColor,
-                  width: _authHeaderBorderW,
-                ),
+                    color: _authHeaderBorderColor,
+                    width: _authHeaderBorderW),
               ),
             ),
             child: Stack(
               children: [
-                // Back button
                 Positioned(
                   left: 24,
                   top: 48,
@@ -390,94 +461,75 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
                         child: CustomPaint(painter: _BackArrowPainter()),
                       ),
                       const SizedBox(width: 2),
-                      const Text(
-                        'Back',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          height: 0.9,
-                        ),
-                      ),
+                      const Text('Back',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              height: 0.9)),
                     ],
                   ),
                 ),
-
-                // Title
                 const Positioned(
                   left: 24,
                   top: 95.99,
-                  child: Text(
-                    'Auth & Clock In',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 30,
-                      fontWeight: FontWeight.bold,
-                      height: 0.9,
-                    ),
-                  ),
+                  child: Text('Auth & Clock In',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 30,
+                          fontWeight: FontWeight.bold,
+                          height: 0.9)),
                 ),
-
-                // Subtitle
                 const Positioned(
                   left: 24,
                   top: 136.99,
-                  child: Text(
-                    'Select your initial verification method',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      height: 0.9,
-                    ),
-                  ),
+                  child: Text('Select your initial verification method',
+                      style: TextStyle(
+                          color: Colors.white, fontSize: 14, height: 0.9)),
                 ),
               ],
             ),
           ),
         ),
 
-        // Step 1 card — overlapping header bottom
+        // Step 1 card — adaptive
         Positioned(
           top: _stepCardTop,
           left: _stepCardHPad,
           right: _stepCardHPad,
-          child: _buildStep1Card(),
+          child: _buildStep1Card(tc),
         ),
       ],
     );
   }
 
-  Widget _buildStep1Card() {
+  Widget _buildStep1Card(_ThemeColors tc) {
     return Container(
       height: 234.38,
       padding: const EdgeInsets.fromLTRB(25.1, 25.1, 25.1, 1.11),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: tc.cardBg,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _authOrangeBorder, width: 1.11),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 3,
-            offset: const Offset(0, 2),
-          ),
+              color: Colors.black.withOpacity(tc.isDark ? 0.25 : 0.05),
+              blurRadius: 3,
+              offset: const Offset(0, 2)),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(
+          SizedBox(
             height: 20.99,
             child: Center(
-              child: Text(
-                'Step 1: Initial Login',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFF0F172A),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+              child: Text('Step 1: Initial Login',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: tc.textDark,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500)),
             ),
           ),
           const SizedBox(height: 23.99),
@@ -487,16 +539,16 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
               children: [
                 Expanded(
                   child: _buildMethodCard(
-                    label: 'Key Fob',
-                    icon: Icons.contactless_rounded,
-                  ),
+                      label: 'Key Fob',
+                      icon: Icons.contactless_rounded,
+                      tc: tc),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: _buildMethodCard(
-                    label: 'Use PIN',
-                    icon: Icons.key_rounded,
-                  ),
+                      label: 'Use PIN',
+                      icon: Icons.key_rounded,
+                      tc: tc),
                 ),
               ],
             ),
@@ -506,10 +558,14 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     );
   }
 
-  Widget _buildMethodCard({required String label, required IconData icon}) {
+  Widget _buildMethodCard({
+    required String label,
+    required IconData icon,
+    required _ThemeColors tc,
+  }) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: tc.cardBg,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _authOrangeBorder, width: 1.11),
       ),
@@ -520,29 +576,24 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
             width: 55.99,
             height: 55.99,
             decoration: BoxDecoration(
-              color: const Color(0xFFF8FAFC),
+              color: tc.methodIconBg,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: _authOrangeBorder, width: 1),
             ),
-            child: Icon(icon, color: const Color(0xFFFB923C), size: 28),
+            child: const Icon(Icons.key_rounded,
+                color: Color(0xFFFB923C), size: 0),
           ),
           const SizedBox(height: 12),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF0F172A),
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          Text(label,
+              style: TextStyle(
+                  color: tc.textDark,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500)),
         ],
       ),
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SUCCESS CARD
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildSuccessCard() {
     final isClockIn = widget.type.toUpperCase() == 'IN';
     final accent = isClockIn ? _neonGreen : const Color(0xFFC4FF0A);
@@ -569,10 +620,9 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         border: Border.all(color: _cardBorder, width: _designBorderWidth),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 12.5),
-          ),
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 10,
+              offset: const Offset(0, 12.5)),
         ],
       ),
       child: Stack(
@@ -587,8 +637,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
                 width: _designIconSize,
                 height: _designIconSize,
                 child: CustomPaint(
-                  painter: _CheckIconPainter(color: accent),
-                ),
+                    painter: _CheckIconPainter(color: accent)),
               ),
             ),
           ),
@@ -596,38 +645,31 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
             top: _designTitleTop,
             left: _designTitleHMargin,
             right: _designTitleHMargin,
-            child: Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 30,
-                fontWeight: FontWeight.w500,
-                height: 1.1,
-              ),
-            ),
+            child: Text(title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 30,
+                    fontWeight: FontWeight.w500,
+                    height: 1.1)),
           ),
           Positioned(
             top: _designSubtitleTop,
             left: _designSubtitleHMargin,
             right: _designSubtitleHMargin,
-            child: Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: _subtitleColor,
-                fontSize: 14,
-                fontWeight: FontWeight.w400,
-                height: 1.4,
-              ),
-            ),
+            child: Text(subtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: _subtitleColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w400,
+                    height: 1.4)),
           ),
           Positioned(
             top: 8,
             right: 8,
             child: Container(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
                 color: Colors.black.withOpacity(0.25),
                 borderRadius: BorderRadius.circular(4),
@@ -635,67 +677,95 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.verified_rounded,
-                      color: Colors.white.withOpacity(0.7), size: 9),
+                  Icon(
+                    _isDemo
+                        ? Icons.science_rounded
+                        : Icons.verified_rounded,
+                    color: Colors.white.withOpacity(0.7),
+                    size: 9,
+                  ),
                   const SizedBox(width: 3),
                   Text(
-                    'VERIFIED',
+                    _isDemo ? 'DEMO' : 'VERIFIED',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
-                      fontSize: 7,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.5,
-                    ),
+                        color: Colors.white.withOpacity(0.7),
+                        fontSize: 7,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5),
                   ),
                 ],
               ),
             ),
           ),
-          if (!_isOnline)
-            Positioned(
-              bottom: 12,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.35),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.35),
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.cloud_off_rounded,
-                          color: Colors.white.withOpacity(0.9), size: 11),
-                      const SizedBox(width: 5),
-                      Text(
-                        'Saved offline — will sync later',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.9),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          Positioned(
+            bottom: 12,
+            left: 0,
+            right: 0,
+            child: Center(child: _buildBottomBadge()),
+          ),
         ],
       ),
     );
   }
+
+  Widget _buildBottomBadge() {
+    if (_isDemo) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.45),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _neonGreen.withOpacity(0.7), width: 1.2),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.science_rounded,
+                color: _neonGreen, size: 11),
+            const SizedBox(width: 5),
+            Text(
+              'Demo — no DB write',
+              style: TextStyle(
+                  color: Colors.white.withOpacity(0.95),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!_isOnline) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.35),
+          borderRadius: BorderRadius.circular(20),
+          border:
+          Border.all(color: Colors.white.withOpacity(0.35), width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cloud_off_rounded,
+                color: Colors.white.withOpacity(0.9), size: 11),
+            const SizedBox(width: 5),
+            Text(
+              'Saved offline — will sync later',
+              style: TextStyle(
+                  color: Colors.white.withOpacity(0.9),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// BACK ARROW PAINTER
-// ═══════════════════════════════════════════════════════════════
 class _BackArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -705,7 +775,6 @@ class _BackArrowPainter extends CustomPainter {
       ..strokeWidth = 1.66602
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-
     final path = Path()
       ..moveTo(size.width * 0.75, size.height * 0.75)
       ..lineTo(size.width * 0.25, size.height * 0.5)
@@ -717,9 +786,6 @@ class _BackArrowPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// CHECK ICON PAINTER
-// ═══════════════════════════════════════════════════════════════
 class _CheckIconPainter extends CustomPainter {
   final Color color;
   const _CheckIconPainter({required this.color});
@@ -732,7 +798,6 @@ class _CheckIconPainter extends CustomPainter {
     final fillPaint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.fill;
-
     final borderPaint = Paint()
       ..color = color
       ..strokeWidth = 3.0 * scale
@@ -740,11 +805,7 @@ class _CheckIconPainter extends CustomPainter {
 
     final rrect = RRect.fromRectAndRadius(
       Rect.fromLTRB(
-        1.5 * scale,
-        1.5 * scale,
-        110.496 * scale,
-        110.496 * scale,
-      ),
+          1.5 * scale, 1.5 * scale, 110.496 * scale, 110.496 * scale),
       Radius.circular(14.5 * scale),
     );
     canvas.drawRRect(rrect, fillPaint);
@@ -757,11 +818,8 @@ class _CheckIconPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
-    canvas.drawCircle(
-      Offset(55.989 * scale, 55.989 * scale),
-      19.998 * scale,
-      strokePaint,
-    );
+    canvas.drawCircle(Offset(55.989 * scale, 55.989 * scale),
+        19.998 * scale, strokePaint);
 
     final checkPath = Path()
       ..moveTo(49.9897 * scale, 55.9889 * scale)

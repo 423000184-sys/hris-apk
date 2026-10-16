@@ -6,7 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:onesignal_flutter/onesignal_flutter.dart'; // 🆕 OneSignal
+import 'package:onesignal_flutter/onesignal_flutter.dart';
 import '../theme/app_theme.dart';
 import '../models/employee.dart' as model;
 import '../data/local/dao/connectivity_service.dart';
@@ -18,6 +18,7 @@ import '../services/motion_detection_service.dart';
 import '../services/geofence_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/presence_challenge_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 NEW
 import 'dashboard_screen.dart';
 import 'clock_screen.dart';
 import 'attendance_history_screen.dart';
@@ -68,6 +69,13 @@ class MainScreenState extends State<MainScreen>
   final GlobalKey<DashboardScreenState> _dashboardKey =
   GlobalKey<DashboardScreenState>();
 
+  // 🎭 DEMO MODE
+  bool get _isDemo => DemoModeService.instance.isEnabled;
+
+  /// Ang employee na gagamitin — kapag demo mode, gamitin ang fake employee.
+  model.Employee? get _effectiveEmployee =>
+      _isDemo ? DemoModeService.demoEmployee : widget.employee;
+
   Color _navBg(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return isDark ? const Color(0xFF18181B) : const Color(0xFFF8F8F8);
@@ -80,6 +88,9 @@ class MainScreenState extends State<MainScreen>
 
   static const Color _navActive = Color(0xFFFF8A00);
   static const Color _navInactive = Color(0xFF71717A);
+  // 🎭 Demo mode uses SAME orange theme para consistent
+  static const Color _demoAccent = Color(0xFFFF8A00);
+  static const Color _demoAccentDark = Color(0xFFF54900);
 
   // ══════════════════════════════════════════════════════════════
   // FINGERPRINT HELPERS
@@ -93,6 +104,14 @@ class MainScreenState extends State<MainScreen>
   }
 
   void _startFingerprintListener() {
+    // 🎭 DEMO — skip
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping fingerprint listener');
+      _fpStatusLoaded = true;
+      _fingerprintEnrolled = true;
+      return;
+    }
+
     final id = widget.employee?.id;
     if (id == null || id.isEmpty) {
       _secureLog('⚠️ [FP] No employee ID — fingerprint listener skipped');
@@ -137,12 +156,18 @@ class MainScreenState extends State<MainScreen>
   }
 
   Future<void> _openFingerprintRegistration() async {
+    // 🎭 DEMO — skip
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Fingerprint registration not needed');
+      return;
+    }
+
     final emp = widget.employee;
     if (emp == null) return;
 
     if (!_isOnline) {
       _showOfflineSnack(
-          '⚠️ Kailangan ng internet para mag-register ng fingerprint.');
+          '⚠️ Internet is required to register your fingerprint.');
       return;
     }
 
@@ -165,6 +190,9 @@ class MainScreenState extends State<MainScreen>
   // PRESENCE CHALLENGE HANDLER
   // ══════════════════════════════════════════════════════════════
   Future<void> _handlePresenceChallenge(ChallengeDue due) async {
+    // 🎭 DEMO — skip
+    if (_isDemo) return;
+
     if (!mounted) return;
     if (_challengeScreenOpen) {
       _secureLog('⚠️ [Challenge] Screen already open — skipping');
@@ -209,7 +237,7 @@ class MainScreenState extends State<MainScreen>
       if (passed == true) {
         _secureLog('✅ [Challenge] PASSED for ${challenge.id}');
         _showChallengeSnack(
-          '✅ Presence verified. Salamat!',
+          '✅ Presence verified. Thank you!',
           const Color(0xFF16A34A),
         );
       } else {
@@ -247,7 +275,7 @@ class MainScreenState extends State<MainScreen>
             SizedBox(width: 10),
             Expanded(
               child: Text(
-                'Nasa Labas Ka ng Work Zone',
+                'You Are Outside the Work Zone',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w800,
@@ -261,8 +289,8 @@ class MainScreenState extends State<MainScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Random presence check required. Pero nasa labas ka ng '
-                  'perimeter ng office.',
+              'A random presence check is required. However, you are '
+                  'currently outside the office perimeter.',
               style: TextStyle(fontSize: 13, height: 1.5),
             ),
             const SizedBox(height: 12),
@@ -285,8 +313,8 @@ class MainScreenState extends State<MainScreen>
             ),
             const SizedBox(height: 12),
             const Text(
-              '⚠️ Bumalik ka muna sa loob ng work zone para maging '
-                  'valid ang presence check.',
+              '⚠️ Please return inside the work zone first so the '
+                  'presence check can be valid.',
               style: TextStyle(
                 fontSize: 12,
                 height: 1.4,
@@ -300,7 +328,7 @@ class MainScreenState extends State<MainScreen>
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: const Text(
-              'Bumalik sa Loob',
+              'Return Inside',
               style: TextStyle(
                 color: Color(0xFF16A34A),
                 fontWeight: FontWeight.w700,
@@ -358,6 +386,9 @@ class MainScreenState extends State<MainScreen>
   }
 
   void _handleMissedSummary(int missedCount) {
+    // 🎭 DEMO — skip
+    if (_isDemo) return;
+
     if (!mounted) return;
     if (_missedSummaryShown) {
       _secureLog('ℹ️ [Challenge] Missed summary already shown — skip');
@@ -393,11 +424,12 @@ class MainScreenState extends State<MainScreen>
             ],
           ),
           content: Text(
-            'May $missedCount presence check na hindi mo nasagot.\n\n'
-                'Ang mga ito ay na-flag na sa iyong attendance record at '
-                'na-notify na ang admin.\n\n'
-                'Mangyaring huwag i-exit ang app habang naka-clock-in para '
-                'hindi ito maulit.',
+            'You have missed $missedCount presence check'
+                '${missedCount > 1 ? "s" : ""}.\n\n'
+                'These have been flagged on your attendance record and '
+                'the admin has been notified.\n\n'
+                'Please do not exit the app while clocked in so this '
+                'does not happen again.',
             style: const TextStyle(fontSize: 13, height: 1.5),
           ),
           actions: [
@@ -411,7 +443,7 @@ class MainScreenState extends State<MainScreen>
               ),
               onPressed: () => Navigator.pop(ctx),
               child: const Text(
-                'Naiintindihan ko',
+                'I Understand',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
@@ -444,12 +476,21 @@ class MainScreenState extends State<MainScreen>
   // PRESENCE HELPERS
   // ══════════════════════════════════════════════════════════════
   String? get _presenceDocId {
+    // 🎭 DEMO — walang totoong doc ID
+    if (_isDemo) return null;
+
     final id = widget.employee?.id;
     if (id == null || id.isEmpty) return null;
     return id;
   }
 
   Future<void> _markOnline() async {
+    // 🎭 DEMO — skip DB write
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping _markOnline DB write');
+      return;
+    }
+
     final id = _presenceDocId;
     if (id == null) return;
     try {
@@ -469,6 +510,12 @@ class MainScreenState extends State<MainScreen>
   }
 
   Future<void> _markOffline() async {
+    // 🎭 DEMO — skip DB write
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping _markOffline DB write');
+      return;
+    }
+
     final id = _presenceDocId;
     if (id == null) return;
     try {
@@ -487,6 +534,9 @@ class MainScreenState extends State<MainScreen>
   }
 
   void _startPresenceHeartbeat() {
+    // 🎭 DEMO — skip
+    if (_isDemo) return;
+
     _presenceHeartbeat?.cancel();
     _presenceHeartbeat = Timer.periodic(
       const Duration(minutes: 5),
@@ -498,6 +548,12 @@ class MainScreenState extends State<MainScreen>
   // GEOFENCE LISTENER
   // ══════════════════════════════════════════════════════════════
   void _startGeofenceListener() {
+    // 🎭 DEMO — skip
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping geofence listener');
+      return;
+    }
+
     if (_geofenceListenerStarted) {
       _secureLog('⚠️ [Geofence] Listener already started — skip');
       return;
@@ -530,6 +586,63 @@ class MainScreenState extends State<MainScreen>
   // LOGOUT
   // ══════════════════════════════════════════════════════════════
   Future<void> _handleLogout() async {
+    // 🎭 DEMO — special exit
+    if (_isDemo) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(children: const [
+            Icon(Icons.science_rounded, color: _demoAccent, size: 22),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Exit Demo Mode?',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+            ),
+          ]),
+          content: const Text(
+            'You will return to the login screen. Demo data will NOT be saved.',
+            style: TextStyle(fontSize: 13, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _demoAccent,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Exit Demo'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm != true) return;
+
+      DemoModeService.instance.disable();
+
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const LandingScreen(),
+          settings: const RouteSettings(
+            name: '/landing-after-demo-exit',
+            arguments: {'skipSessionRestore': true},
+          ),
+        ),
+            (route) => false,
+      );
+      return;
+    }
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -582,7 +695,6 @@ class MainScreenState extends State<MainScreen>
       await FirebaseAuth.instance.signOut();
     } catch (_) {}
 
-    // 🆕 OneSignal — i-logout ang external ID
     try {
       OneSignal.logout();
       debugPrint('🔔 [OneSignal] Logged out');
@@ -641,8 +753,15 @@ class MainScreenState extends State<MainScreen>
   // OPEN CLOCK SCREEN
   // ══════════════════════════════════════════════════════════════
   void _openClockOverlay() {
+    // 🎭 DEMO MODE — bypass lahat ng checks
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Opening clock overlay (bypassing all checks)');
+      setState(() => _showClockOverlay = true);
+      return;
+    }
+
     if (!_isOnline) {
-      _showOfflineSnack('⚠️ Walang internet. Paki-check ang connection.');
+      _showOfflineSnack('⚠️ No internet. Please check your connection.');
       return;
     }
 
@@ -657,7 +776,7 @@ class MainScreenState extends State<MainScreen>
 
     try {
       GeofenceService.instance.invalidateCache();
-      _secureLog('🔄 Geofence cache invalidated bago mag-clock');
+      _secureLog('🔄 Geofence cache invalidated before clock action');
     } catch (e) {
       _secureLog('⚠️ Geofence refresh failed: $e');
     }
@@ -694,16 +813,16 @@ class MainScreenState extends State<MainScreen>
           ),
         ]),
         content: const Text(
-          'Kailangan mo munang i-register ang fingerprint mo bago '
-              'makapag-clock in/out.\n\n'
-              'Ito ay isang beses lang gagawin. Tapos, fingerprint '
-              'na ang gagamitin mo para sa bawat clock action.',
+          'You need to register your fingerprint first before you '
+              'can clock in/out.\n\n'
+              'This is a one-time setup. After that, your fingerprint '
+              'will be used for every clock action.',
           style: TextStyle(fontSize: 13, height: 1.5),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Mamaya'),
+            child: const Text('Later'),
           ),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
@@ -765,6 +884,12 @@ class MainScreenState extends State<MainScreen>
   }
 
   Future<void> _bootstrapChallengeService(model.Employee emp) async {
+    // 🎭 DEMO — skip
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping challenge bootstrap');
+      return;
+    }
+
     final challengeEmpId =
     emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
 
@@ -797,6 +922,41 @@ class MainScreenState extends State<MainScreen>
 
     WidgetsBinding.instance.addObserver(this);
 
+    // 🎭 DEMO MODE
+    if (_isDemo) {
+      _secureLog('═══════════════════════════════════════════');
+      _secureLog('🎭 [DemoMode] MainScreen in DEMO MODE');
+      _secureLog('   • Skipping DB listeners');
+      _secureLog('   • Skipping presence heartbeat');
+      _secureLog('   • Skipping geofence listener');
+      _secureLog('   • Skipping fingerprint listener');
+      _secureLog('   • Skipping challenge service');
+      _secureLog('═══════════════════════════════════════════');
+
+      _fpStatusLoaded = true;
+      _fingerprintEnrolled = true;
+
+      // Only network listener (no DB)
+      try {
+        _isOnline = ConnectivityService.instance.isOnline;
+      } catch (_) {
+        _isOnline = true;
+      }
+
+      try {
+        _networkSub =
+            ConnectivityService.instance.onStatusChange.listen((online) {
+              if (!mounted) return;
+              setState(() => _isOnline = online);
+            });
+      } catch (e) {
+        _secureLog('⚠️ connectivity failed: $e');
+      }
+
+      return; // ← HUWAG mag-setup ng ibang services
+    }
+
+    // NORMAL MODE (existing behavior)
     try {
       SecurityHardeningService.instance.enableSecureScreen();
     } catch (_) {}
@@ -814,7 +974,6 @@ class MainScreenState extends State<MainScreen>
 
     final emp = widget.employee;
     if (emp != null) {
-      // 🆕 OneSignal — para ma-target ang notification sa employee na ito
       final bgEmpId = emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
       if (bgEmpId.isNotEmpty) {
         try {
@@ -908,6 +1067,10 @@ class MainScreenState extends State<MainScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
+
+    // 🎭 DEMO — skip
+    if (_isDemo) return;
+
     if (_presenceDocId == null) return;
 
     _secureLog('📱 Lifecycle → $state');
@@ -954,8 +1117,9 @@ class MainScreenState extends State<MainScreen>
   Widget build(BuildContext context) {
     final isWeb = kIsWeb && MediaQuery.of(context).size.width >= 768;
 
-    final empId = widget.employee?.employeeId ?? '';
-    final empName = widget.employee?.fullName ?? 'Guest';
+    final emp = _effectiveEmployee;
+    final empId = emp?.employeeId ?? '';
+    final empName = emp?.fullName ?? 'Guest';
 
     return Scaffold(
       backgroundColor: AppColors.primary,
@@ -974,10 +1138,10 @@ class MainScreenState extends State<MainScreen>
                         key: _dashboardKey,
                         onTabSwitch: switchTabWithHistory,
                         onClockAction: _openClockOverlay,
-                        initialEmployee: widget.employee,
+                        initialEmployee: emp,
                       ),
                       AttendanceHistoryScreen(
-                        initialEmployee: widget.employee,
+                        initialEmployee: emp,
                         onBack: goBackToPrevious,
                       ),
                       LeaveFormScreen(
@@ -985,15 +1149,15 @@ class MainScreenState extends State<MainScreen>
                         employeeName: empName,
                         onGoHome: goBackToPrevious,
                       ),
-                      ProfileScreen(initialEmployee: widget.employee),
+                      ProfileScreen(initialEmployee: emp),
                     ],
                   ),
                 ),
 
-                if (_showClockOverlay && widget.employee != null)
+                if (_showClockOverlay && emp != null)
                   Positioned.fill(
                     child: ClockScreen(
-                      initialEmployee: widget.employee,
+                      initialEmployee: emp,
                       onBack: () {
                         if (mounted) {
                           setState(() => _showClockOverlay = false);
@@ -1029,7 +1193,7 @@ class MainScreenState extends State<MainScreen>
                     ),
                   ),
 
-                if (!_isOnline)
+                if (!_isOnline && !_isDemo)
                   Positioned(
                     top: 0,
                     left: 0,
@@ -1040,10 +1204,23 @@ class MainScreenState extends State<MainScreen>
                     ),
                   ),
 
+                // 🎭 DEMO MODE badge
+                if (_isDemo)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: SafeArea(
+                      bottom: false,
+                      child: _buildDemoBadge(),
+                    ),
+                  ),
+
                 if (_fpStatusLoaded &&
                     !_fingerprintEnrolled &&
                     !_fpPromptDismissed &&
                     _isOnline &&
+                    !_isDemo && // 🎭 skip kapag demo
                     widget.employee != null &&
                     !_showClockOverlay)
                   Positioned(
@@ -1056,7 +1233,7 @@ class MainScreenState extends State<MainScreen>
                     ),
                   ),
 
-                if (empId.isNotEmpty)
+                if (empId.isNotEmpty && !_isDemo)
                   Positioned(
                     top: 12,
                     right: 12,
@@ -1089,6 +1266,69 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
+  // 🎭 DEMO MODE BADGE
+  Widget _buildDemoBadge() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [_demoAccent, _demoAccentDark],
+        ),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: _demoAccent.withValues(alpha: 0.35),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.science_rounded, color: Colors.white, size: 16),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'DEMO MODE — No data is saved',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.3,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _handleLogout,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Text(
+                'EXIT',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildOfflineBanner() {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -1111,7 +1351,7 @@ class MainScreenState extends State<MainScreen>
           const SizedBox(width: 8),
           const Expanded(
             child: Text(
-              'Walang internet — offline mode',
+              'No internet — offline mode',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 12,
@@ -1187,7 +1427,7 @@ class MainScreenState extends State<MainScreen>
                 ),
                 SizedBox(height: 2),
                 Text(
-                  'Kailangan ito para makapag-clock in/out.',
+                  'Required for clock in/out.',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 11,
@@ -1234,6 +1474,48 @@ class MainScreenState extends State<MainScreen>
   }
 
   Widget _buildClockFab(BuildContext context) {
+    // 🎭 DEMO — always enabled, always fingerprint icon
+    if (_isDemo) {
+      final overlayOpen = _showClockOverlay;
+      return AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          boxShadow: !overlayOpen
+              ? [
+            BoxShadow(
+              color: _navActive.withValues(alpha: 0.4),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ]
+              : null,
+        ),
+        child: FloatingActionButton(
+          backgroundColor: _navActive,
+          elevation: 4,
+          tooltip: overlayOpen ? 'Close Clock Screen' : 'Clock In / Out',
+          onPressed: overlayOpen ? _toggleClockOverlay : _openClockOverlay,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            transitionBuilder: (child, animation) {
+              return RotationTransition(
+                turns: Tween<double>(begin: 0.75, end: 1.0).animate(animation),
+                child: FadeTransition(opacity: animation, child: child),
+              );
+            },
+            child: Icon(
+              overlayOpen ? Icons.close_rounded : Icons.fingerprint_rounded,
+              key: ValueKey(overlayOpen ? 'demo-close' : 'demo-fp'),
+              color: Colors.white,
+              size: 26,
+            ),
+          ),
+        ),
+      );
+    }
+
     final enabled = _isOnline;
     final needsRegistration = _fpStatusLoaded && !_fingerprintEnrolled;
     final overlayOpen = _showClockOverlay;
@@ -1338,12 +1620,16 @@ class MainScreenState extends State<MainScreen>
                 ..._navItems.map((item) => _webNavItem(item)),
                 const Divider(height: 24),
                 _webQuickLink(
-                  label: _fingerprintEnrolled
+                  label: _isDemo
                       ? 'Clock In/Out'
-                      : 'Register Fingerprint',
-                  icon: _fingerprintEnrolled
+                      : (_fingerprintEnrolled
+                      ? 'Clock In/Out'
+                      : 'Register Fingerprint'),
+                  icon: _isDemo
                       ? Icons.fingerprint_rounded
-                      : Icons.app_registration_rounded,
+                      : (_fingerprintEnrolled
+                      ? Icons.fingerprint_rounded
+                      : Icons.app_registration_rounded),
                   onTap: _openClockOverlay,
                 ),
               ],
@@ -1379,21 +1665,26 @@ class MainScreenState extends State<MainScreen>
                 )
               ],
             ),
-            child: const Icon(Icons.fingerprint_rounded,
-                color: Colors.white, size: 22),
+            child: Icon(
+              _isDemo
+                  ? Icons.science_rounded
+                  : Icons.fingerprint_rounded,
+              color: Colors.white,
+              size: 22,
+            ),
           ),
           const SizedBox(width: 12),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('HRIS',
-                  style: TextStyle(
+              Text(_isDemo ? 'DEMO' : 'HRIS',
+                  style: const TextStyle(
                       color: AppColors.textPrimary,
                       fontSize: 15,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 3)),
-              Text('BIOMETRICS',
-                  style: TextStyle(
+              Text(_isDemo ? 'MODE' : 'BIOMETRICS',
+                  style: const TextStyle(
                       color: AppColors.orange,
                       fontSize: 8,
                       fontWeight: FontWeight.w800,
@@ -1482,7 +1773,7 @@ class MainScreenState extends State<MainScreen>
   }
 
   Widget _buildWebProfileFooter() {
-    final emp = widget.employee;
+    final emp = _effectiveEmployee;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1512,7 +1803,7 @@ class MainScreenState extends State<MainScreen>
                   ),
                 ),
               ),
-              if (_fpStatusLoaded)
+              if (_fpStatusLoaded && !_isDemo)
                 Positioned(
                   right: -2,
                   bottom: -2,
@@ -1555,7 +1846,26 @@ class MainScreenState extends State<MainScreen>
                     style: const TextStyle(
                         color: AppColors.textMuted, fontSize: 11),
                   ),
-                  if (_fpStatusLoaded) ...[
+                  if (_isDemo) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: _demoAccent.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Text(
+                        'DEMO',
+                        style: TextStyle(
+                          fontSize: 8,
+                          fontWeight: FontWeight.w800,
+                          color: _demoAccent,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                  ] else if (_fpStatusLoaded) ...[
                     const SizedBox(width: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -1583,7 +1893,9 @@ class MainScreenState extends State<MainScreen>
               ],
             ),
           ),
-          if (emp?.employeeId != null && emp!.employeeId.isNotEmpty)
+          if (emp?.employeeId != null &&
+              emp!.employeeId.isNotEmpty &&
+              !_isDemo)
             EmployeeNotificationBell(
               employeeId: emp.employeeId,
               iconColor: AppColors.textMuted,
@@ -1591,8 +1903,11 @@ class MainScreenState extends State<MainScreen>
             ),
           IconButton(
             onPressed: _handleLogout,
-            icon: const Icon(Icons.logout_rounded,
-                color: AppColors.textMuted, size: 17),
+            icon: Icon(
+              _isDemo ? Icons.science_rounded : Icons.logout_rounded,
+              color: _isDemo ? _demoAccent : AppColors.textMuted,
+              size: 17,
+            ),
           ),
         ],
       ),

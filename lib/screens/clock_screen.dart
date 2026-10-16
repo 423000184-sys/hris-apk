@@ -1,4 +1,7 @@
 // lib/screens/clock_screen.dart
+// v1.2: 🎭 DEMO MODE now shows the SAME skeleton loading screen as normal mode.
+//       Skeleton appears briefly (900ms), then fades into demo UI.
+// v1.1: 🎨 Demo mode now uses ORANGE (matches app theme)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
@@ -20,7 +23,9 @@ import '../services/device_info_service.dart';
 import '../services/admin_notification_service.dart';
 import '../services/security_service.dart';
 import '../services/security_hardening_service.dart';
+import '../services/demo_mode_service.dart';
 import '../data/local/dao/connectivity_service.dart';
+import '../widgets/skeleton_screens.dart';
 import 'login_screen.dart';
 
 class _ThemeColors {
@@ -92,6 +97,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   static const _greenDeep = Color(0xFF166534);
   static const _red = Color(0xFFFF0000);
 
+  // 🎨 DEMO — ORANGE (matches app theme)
+  static const _demoAccent = Color(0xFFFF8A00);
+  static const _demoAccentMid = Color(0xFFFA6A00);
+  static const _demoAccentDark = Color(0xFFF54900);
+
   static const _orangeGradient = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
@@ -100,6 +110,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   );
 
   static const String _logoAsset = 'assets/images/logo.png';
+
+  // 🆕 Demo skeleton display duration
+  static const Duration _demoSkeletonDuration = Duration(milliseconds: 900);
+  // 🆕 Normal mode initial skeleton display duration
+  static const Duration _normalSkeletonDuration = Duration(milliseconds: 600);
 
   late bool _isInRange;
   late bool _wfhAccess;
@@ -110,6 +125,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   DateTime? _clockOutTime;
   bool _saving = false;
   bool _clockActionInProgress = false;
+
+  // 🆕 Initial loading flag for skeleton
+  bool _isInitialLoading = true;
 
   Employee? _liveEmployee;
 
@@ -155,9 +173,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   bool _presenceStarted = false;
   bool _sessionListenerStarted = false;
 
+  bool get _isDemo => DemoModeService.instance.isEnabled;
+
   Employee? get _employee => _liveEmployee ?? widget.initialEmployee;
 
   String? get _employeeId {
+    if (_isDemo) return DemoModeService.demoEmployee.employeeId;
+
     final id = _employee?.employeeId;
     if (id != null && id.isNotEmpty) return id;
     final fallback = _employee?.id;
@@ -166,13 +188,20 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   String? get _employeeDocId {
+    if (_isDemo) return DemoModeService.demoEmployee.id;
+
     final id = _employee?.id;
     if (id != null && id.isNotEmpty) return id;
     return null;
   }
 
-  bool get _canClock =>
-      (_isInRange || _wfhAccess) && _networkState == _NetworkState.online;
+  bool get _canClock {
+    if (_isDemo) return true;
+
+    return (_isInRange || _wfhAccess) &&
+        _networkState == _NetworkState.online;
+  }
+
   bool get _isWfhMode => _wfhAccess && !_isInRange;
   bool get _isOnline => _networkState == _NetworkState.online;
 
@@ -188,6 +217,62 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
 
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — ipakita ang skeleton sa simula
+    // ═══════════════════════════════════════════════════════════
+    if (_isDemo) {
+      debugPrint('═══════════════════════════════════════════════════');
+      debugPrint('🎭 [DemoMode] ClockScreen in DEMO MODE');
+      debugPrint('   • Skipping all DB listeners');
+      debugPrint('   • Orange theme applied');
+      debugPrint('   • Skeleton shown for ${_demoSkeletonDuration.inMilliseconds}ms');
+      debugPrint('═══════════════════════════════════════════════════');
+
+      _isInRange = true;
+      _wfhAccess = true;
+      _sessionValidated = true;
+      _checkingGeofence = false;
+
+      // 🆕 Keep skeleton visible at start
+      _isInitialLoading = true;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        precacheImage(
+          const AssetImage(_logoAsset),
+          context,
+          onError: (e, st) => debugPrint('⚠️ Logo precache failed: $e'),
+        );
+      });
+
+      try {
+        _connectivitySub =
+            ConnectivityService.instance.onStatusChange.listen((online) {
+              if (!mounted) return;
+              setState(() {
+                _networkState =
+                online ? _NetworkState.online : _NetworkState.offline;
+              });
+            });
+      } catch (e) {
+        debugPrint('⚠️ connectivity listen failed: $e');
+      }
+
+      setState(() => _networkState = _NetworkState.online);
+
+      // 🆕 Hide skeleton after short delay
+      Future.delayed(_demoSkeletonDuration, () {
+        if (!mounted) return;
+        setState(() => _isInitialLoading = false);
+        debugPrint('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
+      });
+
+      return;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // NORMAL MODE
+    // ═══════════════════════════════════════════════════════════
     _isInRange = widget.initialInRange;
     _wfhAccess = widget.initialWfhAccess || _readWfhFromEmployee();
 
@@ -238,7 +323,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     }
 
     _checkNetworkOnEntry();
-
     _startPresenceIfNeeded();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -249,9 +333,17 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         if (mounted) debugGeofenceCheck();
       });
     });
+
+    // 🆕 Hide initial skeleton after normal load window
+    Future.delayed(_normalSkeletonDuration, () {
+      if (!mounted) return;
+      setState(() => _isInitialLoading = false);
+    });
   }
 
   Future<void> debugGeofenceCheck() async {
+    if (_isDemo) return;
+
     debugPrint('═══════════════════════════════════════════');
     debugPrint('🔍 [ClockScreen][DEBUG] Manual geofence check');
     debugPrint('   employee.id          = ${_employee?.id ?? "null"}');
@@ -300,6 +392,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   void _startPresenceIfNeeded() {
+    if (_isDemo) return;
+
     if (_presenceStarted) return;
     final emp = _employee;
     if (emp == null) return;
@@ -336,6 +430,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     required String severity,
     required String details,
   }) async {
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Skipping security log: $type');
+      return;
+    }
+
     try {
       if (!_isOnline) return;
       final empId = _employeeId;
@@ -381,6 +480,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _syncServerTime() async {
+    if (_isDemo) return;
+
     try {
       final ref = FirebaseFirestore.instance
           .collection('_time_sync')
@@ -415,6 +516,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _forceLogout(String reason) async {
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Ignoring force logout: $reason');
+      return;
+    }
+
     if (_loggedOut || !mounted) return;
     _loggedOut = true;
 
@@ -462,6 +568,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<bool> _validateSession({bool forceRefresh = false}) async {
+    if (_isDemo) return true;
+
     if (!forceRefresh &&
         _cachedSessionValid != null &&
         _sessionCacheTime != null &&
@@ -521,6 +629,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   void _startSessionRevocationListener() {
+    if (_isDemo) return;
+
     if (_sessionListenerStarted) return;
     final empId = _employeeDocId;
     if (empId == null || empId.isEmpty) return;
@@ -563,6 +673,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   void _startSecurityMonitoring() {
+    if (_isDemo) return;
+
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(minutes: 2), (_) async {
       if (!mounted || _loggedOut) return;
@@ -602,6 +714,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isDemo) return;
+
     if (state == AppLifecycleState.resumed) {
       _recordUserActivity();
       _validateSession(forceRefresh: true).then((valid) {
@@ -614,6 +728,12 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
   Future<void> _checkNetworkOnEntry() async {
     if (!mounted) return;
+
+    if (_isDemo) {
+      setState(() => _networkState = _NetworkState.online);
+      return;
+    }
+
     setState(() => _networkState = _NetworkState.checking);
 
     bool hasNet = true;
@@ -652,7 +772,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     await _checkNetworkOnEntry();
 
-    if (_networkState == _NetworkState.online && mounted) {
+    if (_networkState == _NetworkState.online && mounted && !_isDemo) {
       try {
         await _reloadAttendanceOnce();
         await _reloadEmployeeOnce();
@@ -664,6 +784,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _loadDeviceModel() async {
+    if (_isDemo) {
+      if (mounted) setState(() => _deviceModel = 'Demo Device');
+      return;
+    }
+
     try {
       final model = await DeviceInfoService.instance.getDeviceModel();
       if (!mounted) return;
@@ -718,6 +843,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   String _deviceName() {
+    if (_isDemo) return 'Demo Device';
     if (_deviceModel.isNotEmpty && _deviceModel != 'Unknown Device') {
       return _deviceModel;
     }
@@ -733,6 +859,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   String _computeZoneType() {
+    if (_isDemo) return 'inside';
+
     final role = (_employee?.position ?? '').toLowerCase();
     final dept = (_employee?.department ?? '').toLowerCase();
 
@@ -762,6 +890,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<GeofenceResult?> _checkGeofenceWithFallback() async {
+    if (_isDemo) return null;
+
     final docId = _employeeDocId;
     final empId = _employeeId;
 
@@ -815,6 +945,18 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshGeofence({bool silent = false}) async {
+    if (_isDemo) {
+      if (mounted) {
+        setState(() {
+          _isInRange = true;
+          _wfhAccess = true;
+          _mockLocationDetected = false;
+          _checkingGeofence = false;
+        });
+      }
+      return;
+    }
+
     if (_checkingGeofence) return;
     if (mounted) setState(() => _checkingGeofence = true);
 
@@ -908,6 +1050,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
   Future<void> _handlePullRefresh() async {
     _recordUserActivity();
+
+    if (_isDemo) {
+      await _refreshGeofence(silent: true);
+      _showSnack('🎭 Demo mode — data refreshed (no DB sync)');
+      return;
+    }
+
     await OfflineAttendanceService.instance.dumpAll();
     await Future.wait([
       _refreshGeofence(silent: true),
@@ -920,6 +1069,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _reloadAttendanceOnce() async {
+    if (_isDemo) return;
+
     final empId = _employeeId;
     if (empId == null || empId.isEmpty) return;
 
@@ -944,6 +1095,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _reloadEmployeeOnce() async {
+    if (_isDemo) return;
+
     final docId = _employeeDocId;
     if (docId == null || docId.isEmpty) return;
     try {
@@ -969,6 +1122,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   void _startAttendanceStream() {
+    if (_isDemo) return;
+
     final empId = _employeeId;
     if (empId == null) return;
     _attendanceSub?.cancel();
@@ -987,6 +1142,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   void _startEmployeeListener() {
+    if (_isDemo) return;
+
     final empDocId = _employeeDocId;
     if (empDocId == null || empDocId.isEmpty) return;
     _employeeSub?.cancel();
@@ -1148,6 +1305,12 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     required String type,
     required DateTime time,
   }) async {
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Simulating $type at $time — NO DB WRITE');
+      await Future.delayed(const Duration(milliseconds: 400));
+      return true;
+    }
+
     final empId = _employeeId;
     if (empId == null || empId.isEmpty) {
       _showSnack('Unable to get employee ID. Please check your login.');
@@ -1236,6 +1399,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     String? locationName,
     required String txnId,
   }) {
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Skipping secondary logs');
+      return;
+    }
+
     final effectiveLocation =
     (locationName != null && locationName.isNotEmpty)
         ? locationName
@@ -1366,6 +1534,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _notifyBlockedAttempt(String action) async {
+    if (_isDemo) return;
+
     final empId = _employeeId;
     final empName = _employee?.fullName ?? 'Unknown';
     if (empId == null || empId.isEmpty) return;
@@ -1455,6 +1625,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Future<bool> _preClockCheck(String action) async {
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Bypassing pre-clock check for $action');
+      return true;
+    }
+
     final valid = await _validateSession(forceRefresh: true);
     if (!valid) {
       _showSnack('🚨 Session expired. Please log in again.');
@@ -1545,7 +1720,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       });
       if (!ok) return;
 
-      _showSnack('✅ Clocked IN at ${_formatTime(now)}');
+      _showSnack(
+        _isDemo
+            ? '🎭 DEMO: Clocked IN at ${_formatTime(now)}'
+            : '✅ Clocked IN at ${_formatTime(now)}',
+      );
       widget.onClockIn?.call();
     } finally {
       _clockActionInProgress = false;
@@ -1581,7 +1760,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       });
       if (!ok) return;
 
-      _showSnack('✅ Clocked OUT at ${_formatTime(now)}');
+      _showSnack(
+        _isDemo
+            ? '🎭 DEMO: Clocked OUT at ${_formatTime(now)}'
+            : '✅ Clocked OUT at ${_formatTime(now)}',
+      );
       widget.onClockOut?.call();
     } finally {
       _clockActionInProgress = false;
@@ -1595,6 +1778,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         content: Text(msg),
         duration: const Duration(seconds: 3),
         behavior: SnackBarBehavior.floating,
+        backgroundColor: _isDemo ? _demoAccent : null,
       ),
     );
   }
@@ -1607,6 +1791,34 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     final isOffline = _networkState == _NetworkState.offline;
     final isChecking = _networkState == _NetworkState.checking;
+
+    // ═══════════════════════════════════════════════════════════
+    // 🆕 SKELETON LOADING STATE (works for demo + normal)
+    // ═══════════════════════════════════════════════════════════
+    if (_isInitialLoading) {
+      return Scaffold(
+        backgroundColor: tc.bg,
+        body: SafeArea(
+          child: Stack(
+            children: [
+              const DashboardSkeleton(),
+              if (isOffline && !_isDemo)
+                Positioned.fill(
+                  child: AnimatedOpacity(
+                    opacity: _showOfflineOverlay ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 350),
+                    curve: Curves.easeInOut,
+                    child: IgnorePointer(
+                      ignoring: !_showOfflineOverlay,
+                      child: _buildNetworkErrorOverlay(tc),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: tc.bg,
@@ -1666,26 +1878,20 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                         children: [
                           const SizedBox(height: 8),
 
-                          if (_sessionValidated || _mockLocationDetected) ...[
+                          if (_isDemo) _buildDemoClockBadge(),
+
+                          if (_mockLocationDetected && !_isDemo) ...[
                             Padding(
                               padding:
                               const EdgeInsets.fromLTRB(24, 0, 24, 0),
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
-                                  if (_mockLocationDetected)
-                                    _buildSecurityBadge(
-                                      'FAKE GPS',
-                                      Icons.gps_off_rounded,
-                                      _red,
-                                    ),
-                                  if (_sessionValidated &&
-                                      !_mockLocationDetected)
-                                    _buildSecurityBadge(
-                                      'SECURED',
-                                      Icons.verified_user_rounded,
-                                      _greenDeep,
-                                    ),
+                                  _buildSecurityBadge(
+                                    'FAKE GPS',
+                                    Icons.gps_off_rounded,
+                                    _red,
+                                  ),
                                 ],
                               ),
                             ),
@@ -1711,7 +1917,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
             ],
           ),
 
-          if (isOffline || isChecking)
+          if ((isOffline || isChecking) && !_isDemo)
             Positioned.fill(
               child: AnimatedOpacity(
                 opacity: _showOfflineOverlay ? 1.0 : 0.0,
@@ -1724,6 +1930,45 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  // 🎭 DEMO MODE badge sa taas — ORANGE
+  Widget _buildDemoClockBadge() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [_demoAccent, _demoAccentDark],
+          ),
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: [
+            BoxShadow(
+              color: _demoAccent.withValues(alpha: 0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.science_rounded, color: Colors.white, size: 13),
+            SizedBox(width: 6),
+            Text(
+              'DEMO MODE — No data is saved',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.3,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1913,7 +2158,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                       ),
                       offset: _timeOffset,
                     ),
-                    if (_wfhAccess) ...[
+                    if (_wfhAccess && !_isDemo) ...[
                       const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -1955,7 +2200,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
               ],
             ),
           ),
-          if (_checkingGeofence)
+          if (_checkingGeofence && !_isDemo)
             const Padding(
               padding: EdgeInsets.only(left: 4),
               child: SizedBox(
@@ -1982,12 +2227,15 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       height: 40,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: tc.avatarBg,
-        border: Border.all(color: tc.avatarBorder, width: 1.15),
+        color: _isDemo ? _demoAccent : tc.avatarBg,
+        border: Border.all(
+          color: _isDemo ? _demoAccent : tc.avatarBorder,
+          width: 1.15,
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       alignment: Alignment.center,
-      child: hasPhoto
+      child: hasPhoto && !_isDemo
           ? _buildPhotoContent(tc, photoUrl, initials)
           : Text(
         initials,
@@ -2048,16 +2296,16 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🖼️ HERO CARD — same as dashboard
-  // gradient: from-[#09090b] via-[#09090b]/40 to-black/0
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildHeroCard() {
     final Color accent;
     final String statusText;
     final String subtitle;
 
-    if (_mockLocationDetected && !_wfhAccess) {
+    if (_isDemo) {
+      accent = _demoAccent;
+      statusText = 'DEMO MODE.';
+      subtitle = 'All checks bypassed. No data will be saved to the database.';
+    } else if (_mockLocationDetected && !_wfhAccess) {
       accent = _red;
       statusText = 'Fake GPS.';
       subtitle = 'Please disable mock location apps to proceed.';
@@ -2090,7 +2338,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
             height: 200,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: _orangeBorder, width: 1.15),
+              border: Border.all(
+                color: _isDemo ? _demoAccent : _orangeBorder,
+                width: 1.15,
+              ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.25),
@@ -2103,7 +2354,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
             clipBehavior: Clip.antiAlias,
             child: Stack(
               children: [
-                // ═══ 1. BACKGROUND IMAGE (60% opacity, cover) ═══
                 Positioned.fill(
                   child: Opacity(
                     opacity: 0.6,
@@ -2117,8 +2367,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-
-                // ═══ 2. GRADIENT OVERLAY — from-[#09090b] via-[#09090b]/40 to-black/0 ═══
                 Positioned.fill(
                   child: DecoratedBox(
                     decoration: BoxDecoration(
@@ -2135,8 +2383,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-
-                // ═══ 3. TEXT CONTENT ═══
                 Padding(
                   padding: const EdgeInsets.fromLTRB(25, 32, 25, 20),
                   child: Column(
@@ -2163,9 +2409,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                           ],
                         ),
                       ),
-
                       const Spacer(),
-
                       Text(
                         subtitle,
                         softWrap: true,
@@ -2197,9 +2441,18 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         height: 72,
         padding: const EdgeInsets.all(7),
         decoration: BoxDecoration(
-          gradient: _orangeGradient,
+          gradient: _isDemo
+              ? const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [_demoAccent, _demoAccentDark],
+          )
+              : _orangeGradient,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _orangeBorder, width: 1.15),
+          border: Border.all(
+            color: _isDemo ? _demoAccent : _orangeBorder,
+            width: 1.15,
+          ),
         ),
         child: Row(
           children: [
@@ -2216,7 +2469,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _orangeBorder, width: 1),
+                      border: Border.all(
+                        color: _isDemo ? _demoAccent : _orangeBorder,
+                        width: 1,
+                      ),
                     ),
                     alignment: Alignment.center,
                     child: Column(
@@ -2242,7 +2498,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                             color: !canClock
                                 ? _red
                                 : (clockedIn
-                                ? _orange
+                                ? (_isDemo ? _demoAccent : _orange)
                                 : const Color(0xFFA1A1AA)),
                             letterSpacing: 0.3,
                           ),
@@ -2300,9 +2556,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildClockOutSection(_ThemeColors tc) {
-    final isInRangeOrWfh = _isInRange || _isWfhMode;
+    final isInRangeOrWfh = _isDemo || _isInRange || _isWfhMode;
 
-    final cardBg = _isInRange
+    final cardBg = _isDemo
+        ? _demoAccent.withValues(alpha: tc.isDark ? 0.2 : 0.15)
+        : (_isInRange
         ? (tc.isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.white.withValues(alpha: 0.2))
@@ -2311,11 +2569,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         .withValues(alpha: tc.isDark ? 0.2 : 0.15)
         : (tc.isDark
         ? const Color(0xFF1F1F23)
-        : const Color(0xFF838383).withValues(alpha: 0.28)));
+        : const Color(0xFF838383).withValues(alpha: 0.28))));
 
-    final cardBorder = _isInRange
+    final cardBorder = _isDemo
+        ? _demoAccent
+        : (_isInRange
         ? _orangeBorder
-        : (_isWfhMode ? const Color(0xFF22C55E) : _red);
+        : (_isWfhMode ? const Color(0xFF22C55E) : _red));
 
     final labelColor = isInRangeOrWfh ? tc.textPrimary : tc.textOnDark;
     final hasClockedOut = _clockOutTime != null;
@@ -2340,10 +2600,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
               if (hasClockedOut)
                 Text(
                   _clockOutDisplay,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: _orange,
+                    color: _isDemo ? _demoAccent : _orange,
                   ),
                 )
               else if (!canClock)
@@ -2385,9 +2645,15 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                         height: 48,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          gradient: _orangeGradient,
-                          border:
-                          Border.all(color: _orangeBorder, width: 1.15),
+                          gradient: _isDemo
+                              ? const LinearGradient(
+                            colors: [_demoAccent, _demoAccentDark],
+                          )
+                              : _orangeGradient,
+                          border: Border.all(
+                            color: _isDemo ? _demoAccent : _orangeBorder,
+                            width: 1.15,
+                          ),
                         ),
                         alignment: Alignment.center,
                         child: Icon(
@@ -2417,7 +2683,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
               ),
             ),
           ),
-          if (_isWfhMode) ...[
+          if (_isWfhMode && !_isDemo) ...[
             const SizedBox(height: 12),
             Container(
               padding:
@@ -2538,7 +2804,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
           children: List.generate(items.length, (i) {
             final item = items[i];
             final active = i == _activeNavIndex;
-            final color = active ? _orange : tc.textSecondary;
+            final color = active
+                ? (_isDemo ? _demoAccent : _orange)
+                : tc.textSecondary;
             return GestureDetector(
               onTap: () {
                 _recordUserActivity();

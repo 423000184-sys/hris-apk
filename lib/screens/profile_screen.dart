@@ -1,4 +1,8 @@
 // lib/screens/profile_screen.dart
+// v1.2: 🎭 DEMO MODE now shows the SAME skeleton loading screen as normal mode.
+//       Skeleton appears briefly (900ms), then fades into demo UI.
+// v1.1: 🎭 DEMO MODE — skip session check, Firestore listeners,
+//       presence challenge, security monitoring. Use demoEmployee.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File, Platform;
@@ -18,12 +22,13 @@ import '../services/auth_service.dart';
 import '../services/notification_preference_service.dart';
 import '../services/language_service.dart';
 import '../services/admin_notification_service.dart';
+import '../services/demo_mode_service.dart';
 import '../models/employee.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_screens.dart';
 import 'landing_screen.dart';
 import 'login_screen.dart';
-import 'reports_screen.dart'; // ✅ BAGO: para sa Reports link
+import 'reports_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════
 // ✅ HAND WATERMARK
@@ -75,7 +80,8 @@ class _ThemeColors {
   const _ThemeColors(this.isDark);
 
   Color get bg => isDark ? const Color(0xFF0F0F10) : Colors.white;
-  Color get cardBg => isDark ? const Color(0xFF18181B) : const Color(0xFFF8F8F8);
+  Color get cardBg =>
+      isDark ? const Color(0xFF18181B) : const Color(0xFFF8F8F8);
   Color get cardBorder => isDark ? const Color(0xFF3F3F46) : _Mock.orange;
   Color get textPrimary => isDark ? Colors.white : Colors.black;
   Color get textMuted =>
@@ -128,6 +134,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   static const Duration _sessionCacheTTL = Duration(seconds: 5);
   static const Duration _inactivityLimit = Duration(minutes: 30);
 
+  // 🆕 Demo skeleton display duration
+  static const Duration _demoSkeletonDuration = Duration(milliseconds: 900);
+
   Timer? _heartbeatTimer;
   Timer? _inactivityTimer;
   bool _loggedOut = false;
@@ -138,12 +147,48 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   LanguageService get lang => LanguageService.instance;
 
+  bool get _isDemo => DemoModeService.instance.isEnabled;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
     _lastUserActivityAt = DateTime.now();
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — skip connectivity listener + security
+    //             pero IPAKITA ANG SKELETON sa simula
+    // ═══════════════════════════════════════════════════════════
+    if (_isDemo) {
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('🎭 [DemoMode] Profile — DEMO PATH');
+      debugPrint('   • Skipping connectivity listener');
+      debugPrint('   • Skipping security monitoring');
+      debugPrint('   • Skeleton shown for ${_demoSkeletonDuration.inMilliseconds}ms');
+      debugPrint('═══════════════════════════════════════════');
+
+      _employee = widget.initialEmployee ?? DemoModeService.demoEmployee;
+      _networkState = _NetworkState.online;
+      _sessionValidated = true;
+      _loading = false;
+
+      // 🆕 Keep skeleton visible at start
+      _isInitialLoading = true;
+
+      _loadPushPreference();
+      _loadThemeMode();
+      _loadPasswordCooldown();
+
+      // 🆕 Hide skeleton after short delay
+      Future.delayed(_demoSkeletonDuration, () {
+        if (!mounted) return;
+        setState(() => _isInitialLoading = false);
+        debugPrint('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
+      });
+
+      return;
+    }
 
     _load();
     _loadPushPreference();
@@ -193,6 +238,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   // 🔒 SECURITY — Session validation
   // ═══════════════════════════════════════════════════════════════
   Future<bool> _validateSession({bool forceRefresh = false}) async {
+    // 🎭 DEMO MODE — always valid
+    if (_isDemo) return true;
+
     if (_loggedOut) return false;
 
     if (!forceRefresh &&
@@ -221,7 +269,8 @@ class _ProfileScreenState extends State<ProfileScreen>
       final sessionEmpId =
       await SecurityService.instance.getCurrentEmployeeId();
       final docId = widget.initialEmployee?.id ?? _employee?.id;
-      final empId = widget.initialEmployee?.employeeId ?? _employee?.employeeId;
+      final empId =
+          widget.initialEmployee?.employeeId ?? _employee?.employeeId;
 
       final matches = sessionEmpId == null ||
           sessionEmpId.isEmpty ||
@@ -253,6 +302,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   void _startSecurityMonitoring() {
+    // 🎭 DEMO MODE — skip
+    if (_isDemo) return;
+
     final empDocId = widget.initialEmployee?.id ?? _employee?.id;
     if (empDocId != null && empDocId.isNotEmpty) {
       _sessionSub?.cancel();
@@ -315,6 +367,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _forceLogout(String reason) async {
+    // 🎭 DEMO MODE — ignore
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Profile force logout ignored: $reason');
+      return;
+    }
+
     if (_loggedOut || !mounted) return;
     _loggedOut = true;
 
@@ -360,9 +418,13 @@ class _ProfileScreenState extends State<ProfileScreen>
     required String severity,
     required String details,
   }) {
-    FirebaseFirestore.instance
-        .collection('security_events')
-        .add({
+    // 🎭 DEMO MODE — skip Firestore write
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Profile security event (skipped): $type');
+      return;
+    }
+
+    FirebaseFirestore.instance.collection('security_events').add({
       'type': type,
       'severity': severity,
       'details': details,
@@ -384,6 +446,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _recordActivity();
+      // 🎭 DEMO MODE — skip
+      if (_isDemo) return;
+
       _validateSession(forceRefresh: true).then((valid) {
         if (!valid && mounted && !_loggedOut) {
           _forceLogout('Session invalid on resume');
@@ -435,6 +500,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<bool> _hasNetwork() async {
+    if (_isDemo) return true;
     try {
       return ConnectivityService.instance.isOnline;
     } catch (_) {
@@ -474,6 +540,19 @@ class _ProfileScreenState extends State<ProfileScreen>
   Future<void> _load() async {
     if (_loggedOut) return;
     _recordActivity();
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — use demoEmployee, skip DB
+    // ═══════════════════════════════════════════════════════════
+    if (_isDemo) {
+      if (!mounted) return;
+      setState(() {
+        _employee = widget.initialEmployee ?? DemoModeService.demoEmployee;
+        _loading = false;
+      });
+      debugPrint('🎭 [DemoMode] Profile loaded with demoEmployee');
+      return;
+    }
 
     final valid = await _validateSession(forceRefresh: true);
     if (!valid) {
@@ -519,9 +598,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   void _startEmployeeListener() {
+    // 🎭 DEMO MODE — skip Firestore listener
+    if (_isDemo) return;
+
     final docId = _employee?.id;
     if (docId == null || docId.isEmpty) {
-      debugPrint('⚠️ [Profile] Walang employee doc ID — skip listener');
+      debugPrint('⚠️ [Profile] No employee doc ID — skip listener');
       return;
     }
 
@@ -537,7 +619,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         if (!mounted || _loggedOut) return;
         final data = snap.data();
         if (data == null) {
-          debugPrint('⚠️ [Profile] Doc deleted o empty');
+          debugPrint('⚠️ [Profile] Doc deleted or empty');
           return;
         }
 
@@ -685,14 +767,14 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // ✅ BAGO: Navigate to Reports Screen
+  // ✅ NEW: Navigate to Reports Screen
   // ═══════════════════════════════════════════════════════════════
   Future<void> _openReports() async {
     _recordActivity();
 
     if (_loggedOut) return;
 
-    // 🔒 Session check bago pumasok
+    // 🔒 Session check before entering (bypassed in demo)
     final valid = await _validateSession(forceRefresh: true);
     if (!valid) {
       _showSnack('🚨 Session expired. Please log in again.', isError: true);
@@ -702,7 +784,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
     if (_networkState != _NetworkState.online) {
       _showSnack(
-        '⚠️ Walang internet. Paki-check ang connection.',
+        '⚠️ No internet. Please check your connection.',
         isError: true,
       );
       return;
@@ -720,6 +802,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   Future<void> _requestPasswordChange() async {
     _recordActivity();
 
+    // 🎭 DEMO MODE — show toast only, no Firestore write
+    if (_isDemo) {
+      _showSnack('🎭 Demo Mode — password change is not available.');
+      return;
+    }
+
     final valid = await _validateSession(forceRefresh: true);
     if (!valid) {
       _showSnack('🚨 Session expired. Please log in again.', isError: true);
@@ -729,7 +817,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
     if (_networkState != _NetworkState.online) {
       _showSnack(
-        '⚠️ Walang internet. Paki-check ang connection.',
+        '⚠️ No internet. Please check your connection.',
         isError: true,
       );
       return;
@@ -929,7 +1017,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 tc: dialogTc,
                 value: AppLanguage.tagalog,
                 label: '🇵🇭  Tagalog',
-                subtitle: 'Gamitin ang wikang Tagalog',
+                subtitle: 'Use the Tagalog language',
                 selected: current == AppLanguage.tagalog,
                 onTap: () => Navigator.pop(ctx, AppLanguage.tagalog),
               ),
@@ -939,7 +1027,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child: Text(
-                current == AppLanguage.tagalog ? 'Kanselahin' : 'Cancel',
+                'Cancel',
                 style: TextStyle(
                   color: dialogTc.textMuted,
                   fontWeight: FontWeight.w700,
@@ -959,7 +1047,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (!mounted) return;
 
     final msg = picked == AppLanguage.tagalog
-        ? 'Nakaset na ang wika sa Tagalog'
+        ? 'Language set to Tagalog'
         : 'App language set to English';
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1048,6 +1136,13 @@ class _ProfileScreenState extends State<ProfileScreen>
       severity: 'info',
       details: 'User-initiated logout',
     );
+
+    // 🎭 DEMO MODE — also clear demo session flag
+    if (_isDemo) {
+      try {
+        await DemoModeService.instance.endDemoSession();
+      } catch (_) {}
+    }
 
     try {
       await AuthService.instance.signOut(employee: _employee);
@@ -1145,7 +1240,13 @@ class _ProfileScreenState extends State<ProfileScreen>
                           _buildProfileCard(tc),
                           const SizedBox(height: 4),
 
-                          // ✅ BAGO: REPORTS SECTION
+                          // ✅ DEMO badge
+                          if (_isDemo) ...[
+                            const SizedBox(height: 8),
+                            _buildDemoBadge(),
+                          ],
+
+                          // ✅ NEW: REPORTS SECTION
                           _sectionLabel(tc, 'REPORTS'),
                           const SizedBox(height: 10),
                           _sectionCard(tc, [
@@ -1241,12 +1342,13 @@ class _ProfileScreenState extends State<ProfileScreen>
                               tc: tc,
                               icon: Icons.privacy_tip_rounded,
                               label: langService.t('privacy_policy'),
-                              subtitle: 'Read our policy data privacy policy',
+                              subtitle: 'Read our data privacy policy',
                               onTap: () {
                                 _recordActivity();
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
-                                    builder: (_) => const PrivacyPolicyScreen(),
+                                    builder: (_) =>
+                                    const PrivacyPolicyScreen(),
                                   ),
                                 );
                               },
@@ -1265,6 +1367,36 @@ class _ProfileScreenState extends State<ProfileScreen>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // 🎭 DEMO BADGE
+  Widget _buildDemoBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF54900).withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+            color: const Color(0xFFF54900).withValues(alpha: 0.5), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          Icon(Icons.science_rounded,
+              color: Color(0xFFF54900), size: 14),
+          SizedBox(width: 6),
+          Text(
+            'DEMO MODE — Session Only',
+            style: TextStyle(
+              color: Color(0xFFF54900),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.4,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1393,53 +1525,17 @@ class _ProfileScreenState extends State<ProfileScreen>
           bottomRight: Radius.circular(16),
         ),
       ),
-      child: Stack(
-        children: [
-          Align(
-            alignment: Alignment.topCenter,
-            child: Text(
-              langService.t('profile_title'),
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 30,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Text(
+          langService.t('profile_title'),
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 30,
+            fontWeight: FontWeight.w500,
           ),
-          if (_sessionValidated)
-            Positioned(
-              right: 0,
-              top: 0,
-              child: Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.4)),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.verified_user_rounded,
-                        size: 10, color: Colors.white),
-                    SizedBox(width: 4),
-                    Text(
-                      'SECURED',
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                        letterSpacing: 0.4,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
@@ -1900,7 +1996,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                   if (subtitle != null) ...[
                     const SizedBox(height: 2),
                     Text(subtitle,
-                        style: TextStyle(fontSize: 12, color: tc.textMuted)),
+                        style:
+                        TextStyle(fontSize: 12, color: tc.textMuted)),
                   ],
                 ],
               ),

@@ -1,10 +1,16 @@
 // lib/screens/reports_screen.dart
 // ═══════════════════════════════════════════════════════════════════
-// REPORTS / PAYSLIP SCREEN  v2.0
+// REPORTS / PAYSLIP SCREEN  v2.5
 // Updates:
+//   - 🎭 DEMO MODE skeleton duration now matches other screens (900ms).
 //   - Deterministic PDF password (no more versioning/reset).
 //   - "View My PDF Password" always shows the same password.
 //   - All user-facing text in English.
+//   - SECURED badge removed from header.
+//   - Payslip covers the FULL MONTH (1st to end of month).
+//   - DOWNLOAD ENFORCED AT END-OF-MONTH ONLY.
+//   - 🎭 DEMO MODE: fake payslip data, no DB writes.
+//   - 🎨 v2.4: Demo mode now uses the SAME ORANGE theme (no violet).
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
@@ -25,6 +31,7 @@ import '../services/security_hardening_service.dart';
 import '../services/payroll_calculator.dart';
 import '../services/payroll_pdf_service.dart';
 import '../services/support_request_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 NEW
 import '../models/employee.dart';
 import '../widgets/skeleton_screens.dart';
 import 'login_screen.dart';
@@ -84,6 +91,9 @@ Future<void> _logSecurityEventGlobal({
   String? sessionNonce,
   bool sensitive = false,
 }) async {
+  // 🎭 DEMO — skip DB write
+  if (DemoModeService.instance.isEnabled) return;
+
   try {
     final doc = <String, dynamic>{
       'type': type,
@@ -117,6 +127,14 @@ String _maskString(String input, {int showStart = 2, int showEnd = 2}) {
 
 const int kWorkingDaysPerMonth = 22;
 
+// ══════════════════════════════════════════════════════════════
+// ✅ DOWNLOAD WINDOW CONFIG
+// ══════════════════════════════════════════════════════════════
+const int _kDownloadWindowDays = 1;
+
+// 🆕 Demo skeleton display duration (matches other screens)
+const Duration _kDemoSkeletonDuration = Duration(milliseconds: 900);
+
 enum _NetworkState { online, offline, checking }
 
 class _Mock {
@@ -124,6 +142,8 @@ class _Mock {
   static const Color lime = Color(0xFFC4FF0A);
   static const Color paidBg = Color(0x1AC4FF0A);
   static const Color paidBorder = Color(0x33C4FF0A);
+  // 🎨 Demo now uses the SAME orange color as the rest of the app.
+  static const Color demoAccent = orange;
 }
 
 class _ThemeColors {
@@ -203,14 +223,64 @@ class _ReportsScreenState extends State<ReportsScreen>
   bool? _cachedSessionValid;
   DateTime? _cachedSessionTime;
 
+  // 🎭 DEMO MODE
+  bool get _isDemo => DemoModeService.instance.isEnabled;
+
+  // ═══════════════════════════════════════════════════════════════
+  // PAYSLIP PERIOD — FULL MONTH (1st day → end of month)
+  // ═══════════════════════════════════════════════════════════════
   DateTime get _periodStart {
     final n = DateTime.now();
-    return DateTime(n.year, n.month, 1);
+    return DateTime(n.year, n.month, 1, 0, 0, 0);
   }
 
   DateTime get _periodEnd {
     final n = DateTime.now();
     return DateTime(n.year, n.month + 1, 0, 23, 59, 59);
+  }
+
+  String get _periodRangeLabel {
+    final start = DateFormat('MMM d').format(_periodStart);
+    final end = DateFormat('MMM d, yyyy').format(_periodEnd);
+    return '$start – $end';
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // DOWNLOAD WINDOW — end-of-month enforcement
+  // ═══════════════════════════════════════════════════════════════
+  int get _lastDayOfMonth {
+    final n = DateTime.now();
+    return DateTime(n.year, n.month + 1, 0).day;
+  }
+
+  int get _firstAllowedDay {
+    final last = _lastDayOfMonth;
+    return (last - (_kDownloadWindowDays - 1)).clamp(1, last);
+  }
+
+  bool get _isDownloadWindowOpen {
+    // 🎭 DEMO — always open
+    if (_isDemo) return true;
+
+    final now = DateTime.now();
+    return now.day >= _firstAllowedDay;
+  }
+
+  String get _downloadWindowLabel {
+    final now = DateTime.now();
+    final last = _lastDayOfMonth;
+    final first = _firstAllowedDay;
+    if (first == last) {
+      final d = DateTime(now.year, now.month, last);
+      return DateFormat('MMMM d, yyyy').format(d);
+    }
+    final d1 = DateTime(now.year, now.month, first);
+    final d2 = DateTime(now.year, now.month, last);
+    return '${DateFormat('MMMM d').format(d1)} – ${DateFormat('MMMM d, yyyy').format(d2)}';
+  }
+
+  String get _downloadBlockedReason {
+    return 'Payslip becomes available on $_downloadWindowLabel.';
   }
 
   @override
@@ -221,6 +291,39 @@ class _ReportsScreenState extends State<ReportsScreen>
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
 
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — skip security + listeners
+    //             IPAKITA ANG SKELETON for 900ms (consistent sa iba)
+    // ═══════════════════════════════════════════════════════════
+    if (_isDemo) {
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('🎭 [DemoMode] ReportsScreen in DEMO MODE');
+      debugPrint('   • Skipping security monitoring');
+      debugPrint('   • Skipping session validation');
+      debugPrint('   • Skipping network listener');
+      debugPrint('   • Using fake payslip breakdown');
+      debugPrint('   • Skeleton shown for ${_kDemoSkeletonDuration.inMilliseconds}ms');
+      debugPrint('═══════════════════════════════════════════');
+
+      _sessionValidated = true;
+      _networkState = _NetworkState.online;
+
+      // 🆕 Keep skeleton visible at start (default is already true)
+      _isInitialLoading = true;
+
+      _loadData();
+
+      // 🆕 Hide skeleton after 900ms (matches other screens)
+      Future.delayed(_kDemoSkeletonDuration, () {
+        if (!mounted) return;
+        setState(() => _isInitialLoading = false);
+        debugPrint('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
+      });
+
+      return;
+    }
+
+    // NORMAL MODE
     try {
       _networkSub =
           ConnectivityService.instance.onStatusChange.listen((online) {
@@ -266,6 +369,9 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<bool> _validateSession({bool forceRefresh = false}) async {
+    // 🎭 DEMO — always valid
+    if (_isDemo) return true;
+
     if (!forceRefresh &&
         _cachedSessionValid != null &&
         _cachedSessionTime != null &&
@@ -333,6 +439,9 @@ class _ReportsScreenState extends State<ReportsScreen>
     required String details,
     bool sensitive = false,
   }) async {
+    // 🎭 DEMO — skip
+    if (_isDemo) return;
+
     await _logSecurityEventGlobal(
       type: type,
       severity: severity,
@@ -348,6 +457,9 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   void _startSecurityMonitoring() {
+    // 🎭 DEMO — skip
+    if (_isDemo) return;
+
     final empDocId = widget.initialEmployee?.id;
     if (empDocId != null && empDocId.isNotEmpty) {
       _sessionSub = FirebaseFirestore.instance
@@ -415,6 +527,9 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<void> _forceLogout(String reason) async {
+    // 🎭 DEMO — skip
+    if (_isDemo) return;
+
     if (_loggedOut || !mounted) return;
     _loggedOut = true;
 
@@ -453,6 +568,8 @@ class _ReportsScreenState extends State<ReportsScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isDemo) return;
+
     if (state == AppLifecycleState.resumed) {
       _recordActivity();
       _validateSession(forceRefresh: true).then((valid) {
@@ -464,6 +581,12 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<bool> _checkPdfRateLimit() async {
+    // 🎭 DEMO — no rate limit
+    if (_isDemo) {
+      _totalPdfGenerated++;
+      return true;
+    }
+
     final now = DateTime.now();
 
     if (_lastPdfGeneratedAt != null) {
@@ -489,8 +612,7 @@ class _ReportsScreenState extends State<ReportsScreen>
         }
       }
 
-      if (windowStart == null ||
-          now.difference(windowStart).inHours >= 1) {
+      if (windowStart == null || now.difference(windowStart).inHours >= 1) {
         windowStart = now;
         count = 0;
       }
@@ -505,8 +627,8 @@ class _ReportsScreenState extends State<ReportsScreen>
         return false;
       }
 
-      await prefs.setString(_pdfCountPrefsKey,
-          '${windowStart.toIso8601String()}|${count + 1}');
+      await prefs.setString(
+          _pdfCountPrefsKey, '${windowStart.toIso8601String()}|${count + 1}');
     } catch (e) {
       debugPrint('⚠️ Rate limit prefs error: $e');
     }
@@ -527,6 +649,12 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<void> _checkNetworkOnEntry() async {
+    // 🎭 DEMO — assume online
+    if (_isDemo) {
+      if (mounted) setState(() => _networkState = _NetworkState.online);
+      return;
+    }
+
     if (!mounted) return;
     setState(() => _networkState = _NetworkState.checking);
 
@@ -552,6 +680,8 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<void> _retryNetworkCheck() async {
+    if (_isDemo) return;
+
     if (!mounted) return;
     _recordActivity();
 
@@ -585,6 +715,8 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<Map<String, dynamic>?> _fetchByRawId(String rawId) async {
+    if (_isDemo) return null;
+
     final fs = FirebaseFirestore.instance;
     debugPrint('🔍 [_fetchByRawId] rawId masked: ${_maskString(rawId)}');
 
@@ -626,10 +758,101 @@ class _ReportsScreenState extends State<ReportsScreen>
     return null;
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 🎭 BUILD FAKE BREAKDOWN — for demo mode
+  // ══════════════════════════════════════════════════════════════
+  PayrollBreakdown _buildDemoBreakdown() {
+    final demo = DemoModeService.instance.demoPayslipBreakdown;
+
+    return PayrollBreakdown(
+      regularPay: demo['regularPay'] ?? 22000.0,
+      basicSalary: demo['basicSalary'] ?? 22000.0,
+      basicHours: demo['basicHours'] ?? 176.0,
+      absentAmount: demo['absentAmount'] ?? 0.0,
+      absentHours: demo['absentHours'] ?? 0.0,
+      lateAmount: demo['lateAmount'] ?? -150.0,
+      lateHours: demo['lateHours'] ?? 1.5,
+      undertimeAmount: demo['undertimeAmount'] ?? 0.0,
+      undertimeHours: demo['undertimeHours'] ?? 0.0,
+      dayOffOtAmount: demo['dayOffOtAmount'] ?? 0.0,
+      dayOffOtHours: demo['dayOffOtHours'] ?? 0.0,
+      overtimeAmount: demo['overtimeAmount'] ?? 2750.0,
+      overtimeHours: demo['overtimeHours'] ?? 10.0,
+      nightDiffAmount: demo['nightDiffAmount'] ?? 550.0,
+      nightDiffHours: demo['nightDiffHours'] ?? 12.0,
+      holidayAmount: demo['holidayAmount'] ?? 600.0,
+      otherIncomeAllowance: demo['otherIncomeAllowance'] ?? 0.0,
+      totalAdjustmentsMade: demo['totalAdjustmentsMade'] ?? 0.0,
+      grossPay: demo['grossPay'] ?? 25750.0,
+      thirteenthMonth: 0,
+      silCredits: 0,
+      totalBenefits: 0,
+      workingDays: 22,
+      workingDaysPerMonth: 22,
+      presentDays: 22,
+      absentDays: 0,
+      dailyRate: 1000.0,
+      workRawMinutes: 10560,
+      workLunchMinutes: 1320,
+      workNetMinutes: 9240,
+      workOvertimeMinutes: 600,
+      daysWithLogs: 22,
+      daysWithLunchApplied: 22,
+      salarySource: 'demo',
+      sss: demo['sss'] ?? 990.0,
+      philhealth: demo['philhealth'] ?? 550.0,
+      pagibig: demo['pagibig'] ?? 100.0,
+      taxableIncome: demo['taxableIncome'] ?? 24110.0,
+      taxWithheld: demo['taxWithheld'] ?? 1410.0,
+      totalLoanDeductions: demo['totalLoanDeductions'] ?? 0.0,
+      totalDeductions: demo['totalDeductions'] ?? 3450.0,
+      netPay: demo['netPay'] ?? 22300.0,
+      sickLeaveBalance: demo['sickLeaveBalance'] ?? 120.0,
+      vacationLeaveBalance: demo['vacationLeaveBalance'] ?? 120.0,
+      riceAllowance: demo['riceAllowance'] ?? 0.0,
+    );
+  }
+
   Future<void> _loadData() async {
     if (!mounted) return;
     _recordActivity();
 
+    // ═══════════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — fake breakdown, no Firestore
+    // ═══════════════════════════════════════════════════════════════
+    if (_isDemo) {
+      debugPrint('🎭 [DemoMode] Loading fake payslip breakdown');
+      setState(() => _loading = true);
+
+      final fakeBreakdown = _buildDemoBreakdown();
+      final demo = DemoModeService.instance.demoPayslipBreakdown;
+
+      if (!mounted) return;
+      setState(() {
+        _employee = DemoModeService.demoEmployee;
+        _rawData = null;
+        _breakdown = fakeBreakdown;
+        _bankName = 'DEMO Bank';
+        _accountNumber = '•••• 1234';
+        _department = DemoModeService.demoEmployee.department;
+        _designation = DemoModeService.demoEmployee.position;
+
+        _basicSalary = demo['basicSalary'] ?? 22000.0;
+        _allowances = 0;
+        _dailyRate = 1000.0;
+        _workingDaysPerMonth = 22;
+        _salarySource = 'demo';
+        _role = 'Demo';
+
+        _displayName = DemoModeService.demoEmployee.fullName;
+        _displayEmpId = DemoModeService.demoEmployee.employeeId;
+
+        _loading = false;
+      });
+      return;
+    }
+
+    // NORMAL MODE
     final valid = await _validateSession(forceRefresh: true);
     if (!valid) {
       if (mounted) {
@@ -747,7 +970,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       _logSecurityEvent(
         type: 'reports_payslip_loaded',
         severity: 'info',
-        details: 'Payslip loaded ($_salarySource)',
+        details: 'Payslip loaded ($_salarySource) • period: $_periodRangeLabel',
         sensitive: true,
       );
     } catch (e, stack) {
@@ -773,19 +996,39 @@ class _ReportsScreenState extends State<ReportsScreen>
       debugPrint('🚫 [Reports] Download already in progress — ignored.');
       return;
     }
+
+    // ✅ END-OF-MONTH ENFORCEMENT (skip in demo)
+    if (!_isDownloadWindowOpen) {
+      debugPrint('🚫 [Reports] Download blocked — outside end-of-month window');
+      _showSnack(
+        '🗓️ $_downloadBlockedReason',
+        error: true,
+      );
+      await _logSecurityEvent(
+        type: 'reports_download_blocked_too_early',
+        severity: 'info',
+        details: 'Attempted download before end-of-month window '
+            '(today=${DateTime.now().day}, window=$_downloadWindowLabel)',
+      );
+      return;
+    }
+
     _downloading = true;
 
     try {
       if (!await _checkPdfRateLimit()) return;
 
-      final valid = await _validateSession(forceRefresh: true);
-      if (!valid) {
-        _showSnack('🚨 Session expired. Please log in again.', error: true);
-        _forceLogout('Session invalid on PDF export');
-        return;
+      // 🎭 DEMO — skip session validation
+      if (!_isDemo) {
+        final valid = await _validateSession(forceRefresh: true);
+        if (!valid) {
+          _showSnack('🚨 Session expired. Please log in again.', error: true);
+          _forceLogout('Session invalid on PDF export');
+          return;
+        }
       }
 
-      if (_networkState != _NetworkState.online) {
+      if (!_isDemo && _networkState != _NetworkState.online) {
         _showSnack(
           '⚠️ No internet. Please check your connection.',
           error: true,
@@ -801,7 +1044,11 @@ class _ReportsScreenState extends State<ReportsScreen>
 
       final emp = _employee ?? widget.initialEmployee;
       Employee effectiveEmp;
-      if (emp != null) {
+
+      // 🎭 DEMO — use demo employee
+      if (_isDemo) {
+        effectiveEmp = DemoModeService.demoEmployee;
+      } else if (emp != null) {
         effectiveEmp = emp;
       } else if (_rawData != null) {
         final now = DateTime.now();
@@ -835,7 +1082,6 @@ class _ReportsScreenState extends State<ReportsScreen>
         return;
       }
 
-      // ✅ Deterministic password — no sessionNonce needed
       final password =
       PayrollPdfService.deriveUserPassword(effectiveEmp.employeeId.trim());
 
@@ -857,7 +1103,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     await _logSecurityEvent(
       type: 'reports_pdf_requested',
       severity: 'info',
-      details: 'PDF generation requested',
+      details: 'PDF generation requested • period: $_periodRangeLabel',
       sensitive: true,
     );
 
@@ -919,27 +1165,34 @@ class _ReportsScreenState extends State<ReportsScreen>
         return;
       }
 
-      try {
-        await FirebaseFirestore.instance.collection('pdf_exports').add({
-          'employee_id': effectiveEmp.employeeId,
-          'employee_id_hash':
-          _hashEmployeeId(effectiveEmp.employeeId, _sessionNonce),
-          'report_type': 'Payslip PDF',
-          'month': DateFormat('yyyy-MM').format(DateTime.now()),
-          'net_pay': _breakdown.netPay,
-          'salary_source': _salarySource,
-          'exported_at': FieldValue.serverTimestamp(),
-          'platform': kIsWeb ? 'Web' : 'Mobile',
-          'session_nonce': _sessionNonce,
-        });
-      } catch (e) {
-        debugPrint('⚠️ pdf_exports log warning: $e');
+      // 🎭 DEMO — skip pdf_exports DB write
+      if (!_isDemo) {
+        try {
+          await FirebaseFirestore.instance.collection('pdf_exports').add({
+            'employee_id': effectiveEmp.employeeId,
+            'employee_id_hash':
+            _hashEmployeeId(effectiveEmp.employeeId, _sessionNonce),
+            'report_type': 'Payslip PDF',
+            'month': DateFormat('yyyy-MM').format(DateTime.now()),
+            'period_start': _periodStart.toIso8601String(),
+            'period_end': _periodEnd.toIso8601String(),
+            'period_label': _periodRangeLabel,
+            'net_pay': _breakdown.netPay,
+            'salary_source': _salarySource,
+            'exported_at': FieldValue.serverTimestamp(),
+            'platform': kIsWeb ? 'Web' : 'Mobile',
+            'session_nonce': _sessionNonce,
+          });
+        } catch (e) {
+          debugPrint('⚠️ pdf_exports log warning: $e');
+        }
       }
 
       await _logSecurityEvent(
         type: 'reports_pdf_generated',
         severity: 'info',
-        details: 'PDF successfully generated (#$_totalPdfGenerated)',
+        details: 'PDF successfully generated (#$_totalPdfGenerated) • '
+            'period: $_periodRangeLabel',
         sensitive: true,
       );
 
@@ -947,9 +1200,17 @@ class _ReportsScreenState extends State<ReportsScreen>
         if (result.filePath != null && result.filePath!.isNotEmpty) {
           final fname =
               result.filePath!.split(Platform.pathSeparator).last;
-          _showSnack('✓ Saved to: Download/RACOMA_Payslips/$fname');
+          _showSnack(
+            _isDemo
+                ? '🎭 DEMO PDF saved: $fname'
+                : '✓ Saved to: Download/RACOMA_Payslips/$fname',
+          );
         } else {
-          _showSnack('PDF payslip generated ✓');
+          _showSnack(
+            _isDemo
+                ? '🎭 DEMO PDF payslip generated ✓'
+                : 'PDF payslip generated ✓',
+          );
         }
       }
     } catch (e) {
@@ -980,6 +1241,8 @@ class _ReportsScreenState extends State<ReportsScreen>
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
+    // 🎨 Same accent color for both demo and normal mode.
+    final accent = _Mock.orange;
 
     await showDialog<void>(
       context: context,
@@ -999,16 +1262,21 @@ class _ReportsScreenState extends State<ReportsScreen>
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: _Mock.orange.withValues(alpha: 0.15),
+                  color: accent.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(Icons.lock_outline_rounded,
-                    color: _Mock.orange, size: 20),
+                child: Icon(
+                  _isDemo
+                      ? Icons.science_rounded
+                      : Icons.lock_outline_rounded,
+                  color: accent,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Save Password',
+                  _isDemo ? 'Demo — Save Password' : 'Save Password',
                   style: TextStyle(
                     color: tc.textPrimary,
                     fontSize: 18,
@@ -1034,10 +1302,10 @@ class _ReportsScreenState extends State<ReportsScreen>
                   padding: const EdgeInsets.symmetric(
                       horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
-                    color: _Mock.orange.withValues(alpha: 0.10),
+                    color: accent.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                        color: _Mock.orange.withValues(alpha: 0.35),
+                        color: accent.withValues(alpha: 0.35),
                         width: 1.5),
                   ),
                   child: Row(
@@ -1046,11 +1314,11 @@ class _ReportsScreenState extends State<ReportsScreen>
                         child: SelectionArea(
                           child: Text(
                             password,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 26,
                               fontWeight: FontWeight.w800,
                               letterSpacing: 4,
-                              color: _Mock.orange,
+                              color: accent,
                               fontFamily: 'monospace',
                             ),
                           ),
@@ -1086,7 +1354,9 @@ class _ReportsScreenState extends State<ReportsScreen>
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'This password is the SAME for all your payslips — it never changes. Save it somewhere safe.',
+                        _isDemo
+                            ? '🎭 DEMO MODE — this is a FAKE PDF. No data will be saved to the database.'
+                            : 'This password is the SAME for all your payslips — it never changes. Save it somewhere safe.',
                         style: const TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -1104,7 +1374,7 @@ class _ReportsScreenState extends State<ReportsScreen>
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               style: TextButton.styleFrom(
-                foregroundColor: _Mock.orange,
+                foregroundColor: accent,
                 padding: const EdgeInsets.symmetric(
                     horizontal: 20, vertical: 12),
               ),
@@ -1126,14 +1396,20 @@ class _ReportsScreenState extends State<ReportsScreen>
     _recordActivity();
     if (_loadingPassword) return;
 
-    final emp = _employee ?? widget.initialEmployee;
-    if (emp == null && _rawData == null) {
-      _showSnack('Employee data not loaded.', error: true);
-      return;
-    }
+    // 🎭 DEMO — use demo employee ID
+    String empId;
+    if (_isDemo) {
+      empId = DemoModeService.demoEmployee.employeeId;
+    } else {
+      final emp = _employee ?? widget.initialEmployee;
+      if (emp == null && _rawData == null) {
+        _showSnack('Employee data not loaded.', error: true);
+        return;
+      }
 
-    final empId = emp?.employeeId ??
-        (_rawData?['employeeId'] ?? _displayEmpId).toString();
+      empId = emp?.employeeId ??
+          (_rawData?['employeeId'] ?? _displayEmpId).toString();
+    }
 
     if (empId.isEmpty || empId == '—') {
       _showSnack('Employee ID not available.', error: true);
@@ -1152,6 +1428,8 @@ class _ReportsScreenState extends State<ReportsScreen>
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
+    // 🎨 Same accent color for both demo and normal mode.
+    final accent = _Mock.orange;
 
     await showDialog<void>(
       context: context,
@@ -1169,16 +1447,21 @@ class _ReportsScreenState extends State<ReportsScreen>
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: _Mock.orange.withValues(alpha: 0.15),
+                color: accent.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.vpn_key_rounded,
-                  color: _Mock.orange, size: 20),
+              child: Icon(
+                _isDemo
+                    ? Icons.science_rounded
+                    : Icons.vpn_key_rounded,
+                color: accent,
+                size: 20,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                'Your PDF Password',
+                _isDemo ? 'Demo PDF Password' : 'Your PDF Password',
                 style: TextStyle(
                   color: tc.textPrimary,
                   fontSize: 18,
@@ -1194,7 +1477,9 @@ class _ReportsScreenState extends State<ReportsScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Use this password to open ANY payslip PDF you download. '
+                _isDemo
+                    ? 'This is a FAKE password for demo mode. The PDF will still open with it.'
+                    : 'Use this password to open ANY payslip PDF you download. '
                     'This is the SAME password forever — save it somewhere safe.',
                 style: TextStyle(
                     color: tc.textGrayDark,
@@ -1207,10 +1492,10 @@ class _ReportsScreenState extends State<ReportsScreen>
                 padding: const EdgeInsets.symmetric(
                     horizontal: 16, vertical: 14),
                 decoration: BoxDecoration(
-                  color: _Mock.orange.withValues(alpha: 0.10),
+                  color: accent.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                      color: _Mock.orange.withValues(alpha: 0.35),
+                      color: accent.withValues(alpha: 0.35),
                       width: 1.5),
                 ),
                 child: Row(
@@ -1219,11 +1504,11 @@ class _ReportsScreenState extends State<ReportsScreen>
                       child: SelectionArea(
                         child: Text(
                           pwd,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 26,
                             fontWeight: FontWeight.w800,
                             letterSpacing: 4,
-                            color: _Mock.orange,
+                            color: accent,
                             fontFamily: 'monospace',
                           ),
                         ),
@@ -1259,7 +1544,9 @@ class _ReportsScreenState extends State<ReportsScreen>
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Tip: Copy this now and save it somewhere safe. '
+                      _isDemo
+                          ? '🎭 Demo mode — this password will not be used outside the demo session.'
+                          : 'Tip: Copy this now and save it somewhere safe. '
                           'It won\'t change — even after future downloads.',
                       style: const TextStyle(
                         fontSize: 12,
@@ -1278,7 +1565,7 @@ class _ReportsScreenState extends State<ReportsScreen>
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             style: TextButton.styleFrom(
-              foregroundColor: _Mock.orange,
+              foregroundColor: accent,
               padding: const EdgeInsets.symmetric(
                   horizontal: 20, vertical: 12),
             ),
@@ -1300,6 +1587,15 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (_sendingSupport) return;
 
     _recordActivity();
+
+    // 🎭 DEMO — skip, no DB write
+    if (_isDemo) {
+      _showSnack(
+        '🎭 Demo mode: support requests are not sent.',
+        error: true,
+      );
+      return;
+    }
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
@@ -1636,6 +1932,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
+      // 🎨 Same color for demo & normal (no more violet).
       backgroundColor:
       error ? const Color(0xFFFF4D6D) : const Color(0xFF00E5A0),
       behavior: SnackBarBehavior.floating,
@@ -1656,9 +1953,10 @@ class _ReportsScreenState extends State<ReportsScreen>
     final tc = _ThemeColors(isDark);
     final thisMonth = DateFormat('MMMM yyyy').format(DateTime.now());
 
-    final isOffline = _networkState == _NetworkState.offline;
-    final isChecking = _networkState == _NetworkState.checking;
+    final isOffline = _networkState == _NetworkState.offline && !_isDemo;
+    final isChecking = _networkState == _NetworkState.checking && !_isDemo;
 
+    // 🆕 Skeleton shows for BOTH demo & normal during initial load
     if (isOffline || isChecking || _isInitialLoading) {
       return Scaffold(
         backgroundColor: tc.bg,
@@ -1697,6 +1995,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                 Expanded(
                   child: RefreshIndicator(
                     onRefresh: _loadData,
+                    // 🎨 Same orange accent for demo & normal.
                     color: _Mock.orange,
                     child: SingleChildScrollView(
                       physics: const AlwaysScrollableScrollPhysics(),
@@ -1704,7 +2003,20 @@ class _ReportsScreenState extends State<ReportsScreen>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          // 🎭 DEMO badge
+                          if (_isDemo) ...[
+                            _buildDemoBadge(),
+                            const SizedBox(height: 14),
+                          ],
+
                           _buildPayslipCard(tc, thisMonth),
+
+                          // ✅ Show download window info when locked
+                          if (!_isDownloadWindowOpen && !_isDemo) ...[
+                            const SizedBox(height: 14),
+                            _buildDownloadLockedBanner(tc),
+                          ],
+
                           const SizedBox(height: 20),
                           _buildDownloadButton(),
                           const SizedBox(height: 12),
@@ -1720,6 +2032,101 @@ class _ReportsScreenState extends State<ReportsScreen>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // 🎭 DEMO MODE badge — now ORANGE (same theme)
+  Widget _buildDemoBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [_Mock.orange, Color(0xFFF54900)],
+        ),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: _Mock.orange.withValues(alpha: 0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: const [
+          Icon(Icons.science_rounded, color: Colors.white, size: 16),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'DEMO MODE — Fake payslip, no data is saved',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.3,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDownloadLockedBanner(_ThemeColors tc) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _Mock.orange.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _Mock.orange.withValues(alpha: 0.35),
+          width: 1.2,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: _Mock.orange.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.lock_clock_rounded,
+              color: _Mock.orange,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Download Available at End of Month',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: _Mock.orange,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Payslip for $_periodRangeLabel will be downloadable on '
+                      '$_downloadWindowLabel.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    color: tc.textGrayDark,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1832,19 +2239,29 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Widget _buildHeader(_ThemeColors tc, String thisMonth) {
+    final canDownload = _isDownloadWindowOpen;
+    final busy = _exporting || _downloading;
+    final printDisabled = busy || !canDownload;
+
+    // 🎨 Same orange gradient for both demo & normal.
+    const gradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        Color(0xFFFF8A00),
+        Color(0xFFFA6A00),
+        Color(0xFFF54900),
+      ],
+      stops: [0.0, 0.5, 1.0],
+    );
+
+    // 🎨 Same accent color for both demo & normal.
+    const accent = _Mock.orange;
+
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Color(0xFFFF8A00),
-            Color(0xFFFA6A00),
-            Color(0xFFF54900),
-          ],
-          stops: [0.0, 0.5, 1.0],
-        ),
+        gradient: gradient,
         borderRadius: BorderRadius.only(
           bottomLeft: Radius.circular(16),
           bottomRight: Radius.circular(16),
@@ -1879,63 +2296,68 @@ class _ReportsScreenState extends State<ReportsScreen>
                 ),
               ),
               const Spacer(),
-              if (_sessionValidated)
+              // 🎭 DEMO badge in header (same orange theme)
+              if (_isDemo) ...[
                 Container(
-                  margin: const EdgeInsets.only(right: 8),
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
+                      horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.4)),
+                    color: Colors.white.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.verified_user_rounded,
-                          size: 10, color: Colors.white),
-                      SizedBox(width: 4),
+                      Icon(Icons.science_rounded,
+                          color: Colors.white, size: 11),
+                      SizedBox(width: 5),
                       Text(
-                        'SECURED',
+                        'DEMO',
                         style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                          letterSpacing: 0.4,
-                        ),
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.5),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(width: 8),
+              ],
               GestureDetector(
-                onTap: (_exporting || _downloading)
-                    ? null
-                    : _onDownloadPressed,
-                child: Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: tc.printButtonBg,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: tc.printButtonBorder),
+                onTap: printDisabled ? null : _onDownloadPressed,
+                child: Opacity(
+                  opacity: printDisabled && !busy ? 0.55 : 1.0,
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: tc.printButtonBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: tc.printButtonBorder),
+                    ),
+                    child: busy
+                        ? const Padding(
+                      padding: EdgeInsets.all(9),
+                      child: CircularProgressIndicator(
+                          color: accent, strokeWidth: 2),
+                    )
+                        : Icon(
+                      canDownload
+                          ? Icons.print_rounded
+                          : Icons.lock_outline_rounded,
+                      color: accent,
+                      size: 20,
+                    ),
                   ),
-                  child: (_exporting || _downloading)
-                      ? const Padding(
-                    padding: EdgeInsets.all(9),
-                    child: CircularProgressIndicator(
-                        color: _Mock.orange, strokeWidth: 2),
-                  )
-                      : const Icon(Icons.print_rounded,
-                      color: _Mock.orange, size: 20),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 40),
-          const Text(
-            'Payslip Details',
-            style: TextStyle(
+          Text(
+            _isDemo ? 'Demo Payslip' : 'Payslip Details',
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 30,
               fontWeight: FontWeight.w500,
@@ -1949,18 +2371,31 @@ class _ReportsScreenState extends State<ReportsScreen>
               fontSize: 14,
             ),
           ),
+          const SizedBox(height: 4),
+          Text(
+            'Period: $_periodRangeLabel',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.85),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildPayslipCard(_ThemeColors tc, String thisMonth) {
+    // 🎨 Same accent color for both demo & normal.
+    const accent = _Mock.orange;
+
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
         color: tc.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: tc.cardBorder),
+        // 🎨 Use normal card border (not violet) even in demo mode.
+        border: Border.all(color: tc.cardBorder, width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.06),
@@ -1980,14 +2415,16 @@ class _ReportsScreenState extends State<ReportsScreen>
                 const Text(
                   'R.A.C.O.M.A',
                   style: TextStyle(
-                    color: _Mock.orange,
+                    color: accent,
                     fontSize: 20,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Smart HR Information System',
+                  _isDemo
+                      ? 'DEMO Payslip — no data saved'
+                      : 'Smart HR Information System',
                   style: TextStyle(
                     color: tc.textPrimary,
                     fontSize: 12,
@@ -1995,7 +2432,9 @@ class _ReportsScreenState extends State<ReportsScreen>
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Jumbo HQ, Manila, Philippines',
+                  _isDemo
+                      ? 'Demo Company HQ, Philippines'
+                      : 'Jumbo HQ, Manila, Philippines',
                   style: TextStyle(
                     color: tc.textGrayDark,
                     fontSize: 10,
@@ -2012,20 +2451,34 @@ class _ReportsScreenState extends State<ReportsScreen>
                 padding: const EdgeInsets.symmetric(
                     horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: _Mock.paidBg,
+                  // 🎨 Demo uses the same PAID-style background (orange tint)
+                  //   instead of violet.
+                  color: _isDemo
+                      ? _Mock.orange.withValues(alpha: 0.12)
+                      : _Mock.paidBg,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _Mock.paidBorder),
+                  border: Border.all(
+                    color: _isDemo
+                        ? _Mock.orange.withValues(alpha: 0.45)
+                        : _Mock.paidBorder,
+                  ),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.check_circle_rounded,
-                        color: _Mock.lime, size: 14),
-                    SizedBox(width: 6),
+                    Icon(
+                      _isDemo
+                          ? Icons.science_rounded
+                          : Icons.check_circle_rounded,
+                      // 🎨 Both modes use orange.
+                      color: accent,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 6),
                     Text(
-                      'Paid',
+                      _isDemo ? 'DEMO' : 'Paid',
                       style: TextStyle(
-                        color: _Mock.lime,
+                        color: accent,
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
                       ),
@@ -2052,49 +2505,67 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Widget _buildDownloadButton() {
-    final disabled = _exporting || _downloading;
+    final canDownload = _isDownloadWindowOpen;
+    final busy = _exporting || _downloading;
+    final disabled = busy || !canDownload;
+
+    // 🎨 Same orange gradient for both demo & normal.
+    const gradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        Color(0xFFFF8A00),
+        Color(0xFFFA6A00),
+        Color(0xFFF54900),
+      ],
+      stops: [0.0, 0.5, 1.0],
+    );
+
     return GestureDetector(
       onTap: disabled ? null : _onDownloadPressed,
       child: Container(
         width: double.infinity,
         height: 48,
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFFFF8A00),
-              Color(0xFFFA6A00),
-              Color(0xFFF54900),
-            ],
-            stops: [0.0, 0.5, 1.0],
-          ),
+          gradient: canDownload ? gradient : null,
+          color: canDownload ? null : const Color(0xFF9CA3AF),
           borderRadius: BorderRadius.circular(12),
-          boxShadow: [
+          boxShadow: canDownload
+              ? [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.1),
               blurRadius: 3,
               offset: const Offset(0, 2),
             ),
-          ],
+          ]
+              : null,
         ),
         child: Center(
-          child: disabled
+          child: busy
               ? const SizedBox(
             width: 20,
             height: 20,
             child: CircularProgressIndicator(
                 color: Colors.white, strokeWidth: 2.5),
           )
-              : const Row(
+              : Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.download_rounded,
-                  color: Colors.white, size: 20),
-              SizedBox(width: 10),
+              Icon(
+                canDownload
+                    ? Icons.download_rounded
+                    : Icons.lock_clock_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
               Text(
-                'Download as PDF / Print',
-                style: TextStyle(
+                canDownload
+                    ? (_isDemo
+                    ? 'Download DEMO PDF'
+                    : 'Download as PDF / Print')
+                    : 'Available on $_downloadWindowLabel',
+                style: const TextStyle(
                   color: Colors.white,
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
@@ -2109,6 +2580,9 @@ class _ReportsScreenState extends State<ReportsScreen>
 
   Widget _buildViewPasswordButton(_ThemeColors tc) {
     final disabled = _loadingPassword;
+    // 🎨 Same accent color for both demo & normal.
+    final accent = _isDemo ? _Mock.orange : tc.textGrayDark;
+
     return GestureDetector(
       onTap: disabled ? null : _showCurrentPdfPassword,
       child: Container(
@@ -2117,7 +2591,11 @@ class _ReportsScreenState extends State<ReportsScreen>
         decoration: BoxDecoration(
           color: tc.cardBg,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: tc.cardBorder, width: 1),
+          // 🎨 Demo & normal both use cardBorder (no more violet border).
+          border: Border.all(
+            color: tc.cardBorder,
+            width: 1,
+          ),
         ),
         child: Center(
           child: disabled
@@ -2130,13 +2608,14 @@ class _ReportsScreenState extends State<ReportsScreen>
               : Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.vpn_key_rounded,
-                  color: tc.textGrayDark, size: 16),
+              Icon(Icons.vpn_key_rounded, color: accent, size: 16),
               const SizedBox(width: 8),
               Text(
-                'View My PDF Password',
+                _isDemo
+                    ? 'View Demo PDF Password'
+                    : 'View My PDF Password',
                 style: TextStyle(
-                  color: tc.textGrayDark,
+                  color: accent,
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),
@@ -2149,43 +2628,49 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Widget _buildContactHrButton(_ThemeColors tc) {
-    final disabled = _sendingSupport;
+    final disabled = _sendingSupport || _isDemo;
+
     return GestureDetector(
       onTap: disabled ? null : () => _showContactHrSheet(),
-      child: Container(
-        width: double.infinity,
-        height: 46,
-        decoration: BoxDecoration(
-          color: tc.cardBg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: _Mock.orange.withValues(alpha: 0.45),
-            width: 1.5,
+      child: Opacity(
+        opacity: _isDemo ? 0.5 : 1.0,
+        child: Container(
+          width: double.infinity,
+          height: 46,
+          decoration: BoxDecoration(
+            color: tc.cardBg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: _Mock.orange.withValues(alpha: 0.45),
+              width: 1.5,
+            ),
           ),
-        ),
-        child: Center(
-          child: disabled
-              ? const SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(
-                color: _Mock.orange, strokeWidth: 2),
-          )
-              : Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.support_agent_rounded,
-                  color: _Mock.orange, size: 18),
-              const SizedBox(width: 8),
-              Text(
-                'Contact HR / Report Issue',
-                style: TextStyle(
-                  color: tc.textPrimary,
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w700,
+          child: Center(
+            child: disabled && !_isDemo
+                ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                  color: _Mock.orange, strokeWidth: 2),
+            )
+                : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.support_agent_rounded,
+                    color: _Mock.orange, size: 18),
+                const SizedBox(width: 8),
+                Text(
+                  _isDemo
+                      ? 'Contact HR (disabled in demo)'
+                      : 'Contact HR / Report Issue',
+                  style: TextStyle(
+                    color: tc.textPrimary,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

@@ -69,11 +69,7 @@ dependencies:
 
   # ─── Face Detection & Recognition ─────────────────────────────────
   google_mlkit_face_detection: ^0.11.0
-
-  # ⚠️ Keep flutter_litert kung may ibang gumagamit
-  # Kung ito lang ang gumagamit, pwede mo tanggalin
   flutter_litert: ^1.0.0
-
   image: ^4.2.0
 
   # ─── Camera ───────────────────────────────────────────────────────
@@ -106,6 +102,9 @@ dependencies:
   syncfusion_flutter_pdf: ^25.2.7
   excel: ^4.0.6
   csv: ^5.0.0
+
+  # 🆕 ─── Sharing (for payslip PDF share) ──────────────────────────
+  share_plus: ^10.1.1
 
   # ─── NFC ──────────────────────────────────────────────────────────
   nfc_manager: ^3.5.1

@@ -26,6 +26,7 @@ import 'services/language_service.dart';
 import 'services/security_service.dart';
 import 'services/fcm_service.dart';
 import 'services/employee_notification_listener.dart';
+import 'services/demo_mode_service.dart'; // 🎭 NEW
 import 'widgets/network_gate.dart';
 import 'theme/theme_notifier.dart';
 import 'theme/app_theme.dart';
@@ -69,6 +70,17 @@ void main() async {
       FlutterError.presentError(details);
       _logGlobalError(details.exception, details.stack ?? StackTrace.empty);
     };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🎭 LOAD DEMO MODE (early — bago ang lahat ng UI)
+    // ═══════════════════════════════════════════════════════════════
+    try {
+      await DemoModeService.instance.load();
+      debugPrint('🎭 [DemoMode] Loaded — '
+          'enabled=${DemoModeService.instance.isEnabled}');
+    } catch (e) {
+      debugPrint('⚠️ [DemoMode] Load failed: $e');
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // 🆕 REGISTER FCM BACKGROUND HANDLER

@@ -1,4 +1,7 @@
 // lib/screens/facial_recognition_screen.dart
+// v2.4: 🌐 All UI strings converted to English
+//       🔒 Demo mode requires internet connection
+//       ✅ Online → real camera + liveness (always pass)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -23,6 +26,7 @@ import '../services/device_info_service.dart';
 import '../services/face_liveness.dart';
 import '../services/security_hardening_service.dart';
 import '../services/presence_challenge_service.dart';
+import '../services/demo_mode_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_screens.dart';
 import 'main_screen.dart';
@@ -74,6 +78,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   bool get _isChallenge => widget.challenge != null;
 
+  // 🎭 DEMO MODE
+  bool get _isDemo => DemoModeService.instance.isEnabled;
+
   _FaceState _faceState = _FaceState.idle;
   _AuthMode _authMode = _AuthMode.unknown;
   String? _errorMessage;
@@ -94,7 +101,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   int _enrollCaptureCount = 0;
   static const int _requiredEnrollCaptures = 3;
   bool _isSavingEnroll = false;
-  String _enrollHint = 'Tumingin nang diretso sa camera.';
+  String _enrollHint = 'Look straight at the camera.';
   DateTime? _lastEnrollCaptureAt;
   static const Duration _enrollCaptureCooldown = Duration(milliseconds: 1200);
 
@@ -102,15 +109,26 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   bool _isCheckingTemplate = false;
   bool _selfHealTriggered = false;
 
+  bool _geofenceVerifiedOffline = false;
+  int _pendingCount = 0;
+  StreamSubscription<int>? _pendingSub;
+
   String _deviceModel = 'Unknown Device';
 
   static const double _matchThreshold = 0.68;
-  static const double _minSharpnessScore = 12.0;
+  static const double _minSharpnessScore = 8.0;
   static const double _minFaceAreaRatio = 0.06;
   static const double _maxFaceAreaRatio = 0.65;
   static const double _maxHeadYawDeg = 22.0;
   static const double _maxHeadRollDeg = 22.0;
   static const double _maxHeadPitchDeg = 20.0;
+
+  static const double _verifyMaxYaw = 30.0;
+  static const double _verifyMaxRoll = 30.0;
+  static const double _verifyMaxPitch = 25.0;
+  static const double _verifyMinFaceArea = 0.02;
+  static const double _verifyMaxFaceArea = 0.80;
+  static const double _verifyMinSharpness = 8.0;
 
   late final FaceDetector _faceDetector;
 
@@ -121,14 +139,21 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   bool _facePresent = false;
   bool _eyesWereClosed = false;
   int _closedFrames = 0;
-  static const int _minClosedFrames = 1;
-  static const double _blinkClosedThreshold = 0.45;
-  static const double _blinkOpenThreshold = 0.50;
-  static const double _smileThreshold = 0.45;
+  int _openFramesAfterClose = 0;
+
+  static const int _minClosedFrames = 2;
+  static const int _minOpenFrames = 2;
+  static const double _blinkClosedThreshold = 0.40;
+  static const double _blinkOpenThreshold = 0.55;
+  static const double _smileThreshold = 0.40;
   static const int _maxClosedFramesBeforeStuck = 45;
 
   DateTime? _livenessStartTime;
   static const int _livenessTimeoutMs = 25000;
+
+  static const int _verifySampleCount = 3;
+  static const int _maxVerifyAttempts = 2;
+  int _verifyAttempts = 0;
 
   static const double _cameraBoxSize = 300.0;
 
@@ -146,7 +171,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   String? _deviceBinding;
   late final String _sessionNonce;
 
-  /// 🆕 Guard para hindi mag-doble-doble ang cancellation notification
   bool _cancelRecorded = false;
 
   _NetState _networkState = _NetState.online;
@@ -189,6 +213,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   static const _faceGreen = Color(0xFF00E676);
   static const _warning = Color(0xFFFFCC00);
   static const _verifiedGreen = Color(0xFF51FF00);
+
+  // 🎨 DEMO — ORANGE (matches app theme)
+  static const _demoAccent = Color(0xFFFF8A00);
+  static const _demoAccentMid = Color(0xFFFA6A00);
+  static const _demoAccentDark = Color(0xFFF54900);
+
+  bool get _isOffline => _networkState == _NetState.offline;
 
   // ══════════════════════════════════════════════════════════
   // INIT
@@ -253,13 +284,48 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _ringCtrl.repeat();
     _fadeCtrl.forward();
 
-    _loadDeviceModel();
-    _secureLog('📷 Facial recognition ready'
-        '${_isChallenge ? " (CHALLENGE MODE)" : ""}');
-    _secureLog('🎯 Match threshold: '
-        '${(_matchThreshold * 100).toStringAsFixed(0)}%');
+    // 🎭 DEMO MODE — skip security bootstrap at listeners
+    if (_isDemo) {
+      _secureLog('═══════════════════════════════════════════');
+      _secureLog('🎭 [DemoMode] FacialRecognitionScreen');
+      _secureLog('   • Skipping security bootstrap');
+      _secureLog('   • Real camera + liveness (always pass)');
+      _secureLog('   • 🔒 Requires internet connection');
+      _secureLog('═══════════════════════════════════════════');
 
+      _authMode = _AuthMode.verify;
+      _preAuthValid = true;
+      _networkState = _NetState.online;
+
+      try {
+        _connectivitySub =
+            ConnectivityService.instance.onStatusChange.listen((online) {
+              if (!mounted) return;
+              setState(() {
+                _networkState = online ? _NetState.online : _NetState.offline;
+              });
+            });
+      } catch (e) {
+        _secureLog('⚠️ connectivity listen error: $e');
+      }
+
+      // Sync initial connectivity state
+      try {
+        final online = ConnectivityService.instance.isOnline;
+        _networkState = online ? _NetState.online : _NetState.offline;
+      } catch (_) {}
+
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (mounted) setState(() => _isInitialLoading = false);
+      });
+      return;
+    }
+
+    // NORMAL MODE
+    _loadDeviceModel();
     _bootstrapSecurity();
+    _subscribePendingCount();
 
     try {
       _connectivitySub =
@@ -267,21 +333,15 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             if (!mounted) return;
 
             if (!online) {
-              _overlayDelayTimer?.cancel();
               setState(() {
                 _networkState = _NetState.offline;
                 _networkErrorMessage =
-                'No internet connection.\nPlease check your network.';
+                'No internet connection.\n\n'
+                    'You can still clock in — records will be saved locally '
+                    'and synced automatically when you\'re back online.';
                 _showOfflineOverlay = false;
               });
-              _overlayDelayTimer = Timer(const Duration(milliseconds: 1200), () {
-                if (mounted && _networkState == _NetState.offline) {
-                  setState(() => _showOfflineOverlay = true);
-                }
-              });
             } else if (_networkState == _NetState.offline) {
-              _overlayDelayTimer?.cancel();
-              _showOfflineOverlay = false;
               _retryNetworkCheck();
             }
           });
@@ -302,9 +362,77 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   // ══════════════════════════════════════════════════════════
-  // MODE DETECTION
+  // 🔌 OFFLINE HELPERS
   // ══════════════════════════════════════════════════════════
+  void _showOfflineSnack([String? custom]) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.cloud_off_rounded,
+                  color: Colors.white, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  custom ??
+                      'Internet connection is required for Demo Mode.',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: _error,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+  }
+
+  bool _isOnlineSafely() {
+    try {
+      return ConnectivityService.instance.isOnline;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _subscribePendingCount() {
+    if (_isDemo) return;
+
+    try {
+      _pendingSub = OfflineAttendanceService.instance.pendingStream.listen((c) {
+        if (mounted) setState(() => _pendingCount = c);
+      });
+      OfflineAttendanceService.instance.getPendingCount().then((c) {
+        if (mounted) setState(() => _pendingCount = c);
+      });
+    } catch (e) {
+      _secureLog('⚠️ pending stream error: $e');
+    }
+  }
+
+  Future<void> _emitPendingCount() async {
+    if (_isDemo) return;
+
+    try {
+      final c = await OfflineAttendanceService.instance.getPendingCount();
+      if (mounted) setState(() => _pendingCount = c);
+    } catch (_) {}
+  }
+
   Future<void> _detectMode() async {
+    if (_isDemo) {
+      _authMode = _AuthMode.verify;
+      return;
+    }
+
     if (kIsWeb) {
       _authMode = _AuthMode.verify;
       return;
@@ -321,8 +449,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         setState(() {
           _authMode = _AuthMode.verify;
           _faceState = _FaceState.error;
-          _errorMessage = 'Wala pang registered face ang account mo.\n'
-              'Ipa-enroll muna sa admin bago makapag-verify.';
+          _errorMessage = 'Your account has no registered face yet.\n'
+              'Please have it enrolled by an admin before verifying.';
         });
         _shakeCtrl.forward(from: 0);
 
@@ -342,7 +470,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         _secureLog('✅ Mode: VERIFY${_isChallenge ? " (challenge)" : ""}');
       } else {
         _secureLog('🆕 Mode: ENROLL');
-        _enrollHint = 'Unang beses mo — kailangan i-register ang mukha mo.';
+        _enrollHint = 'First time — you need to register your face.';
       }
     } catch (e) {
       _secureLog('⚠️ _detectMode error: $e');
@@ -352,10 +480,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
-  // ══════════════════════════════════════════════════════════
-  // LIFECYCLE
-  // ══════════════════════════════════════════════════════════
   void _updateRotationCompensation() {
+    if (_isDemo) return;
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       try {
@@ -379,6 +506,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _checkNetworkAndProceed() async {
+    if (_isDemo) {
+      setState(() => _networkState = _NetState.online);
+      return;
+    }
+
     if (!mounted) return;
     setState(() => _networkState = _NetState.checking);
 
@@ -386,17 +518,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!mounted) return;
 
     if (!hasNet) {
-      _overlayDelayTimer?.cancel();
       setState(() {
         _networkState = _NetState.offline;
         _networkErrorMessage =
-        'No internet connection.\nPlease check your network and try again.';
+        'No internet connection.\n\n'
+            'You can still clock in — records will be saved locally '
+            'and synced automatically when you\'re back online.';
         _showOfflineOverlay = false;
-      });
-      _overlayDelayTimer = Timer(const Duration(milliseconds: 1200), () {
-        if (mounted && _networkState == _NetState.offline) {
-          setState(() => _showOfflineOverlay = true);
-        }
       });
       return;
     }
@@ -405,6 +533,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _retryNetworkCheck() async {
+    if (_isDemo) return;
+
     if (!mounted) return;
     _overlayDelayTimer?.cancel();
     setState(() {
@@ -422,6 +552,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _bootstrapSecurity() async {
+    if (_isDemo) {
+      _preAuthValid = true;
+      return;
+    }
+
     try {
       await SecurityHardeningService.instance.enableSecureScreen();
     } catch (e) {
@@ -436,7 +571,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         await _logSecurityEvent(
           type: 'face_compromised_device',
           severity: 'critical',
-          details: SecurityHardeningService.instance.integrityIssues.join(','),
+          details:
+          SecurityHardeningService.instance.integrityIssues.join(','),
         );
       }
       if (mounted) {
@@ -458,6 +594,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _verifyPreAuthAndSession() async {
+    if (_isDemo) {
+      _preAuthValid = true;
+      return;
+    }
+
     try {
       String? secEmpId;
       try {
@@ -512,9 +653,37 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     required String severity,
     required String details,
   }) async {
-    try {
-      if (!NetworkGuard.instance.isOnline) return;
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping security event: $type');
+      return;
+    }
 
+    if (!NetworkGuard.instance.isOnline) {
+      try {
+        await OfflineAttendanceService.instance.enqueue(
+          collection: 'security_events',
+          data: {
+            'type': type,
+            'severity': severity,
+            'details': details,
+            'employeeId': widget.employee.id,
+            'employeeName': widget.employee.fullName,
+            'sessionNonce': _sessionNonce,
+            'deviceBinding': _deviceBinding,
+            'deviceCompromised': _deviceCompromised,
+            'stage': _isChallenge ? 'presence_challenge' : 'facial_recognition',
+            if (_isChallenge) 'challengeId': widget.challenge!.id,
+            'platform': kIsWeb ? 'web' : 'mobile',
+            'timestamp': DateTime.now(),
+          },
+        );
+      } catch (e) {
+        _secureLog('⚠️ Security event queue failed: $e');
+      }
+      return;
+    }
+
+    try {
       final hashDevice = _deviceBinding != null
           ? sha256.convert(utf8.encode(_deviceBinding!)).toString()
           : null;
@@ -540,6 +709,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _loadDeviceModel() async {
+    if (_isDemo) {
+      if (mounted) setState(() => _deviceModel = 'Demo Device');
+      return;
+    }
+
     try {
       final model = await DeviceInfoService.instance.getDeviceModel();
       if (!mounted) return;
@@ -573,6 +747,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     WidgetsBinding.instance.removeObserver(this);
     _isScanning = false;
     _connectivitySub?.cancel();
+    _pendingSub?.cancel();
     _overlayDelayTimer?.cancel();
     _pulseCtrl.dispose();
     _ringCtrl.dispose();
@@ -604,10 +779,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     super.dispose();
   }
 
-  // ══════════════════════════════════════════════════════════
-  // CHALLENGE CANCELLATION RECORDING
-  // ══════════════════════════════════════════════════════════
   Future<void> _recordChallengeFailure(String reason) async {
+    if (_isDemo) return;
+
     if (!_isChallenge || widget.challenge == null) return;
     if (_cancelRecorded) {
       _secureLog('ℹ️ [Challenge] Cancellation already recorded — skip');
@@ -635,9 +809,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
-  // ══════════════════════════════════════════════════════════
-  // CAMERA
-  // ══════════════════════════════════════════════════════════
   Future<bool> _ensureCameraPermission() async {
     if (kIsWeb) return true;
     try {
@@ -680,12 +851,24 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       );
       final ctrl = CameraController(
         front,
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup:
         kIsWeb ? ImageFormatGroup.jpeg : ImageFormatGroup.nv21,
       );
       await ctrl.initialize();
+
+      try {
+        await ctrl.setFocusMode(FocusMode.auto);
+      } catch (e) {
+        _secureLog('⚠️ setFocusMode failed: $e');
+      }
+      try {
+        await ctrl.setExposureMode(ExposureMode.auto);
+      } catch (e) {
+        _secureLog('⚠️ setExposureMode failed: $e');
+      }
+
       if (!mounted) {
         ctrl.dispose();
         return;
@@ -694,7 +877,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         _camCtrl = ctrl;
         _camReady = true;
       });
-      _secureLog('✅ Camera ready');
+      _secureLog('✅ Camera ready (high + auto-focus)');
     } catch (e) {
       _secureLog('⚠️ Camera init failed: $e');
       _camError = 'Camera error';
@@ -702,18 +885,115 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
+  Future<void> _waitForFocusAndCapture() async {
+    try {
+      await _camCtrl!.setFocusPoint(const Offset(0.5, 0.5));
+    } catch (_) {}
+    await Future.delayed(const Duration(milliseconds: 250));
+  }
+
   // ══════════════════════════════════════════════════════════
-  // START SCAN
+  // 🎭 START SCAN — DEMO: real camera + liveness, requires internet
   // ══════════════════════════════════════════════════════════
   Future<void> _startScan() async {
     if (!mounted || _isScanning || _isCheckingTemplate) return;
     if (_authMode == _AuthMode.unknown) return;
 
-    if (_networkState == _NetState.offline) {
-      await _retryNetworkCheck();
-      if (_networkState != _NetState.online) return;
+    // ═══════════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — REQUIRES INTERNET
+    //    • Offline → snackbar + block
+    //    • Online  → real camera + liveness, always pass
+    // ═══════════════════════════════════════════════════════════════
+    if (_isDemo) {
+      _secureLog('═══════════════════════════════════════════');
+      _secureLog('🎭 [DemoMode] _startScan() STARTED');
+      _secureLog('═══════════════════════════════════════════');
+
+      // 🔌 STEP 1: CHECK INTERNET FIRST
+      final online = _isOnlineSafely();
+      _secureLog('🎭 [DemoMode] online check = $online');
+
+      if (!online) {
+        _secureLog('🎭 [DemoMode] ⛔ BLOCKED — no internet connection');
+        _showOfflineSnack(
+            'Internet connection is required for Demo Mode.');
+        return;
+      }
+
+      _secureLog('🎭 [DemoMode] Real camera + liveness — always pass');
+
+      _isScanning = true;
+      _blinkDone = false;
+      _smileDone = false;
+      _eyesWereClosed = false;
+      _closedFrames = 0;
+      _openFramesAfterClose = 0;
+      _facePresent = false;
+      _faceMatched = false;
+      _matchScore = 0.0;
+      _matchPercent = 0.0;
+      _verifyAttempts = 0;
+      _livenessStep = _LivenessStep.waitingForFace;
+      _livenessStartTime = DateTime.now();
+
+      setState(() {
+        _faceState = _FaceState.scanning;
+        _errorMessage = null;
+        _faceWarning = _FaceWarning.none;
+      });
+
+      bool cameraOk = false;
+      if (!kIsWeb) {
+        if (!_camReady) await _initCamera();
+        cameraOk = _camReady;
+      }
+
+      if (!cameraOk) {
+        // 🔁 Fallback: auto-succeed (no camera / web)
+        _secureLog('🎭 [DemoMode] No camera — auto-succeed fallback');
+        await Future.delayed(const Duration(milliseconds: 1500));
+        if (!mounted) return;
+
+        // 🔌 Re-check internet before proceeding
+        if (!_isOnlineSafely()) {
+          _isScanning = false;
+          setState(() {
+            _faceState = _FaceState.idle;
+            _errorMessage = null;
+          });
+          _showOfflineSnack(
+              'No internet connection. Internet is required to continue.');
+          return;
+        }
+
+        await _demoAutoSucceed();
+        return;
+      }
+
+      _scanLineCtrl.repeat(reverse: true);
+      try {
+        await _camCtrl!.startImageStream(_onCameraImage);
+      } catch (e) {
+        _secureLog('⚠️ [DemoMode] startStream failed: $e');
+        _isScanning = false;
+        _scanLineCtrl.stop();
+
+        // 🔌 Re-check internet before proceeding
+        if (!_isOnlineSafely()) {
+          setState(() {
+            _faceState = _FaceState.idle;
+            _errorMessage = null;
+          });
+          _showOfflineSnack(
+              'No internet connection. Internet is required to continue.');
+          return;
+        }
+        await _demoAutoSucceed();
+      }
+      return;
     }
 
+    // NORMAL MODE
     if (!_preAuthValid) {
       _onFailure('Security check failed. Please log in again.');
       return;
@@ -733,6 +1013,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _smileDone = false;
     _eyesWereClosed = false;
     _closedFrames = 0;
+    _openFramesAfterClose = 0;
     _facePresent = false;
     _faceMatched = false;
     _matchScore = 0.0;
@@ -741,6 +1022,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _livenessStep = _LivenessStep.waitingForFace;
     _livenessStartTime = DateTime.now();
     _enrollCaptureCount = 0;
+    _verifyAttempts = 0;
 
     setState(() {
       _faceState = _FaceState.scanning;
@@ -761,8 +1043,73 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     await _camCtrl!.startImageStream(_onCameraImage);
   }
 
+  // 🎭 Demo helper: instant success + proceed (requires internet)
+  Future<void> _demoAutoSucceed() async {
+    if (!mounted) return;
+
+    // 🔌 Re-check internet before succeeding
+    if (_isDemo && !_isOnlineSafely()) {
+      _secureLog('🎭 [DemoMode] _demoAutoSucceed — offline, blocking');
+      _isScanning = false;
+      _scanLineCtrl.stop();
+      setState(() {
+        _faceState = _FaceState.idle;
+        _errorMessage = null;
+      });
+      _showOfflineSnack(
+          'No internet connection. Internet is required to continue.');
+      return;
+    }
+
+    _isScanning = false;
+    _scanLineCtrl.stop();
+    _matchScore = 1.0;
+    _matchPercent = 100.0;
+    _faceMatched = true;
+    _blinkDone = true;
+    _smileDone = true;
+    _facePresent = true;
+
+    setState(() {
+      _faceState = _FaceState.success;
+      _errorMessage = null;
+    });
+
+    _successCtrl.forward(from: 0);
+    _matchCountCtrl.forward(from: 0);
+    _pulseCtrl.stop();
+    _ringCtrl.stop();
+
+    await Future.delayed(const Duration(milliseconds: 1400));
+    if (!mounted) return;
+
+    // 🔌 Re-check internet before navigation
+    if (_isDemo && !_isOnlineSafely()) {
+      _secureLog('🎭 [DemoMode] Lost internet before navigation');
+      setState(() {
+        _faceState = _FaceState.idle;
+        _errorMessage = null;
+      });
+      _successCtrl.reset();
+      _pulseCtrl.repeat(reverse: true);
+      _ringCtrl.repeat();
+      _showOfflineSnack(
+          'No internet connection. Internet is required to continue.');
+      return;
+    }
+
+    if (_isChallenge) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+
+    _proceedToNext();
+  }
+
   Future<void> _checkTemplateAvailability() async {
+    if (_isDemo) return;
     if (kIsWeb) return;
+
     try {
       _isCheckingTemplate = true;
       final status = await FaceMatcher.debugTemplateStatus(widget.employee.id);
@@ -774,11 +1121,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
       if (!hasTemplate) {
         final hasPhoto = status['hasPhotoUrl'] == true;
-        if (hasPhoto) {
+        if (hasPhoto && NetworkGuard.instance.isOnline) {
           _secureLog('🔧 Attempting self-heal from photoUrl...');
           final healed =
           await FaceMatcher.autoUpgradeFromExistingPhoto(widget.employee.id);
           if (healed) _selfHealTriggered = true;
+        } else if (hasPhoto) {
+          _secureLog('📴 Offline — skipping self-heal');
         }
       }
     } catch (e) {
@@ -789,6 +1138,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _runMockScan() async {
+    if (_isDemo) return;
+
     _secureLog('🌐 [Web] Starting mock scan');
     while (mounted && _isScanning) {
       await Future.delayed(const Duration(milliseconds: _webDetectIntervalMs));
@@ -813,8 +1164,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         _isScanning = false;
         _scanLineCtrl.stop();
         if (mounted) {
-          _onFailure('Enrollment sa web ay hindi supported. '
-              'Gamitin ang mobile app.');
+          _onFailure('Enrollment is not supported on web. '
+              'Please use the mobile app.');
         }
         return;
       }
@@ -845,9 +1196,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
-  // ══════════════════════════════════════════════════════════
-  // IMAGE CONVERSION
-  // ══════════════════════════════════════════════════════════
   InputImage? _buildInputImage(CameraImage image) {
     if (_camCtrl == null) return null;
 
@@ -886,8 +1234,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final width = image.width;
       final height = image.height;
 
+      if (width <= 0 || height <= 0) return null;
+
       if (image.planes.length == 1) {
         final plane = image.planes[0];
+        if (plane.bytes.isEmpty) return null;
         final fmt = (kIsWeb || Platform.isIOS)
             ? InputImageFormat.bgra8888
             : InputImageFormat.nv21;
@@ -908,9 +1259,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         final uPlane = image.planes[1];
         final vPlane = image.planes[2];
 
+        if (yPlane.bytes.length < width * height) {
+          return null;
+        }
+        if (uPlane.bytes.isEmpty || vPlane.bytes.isEmpty) {
+          return null;
+        }
+
         final int yRowStride = yPlane.bytesPerRow;
         final int uvRowStride = uPlane.bytesPerRow;
         final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
+
+        if (uvPixelStride == 0) return null;
 
         final nv21 = Uint8List(width * height * 3 ~/ 2);
         int pos = 0;
@@ -921,6 +1281,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         } else {
           for (int r = 0; r < height; r++) {
             final int start = r * yRowStride;
+            if (start + width > yPlane.bytes.length) break;
             nv21.setRange(pos, pos + width, yPlane.bytes, start);
             pos += width;
           }
@@ -931,6 +1292,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         for (int r = 0; r < uvHeight; r++) {
           for (int c = 0; c < uvWidth; c++) {
             final int uvIdx = r * uvRowStride + c * uvPixelStride;
+            if (uvIdx >= uPlane.bytes.length || uvIdx >= vPlane.bytes.length) {
+              break;
+            }
+            if (pos + 1 >= nv21.length) break;
             nv21[pos++] = vPlane.bytes[uvIdx];
             nv21[pos++] = uPlane.bytes[uvIdx];
           }
@@ -948,17 +1313,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       }
 
       return null;
-    } catch (e, st) {
-      _secureLog('⚠️ _buildInputImage error: $e\n$st');
+    } catch (e) {
+      _secureLog('⚠️ _buildInputImage error: $e');
       return null;
     }
   }
 
-  // ══════════════════════════════════════════════════════════
-  // CAMERA FRAME HANDLER
-  // ══════════════════════════════════════════════════════════
   Future<void> _onCameraImage(CameraImage image) async {
+    // 🎭 Demo mode: still process real frames for liveness
     if (!_isScanning || _isProcessing || !mounted) return;
+
     _isProcessing = true;
     try {
       final inputImage = _buildInputImage(image);
@@ -995,10 +1359,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _isProcessing = false;
   }
 
-  // ══════════════════════════════════════════════════════════
-  // ENROLL MODE
-  // ══════════════════════════════════════════════════════════
   Future<void> _handleEnrollFrame(CameraImage image, Face face) async {
+    // Enroll path is skipped in demo (authMode = verify)
+    if (_isSavingEnroll) {
+      _isProcessing = false;
+      return;
+    }
+
     if (_lastEnrollCaptureAt != null) {
       final elapsed = DateTime.now().difference(_lastEnrollCaptureAt!);
       if (elapsed < _enrollCaptureCooldown) {
@@ -1007,12 +1374,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       }
     }
 
-    if (_isSavingEnroll) return;
-
     final warning = _assessEnrollQuality(face, image);
     if (warning != _FaceWarning.none) {
       _eyesWereClosed = false;
       _closedFrames = 0;
+      _openFramesAfterClose = 0;
       if (mounted) setState(() => _faceWarning = warning);
       _warningCtrl.repeat(reverse: true);
       _isProcessing = false;
@@ -1026,6 +1392,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!_blinkDone) {
       if (avgOpen < _blinkClosedThreshold) {
         _closedFrames++;
+        _openFramesAfterClose = 0;
         _eyesWereClosed = true;
         if (_closedFrames > _maxClosedFramesBeforeStuck) {
           _eyesWereClosed = false;
@@ -1037,19 +1404,24 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           _isProcessing = false;
           return;
         }
-      } else if (avgOpen > _blinkOpenThreshold &&
-          _eyesWereClosed &&
-          _closedFrames >= _minClosedFrames) {
-        _blinkDone = true;
-        _eyesWereClosed = false;
-        _closedFrames = 0;
-        if (mounted) {
-          setState(() {
-            _faceWarning = _FaceWarning.none;
-            _enrollHint = 'Mabuti! Ngayon naman, tingnan ang camera.';
-          });
+      } else if (avgOpen > _blinkOpenThreshold) {
+        if (_eyesWereClosed && _closedFrames >= _minClosedFrames) {
+          _openFramesAfterClose++;
+          if (_openFramesAfterClose >= _minOpenFrames) {
+            _blinkDone = true;
+            _eyesWereClosed = false;
+            _closedFrames = 0;
+            _openFramesAfterClose = 0;
+            if (mounted) {
+              setState(() {
+                _faceWarning = _FaceWarning.none;
+                _enrollHint =
+                'Good! Hold steady — capturing 3 samples.';
+              });
+            }
+            _secureLog('✅ [Enroll] Blink detected — auto-capture 3 samples');
+          }
         }
-        _secureLog('✅ [Enroll] Blink detected — ready to capture');
       } else {
         if (_eyesWereClosed && _closedFrames < _minClosedFrames) {
           _eyesWereClosed = false;
@@ -1069,6 +1441,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     try {
       _isSavingEnroll = true;
       if (mounted) setState(() {});
+
+      await _waitForFocusAndCapture();
 
       final picture = await _camCtrl!.takePicture();
       final bytes = await picture.readAsBytes();
@@ -1092,7 +1466,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         _secureLog('❌ [Enroll] Save failed: ${result.error}');
         if (mounted) {
           setState(() {
-            _enrollHint = 'Hindi nakuha. Subukan muli — tingnan ang camera.';
+            _enrollHint = 'Capture failed. Try again — look at the camera.';
           });
         }
         _isProcessing = false;
@@ -1120,7 +1494,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         if (mounted) {
           setState(() {
             _faceState = _FaceState.success;
-            _enrollHint = 'Matagumpay na naka-register ang mukha mo!';
+            _enrollHint = 'Your face has been registered successfully!';
           });
           _successCtrl.forward();
         }
@@ -1134,10 +1508,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       if (mounted) {
         setState(() {
           _enrollHint =
-          'Sample ${_enrollCaptureCount + 1} ng $_requiredEnrollCaptures — '
-              'tingnan ulit sa camera.';
-          _blinkDone = false;
+          'Sample ${_enrollCaptureCount + 1} of $_requiredEnrollCaptures — '
+              'hold steady.';
           _closedFrames = 0;
+          _openFramesAfterClose = 0;
         });
       }
     } catch (e) {
@@ -1148,15 +1522,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _isProcessing = false;
   }
 
-  // ══════════════════════════════════════════════════════════
-  // VERIFY MODE
-  // ══════════════════════════════════════════════════════════
   Future<void> _handleVerifyFrame(CameraImage image, Face face) async {
     final quality = _assessVerifyQuality(face, image);
 
     if (quality != _FaceWarning.none) {
       _eyesWereClosed = false;
       _closedFrames = 0;
+      _openFramesAfterClose = 0;
       if (mounted) setState(() => _faceWarning = quality);
       _warningCtrl.repeat(reverse: true);
       _isProcessing = false;
@@ -1179,6 +1551,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (_livenessStep == _LivenessStep.blink && !_blinkDone) {
       if (avgOpen < _blinkClosedThreshold) {
         _closedFrames++;
+        _openFramesAfterClose = 0;
         _eyesWereClosed = true;
         if (_closedFrames > _maxClosedFramesBeforeStuck) {
           _eyesWereClosed = false;
@@ -1190,14 +1563,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           _isProcessing = false;
           return;
         }
-      } else if (avgOpen > _blinkOpenThreshold &&
-          _eyesWereClosed &&
-          _closedFrames >= _minClosedFrames) {
-        _blinkDone = true;
-        _eyesWereClosed = false;
-        _closedFrames = 0;
-        _livenessStep = _LivenessStep.smile;
-        _secureLog('✅ [Verify] Blink detected — now smile');
+      } else if (avgOpen > _blinkOpenThreshold) {
+        if (_eyesWereClosed && _closedFrames >= _minClosedFrames) {
+          _openFramesAfterClose++;
+          if (_openFramesAfterClose >= _minOpenFrames) {
+            _blinkDone = true;
+            _eyesWereClosed = false;
+            _closedFrames = 0;
+            _openFramesAfterClose = 0;
+            _livenessStep = _LivenessStep.smile;
+            _secureLog('✅ [Verify] Blink detected — now smile');
+          }
+        }
       } else {
         if (_eyesWereClosed && _closedFrames < _minClosedFrames) {
           _eyesWereClosed = false;
@@ -1215,7 +1592,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         if (matched) {
           await _onSuccess();
         } else {
-          _onFaceMismatch();
+          await _handleVerifyFailure();
         }
         _isProcessing = false;
         return;
@@ -1238,9 +1615,50 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (mounted) setState(() => _faceWarning = _FaceWarning.none);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // QUALITY CHECKS
-  // ══════════════════════════════════════════════════════════
+  Future<void> _handleVerifyFailure() async {
+    if (_isDemo) {
+      // Demo never fails — auto-succeed
+      await _demoAutoSucceed();
+      return;
+    }
+
+    _verifyAttempts++;
+    _secureLog('🔁 [Verify] Failed attempt $_verifyAttempts/$_maxVerifyAttempts');
+
+    if (_verifyAttempts < _maxVerifyAttempts) {
+      if (!mounted) return;
+      _blinkDone = true;
+      _smileDone = false;
+      _eyesWereClosed = false;
+      _closedFrames = 0;
+      _openFramesAfterClose = 0;
+      _livenessStep = _LivenessStep.smile;
+      _livenessStartTime = DateTime.now();
+      _isScanning = true;
+      _faceMatched = false;
+      _matchScore = 0.0;
+      _matchPercent = 0.0;
+
+      setState(() {
+        _faceState = _FaceState.scanning;
+        _errorMessage = null;
+        _faceWarning = _FaceWarning.none;
+      });
+
+      _scanLineCtrl.repeat(reverse: true);
+
+      try {
+        await _camCtrl!.startImageStream(_onCameraImage);
+      } catch (e) {
+        _secureLog('⚠️ retry startStream failed: $e');
+        _onFaceMismatch();
+      }
+      return;
+    }
+
+    _onFaceMismatch();
+  }
+
   _FaceWarning _assessEnrollQuality(Face face, CameraImage image) {
     final yaw = face.headEulerAngleY ?? 0.0;
     final roll = face.headEulerAngleZ ?? 0.0;
@@ -1272,8 +1690,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     if (!kIsWeb && image.planes.isNotEmpty) {
       final brightness = _estimateBrightness(image);
-      if (brightness < 35) return _FaceWarning.tooDark;
-      if (brightness > 225) return _FaceWarning.tooBright;
+      if (brightness < 25) return _FaceWarning.tooDark;
+      if (brightness > 240) return _FaceWarning.tooBright;
     }
 
     return _FaceWarning.none;
@@ -1282,7 +1700,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   _FaceWarning _assessVerifyQuality(Face face, CameraImage image) {
     final yaw = face.headEulerAngleY ?? 0.0;
     final roll = face.headEulerAngleZ ?? 0.0;
-    if (yaw.abs() > 25.0 || roll.abs() > 25.0) {
+    final pitch = face.headEulerAngleX ?? 0.0;
+
+    if (yaw.abs() > _verifyMaxYaw ||
+        roll.abs() > _verifyMaxRoll ||
+        pitch.abs() > _verifyMaxPitch) {
       return _FaceWarning.headAngle;
     }
 
@@ -1290,14 +1712,64 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     (face.boundingBox.width * face.boundingBox.height).toDouble();
     final imageArea = (image.width * image.height).toDouble();
     final areaRatio = faceArea / imageArea;
-    if (areaRatio < 0.03) return _FaceWarning.tooFar;
+
+    if (areaRatio < _verifyMinFaceArea) return _FaceWarning.tooFar;
+    if (areaRatio > _verifyMaxFaceArea) return _FaceWarning.tooClose;
 
     final hasNose = face.landmarks[FaceLandmarkType.noseBase] != null;
-    final hasBothEyes = face.landmarks[FaceLandmarkType.leftEye] != null &&
-        face.landmarks[FaceLandmarkType.rightEye] != null;
-    if (!hasBothEyes && !hasNose) return _FaceWarning.occluded;
+    final hasLeft = face.landmarks[FaceLandmarkType.leftEye] != null;
+    final hasRight = face.landmarks[FaceLandmarkType.rightEye] != null;
+    final lmCount = [hasNose, hasLeft, hasRight].where((x) => x).length;
+    if (lmCount < 2) return _FaceWarning.occluded;
+
+    if (!kIsWeb && image.planes.isNotEmpty) {
+      final sharp = _estimateSharpness(image);
+      if (sharp < _verifyMinSharpness) {
+        return _FaceWarning.blurry;
+      }
+
+      final brightness = _estimateBrightness(image);
+      if (brightness < 25) return _FaceWarning.tooDark;
+      if (brightness > 240) return _FaceWarning.tooBright;
+    }
 
     return _FaceWarning.none;
+  }
+
+  double _estimateSharpness(CameraImage image) {
+    try {
+      final bytes = image.planes.first.bytes;
+      final w = image.width;
+      final h = image.height;
+      if (bytes.length < w * 2 + 2 || w < 5 || h < 5) return 0;
+
+      int sum = 0;
+      double sumSq = 0;
+      int n = 0;
+      const step = 4;
+
+      for (int y = 2; y < h - 2; y += step) {
+        for (int x = 2; x < w - 2; x += step) {
+          final i = y * w + x;
+          if (i - w < 0 || i + w >= bytes.length) continue;
+          final lap = (4 * bytes[i] -
+              bytes[i - 1] -
+              bytes[i + 1] -
+              bytes[i - w] -
+              bytes[i + w])
+              .toDouble();
+          sum += lap.toInt();
+          sumSq += lap * lap;
+          n++;
+        }
+      }
+
+      if (n == 0) return 0;
+      final mean = sum / n;
+      return (sumSq / n) - (mean * mean);
+    } catch (_) {
+      return 0;
+    }
   }
 
   double _estimateBrightness(CameraImage image) {
@@ -1323,58 +1795,110 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   void _resetWarning() {
     _eyesWereClosed = false;
     _closedFrames = 0;
+    _openFramesAfterClose = 0;
     _warningCtrl.stop();
     _warningCtrl.reset();
     if (mounted) setState(() => _faceWarning = _FaceWarning.none);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // VERIFY FACE MATCH
-  // ══════════════════════════════════════════════════════════
+  double _effectiveThreshold() {
+    double t = _matchThreshold;
+    if (_faceWarning == _FaceWarning.none && _facePresent) t -= 0.02;
+    if (_faceWarning != _FaceWarning.none) t += 0.03;
+    return t.clamp(0.58, 0.85);
+  }
+
   Future<bool> _verifyFaceMatch() async {
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping FaceMatcher — auto PASS');
+      _matchScore = 1.0;
+      _matchPercent = 100.0;
+      _faceMatched = true;
+      return true;
+    }
+
     try {
       if (_camCtrl == null || !_camCtrl!.value.isInitialized) return false;
       if (!_preAuthValid) return false;
       if (_deviceCompromised) return false;
 
-      final picture = await _camCtrl!.takePicture();
-      final bytes = await picture.readAsBytes();
+      final threshold = _effectiveThreshold();
+      _secureLog('🔍 [Verify] Effective threshold: '
+          '${threshold.toStringAsFixed(3)}');
 
-      try {
-        final f = File(picture.path);
-        if (await f.exists()) await f.delete();
-      } catch (_) {}
+      final List<double> scores = [];
+      final List<Uint8List> frames = [];
 
-      final result = await FaceMatcher.verify(
-        widget.employee.id,
-        bytes,
-        threshold: _matchThreshold,
-      );
+      for (int i = 0; i < _verifySampleCount; i++) {
+        try {
+          await _waitForFocusAndCapture();
+          final picture = await _camCtrl!.takePicture();
+          final bytes = await picture.readAsBytes();
+          try {
+            final f = File(picture.path);
+            if (await f.exists()) await f.delete();
+          } catch (_) {}
+          frames.add(bytes);
+        } catch (e) {
+          _secureLog('⚠️ [Verify] sample $i capture failed: $e');
+        }
+        if (i < _verifySampleCount - 1) {
+          await Future.delayed(const Duration(milliseconds: 180));
+        }
+      }
 
-      _secureLog('🔍 score=${result.score.toStringAsFixed(4)}, '
-          'matched=${result.matched}, hasEmbedding=${result.hasEmbedding}');
+      if (frames.isEmpty) {
+        _secureLog('❌ [Verify] No frames captured');
+        return false;
+      }
 
-      if (!result.hasEmbedding) {
+      double bestScore = 0.0;
+      for (final bytes in frames) {
+        try {
+          final r = await FaceMatcher.verify(
+            widget.employee.id,
+            bytes,
+            threshold: threshold,
+          );
+          if (!r.hasEmbedding) continue;
+          scores.add(r.score);
+          if (r.score > bestScore) bestScore = r.score;
+        } catch (e) {
+          _secureLog('⚠️ [Verify] sample verify failed: $e');
+        }
+      }
+
+      if (scores.isEmpty) {
         _matchScore = 0.0;
         _matchPercent = 0.0;
         _faceMatched = false;
         return false;
       }
 
-      _matchScore = result.score;
-      _matchPercent = result.score * 100.0;
-      _faceMatched = result.matched;
-      return result.matched;
-    } catch (e, st) {
-      _secureLog('⚠️ verify error: $e\n$st');
+      final avg = scores.reduce((a, b) => a + b) / scores.length;
+      final blended = (avg * 0.7) + (bestScore * 0.3);
+
+      _matchScore = blended;
+      _matchPercent = blended * 100.0;
+      _faceMatched = blended >= threshold;
+
+      _secureLog('🔍 [Verify] samples=${scores.length} '
+          'avg=${avg.toStringAsFixed(3)} '
+          'best=${bestScore.toStringAsFixed(3)} '
+          'blended=${blended.toStringAsFixed(3)} '
+          'threshold=${threshold.toStringAsFixed(3)} '
+          'matched=$_faceMatched');
+
+      return _faceMatched;
+    } catch (e) {
+      _secureLog('⚠️ verify error: $e');
       return false;
     }
   }
 
-  // ══════════════════════════════════════════════════════════
-  // FACE MISMATCH
-  // ══════════════════════════════════════════════════════════
   void _onFaceMismatch() {
+    if (_isDemo) return;
+
     if (!mounted) return;
     _isScanning = false;
     _scanLineCtrl.stop();
@@ -1397,14 +1921,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     final String reason;
     if (_matchPercent < 40) {
-      reason = 'Hindi ma-detect ng maayos ang mukha.\n'
-          'Subukan sa mas maliwanag na lugar.';
+      reason = 'Face could not be detected properly.\n'
+          'Try in a brighter area.';
     } else if (_matchPercent < 55) {
-      reason = 'Malabo ang pagkakatugma ng mukha.\n'
-          'Alisin ang salamin/mask at tingnan direkta ang camera.';
+      reason = 'Face match is unclear.\n'
+          'Remove glasses/mask and look directly at the camera.';
     } else {
-      reason = 'Hindi tugma ang mukha sa naka-register.\n'
-          'Kung bago ka, ipa-enroll sa Admin.';
+      reason = 'Face does not match the registered one.\n'
+          'If you are new, have it enrolled by Admin.';
     }
 
     setState(() {
@@ -1427,15 +1951,19 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           _faceState = _FaceState.idle;
           _errorMessage = null;
           _faceWarning = _FaceWarning.none;
+          _verifyAttempts = 0;
         });
       }
     });
   }
 
-  // ══════════════════════════════════════════════════════════
-  // GEOFENCE + ATTENDANCE
-  // ══════════════════════════════════════════════════════════
   Future<bool> _checkRoleAndGeofence() async {
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Bypassing geofence check');
+      if (mounted) setState(() => _isCheckingGeofence = false);
+      return true;
+    }
+
     if (mounted) setState(() => _isCheckingGeofence = true);
     GeofenceService.instance.invalidateCache();
 
@@ -1453,6 +1981,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final isExempted = geoResult?.isExempted ?? false;
 
       if (isAllowed || isExempted) {
+        _geofenceVerifiedOffline = false;
+        if (mounted) setState(() => _isCheckingGeofence = false);
+        return true;
+      }
+
+      if (_isOffline && geoResult == null) {
+        _secureLog('📴 [Face] Offline — allowing with pending geofence');
+        _geofenceVerifiedOffline = true;
         if (mounted) setState(() => _isCheckingGeofence = false);
         return true;
       }
@@ -1488,6 +2024,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     } catch (e) {
       if (mounted) setState(() => _isCheckingGeofence = false);
       _secureLog('🚨 Geofence exception: $e');
+      if (_isOffline) {
+        _geofenceVerifiedOffline = true;
+        return true;
+      }
       return false;
     }
   }
@@ -1507,12 +2047,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   String get _employeeIdForAttendance {
+    if (_isDemo) return DemoModeService.demoEmployee.employeeId;
+
     final empId = widget.employee.employeeId;
     if (empId.isNotEmpty) return empId;
     return widget.employee.id;
   }
 
   String _computeZoneType() {
+    if (_isDemo) return 'inside';
+
     final role = widget.employee.position.toLowerCase();
     final dept = widget.employee.department.toLowerCase();
     if (role.contains('driver') ||
@@ -1526,6 +2070,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _writeAttendanceLog() async {
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping attendance log write');
+      return;
+    }
+
     try {
       final employeeId = _employeeIdForAttendance;
       if (employeeId.isEmpty) return;
@@ -1546,7 +2095,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final deviceName = _deviceModel;
       final zoneType = _computeZoneType();
 
+      final remarks = _geofenceVerifiedOffline
+          ? 'face_match:${_matchPercent.toStringAsFixed(0)}|pending_geofence_verification'
+          : 'face_match:${_matchPercent.toStringAsFixed(0)}';
+
+      AttendanceResult? offlineResult;
       try {
+        offlineResult =
         await OfflineAttendanceService.instance.logAttendance(
           employeeId: employeeId,
           employeeName: employeeName,
@@ -1554,60 +2109,91 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           type: attendanceType,
           timestamp: now,
           device: deviceName,
-          remarks: 'face_match:${_matchPercent.toStringAsFixed(0)}',
+          remarks: remarks,
           zoneType: zoneType,
         );
+        _secureLog(
+            '💾 [Face] Local save: queued=${offlineResult.queued} id=${offlineResult.localId}');
       } catch (e) {
-        _secureLog('⚠️ Local save failed: $e');
+        _secureLog('❌ [Face] OfflineAttendanceService failed: $e');
+        await _logSecurityEvent(
+          type: 'attendance_local_save_failed',
+          severity: 'critical',
+          details: 'Failed to save attendance locally: $e',
+        );
       }
 
-      if (!NetworkGuard.instance.isOnline) return;
+      final needsDirectWrite = offlineResult != null &&
+          !offlineResult.queued &&
+          NetworkGuard.instance.isOnline;
+
+      if (!needsDirectWrite) {
+        _secureLog('📥 [Face] Attendance queued — skipping Firestore');
+        await _emitPendingCount();
+        return;
+      }
+
+      final attendancePayload = <String, dynamic>{
+        'employee_id': employeeId,
+        'employee_name': employeeName,
+        'employee_email': employeeEmail,
+        'type': attendanceType,
+        'date': todayStr,
+        'time': timeStr,
+        'timestamp': FieldValue.serverTimestamp(),
+        'device': deviceName,
+        'device_binding': _deviceBinding,
+        'zone_type': zoneType,
+        'face_match_percent': _matchPercent,
+        'match_score': _matchScore,
+        'session_nonce': _sessionNonce,
+        'device_compromised': _deviceCompromised,
+        'self_heal_used': _selfHealTriggered,
+        'remarks': remarks,
+        if (_geofenceVerifiedOffline) 'pending_geofence_verification': true,
+      };
 
       try {
-        await FirebaseFirestore.instance.collection('attendance_logs').add({
-          'employee_id': employeeId,
-          'employee_name': employeeName,
-          'employee_email': employeeEmail,
-          'type': attendanceType,
-          'date': todayStr,
-          'time': timeStr,
-          'timestamp': FieldValue.serverTimestamp(),
-          'device': deviceName,
-          'device_binding': _deviceBinding,
-          'zone_type': zoneType,
-          'face_match_percent': _matchPercent,
-          'match_score': _matchScore,
-          'session_nonce': _sessionNonce,
-          'device_compromised': _deviceCompromised,
-          'self_heal_used': _selfHealTriggered,
-          'remarks': 'face_match:${_matchPercent.toStringAsFixed(0)}',
-        });
+        await FirebaseFirestore.instance
+            .collection('attendance_logs')
+            .add(attendancePayload);
       } catch (e) {
         _secureLog('❌ attendance_logs write FAILED: $e');
       }
 
+      final activityPayload = <String, dynamic>{
+        'type': isClockIn ? 'clock_in' : 'clock_out',
+        'action': isClockIn ? 'Clocked In (Face)' : 'Clocked Out (Face)',
+        'employeeId': widget.employee.id,
+        'employee_id': employeeId,
+        'employee_name': employeeName,
+        'email': employeeEmail,
+        'face_match_percent': _matchPercent,
+        'match_score': _matchScore,
+        'zone_type': zoneType,
+        'time': timeStr,
+        'date': todayStr,
+        'device': deviceName,
+        'device_binding': _deviceBinding,
+        'device_compromised': _deviceCompromised,
+        'platform': kIsWeb ? 'web' : 'mobile',
+        'session_nonce': _sessionNonce,
+        'timestamp': FieldValue.serverTimestamp(),
+        if (_geofenceVerifiedOffline) 'pending_geofence_verification': true,
+      };
+
       try {
-        await FirebaseFirestore.instance.collection('activity_logs').add({
-          'type': isClockIn ? 'clock_in' : 'clock_out',
-          'action': isClockIn ? 'Clocked In (Face)' : 'Clocked Out (Face)',
-          'employeeId': widget.employee.id,
-          'employee_id': employeeId,
-          'employee_name': employeeName,
-          'email': employeeEmail,
-          'face_match_percent': _matchPercent,
-          'match_score': _matchScore,
-          'zone_type': zoneType,
-          'time': timeStr,
-          'date': todayStr,
-          'device': deviceName,
-          'device_binding': _deviceBinding,
-          'device_compromised': _deviceCompromised,
-          'platform': kIsWeb ? 'web' : 'mobile',
-          'session_nonce': _sessionNonce,
-          'timestamp': FieldValue.serverTimestamp(),
-        });
+        await FirebaseFirestore.instance
+            .collection('activity_logs')
+            .add(activityPayload);
       } catch (e) {
         _secureLog('⚠️ activity_logs FAILED: $e');
+        try {
+          await OfflineAttendanceService.instance.enqueue(
+            collection: 'activity_logs',
+            data: activityPayload,
+          );
+        } catch (_) {}
       }
 
       if (isClockIn) {
@@ -1617,7 +2203,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             clockInAt: now,
             employeeName: employeeName,
           ));
-          _secureLog('🎯 [Challenge] Scheduled for $employeeId');
         } catch (e) {
           _secureLog('⚠️ [Challenge] scheduleForToday failed: $e');
         }
@@ -1678,17 +2263,44 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     await Future.delayed(const Duration(milliseconds: 2000));
     if (!mounted) return;
 
+    // 🔌 Demo mode — re-check internet before proceeding
+    if (_isDemo && !_isOnlineSafely()) {
+      _secureLog('🎭 [DemoMode] Lost internet before navigation');
+      _showOfflineSnack(
+          'No internet connection. Internet is required to continue.');
+      setState(() {
+        _faceState = _FaceState.idle;
+        _errorMessage = null;
+      });
+      _successCtrl.reset();
+      _pulseCtrl.repeat(reverse: true);
+      _ringCtrl.repeat();
+      return;
+    }
+
     _proceedToNext();
   }
 
-  // ══════════════════════════════════════════════════════════
-  // 🆕 CHALLENGE COMPLETION — geofence-aware
-  // ══════════════════════════════════════════════════════════
   Future<void> _finishChallenge() async {
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping challenge finish — pop true');
+      await Future.delayed(const Duration(milliseconds: 800));
+      if (!mounted) return;
+
+      // 🔌 Re-check internet before popping
+      if (!_isOnlineSafely()) {
+        _showOfflineSnack(
+            'No internet connection. Internet is required to continue.');
+        return;
+      }
+
+      Navigator.of(context).pop(true);
+      return;
+    }
+
     if (!mounted) return;
     final ch = widget.challenge!;
 
-    // Mark as recorded so we don't double-send on pop
     _cancelRecorded = true;
 
     _secureLog('🎯 [Challenge] Verifying geofence...');
@@ -1697,7 +2309,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!canProceed) {
       _secureLog('⚠️ [Challenge] Geofence failed — recording FAILED');
 
-      // 🆕 Record as FAILED (not PASSED)
       unawaited(PresenceChallengeService.instance.recordFailedAttempt(
         ch,
         faceScore: _matchPercent,
@@ -1711,7 +2322,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         'Challenge ${ch.id} FAILED — outside work zone at verification',
       );
 
-      // 🆕 pop(false) para tama ang snackbar sa MainScreen
       await Future.delayed(const Duration(seconds: 2));
       if (!mounted) return;
       Navigator.of(context).pop(false);
@@ -1719,12 +2329,39 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
 
     final zone = _computeZoneType();
-    await PresenceChallengeService.instance.submitPassed(
-      ch,
-      faceScore: _matchPercent,
-      zone: zone,
-      deviceBinding: _deviceBinding,
-    );
+
+    if (!NetworkGuard.instance.isOnline) {
+      try {
+        await OfflineAttendanceService.instance.enqueue(
+          collection: 'presence_challenges',
+          docId: ch.id,
+          data: {
+            'id': ch.id,
+            'employeeId': widget.employee.id,
+            'status': 'passed',
+            'faceScore': _matchPercent,
+            'zone': zone,
+            'deviceBinding': _deviceBinding,
+            'verifiedAt': DateTime.now(),
+            'verificationMode': 'offline',
+          },
+        );
+        _secureLog('📥 [Challenge] Queued passed (offline)');
+      } catch (e) {
+        _secureLog('⚠️ [Challenge] Queue failed: $e');
+      }
+    } else {
+      try {
+        await PresenceChallengeService.instance.submitPassed(
+          ch,
+          faceScore: _matchPercent,
+          zone: zone,
+          deviceBinding: _deviceBinding,
+        );
+      } catch (e) {
+        _secureLog('⚠️ [Challenge] submitPassed failed: $e');
+      }
+    }
 
     _secureLog('✅ [Challenge] PASSED for ${widget.employee.id} '
         '(score=${_matchPercent.toStringAsFixed(1)}%, zone=$zone)');
@@ -1741,7 +2378,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     Navigator.of(context).pop(true);
   }
 
-     void _proceedToNext() {
+  void _proceedToNext() {
     if (!mounted) return;
     final navigator = Navigator.of(context);
 
@@ -1786,6 +2423,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         setState(() {
           _faceState = _FaceState.idle;
           _errorMessage = null;
+          _verifyAttempts = 0;
         });
       }
     });
@@ -1807,13 +2445,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _ringCtrl.stop();
   }
 
-  // ══════════════════════════════════════════════════════════
-  // BACK BUTTON
-  // ══════════════════════════════════════════════════════════
   Future<void> _goBack() async {
     await _stopAllCameraOperations();
 
-    if (_isChallenge && !_cancelRecorded) {
+    if (_isChallenge && !_cancelRecorded && !_isDemo) {
       _secureLog('🚪 [Challenge] User tapped Back — recording cancellation');
       await _recordChallengeFailure('user_tapped_back');
     }
@@ -1831,13 +2466,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
-  // ══════════════════════════════════════════════════════════
-  // CANCEL BUTTON
-  // ══════════════════════════════════════════════════════════
   Future<void> _onCancelTapped() async {
     await _stopAllCameraOperations();
 
-    if (_isChallenge && !_cancelRecorded) {
+    if (_isChallenge && !_cancelRecorded && !_isDemo) {
       _secureLog('🚪 [Challenge] User tapped Cancel — recording cancellation');
       await _recordChallengeFailure('user_tapped_cancel');
     }
@@ -1869,28 +2501,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
 
-    final isOffline = _networkState == _NetState.offline;
-    final isChecking = _networkState == _NetState.checking;
-
-    if (isOffline || isChecking || _isInitialLoading) {
+    if (_isInitialLoading) {
       return Scaffold(
         backgroundColor: tc.bgTop,
         body: SafeArea(
           child: Stack(
             children: [
               const DashboardSkeleton(),
-              if (isOffline)
-                Positioned.fill(
-                  child: AnimatedOpacity(
-                    opacity: _showOfflineOverlay ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 350),
-                    curve: Curves.easeInOut,
-                    child: IgnorePointer(
-                      ignoring: !_showOfflineOverlay,
-                      child: _buildNetworkErrorOverlay(tc),
-                    ),
-                  ),
-                ),
               if (_obscureContent) _buildPrivacyShield(),
             ],
           ),
@@ -1927,18 +2544,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                           right: 16,
                           child: _buildOuterCard(tc),
                         ),
-                        if (isOffline)
-                          Positioned.fill(
-                            child: AnimatedOpacity(
-                              opacity: _showOfflineOverlay ? 1.0 : 0.0,
-                              duration: const Duration(milliseconds: 350),
-                              curve: Curves.easeInOut,
-                              child: IgnorePointer(
-                                ignoring: !_showOfflineOverlay,
-                                child: _buildNetworkErrorOverlay(tc),
-                              ),
-                            ),
-                          ),
+                        if (_pendingCount > 0 && !_isDemo) _buildPendingBadge(),
                         if (_obscureContent) _buildPrivacyShield(),
                       ],
                     ),
@@ -1952,88 +2558,45 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     );
   }
 
-  Widget _buildNetworkErrorOverlay(_ThemeColors tc) {
-    return Container(
-      color: Colors.black.withValues(alpha: 0.72),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 380),
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xFFFF8A00),
-                  Color(0xFFFA6A00),
-                  Color(0xFFF54900)
-                ],
+  Widget _buildPendingBadge() {
+    return Positioned(
+      top: 12,
+      right: 12,
+      child: SafeArea(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.orange.shade700,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
               ),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _white, width: 1.15),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  blurRadius: 20,
-                  offset: const Offset(0, 12),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.6,
+                  valueColor: AlwaysStoppedAnimation(Colors.white),
                 ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.2),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.4),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: const Icon(Icons.wifi_off_rounded,
-                      color: Colors.white, size: 40),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '$_pendingCount pending',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
                 ),
-                const SizedBox(height: 20),
-                const Text('No Connection',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700)),
-                const SizedBox(height: 10),
-                Text(_networkErrorMessage,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.92),
-                        fontSize: 13,
-                        height: 1.5)),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: 180,
-                  child: ElevatedButton.icon(
-                    onPressed: _retryNetworkCheck,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: _orange,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    icon: const Icon(Icons.refresh_rounded, size: 18),
-                    label: const Text('Try Again',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w700)),
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -2093,14 +2656,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     return Container(
       width: double.infinity,
       height: 287.13,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFFF8A00), Color(0xFFFF6B00), Color(0xFFF54900)],
-          stops: [0.0001, 0.3318, 1.0],
+          colors: _isDemo
+              ? [_demoAccent, _demoAccentMid, _demoAccentDark]
+              : const [Color(0xFFFF8A00), Color(0xFFFF6B00), Color(0xFFF54900)],
+          stops: const [0.0001, 0.3318, 1.0],
         ),
-        borderRadius: BorderRadius.only(
+        borderRadius: const BorderRadius.only(
           bottomLeft: Radius.circular(16),
           bottomRight: Radius.circular(16),
         ),
@@ -2112,20 +2677,24 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             top: 48,
             child: GestureDetector(
               onTap: _goBack,
-              child: Row(
+              behavior: HitTestBehavior.opaque,
+              child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  SizedBox(
-                      width: 19.99,
-                      height: 19.99,
-                      child: CustomPaint(painter: _BackArrowPainter())),
-                  const SizedBox(width: 2),
-                  const Text('Back',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.white,
-                          height: 0.9)),
+                  Icon(
+                    Icons.chevron_left_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                  SizedBox(width: 2),
+                  Text(
+                    'Back',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -2134,11 +2703,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               left: 24,
               top: 95.99,
               child: Text(
-                  _isChallenge
+                  _isDemo
+                      ? 'Demo Check'
+                      : (_isChallenge
                       ? 'Random Check'
                       : (_authMode == _AuthMode.enroll
                       ? 'Face Registration'
-                      : 'Auth & Clock In'),
+                      : 'Auth & Clock In')),
                   style: const TextStyle(
                       fontSize: 30,
                       fontWeight: FontWeight.w700,
@@ -2148,13 +2719,106 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               left: 24,
               top: 136.99,
               child: Text(
-                  _isChallenge
+                  _isDemo
+                      ? 'Real camera + liveness — always pass'
+                      : (_isChallenge
                       ? 'Presence verification required'
                       : (_authMode == _AuthMode.enroll
                       ? 'First-time face enrollment'
-                      : 'Face + Liveness verification'),
+                      : 'Face + Liveness verification')),
                   style: const TextStyle(
                       fontSize: 14, color: Colors.white, height: 0.9))),
+          if (_isDemo)
+            Positioned(
+              right: 24,
+              top: 48,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.science_rounded,
+                            color: Colors.white, size: 12),
+                        SizedBox(width: 5),
+                        Text(
+                          'DEMO',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_isOffline) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _error.withValues(alpha: 0.85),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.cloud_off_rounded,
+                              color: Colors.white, size: 11),
+                          SizedBox(width: 4),
+                          Text(
+                            'OFFLINE',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.4),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            )
+          else if (_isOffline)
+            Positioned(
+              right: 24,
+              top: 48,
+              child: Container(
+                padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.cloud_off_rounded,
+                        color: Colors.white, size: 12),
+                    const SizedBox(width: 5),
+                    Text(
+                      _pendingCount > 0
+                          ? 'Offline · $_pendingCount pending'
+                          : 'Offline mode',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -2178,14 +2842,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-              _isChallenge
+              _isDemo
+                  ? 'Demo Mode'
+                  : (_isChallenge
                   ? 'Presence Check'
                   : (_authMode == _AuthMode.enroll
                   ? 'Step 3: Face Registration'
-                  : 'Step 3: Facial Recognition'),
+                  : 'Step 3: Facial Recognition')),
               textAlign: TextAlign.center,
               style: TextStyle(
-                  color: tc.stepLabelColor,
+                  color: _isDemo ? _demoAccent : tc.stepLabelColor,
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                   letterSpacing: 0.5)),
@@ -2204,15 +2870,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFFF8C2B), Color(0xFFF05000)],
+          colors: _isDemo
+              ? [_demoAccent, _demoAccentDark]
+              : const [Color(0xFFFF8C2B), Color(0xFFF05000)],
         ),
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-              color: const Color(0xFFF05000).withValues(alpha: 0.35),
+              color: (_isDemo ? _demoAccent : const Color(0xFFF05000))
+                  .withValues(alpha: 0.35),
               blurRadius: 30,
               offset: const Offset(0, 12))
         ],
@@ -2240,7 +2909,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           ),
           if (isScanning) ...[
             const SizedBox(height: 16),
-            if (_authMode == _AuthMode.enroll)
+            if (_authMode == _AuthMode.enroll && !_isDemo)
               _buildEnrollProgressBar()
             else
               _buildScanProgressBar(),
@@ -2256,7 +2925,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             duration: const Duration(milliseconds: 300),
             child: Text(
               _stateTitle.replaceAll('\n', ' '),
-              key: ValueKey('title_${_faceState}_$_authMode'),
+              key: ValueKey('title_${_faceState}_$_authMode-$_isDemo'),
               textAlign: TextAlign.center,
               style: const TextStyle(
                   color: _white, fontSize: 20, fontWeight: FontWeight.w700),
@@ -2267,7 +2936,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             duration: const Duration(milliseconds: 300),
             child: Text(
               _errorMessage ?? _stateSubtitle.replaceAll('\n', ' '),
-              key: ValueKey('subtitle_${_errorMessage ?? _faceState}'),
+              key: ValueKey('subtitle_${_errorMessage ?? _faceState}_'
+                  '${_networkState.name}_$_pendingCount-$_isDemo'),
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: _white.withValues(alpha: 0.9),
@@ -2292,7 +2962,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                       fontWeight: FontWeight.w600)),
             ]),
           ],
-          if (_camError != null && _faceState == _FaceState.idle) ...[
+          if (_camError != null &&
+              _faceState == _FaceState.idle &&
+              !_isDemo) ...[
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2304,7 +2976,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   style: const TextStyle(color: _warning, fontSize: 10)),
             ),
           ],
-          if (_isSavingEnroll) ...[
+          if (_isSavingEnroll && !_isDemo) ...[
             const SizedBox(height: 12),
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
               const SizedBox(
@@ -2320,6 +2992,33 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                       fontWeight: FontWeight.w600)),
             ]),
           ],
+          if (_isOffline && _pendingCount > 0 && !_isDemo) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.2), width: 1),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.cloud_upload_outlined,
+                      color: Colors.white, size: 13),
+                  const SizedBox(width: 6),
+                  Text(
+                    '$_pendingCount queued for sync',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 20),
           _buildCancelButton(tc),
         ],
@@ -2329,8 +3028,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   Widget _buildMatchPercentBadge() {
     final percent = _matchPercent;
-    final color = _matchColor(percent);
-    final label = _matchLabel(percent);
+    final color = _isDemo ? _demoAccent : _matchColor(percent);
+    final label = _isDemo ? 'DEMO VERIFIED' : _matchLabel(percent);
 
     return AnimatedBuilder(
       animation: _matchCountAnim,
@@ -2408,7 +3107,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                 child: CustomPaint(
                   size: const Size(36, 36),
                   painter: _FaceScanIconPainter(
-                      color: isError ? _error : _orange),
+                      color: isError
+                          ? _error
+                          : (_isDemo ? _demoAccent : _orange)),
                 ),
               ),
             ),
@@ -2427,7 +3128,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           width: 140,
           height: 140,
           child: CustomPaint(
-            painter: _VerifiedBadgePainter(color: _verifiedGreen),
+            painter: _VerifiedBadgePainter(
+              color: _isDemo ? _demoAccent : _verifiedGreen,
+            ),
           ),
         ),
       ),
@@ -2612,14 +3315,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           child: AnimatedDefaultTextStyle(
             duration: const Duration(milliseconds: 200),
             style: TextStyle(
-                color: tc.cancelText,
+                color: _isDemo ? _demoAccent : tc.cancelText,
                 fontSize: 14,
                 fontWeight: FontWeight.w600),
-            child: Text(_isChallenge
+            child: Text(_isDemo
+                ? 'Exit Demo'
+                : (_isChallenge
                 ? 'Cancel Verification'
                 : (_authMode == _AuthMode.enroll
                 ? 'Cancel Registration'
-                : 'Cancel Authentication')),
+                : 'Cancel Authentication'))),
           ),
         ),
       ),
@@ -2659,11 +3364,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   String get _enrollProgressLabel {
-    if (_faceState == _FaceState.success) return 'Naka-register na!';
+    if (_faceState == _FaceState.success) return 'Registered!';
     if (_faceWarning != _FaceWarning.none) return _warningHintText;
-    if (!_facePresent) return 'Hanapin ang mukha sa frame';
-    if (!_blinkDone) return 'I-blink ang mata para patunay na live';
-    return 'Sample $_enrollCaptureCount/$_requiredEnrollCaptures nakuha';
+    if (!_facePresent) return 'Find your face in the frame';
+    if (!_blinkDone) return 'Blink your eyes to prove you are live';
+    return 'Sample $_enrollCaptureCount/$_requiredEnrollCaptures captured';
   }
 
   Widget _buildScanProgressBar() {
@@ -2779,23 +3484,23 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   String get _warningHintText {
     switch (_faceWarning) {
       case _FaceWarning.faceMask:
-        return 'Alisin ang face mask';
+        return 'Remove face mask';
       case _FaceWarning.occluded:
-        return 'Alisin ang harang sa mukha';
+        return 'Remove obstruction from face';
       case _FaceWarning.headAngle:
-        return 'Tumingin nang diretso sa camera';
+        return 'Look straight at the camera';
       case _FaceWarning.eyesClosed:
-        return 'Buksan ang mata';
+        return 'Open your eyes';
       case _FaceWarning.blurry:
-        return 'Malabo — huminto at hawakan steady';
+        return 'Blurry — stop and hold steady';
       case _FaceWarning.tooDark:
-        return 'Masyadong madilim — lumipat sa maliwanag';
+        return 'Too dark — move to a brighter area';
       case _FaceWarning.tooBright:
-        return 'Masyadong maliwanag — iwasan ang sikat';
+        return 'Too bright — avoid direct light';
       case _FaceWarning.tooFar:
-        return 'Mas malapit sa camera';
+        return 'Move closer to the camera';
       case _FaceWarning.tooClose:
-        return 'Bahagyang lumayo sa camera';
+        return 'Move slightly away from the camera';
       case _FaceWarning.none:
         return '';
     }
@@ -2855,26 +3560,49 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return 'Checking your role and location...';
     }
 
+    // 🔌 Demo offline message
+    if (_isDemo && _isOffline) {
+      switch (_faceState) {
+        case _FaceState.idle:
+          return '📴 No internet connection. '
+              'Internet is required to use Demo account.';
+        case _FaceState.scanning:
+          return 'Checking internet connection...';
+        case _FaceState.success:
+          return 'Demo verification complete. '
+              'Proceeding to Clock-In...';
+        case _FaceState.error:
+          return 'No internet. Please connect to the network.';
+        case _FaceState.enrolling:
+          return 'No internet. Please connect to the network.';
+      }
+    }
+
     if (_authMode == _AuthMode.enroll) {
       switch (_faceState) {
         case _FaceState.idle:
-          return 'Wala pang registered face.\nTap para magsimula ng 3-shot enrollment.';
+          return 'No registered face yet.\nTap to start registration.';
         case _FaceState.scanning:
           if (_faceWarning != _FaceWarning.none) return _warningHintText;
           if (!_facePresent) return 'Center your face in the frame';
-          if (!_blinkDone) return 'I-blink ang mata 👁️ para patunay na live';
+          if (!_blinkDone) return 'Blink your eyes 👁️ to prove you are live';
           return _enrollHint;
         case _FaceState.success:
-          return 'Matagumpay! Naka-save na sa admin database.';
+          return 'Success! Saved to admin database.';
         case _FaceState.error:
-          return 'Hindi natapos. Tap para subukan muli.';
+          return 'Not completed. Tap to try again.';
         case _FaceState.enrolling:
-          return 'Tap para magsimula';
+          return 'Tap to start';
       }
     }
 
     switch (_faceState) {
       case _FaceState.idle:
+        if (_isOffline) {
+          return '📴 Offline mode — tap to scan.\n'
+              'Attendance will be saved locally\n'
+              'and synced automatically when online.';
+        }
         return _isChallenge
             ? 'Tap to start random verification'
             : 'Tap the camera icon to start\nfacial scan';
@@ -2920,26 +3648,6 @@ enum _LivenessStep { waitingForFace, blink, smile }
 // ═══════════════════════════════════════════════════════════════
 // PAINTERS
 // ═══════════════════════════════════════════════════════════════
-class _BackArrowPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.66602
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    final path = Path()
-      ..moveTo(size.width * 0.75, size.height * 0.75)
-      ..lineTo(size.width * 0.25, size.height * 0.5)
-      ..lineTo(size.width * 0.75, size.height * 0.25);
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
 class _FaceScanIconPainter extends CustomPainter {
   final Color color;
   const _FaceScanIconPainter({required this.color});

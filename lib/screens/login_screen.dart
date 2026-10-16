@@ -1,6 +1,6 @@
 // lib/screens/login_screen.dart
-// v2.2: Added "Forgot PIN / Request Password Change" button + dialog
-// v2.3: FCM token + notification listener auto-start on login
+// v3.0: 🔒 Demo mode now REQUIRES internet connection
+//       🌐 All UI text converted to English
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -26,6 +26,7 @@ import '../services/location_tracking_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/fcm_service.dart';
 import '../services/employee_notification_listener.dart';
+import '../services/demo_mode_service.dart';
 import '../models/employee.dart';
 import 'biometric_method_screen.dart';
 import 'fingerprint_screen.dart';
@@ -209,6 +210,9 @@ class _LoginScreenState extends State<LoginScreen>
   static const Color _cmShutterGlow = Color(0xFFFF8C00);
   static const Color _shieldBg = Color(0xFF0C0C0E);
 
+  static const Color _demoGradStart = Color(0xFFFF8A00);
+  static const Color _demoGradEnd = Color(0xFFF54900);
+
   static const double _kHeaderDesignFrameWidth = 386.13;
   static const double _kHeaderH = 287.13;
   static const double _kHeaderBorderBottom = 1.15;
@@ -335,6 +339,134 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // 🔌 OFFLINE SNACKBAR HELPER
+  // ═══════════════════════════════════════════════════════════════
+  void _showOfflineSnack([String? custom]) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.cloud_off_rounded,
+                  color: Colors.white, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  custom ??
+                      'Internet connection is required for Demo Mode.',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: _error,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+  }
+
+  bool _isOnlineSafely() {
+    try {
+      return ConnectivityService.instance.isOnline;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🎭 DEMO MODE — legacy button handler (backwards compat)
+  //    REQUIRES internet connection
+  // ═══════════════════════════════════════════════════════════════
+  Future<void> _openDemoMode() async {
+    _secureLog('🎭 [DemoMode] Button tapped — routing to biometric flow');
+
+    // 🔌 CHECK INTERNET FIRST
+    if (!_isOnlineSafely()) {
+      _showOfflineSnack('Internet connection is required for Demo Mode.');
+      _secureLog('🎭 [DemoMode] BLOCKED — no internet');
+      return;
+    }
+
+    if (!kIsWeb) {
+      try {
+        HapticFeedback.mediumImpact();
+      } catch (_) {}
+    }
+
+    await DemoModeService.instance.startDemoSession();
+
+    try {
+      await _logSecurityEvent(
+        type: 'demo_mode_activated',
+        severity: 'info',
+        details: 'User entered DEMO MODE from login screen',
+      );
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => BiometricMethodScreen(
+          employee: DemoModeService.demoEmployee,
+          mode: BiometricFlowMode.login,
+        ),
+        settings: const RouteSettings(name: '/demo-biometric'),
+      ),
+          (route) => false,
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🎭 DEMO AUTO-LOGIN — proceed to biometric
+  //    REQUIRES internet connection
+  // ═══════════════════════════════════════════════════════════════
+  Future<void> _demoAutoLogin() async {
+    _secureLog('🎭 [DemoMode] Auto-login → BiometricMethodScreen');
+
+    // 🔌 CHECK INTERNET FIRST
+    if (!_isOnlineSafely()) {
+      _showOfflineSnack('Internet connection is required for Demo Mode.');
+      _secureLog('🎭 [DemoMode] Auto-login BLOCKED — no internet');
+      return;
+    }
+
+    if (!kIsWeb) {
+      try {
+        HapticFeedback.mediumImpact();
+      } catch (_) {}
+    }
+
+    await DemoModeService.instance.startDemoSession();
+
+    if (!mounted) return;
+
+    // 🔌 Re-check internet before navigation
+    if (!_isOnlineSafely()) {
+      _showOfflineSnack('Internet connection lost. Please try again.');
+      return;
+    }
+
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => BiometricMethodScreen(
+          employee: DemoModeService.demoEmployee,
+          mode: BiometricFlowMode.login,
+        ),
+        settings: const RouteSettings(name: '/demo-biometric'),
+      ),
+          (route) => false,
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // 🔒 SECURITY BOOTSTRAP
   // ═══════════════════════════════════════════════════════════════
   Future<void> _bootstrapSecurity() async {
@@ -345,8 +477,8 @@ class _LoginScreenState extends State<LoginScreen>
     }
 
     try {
-      final ok = await SecurityHardeningService.instance
-          .checkDeviceIntegrity();
+      final ok =
+      await SecurityHardeningService.instance.checkDeviceIntegrity();
       if (!ok) {
         _secureLog('🚨 [Integrity] Compromised: '
             '${SecurityHardeningService.instance.integrityIssues.join(",")}');
@@ -1405,12 +1537,52 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🔒 HARDENED PIN LOGIN
+  // 🔒 HARDENED PIN LOGIN — 🎭 DEMO MODE accepts ANY 4-digit PIN
+  //    REQUIRES internet connection even in demo
   // ═══════════════════════════════════════════════════════════════
   Future<void> _loginWithPin() async {
     if (_pinInput.length < 4) return;
     if (_loggingIn) return;
 
+    // ═══════════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — accept ANY 4-digit PIN (requires internet)
+    // ═══════════════════════════════════════════════════════════════
+    if (DemoModeService.instance.isEnabled) {
+      _secureLog('🎭 [DemoMode] Accepting PIN "${_pinInput}" (demo)');
+
+      // 🔌 CHECK INTERNET FIRST
+      if (!_isOnlineSafely()) {
+        _secureLog('🎭 [DemoMode] BLOCKED — no internet');
+        setState(() {
+          _errorMessage = null;
+          _pinInput = '';
+        });
+        _showOfflineSnack('Internet connection is required for Demo Mode.');
+        return;
+      }
+
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _pinInput = '';
+
+      // 🔌 Re-check internet before navigation
+      if (!_isOnlineSafely()) {
+        _showOfflineSnack('Internet connection lost. Please try again.');
+        return;
+      }
+
+      await _demoAutoLogin();
+      return;
+    }
+
+    // ─── Normal mode continues below ────────────────────────────
     if (!kIsWeb && _deviceCompromised) {
       _setError('This device is flagged as compromised. Login blocked.');
       await _logSecurityEvent(
@@ -1837,9 +2009,6 @@ class _LoginScreenState extends State<LoginScreen>
       _activeEmployee = employee;
       await _saveLastEmployeeId(employee.id);
 
-      // ═══════════════════════════════════════════════════════════
-      // 🆕 START NOTIFICATION LISTENER (para sa auto PIN notification)
-      // ═══════════════════════════════════════════════════════════
       try {
         await EmployeeNotificationListener.instance.start(employee.id);
         _secureLog('✅ [NotifListener] Started for ${employee.id}');
@@ -1847,7 +2016,6 @@ class _LoginScreenState extends State<LoginScreen>
         _secureLog('⚠️ [NotifListener] Start failed: $e');
       }
 
-      // 🆕 FCM token association (para sa future push, kung may FCM na)
       try {
         await FcmService.instance.associateWithEmployee(employee.id);
         _secureLog('✅ [FCM] Token associated with ${employee.id}');
@@ -1962,7 +2130,26 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🎭 _goToStep — DEMO: intercept NFC only (with net check)
+  // ═══════════════════════════════════════════════════════════════
   void _goToStep(_LoginStep step) {
+    // 🎭 DEMO MODE INTERCEPT — NFC only, let PIN step show normally
+    if (DemoModeService.instance.isEnabled) {
+      if (step == _LoginStep.nfcWait) {
+        _secureLog('🎭 [DemoMode] Intercepted NFC → auto-login');
+
+        // 🔌 CHECK INTERNET FIRST
+        if (!_isOnlineSafely()) {
+          _showOfflineSnack('Internet connection is required for Demo Mode.');
+          return;
+        }
+
+        _demoAutoLogin();
+        return;
+      }
+    }
+
     if (step == _LoginStep.nfcWait && kIsWeb) {
       _setError('NFC is not available on web. Please use PIN instead.');
       return;
@@ -2796,7 +2983,6 @@ class _LoginScreenState extends State<LoginScreen>
       }
     }
 
-    // 🆕 Start notification listener din para sa client meeting
     try {
       await EmployeeNotificationListener.instance.start(employee.id);
       _secureLog('✅ [NotifListener] Started (client meeting)');
@@ -2852,7 +3038,6 @@ class _LoginScreenState extends State<LoginScreen>
     _goToStep(_LoginStep.clientMeeting);
   }
 
-  /// Safe cleanup — walang setState. Ginagamit sa dispose() at lifecycle.
   Future<void> _releaseCameraQuiet() async {
     final controller = _cameraController;
     _cameraController = null;
@@ -2863,18 +3048,14 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
-  /// Normal release — may setState. Ginagamit kapag buhay pa ang widget.
   Future<void> _releaseCamera() async {
     await _releaseCameraQuiet();
     if (!mounted) return;
-    // Double-check na active pa ang element (hindi pa defunct)
     try {
       if (context.mounted) {
         setState(() {});
       }
-    } catch (_) {
-      // Silent — nangyayari lang ito kapag defunct na ang element
-    }
+    } catch (_) {}
   }
 
   Future<void> _startCameraSession() async {
@@ -3902,6 +4083,7 @@ class _LoginScreenState extends State<LoginScreen>
           final outerRadius = _kHeaderRadius * scale;
           final borderW = _kHeaderBorderBottom * scale;
           final innerRadius = (outerRadius - borderW).clamp(0.0, outerRadius);
+
           return Container(
             width: double.infinity,
             height: _kHeaderH * scale,
@@ -3938,20 +4120,27 @@ class _LoginScreenState extends State<LoginScreen>
                       behavior: HitTestBehavior.opaque,
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           SizedBox(
                             width: _kBackIconSize * scale,
                             height: _kBackIconSize * scale,
-                            child:
-                            CustomPaint(painter: _BackArrowPainter()),
+                            child: CustomPaint(
+                              size: Size(
+                                _kBackIconSize * scale,
+                                _kBackIconSize * scale,
+                              ),
+                              painter: _BackArrowPainter(),
+                            ),
                           ),
-                          SizedBox(width: 2 * scale),
+                          SizedBox(width: 6 * scale),
                           Text(
                             'Back',
                             style: TextStyle(
                               color: _white,
                               fontSize: 16 * scale,
                               fontWeight: FontWeight.w500,
+                              height: 1.0,
                             ),
                           ),
                         ],
@@ -5098,9 +5287,6 @@ class _LoginScreenState extends State<LoginScreen>
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// WEB OPTION CARD
-// ═══════════════════════════════════════════════════════════════
 class _WebOptionCard extends StatefulWidget {
   final IconData icon;
   final String title;
@@ -5284,15 +5470,15 @@ class _BackArrowPainter extends CustomPainter {
     final paint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.66602 * (size.width / 19.99)
+      ..strokeWidth = 1.8
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-    final s = size.width / 19.99;
-    Offset p(double x, double y) => Offset(x * s, (y - 5) * s);
+
     final path = Path()
-      ..moveTo(p(12.4951, 14.9941).dx, p(12.4951, 14.9941).dy)
-      ..lineTo(p(7.49707, 9.9961).dx, p(7.49707, 9.9961).dy)
-      ..lineTo(p(12.4951, 4.99805).dx, p(12.4951, 4.99805).dy);
+      ..moveTo(size.width * 0.68, size.height * 0.72)
+      ..lineTo(size.width * 0.32, size.height * 0.50)
+      ..lineTo(size.width * 0.68, size.height * 0.28);
+
     canvas.drawPath(path, paint);
   }
 

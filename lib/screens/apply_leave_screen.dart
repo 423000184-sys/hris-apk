@@ -1,4 +1,7 @@
 // lib/screens/apply_leave_screen.dart
+// ✅ v1.1: DEMO MODE now shows the SAME skeleton loading screen as normal mode.
+//         - Skeleton appears briefly (900ms), then fades into demo UI.
+//         - All 3 screens (LeaveForm, History, ApplicationForm) updated.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -13,6 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/admin_notification_service.dart';
 import '../services/security_service.dart';
 import '../services/security_hardening_service.dart';
+import '../services/demo_mode_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_screens.dart';
 import 'itinerary_screen.dart';
@@ -23,6 +27,9 @@ import 'login_screen.dart';
 // ═══════════════════════════════════════════════════════════════
 const String _kLogoAsset = 'assets/images/logo.png';
 double _degToRad(double deg) => deg * 3.1415926535 / 180;
+
+/// 🆕 Shared demo skeleton display duration for all leave screens
+const Duration _kDemoSkeletonDuration = Duration(milliseconds: 900);
 
 Widget _buildHandWatermark({required double opacity}) {
   return Positioned(
@@ -49,6 +56,12 @@ Widget _buildHandWatermark({required double opacity}) {
 // LEAVE FETCH
 // ═══════════════════════════════════════════════════════════════
 Future<List<Map<String, dynamic>>> _fetchEmployeeLeaves(String empKey) async {
+  // 🎭 DEMO MODE — return fake data, walang Firestore read
+  if (DemoModeService.instance.isEnabled) {
+    return DemoModeService.instance.demoLeaveHistory
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
   final key = empKey.trim();
   if (key.isEmpty) return [];
   final firestore = FirebaseFirestore.instance;
@@ -73,6 +86,8 @@ Future<List<Map<String, dynamic>>> _fetchEmployeeLeaves(String empKey) async {
 // GENDER FETCH
 // ═══════════════════════════════════════════════════════════════
 Future<String> _fetchEmployeeGender(String empKey) async {
+  // 🎭 DEMO MODE — fixed gender
+  if (DemoModeService.instance.isEnabled) return 'male';
   final key = empKey.trim();
   if (key.isEmpty) return 'unknown';
   final firestore = FirebaseFirestore.instance;
@@ -161,6 +176,11 @@ Future<void> _logSecurityEvent({
   String? employeeId,
   String? sessionNonce,
 }) async {
+  // 🎭 DEMO MODE — skip Firestore write
+  if (DemoModeService.instance.isEnabled) {
+    debugPrint('🎭 [DemoMode] Security event (skipped): $type — $details');
+    return;
+  }
   try {
     await FirebaseFirestore.instance.collection('security_events').add({
       'type': type, 'severity': severity, 'details': details,
@@ -739,6 +759,36 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
     WidgetsBinding.instance.addObserver(this);
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — skip network listener, security monitoring
+    //             pero IPAKITA ANG SKELETON sa simula
+    // ═══════════════════════════════════════════════════════════
+    if (DemoModeService.instance.isEnabled) {
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('🎭 [DemoMode] Leave Application Form — DEMO PATH');
+      debugPrint('   • Skeleton shown for ${_kDemoSkeletonDuration.inMilliseconds}ms');
+      debugPrint('═══════════════════════════════════════════');
+
+      _networkState = _NetworkState.online;
+      _sessionValidated = true;
+      _verifiedEmployeeId = widget.employeeId;
+
+      // 🆕 Keep skeleton visible at start
+      _isInitialLoading = true;
+
+      _fetchLeaveData();
+
+      // 🆕 Hide skeleton after short delay
+      Future.delayed(_kDemoSkeletonDuration, () {
+        if (!mounted) return;
+        setState(() => _isInitialLoading = false);
+        debugPrint('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
+      });
+
+      return;
+    }
+
     try {
       _networkSub = ConnectivityService.instance.onStatusChange.listen((online) {
         if (!mounted || _loggedOut) return;
@@ -777,6 +827,8 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   }
 
   Future<bool> _validateSession({bool forceRefresh = false}) async {
+    // 🎭 DEMO MODE — always valid
+    if (DemoModeService.instance.isEnabled) return true;
     if (_loggedOut) return false;
     if (!forceRefresh && _cachedSessionValid != null && _cachedSessionTime != null &&
         DateTime.now().difference(_cachedSessionTime!) < _sessionCacheTTL) {
@@ -817,6 +869,11 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   }
 
   Future<void> _forceLogout(String reason) async {
+    // 🎭 DEMO MODE — ignore logout
+    if (DemoModeService.instance.isEnabled) {
+      debugPrint('🎭 [DemoMode] Force logout ignored: $reason');
+      return;
+    }
     if (_loggedOut || !mounted) return;
     _loggedOut = true;
     _heartbeatTimer?.cancel();
@@ -837,6 +894,8 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   }
 
   void _startSecurityMonitoring() {
+    // 🎭 DEMO MODE — skip
+    if (DemoModeService.instance.isEnabled) return;
     if (widget.employeeId.isNotEmpty) {
       _sessionSub?.cancel();
       _sessionSub = FirebaseFirestore.instance.collection('sessions')
@@ -889,6 +948,7 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _recordActivity();
+      if (DemoModeService.instance.isEnabled) return;
       _validateSession(forceRefresh: true).then((valid) {
         if (!valid && mounted && !_loggedOut) _forceLogout('Session invalid on resume');
       });
@@ -896,6 +956,11 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   }
 
   Future<void> _checkNetworkOnEntry() async {
+    // 🎭 DEMO MODE — always online
+    if (DemoModeService.instance.isEnabled) {
+      if (mounted) setState(() => _networkState = _NetworkState.online);
+      return;
+    }
     if (!mounted) return;
     setState(() => _networkState = _NetworkState.checking);
     bool hasNet = true;
@@ -926,6 +991,26 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
 
   Future<void> _fetchLeaveData() async {
     if (!mounted || _loggedOut) return;
+
+    // 🎭 DEMO MODE — load fake data
+    if (DemoModeService.instance.isEnabled) {
+      setState(() { _loading = true; _error = null; });
+      await Future.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return;
+      final history = DemoModeService.instance.demoLeaveHistory
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      history.sort((a, b) {
+        final aTime = a['createdAt'];
+        final bTime = b['createdAt'];
+        if (aTime is DateTime && bTime is DateTime) return bTime.compareTo(aTime);
+        return 0;
+      });
+      final stats = _computeStats(history);
+      setState(() { _leaveHistory = history; _stats = stats; _loading = false; });
+      return;
+    }
+
     final valid = await _validateSession();
     if (!valid) {
       if (mounted && !_loggedOut) _forceLogout('Session invalid');
@@ -1226,6 +1311,35 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
     WidgetsBinding.instance.addObserver(this);
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — ipakita ang skeleton sa simula
+    // ═══════════════════════════════════════════════════════════
+    if (DemoModeService.instance.isEnabled) {
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('🎭 [DemoMode] Leave History — DEMO PATH');
+      debugPrint('   • Skeleton shown for ${_kDemoSkeletonDuration.inMilliseconds}ms');
+      debugPrint('═══════════════════════════════════════════');
+
+      _networkState = _NetworkState.online;
+      _sessionValidated = true;
+      _verifiedEmployeeId = widget.employeeId;
+
+      // 🆕 Keep skeleton visible at start
+      _isInitialLoading = true;
+
+      _fetchLeaveData();
+
+      // 🆕 Hide skeleton after short delay
+      Future.delayed(_kDemoSkeletonDuration, () {
+        if (!mounted) return;
+        setState(() => _isInitialLoading = false);
+        debugPrint('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
+      });
+
+      return;
+    }
+
     try {
       _networkSub = ConnectivityService.instance.onStatusChange.listen((online) {
         if (!mounted || _loggedOut) return;
@@ -1264,6 +1378,7 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
   }
 
   Future<bool> _validateSession({bool forceRefresh = false}) async {
+    if (DemoModeService.instance.isEnabled) return true; // 🎭 DEMO
     if (_loggedOut) return false;
     if (!forceRefresh && _cachedSessionValid != null && _cachedSessionTime != null &&
         DateTime.now().difference(_cachedSessionTime!) < _sessionCacheTTL) {
@@ -1293,6 +1408,10 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
   }
 
   Future<void> _forceLogout(String reason) async {
+    if (DemoModeService.instance.isEnabled) {
+      debugPrint('🎭 [DemoMode] Force logout ignored: $reason');
+      return;
+    }
     if (_loggedOut || !mounted) return;
     _loggedOut = true;
     _heartbeatTimer?.cancel(); _inactivityTimer?.cancel(); _sessionSub?.cancel();
@@ -1310,6 +1429,7 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
   }
 
   void _startSecurityMonitoring() {
+    if (DemoModeService.instance.isEnabled) return; // 🎭 DEMO
     if (widget.employeeId.isNotEmpty) {
       _sessionSub?.cancel();
       _sessionSub = FirebaseFirestore.instance.collection('sessions')
@@ -1351,6 +1471,7 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _recordActivity();
+      if (DemoModeService.instance.isEnabled) return;
       _validateSession(forceRefresh: true).then((valid) {
         if (!valid && mounted && !_loggedOut) _forceLogout('Session invalid on resume');
       });
@@ -1367,6 +1488,10 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
   }
 
   Future<void> _checkNetworkOnEntry() async {
+    if (DemoModeService.instance.isEnabled) {
+      if (mounted) setState(() => _networkState = _NetworkState.online);
+      return;
+    }
     if (!mounted) return;
     setState(() => _networkState = _NetworkState.checking);
     bool hasNet = true;
@@ -1395,6 +1520,25 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
 
   Future<void> _fetchLeaveData() async {
     if (!mounted || _loggedOut) return;
+
+    if (DemoModeService.instance.isEnabled) {
+      setState(() { _loading = true; _error = null; });
+      await Future.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return;
+      final history = DemoModeService.instance.demoLeaveHistory
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      history.sort((a, b) {
+        final aTime = a['createdAt'];
+        final bTime = b['createdAt'];
+        if (aTime is DateTime && bTime is DateTime) return bTime.compareTo(aTime);
+        return 0;
+      });
+      final stats = _computeStats(history);
+      setState(() { _leaveHistory = history; _stats = stats; _loading = false; });
+      return;
+    }
+
     final valid = await _validateSession();
     if (!valid) {
       if (mounted && !_loggedOut) _forceLogout('Session invalid');
@@ -1706,6 +1850,36 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
     _reasonCtrl.addListener(_onReasonChanged);
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — ipakita ang skeleton sa simula
+    // ═══════════════════════════════════════════════════════════
+    if (DemoModeService.instance.isEnabled) {
+      debugPrint('═══════════════════════════════════════════');
+      debugPrint('🎭 [DemoMode] Leave Form — DEMO PATH');
+      debugPrint('   • Skeleton shown for ${_kDemoSkeletonDuration.inMilliseconds}ms');
+      debugPrint('═══════════════════════════════════════════');
+
+      _networkState = _NetworkState.online;
+      _sessionValidated = true;
+      _verifiedEmployeeId = widget.employeeId;
+
+      // 🆕 Keep skeleton visible at start
+      _isInitialLoading = true;
+
+      _loadHistoryPreview();
+      _loadEmployeeGender();
+
+      // 🆕 Hide skeleton after short delay
+      Future.delayed(_kDemoSkeletonDuration, () {
+        if (!mounted) return;
+        setState(() => _isInitialLoading = false);
+        debugPrint('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
+      });
+
+      return;
+    }
+
     try {
       _networkSub = ConnectivityService.instance.onStatusChange.listen((online) {
         if (!mounted || _loggedOut) return;
@@ -1745,6 +1919,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   Future<bool> _validateSession({bool forceRefresh = false}) async {
+    if (DemoModeService.instance.isEnabled) return true; // 🎭 DEMO
     if (_loggedOut) return false;
     if (!forceRefresh && _cachedSessionValid != null && _cachedSessionTime != null &&
         DateTime.now().difference(_cachedSessionTime!) < _sessionCacheTTL) {
@@ -1775,6 +1950,10 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   Future<void> _forceLogout(String reason) async {
+    if (DemoModeService.instance.isEnabled) {
+      debugPrint('🎭 [DemoMode] Force logout ignored: $reason');
+      return;
+    }
     if (_loggedOut || !mounted) return;
     _loggedOut = true;
     _inactivityTimer?.cancel(); _heartbeatTimer?.cancel();
@@ -1792,6 +1971,10 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
 
   Future<void> _logSecurityEvent({required String type,
     required String severity, required String details}) async {
+    if (DemoModeService.instance.isEnabled) {
+      debugPrint('🎭 [DemoMode] Security event (skipped): $type — $details');
+      return;
+    }
     try {
       if (_networkState != _NetworkState.online) return;
       await FirebaseFirestore.instance.collection('security_events').add({
@@ -1806,6 +1989,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   void _startSecurityMonitoring() {
+    if (DemoModeService.instance.isEnabled) return; // 🎭 DEMO
     if (widget.employeeId.isNotEmpty) {
       _sessionSub?.cancel();
       _sessionSub = FirebaseFirestore.instance.collection('sessions')
@@ -1845,6 +2029,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _lastUserActivityAt = DateTime.now();
+      if (DemoModeService.instance.isEnabled) return;
       _validateSession(forceRefresh: true).then((valid) {
         if (!valid && mounted && !_loggedOut) _forceLogout('Session invalid on resume');
       });
@@ -1852,6 +2037,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   bool _checkSubmitCooldown() {
+    if (DemoModeService.instance.isEnabled) return true; // 🎭 DEMO — no cooldown
     final now = DateTime.now();
     if (_lastSubmitAt != null) {
       final elapsed = now.difference(_lastSubmitAt!).inMilliseconds;
@@ -1865,6 +2051,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   Future<bool> _checkHourlySubmitLimit() async {
+    if (DemoModeService.instance.isEnabled) return true; // 🎭 DEMO
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_kSubmitCountPrefsKey);
@@ -1909,6 +2096,10 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   Future<void> _checkNetworkOnEntry() async {
+    if (DemoModeService.instance.isEnabled) {
+      if (mounted) setState(() => _networkState = _NetworkState.online);
+      return;
+    }
     if (!mounted) return;
     setState(() => _networkState = _NetworkState.checking);
     bool hasNet = true;
@@ -1963,6 +2154,24 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
 
   Future<void> _loadHistoryPreview() async {
     if (_loggedOut) return;
+
+    // 🎭 DEMO MODE
+    if (DemoModeService.instance.isEnabled) {
+      await Future.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return;
+      final history = DemoModeService.instance.demoLeaveHistory
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      history.sort((a, b) {
+        final aTime = a['createdAt'];
+        final bTime = b['createdAt'];
+        if (aTime is DateTime && bTime is DateTime) return bTime.compareTo(aTime);
+        return 0;
+      });
+      setState(() { _leaveHistory = history; _loadingHistory = false; });
+      return;
+    }
+
     final valid = await _validateSession();
     if (!valid) {
       if (mounted && !_loggedOut) _forceLogout('Session invalid on history load');
@@ -2149,6 +2358,8 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   Future<bool> _hasEnoughBalance() async {
+    // 🎭 DEMO MODE — always enough
+    if (DemoModeService.instance.isEnabled) return true;
     if (_selectedLeaveType == null || _leaveDays <= 0) return true;
     try {
       final rawDocs = await _fetchEmployeeLeaves(widget.employeeId);
@@ -2220,6 +2431,22 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
     if (_isSubmitting) return;
     setState(() => _isSubmitting = true);
     _lastUserActivityAt = DateTime.now();
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DEMO MODE — skip lahat ng security + Firestore write
+    // ═══════════════════════════════════════════════════════════
+    if (DemoModeService.instance.isEnabled ||
+        DemoModeService.instance.shouldSkipDbWrite) {
+      await Future.delayed(const Duration(milliseconds: 700));
+      _pendingTxnId = _generateLeaveTxnId();
+      _totalSubmits++;
+      debugPrint('🎭 [DemoMode] Leave submitted (NO DB WRITE): $_pendingTxnId');
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      _showSuccessDialog();
+      return;
+    }
+
     try {
       if (!_checkSubmitCooldown()) { setState(() => _isSubmitting = false); return; }
       if (!await _checkHourlySubmitLimit()) {

@@ -1,22 +1,26 @@
 // lib/services/presence_challenge_service.dart
 // ═══════════════════════════════════════════════════════════════════
-// PRESENCE CHALLENGE SERVICE v2.0
+// PRESENCE CHALLENGE SERVICE v3.0 (OFFLINE-SAFE)
 //
-// v2.0 CHANGES (AUTO-ENFORCEMENT):
-//   ✅ Auto-clock-out kapag 3+ missed challenges
-//   ✅ Auto-clock-out kapag 15+ minutes outside zone
-//   ✅ Auto-cancel (hindi missed) kapag user ay nasa labas ngayon
-//   ✅ CRITICAL admin notifications para sa lahat ng auto-actions
-//   ✅ Duplicate notification guard (_notifiedMissed)
-//   ✅ checkNow() para sa instant checks
+// v3.0 CHANGES:
+//   ✅ Offline queue para sa lahat ng writes
+//   ✅ Persisted pending schedule request (retry on reconnect)
+//   ✅ Persisted out-of-range timer (survives restart)
+//   ✅ Cached schedule (works offline after first load)
+//   ✅ Fixed duplicate attendance OUT write
+//   ✅ Cached missed count (offline threshold check)
+//   ✅ Graceful degradation kapag offline
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'clock_status_service.dart';
 import 'geofence_service.dart';
 import 'offline_attendance_service.dart';
+import '../data/local/dao/connectivity_service.dart';
 
 // ═══════════════════════════════════════════════════════════════
 // Challenge Model
@@ -44,6 +48,23 @@ class PresenceChallenge {
       expiresAt: (m['expiresAt'] as Timestamp).toDate(),
     );
   }
+
+  /// 🎯 NEW: from cached JSON
+  factory PresenceChallenge.fromJson(Map<String, dynamic> j) {
+    return PresenceChallenge(
+      id: j['id'] as String,
+      employeeId: j['employeeId'] as String,
+      dueAt: DateTime.parse(j['dueAt'] as String),
+      expiresAt: DateTime.parse(j['expiresAt'] as String),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'employeeId': employeeId,
+    'dueAt': dueAt.toIso8601String(),
+    'expiresAt': expiresAt.toIso8601String(),
+  };
 
   bool get isExpired => DateTime.now().isAfter(expiresAt);
   bool get isDue => !DateTime.now().isBefore(dueAt);
@@ -100,34 +121,42 @@ class PresenceChallengeService {
   static const Duration beforeShiftEndBuffer = Duration(minutes: 30);
   static const int shiftEndHour = 17;
 
-  // 🆕 AUTO-ENFORCEMENT CONFIG
-  /// Kapag 3+ missed challenges → auto-clock-out
   static const int missedThresholdForAutoClockout = 3;
-
-  /// Kapag outside ng work zone for X minutes → auto-clock-out
   static const Duration outOfRangeAutoClockoutThreshold = Duration(minutes: 15);
+
+  // 🎯 NEW: SharedPreferences keys
+  static const String _kPendingSchedulePrefix = 'pc_pending_schedule_';
+  static const String _kScheduleCachePrefix = 'pc_schedule_cache_';
+  static const String _kOutOfRangeSinceKey = 'pc_out_of_range_since';
+  static const String _kMissedCountPrefix = 'pc_missed_count_';
 
   // ─── INTERNAL ──────────────────────────────────────────────
   final _db = FirebaseFirestore.instance;
   final _rng = Random.secure();
   final List<PresenceChallenge> _pending = [];
   final Set<String> _prompted = {};
-  final Set<String> _notifiedMissed = {};   // 🆕 duplicate guard
+  final Set<String> _notifiedMissed = {};
 
   Timer? _tick;
   String? _activeEmployeeId;
   String? _activeEmployeeName;
   bool _debugLog = kDebugMode;
 
-  // 🆕 Auto-enforcement state
+  // 🎯 Auto-enforcement state
   DateTime? _outOfRangeSince;
   DateTime? _lastAutoClockoutAt;
+
+  // 🎯 MOVED: from late declaration to here
+  DateTime? _autoClockoutTriggeredAt;
   bool _autoClockoutTriggeredToday = false;
 
-  /// Callback kapag may due.
-  void Function(ChallengeDue due)? onDue;
+  /// 🎯 NEW: cached missed count for offline threshold check
+  int _cachedMissedCount = 0;
 
-  /// Callback kapag may missed challenges on start.
+  /// 🎯 NEW: true kapag offline at hindi pa-loaded ang schedule
+  bool _scheduleLoadedFromCache = false;
+
+  void Function(ChallengeDue due)? onDue;
   void Function(int missedCount)? onMissedSummary;
 
   CollectionReference<Map<String, dynamic>> get _col =>
@@ -141,6 +170,14 @@ class PresenceChallengeService {
 
   int get _effectiveCount =>
       testMode ? _testChallengesPerDay : challengesPerDay;
+
+  bool get _isOnline {
+    try {
+      return ConnectivityService.instance.isOnline;
+    } catch (_) {
+      return true;
+    }
+  }
 
   void _log(String msg) {
     if (_debugLog) debugPrint('[PresenceChallenge] $msg');
@@ -168,7 +205,7 @@ class PresenceChallengeService {
       return;
     }
 
-    _log('⚡ checkNow() — instant check triggered');
+    _log('⚡ checkNow() — instant check');
     try {
       await _load(id);
       await _check(id);
@@ -178,7 +215,127 @@ class PresenceChallengeService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // SCHEDULE
+  // 🎯 CACHE PERSISTENCE
+  // ═══════════════════════════════════════════════════════════
+  Future<void> _cacheSchedule(
+      String employeeId, String date, List<PresenceChallenge> list) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final json = list.map((c) => c.toJson()).toList();
+      await prefs.setString(
+        '$_kScheduleCachePrefix${employeeId}_$date',
+        jsonEncode(json),
+      );
+      _log('💾 Cached ${list.length} challenges for $employeeId/$date');
+    } catch (e) {
+      _log('⚠️ Cache write failed: $e');
+    }
+  }
+
+  Future<List<PresenceChallenge>> _readCachedSchedule(
+      String employeeId, String date) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('$_kScheduleCachePrefix${employeeId}_$date');
+      if (raw == null || raw.isEmpty) return [];
+      final list = jsonDecode(raw) as List;
+      return list
+          .map((j) => PresenceChallenge.fromJson(j as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      _log('⚠️ Cache read failed: $e');
+      return [];
+    }
+  }
+
+  // 🎯 NEW: persist pending schedule request for offline retry
+  Future<void> _persistPendingSchedule({
+    required String employeeId,
+    required DateTime clockInAt,
+    String? employeeName,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        '$_kPendingSchedulePrefix$employeeId',
+        jsonEncode({
+          'employeeId': employeeId,
+          'clockInAt': clockInAt.toIso8601String(),
+          'employeeName': employeeName,
+        }),
+      );
+      _log('💾 Pending schedule persisted for $employeeId');
+    } catch (e) {
+      _log('⚠️ Persist pending failed: $e');
+    }
+  }
+
+  Future<void> _clearPendingSchedule(String employeeId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('$_kPendingSchedulePrefix$employeeId');
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>?> _readPendingSchedule(
+      String employeeId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('$_kPendingSchedulePrefix$employeeId');
+      if (raw == null || raw.isEmpty) return null;
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // 🎯 Persist out-of-range timer
+  Future<void> _persistOutOfRange(DateTime? since) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (since == null) {
+        await prefs.remove(_kOutOfRangeSinceKey);
+      } else {
+        await prefs.setString(
+            _kOutOfRangeSinceKey, since.toIso8601String());
+      }
+    } catch (_) {}
+  }
+
+  Future<DateTime?> _readPersistedOutOfRange() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kOutOfRangeSinceKey);
+      if (raw == null || raw.isEmpty) return null;
+      return DateTime.tryParse(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // 🎯 Cache missed count
+  Future<void> _cacheMissedCount(String employeeId, int count) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final date = _dateStr(DateTime.now());
+      await prefs.setInt(
+          '$_kMissedCountPrefix${employeeId}_$date', count);
+      _cachedMissedCount = count;
+    } catch (_) {}
+  }
+
+  Future<int> _readCachedMissedCount(String employeeId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final date = _dateStr(DateTime.now());
+      return prefs.getInt('$_kMissedCountPrefix${employeeId}_$date') ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 🎯 SCHEDULE — offline-safe with pending retry
   // ═══════════════════════════════════════════════════════════
   Future<void> scheduleForToday({
     required String employeeId,
@@ -192,20 +349,41 @@ class PresenceChallengeService {
 
     _activeEmployeeName = employeeName;
 
+    // 🎯 Kung offline → persist request at hintayin ang online
+    if (!_isOnline) {
+      _log('📥 Offline — persisting schedule request for $employeeId');
+      await _persistPendingSchedule(
+        employeeId: employeeId,
+        clockInAt: clockInAt,
+        employeeName: employeeName,
+      );
+      return;
+    }
+
     final now = DateTime.now();
     final date = _dateStr(now);
 
+    // ── Probe: check kung may existing na ──
     try {
       final probe = await _col.doc('${employeeId}_${date}_0').get();
       if (probe.exists) {
         _log('ℹ️ Challenges already exist for $employeeId on $date — skip');
+        await _clearPendingSchedule(employeeId);
+        // Cache din ang existing
+        await _load(employeeId);
         return;
       }
     } catch (e) {
-      _log('⚠️ Probe failed (offline?) — skip schedule: $e');
+      _log('⚠️ Probe failed — persist for retry: $e');
+      await _persistPendingSchedule(
+        employeeId: employeeId,
+        clockInAt: clockInAt,
+        employeeName: employeeName,
+      );
       return;
     }
 
+    // ── Compute window ──
     DateTime windowStart;
     DateTime windowEnd;
 
@@ -230,19 +408,22 @@ class PresenceChallengeService {
     final totalMinutes = windowEnd.difference(windowStart).inMinutes;
     if (totalMinutes < _effectiveCount * 2) {
       _log('ℹ️ Not enough time window ($totalMinutes min) — skip');
+      await _clearPendingSchedule(employeeId);
       return;
     }
 
     final slotMinutes = totalMinutes ~/ _effectiveCount;
     final batch = _db.batch();
+    final cacheList = <PresenceChallenge>[];
 
     for (var i = 0; i < _effectiveCount; i++) {
       final offset =
           i * slotMinutes + (slotMinutes > 1 ? _rng.nextInt(slotMinutes) : 0);
       final dueAt = windowStart.add(Duration(minutes: offset));
       final expiresAt = dueAt.add(responseWindow);
+      final challengeId = '${employeeId}_${date}_$i';
 
-      batch.set(_col.doc('${employeeId}_${date}_$i'), {
+      batch.set(_col.doc(challengeId), {
         'employeeId': employeeId,
         'employeeName': employeeName ?? '',
         'date': date,
@@ -254,18 +435,52 @@ class PresenceChallengeService {
         'createdAt': FieldValue.serverTimestamp(),
       });
 
+      cacheList.add(PresenceChallenge(
+        id: challengeId,
+        employeeId: employeeId,
+        dueAt: dueAt,
+        expiresAt: expiresAt,
+      ));
+
       _log('📅 Scheduled #$i → due $dueAt, expires $expiresAt');
     }
 
     try {
       await batch.commit();
       _log('✅ Scheduled $_effectiveCount challenge(s) for $employeeId');
+      // 🎯 Cache lokal para sa offline fallback
+      await _cacheSchedule(employeeId, date, cacheList);
+      await _clearPendingSchedule(employeeId);
     } catch (e) {
-      _log('❌ Batch commit failed: $e');
+      _log('❌ Batch commit failed — persist for retry: $e');
+      await _persistPendingSchedule(
+        employeeId: employeeId,
+        clockInAt: clockInAt,
+        employeeName: employeeName,
+      );
       return;
     }
 
     await _load(employeeId);
+  }
+
+  // 🎯 NEW: retry pending schedule kapag online
+  Future<void> _retryPendingSchedule(String employeeId) async {
+    if (!_isOnline) return;
+
+    final pending = await _readPendingSchedule(employeeId);
+    if (pending == null) return;
+
+    _log('🔁 Retrying pending schedule for $employeeId');
+    try {
+      await scheduleForToday(
+        employeeId: pending['employeeId'] as String,
+        clockInAt: DateTime.parse(pending['clockInAt'] as String),
+        employeeName: pending['employeeName'] as String?,
+      );
+    } catch (e) {
+      _log('⚠️ Retry schedule failed: $e');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -287,18 +502,34 @@ class PresenceChallengeService {
       _activeEmployeeName = employeeName;
     }
 
-    // Reset daily auto-clockout flag
     _autoClockoutTriggeredToday = false;
-    _outOfRangeSince = null;
+    _autoClockoutTriggeredAt = null;
 
-    final missedCount = await _auditExpiredChallenges(employeeId);
-    if (missedCount > 0 && onMissedSummary != null) {
-      _log('⚠️ [Audit] $missedCount missed challenge(s) flagged');
-      try {
-        onMissedSummary!(missedCount);
-      } catch (e) {
-        _log('⚠️ onMissedSummary callback error: $e');
+    // 🎯 Restore persisted out-of-range
+    _outOfRangeSince = await _readPersistedOutOfRange();
+    if (_outOfRangeSince != null) {
+      _log('♻️ Restored out-of-range since: $_outOfRangeSince');
+    }
+
+    // 🎯 Load cached missed count
+    _cachedMissedCount = await _readCachedMissedCount(employeeId);
+
+    // 🎯 Retry pending schedule kung online
+    unawaited(_retryPendingSchedule(employeeId));
+
+    // 🎯 Audit expired (online-only)
+    if (_isOnline) {
+      final missedCount = await _auditExpiredChallenges(employeeId);
+      if (missedCount > 0 && onMissedSummary != null) {
+        _log('⚠️ [Audit] $missedCount missed flagged');
+        try {
+          onMissedSummary!(missedCount);
+        } catch (e) {
+          _log('⚠️ onMissedSummary error: $e');
+        }
       }
+    } else {
+      _log('📥 Offline at start — using cached data');
     }
 
     await _load(employeeId);
@@ -309,7 +540,8 @@ class PresenceChallengeService {
     );
 
     _log('🛰️ Started for $employeeId '
-        '(${_pending.length} pending, ${testMode ? "TEST" : "PROD"} mode)');
+        '(${_pending.length} pending, ${testMode ? "TEST" : "PROD"} mode, '
+        'online=$_isOnline)');
   }
 
   void stop() {
@@ -319,14 +551,35 @@ class PresenceChallengeService {
     _prompted.clear();
     _notifiedMissed.clear();
     _activeEmployeeId = null;
-    _outOfRangeSince = null;
+    // 🎯 Huwag i-clear ang _outOfRangeSince — persist siya
     _log('🛑 Stopped');
   }
 
+  // 🎯 NEW: cleanup for logout
+  Future<void> clearAll() async {
+    stop();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final keys = prefs.getKeys().where(
+              (k) => k.startsWith('pc_'));
+      for (final k in keys) {
+        await prefs.remove(k);
+      }
+      _log('🧹 Cleared all PC prefs');
+    } catch (_) {}
+    _cachedMissedCount = 0;
+    _outOfRangeSince = null;
+  }
+
   // ═══════════════════════════════════════════════════════════
-  // AUDIT — with clock status verification
+  // AUDIT — online-only, but uses cached missed count offline
   // ═══════════════════════════════════════════════════════════
   Future<int> _auditExpiredChallenges(String employeeId) async {
+    if (!_isOnline) {
+      _log('📥 [Audit] Offline — skipping remote audit');
+      return _cachedMissedCount;
+    }
+
     try {
       bool clockedIn = false;
       try {
@@ -334,11 +587,9 @@ class PresenceChallengeService {
             .isCurrentlyClockedIn(employeeId)
             .timeout(const Duration(seconds: 8));
       } catch (e) {
-        _log('⚠️ [Audit] Clock status check failed: $e — assuming clocked in');
+        _log('⚠️ [Audit] Clock status failed: $e — assume clocked in');
         clockedIn = true;
       }
-
-      _log('🔍 [Audit] Employee clockedIn=$clockedIn');
 
       final snap = await _col
           .where('employeeId', isEqualTo: employeeId)
@@ -346,7 +597,6 @@ class PresenceChallengeService {
           .get();
 
       if (snap.docs.isEmpty) {
-        _log('🔍 [Audit] No pending challenges to audit');
         return 0;
       }
 
@@ -377,19 +627,36 @@ class PresenceChallengeService {
         }
       }
 
+      _cachedMissedCount = flaggedMissed;
+      await _cacheMissedCount(employeeId, flaggedMissed);
+
       _log('🔍 [Audit] Done — $flaggedMissed missed, $cancelled cancelled');
       return flaggedMissed;
     } catch (e) {
       _log('⚠️ [Audit] Failed: $e');
-      return 0;
+      return _cachedMissedCount;
     }
   }
 
+  // 🎯 UPDATED: offline fallback sa cached schedule
   Future<void> _load(String employeeId) async {
+    final date = _dateStr(DateTime.now());
+
+    if (!_isOnline) {
+      // Use cached schedule
+      final cached = await _readCachedSchedule(employeeId, date);
+      _pending
+        ..clear()
+        ..addAll(cached.where((c) => !c.isExpired));
+      _scheduleLoadedFromCache = true;
+      _log('📥 [Cache] Loaded ${_pending.length} challenge(s) from cache');
+      return;
+    }
+
     try {
       final snap = await _col
           .where('employeeId', isEqualTo: employeeId)
-          .where('date', isEqualTo: _dateStr(DateTime.now()))
+          .where('date', isEqualTo: date)
           .where('status', isEqualTo: 'pending')
           .get();
 
@@ -397,13 +664,21 @@ class PresenceChallengeService {
         ..clear()
         ..addAll(snap.docs.map(PresenceChallenge.fromDoc));
 
-      // Clean notifiedMissed — alisin ang wala na sa pending
+      // 🎯 Update cache
+      await _cacheSchedule(employeeId, date, _pending);
+      _scheduleLoadedFromCache = false;
+
       _notifiedMissed.removeWhere(
               (id) => !_pending.any((c) => c.id == id));
 
-      _log('📥 Loaded ${_pending.length} pending challenge(s)');
+      _log('📥 Loaded ${_pending.length} pending challenge(s) from server');
     } catch (e) {
-      _log('⚠️ _load failed: $e');
+      _log('⚠️ _load failed — falling back to cache: $e');
+      final cached = await _readCachedSchedule(employeeId, date);
+      _pending
+        ..clear()
+        ..addAll(cached.where((c) => !c.isExpired));
+      _scheduleLoadedFromCache = true;
     }
   }
 
@@ -411,23 +686,27 @@ class PresenceChallengeService {
   // CHECK (main loop)
   // ═══════════════════════════════════════════════════════════
   Future<void> _check(String employeeId) async {
-    // 🆕 1) Auto-clock-out check kung 3+ missed
+    // 1) Missed threshold check
     await _checkMissedThreshold(employeeId);
 
-    // 🆕 2) Auto-clock-out check kung outside for 15+ min
+    // 2) Out-of-range check
     await _checkOutOfRange(employeeId);
 
-    // Kung may trigger na auto-clockout, tapos na tayo
     if (_autoClockoutTriggeredToday) return;
 
-    if (_pending.isEmpty) return;
+    if (_pending.isEmpty) {
+      // Kung offline at walang cache, subukan i-load ulit
+      if (_isOnline) return;
+      await _load(employeeId);
+      if (_pending.isEmpty) return;
+    }
 
-    // Verify clock status first
+    // Verify clock status
     try {
-      final clockedIn =
-      await ClockStatusService.instance.isCurrentlyClockedIn(employeeId);
+      final clockedIn = await ClockStatusService.instance
+          .isCurrentlyClockedIn(employeeId);
       if (!clockedIn) {
-        _log('🚪 Not clocked-in — cancelling all pending challenges');
+        _log('🚪 Not clocked-in — cancelling all pending');
         await _cancelAll();
         return;
       }
@@ -448,14 +727,19 @@ class PresenceChallengeService {
     if (expired.isEmpty && due.isEmpty) return;
 
     for (final c in expired) {
-      _log('⏰ Challenge EXPIRED: ${c.id}');
+      _log('⏰ EXPIRED: ${c.id}');
 
-      // 🆕 Bago i-mark as missed, i-check kung nasa labas ba si user.
-      //    Kung nasa labas → i-cancel (fair) at notify admin.
+      // Kung offline, huwag i-mark missed — i-skip muna (fair)
+      if (!_isOnline) {
+        _log('📥 Offline — deferring missed marking for ${c.id}');
+        // Huwag i-remove sa _pending — susubukan ulit pag online
+        continue;
+      }
+
       final isOutside = await _isEmployeeCurrentlyOutside(employeeId);
 
       if (isOutside) {
-        _log('📍 [Challenge] User outside — cancelling (not marking missed)');
+        _log('📍 Outside — cancelling (not missed)');
         await _cancelOutside(c);
       } else {
         await _markMissed(c);
@@ -464,7 +748,7 @@ class PresenceChallengeService {
     }
 
     for (final c in due) {
-      _log('🎯 Challenge DUE: ${c.id} — verifying geofence...');
+      _log('🎯 DUE: ${c.id} — geofence check...');
 
       bool isInside = false;
       double? distance;
@@ -482,11 +766,8 @@ class PresenceChallengeService {
         radius = geo.radiusUsed;
         zoneName = geo.matchedLocationName;
         zoneStatus = geo.status?.toString();
-
-        _log('📍 [Challenge] Geofence: '
-            '${isInside ? "INSIDE ✅" : "OUTSIDE ❌"}');
       } catch (e) {
-        _log('⚠️ [Challenge] Geofence check failed: $e');
+        _log('⚠️ Geofence failed: $e — assume inside');
         isInside = true;
       }
 
@@ -506,7 +787,6 @@ class PresenceChallengeService {
     }
   }
 
-  /// Helper: is the employee currently outside the work zone?
   Future<bool> _isEmployeeCurrentlyOutside(String employeeId) async {
     try {
       final geo = await GeofenceService.instance
@@ -520,29 +800,35 @@ class PresenceChallengeService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 🆕 AUTO-CLOCK-OUT: 3+ MISSED CHALLENGES
+  // AUTO-CLOCK-OUT: 3+ MISSED (offline-safe)
   // ═══════════════════════════════════════════════════════════
   Future<void> _checkMissedThreshold(String employeeId) async {
     if (_autoClockoutTriggeredToday) return;
 
     try {
-      final date = _dateStr(DateTime.now());
-      final snap = await _col
-          .where('employeeId', isEqualTo: employeeId)
-          .where('date', isEqualTo: date)
-          .where('status', isEqualTo: 'missed')
-          .get();
+      int missedCount = _cachedMissedCount;
 
-      final missedCount = snap.docs.length;
+      if (_isOnline) {
+        final date = _dateStr(DateTime.now());
+        final snap = await _col
+            .where('employeeId', isEqualTo: employeeId)
+            .where('date', isEqualTo: date)
+            .where('status', isEqualTo: 'missed')
+            .get();
+        missedCount = snap.docs.length;
+        _cachedMissedCount = missedCount;
+        await _cacheMissedCount(employeeId, missedCount);
+      } else {
+        _log('📥 [MissedThreshold] Using cached count: $missedCount');
+      }
+
       if (missedCount < missedThresholdForAutoClockout) return;
 
-      // Double-check: naka-clock-in pa ba?
       final clockedIn = await ClockStatusService.instance
           .isCurrentlyClockedIn(employeeId);
       if (!clockedIn) return;
 
-      _log('🚨 [AutoClockOut] $missedCount missed challenges '
-          '— TRIGGERING auto-clock-out');
+      _log('🚨 [AutoClockOut] $missedCount missed — TRIGGERING');
 
       await _forceAutoClockOut(
         employeeId: employeeId,
@@ -554,46 +840,50 @@ class PresenceChallengeService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 🆕 AUTO-CLOCK-OUT: 15+ MINUTES OUTSIDE
+  // AUTO-CLOCK-OUT: 15+ MIN OUTSIDE (persisted)
   // ═══════════════════════════════════════════════════════════
   Future<void> _checkOutOfRange(String employeeId) async {
     if (_autoClockoutTriggeredToday) return;
 
     try {
-      // Naka-clock-in ba?
       final clockedIn = await ClockStatusService.instance
           .isCurrentlyClockedIn(employeeId);
       if (!clockedIn) {
-        _outOfRangeSince = null;
+        if (_outOfRangeSince != null) {
+          _outOfRangeSince = null;
+          await _persistOutOfRange(null);
+        }
         return;
       }
 
-      // Nasa labas ba?
       final isOutside = await _isEmployeeCurrentlyOutside(employeeId);
 
       if (isOutside) {
-        _outOfRangeSince ??= DateTime.now();
+        if (_outOfRangeSince == null) {
+          _outOfRangeSince = DateTime.now();
+          await _persistOutOfRange(_outOfRangeSince);
+          _log('⚠️ [OutOfRange] Started timer at $_outOfRangeSince');
+        }
 
         final duration = DateTime.now().difference(_outOfRangeSince!);
-        _log('⚠️ [AutoClockOut] Outside for ${duration.inMinutes}min '
+        _log('⚠️ [OutOfRange] ${duration.inMinutes}min '
             '(threshold: ${outOfRangeAutoClockoutThreshold.inMinutes}min)');
 
         if (duration >= outOfRangeAutoClockoutThreshold) {
-          _log('🚨 [AutoClockOut] Outside for ${duration.inMinutes}min '
-              '— TRIGGERING auto-clock-out');
-
+          _log('🚨 [OutOfRange] Triggering auto-clock-out');
           await _forceAutoClockOut(
             employeeId: employeeId,
-            reason:
-            'auto_clockout_outside_${duration.inMinutes}min',
+            reason: 'auto_clockout_outside_${duration.inMinutes}min',
           );
           _outOfRangeSince = null;
+          await _persistOutOfRange(null);
         }
       } else {
         if (_outOfRangeSince != null) {
-          _log('✅ [AutoClockOut] Back in range — out-of-range timer reset');
+          _log('✅ [OutOfRange] Back in range — timer reset');
         }
         _outOfRangeSince = null;
+        await _persistOutOfRange(null);
       }
     } catch (e) {
       _log('⚠️ _checkOutOfRange error: $e');
@@ -601,16 +891,13 @@ class PresenceChallengeService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 🆕 FORCE AUTO-CLOCK-OUT
+  // 🎯 FORCE AUTO-CLOCK-OUT (fixed: no duplicate write, offline-safe)
   // ═══════════════════════════════════════════════════════════
   Future<void> _forceAutoClockOut({
     required String employeeId,
     required String reason,
   }) async {
-    if (_autoClockoutTriggeredToday) {
-      _log('⏭️ [AutoClockOut] Already triggered today — skip');
-      return;
-    }
+    if (_autoClockoutTriggeredToday) return;
     _autoClockoutTriggeredAt = DateTime.now();
     _autoClockoutTriggeredToday = true;
 
@@ -621,102 +908,96 @@ class PresenceChallengeService {
         '${now.second.toString().padLeft(2, '0')}';
     final employeeName = _activeEmployeeName ?? employeeId;
 
-    _log('🚨 [AutoClockOut] EXECUTING for $employeeId — reason: $reason');
+    _log('🚨 [AutoClockOut] EXECUTING $employeeId — $reason');
 
-    // 1) Cancel all pending challenges
+    // 1) Cancel all pending (queued)
     try {
       await _cancelAll();
     } catch (e) {
-      _log('⚠️ [AutoClockOut] Cancel pending failed: $e');
+      _log('⚠️ Cancel failed: $e');
     }
 
-    // 2) Write attendance_log OUT (via OfflineAttendanceService para may sync)
+    // 2) 🎯 ATTENDANCE OUT — via offline queue (NO direct write!)
+    //    Deterministic ID para hindi doble kahit i-retry
+    final localId = '${employeeId}_AUTOOUT_${now.millisecondsSinceEpoch}';
     try {
-      await OfflineAttendanceService.instance.logAttendance(
-        employeeId: employeeId,
-        employeeName: employeeName,
-        employeeEmail: '',
-        type: 'OUT',
-        timestamp: now,
-        device: 'AutoEnforcement',
-        remarks: reason,
-        zoneType: 'inside',
-      );
-      _log('✅ [AutoClockOut] Local attendance OUT written');
-    } catch (e) {
-      _log('⚠️ [AutoClockOut] Local attendance failed: $e');
-    }
-
-    // 3) Write Firestore attendance_log directly (belt + suspenders)
-    try {
-      await _db.collection('attendance_logs').add({
-        'employee_id': employeeId,
-        'employee_name': employeeName,
-        'type': 'OUT',
-        'date': dateStr,
-        'time': timeStr,
-        'timestamp': FieldValue.serverTimestamp(),
-        'device': 'AutoEnforcement',
-        'remarks': reason,
-        'zone_type': 'inside',
-        'auto_clockout': true,
-        'auto_clockout_reason': reason,
-        'session_nonce': null,
-        'face_match_percent': 0,
-        'match_score': 0,
-      });
-      _log('✅ [AutoClockOut] Firestore attendance OUT written');
-    } catch (e) {
-      _log('❌ [AutoClockOut] Firestore write failed: $e');
-    }
-
-    // 4) CRITICAL admin notification
-    try {
-      await _adminNotifCol.add({
-        'type': 'challenge_auto_clockout',
-        'title': '🚨 AUTO-CLOCK-OUT — Possible Abandonment',
-        'message':
-        '$employeeName was automatically clocked out.\nReason: $reason',
-        'employeeId': employeeId,
-        'employeeName': employeeName,
-        'priority': 'critical',
-        'metadata': {
-          'reason': reason,
-          'missedThreshold': missedThresholdForAutoClockout,
-          'outOfRangeThresholdMin':
-          outOfRangeAutoClockoutThreshold.inMinutes,
-          'clockoutAt': now.toIso8601String(),
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'attendance_logs',
+        docId: localId,
+        data: {
+          'employee_id': employeeId,
+          'employee_name': employeeName,
+          'employee_email': '',
+          'type': 'OUT',
+          'date': dateStr,
+          'time': timeStr,
+          'timestamp': FieldValue.serverTimestamp(),
+          'device': 'AutoEnforcement',
+          'remarks': reason,
+          'zone_type': 'inside',
+          'auto_clockout': true,
+          'auto_clockout_reason': reason,
+          'face_match_percent': 0,
+          'match_score': 0,
+          'localId': localId,
         },
-        'timestamp': FieldValue.serverTimestamp(),
-        'read': false,
-      });
-      _log('📢 [AutoClockOut] Admin notified (CRITICAL)');
+      );
+      _log('✅ [AutoClockOut] Attendance OUT queued (id=$localId)');
     } catch (e) {
-      _log('⚠️ [AutoClockOut] Admin notif failed: $e');
+      _log('❌ [AutoClockOut] Queue failed: $e');
     }
 
-    // 5) Log security event
+    // 3) 🎯 Admin notification — via queue
     try {
-      await _db.collection('security_events').add({
-        'type': 'auto_clockout_triggered',
-        'severity': 'high',
-        'details': 'Auto-clock-out triggered for $employeeId: $reason',
-        'employeeId': employeeId,
-        'employeeName': employeeName,
-        'reason': reason,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'admin_notifications',
+        data: {
+          'type': 'challenge_auto_clockout',
+          'title': '🚨 AUTO-CLOCK-OUT — Possible Abandonment',
+          'message':
+          '$employeeName was automatically clocked out.\nReason: $reason',
+          'employeeId': employeeId,
+          'employeeName': employeeName,
+          'priority': 'critical',
+          'metadata': {
+            'reason': reason,
+            'missedThreshold': missedThresholdForAutoClockout,
+            'outOfRangeThresholdMin':
+            outOfRangeAutoClockoutThreshold.inMinutes,
+            'clockoutAt': now.toIso8601String(),
+          },
+          'timestamp': FieldValue.serverTimestamp(),
+          'read': false,
+        },
+      );
+      _log('📢 [AutoClockOut] Admin notification queued');
+    } catch (e) {
+      _log('⚠️ Admin notif failed: $e');
+    }
+
+    // 4) 🎯 Security event — via queue
+    try {
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'security_events',
+        data: {
+          'type': 'auto_clockout_triggered',
+          'severity': 'high',
+          'details': 'Auto-clock-out for $employeeId: $reason',
+          'employeeId': employeeId,
+          'employeeName': employeeName,
+          'reason': reason,
+          'timestamp': FieldValue.serverTimestamp(),
+        },
+      );
     } catch (_) {}
 
-    // 6) Stop the service — walang nang challenge pag clock-out na
-    _log('🛑 [AutoClockOut] Stopping service (auto-clockout complete)');
+    // 5) Stop
+    _log('🛑 [AutoClockOut] Stopping service');
     stop();
   }
 
-  // 🆕 Reference — kailangan i-declare sa field list
-  DateTime? _autoClockoutTriggeredAt;
-
   Future<void> _logChallengeFired(ChallengeDue due) async {
+    if (!_isOnline) return;
     try {
       await _col.doc(due.challenge.id).update({
         'firedAt': FieldValue.serverTimestamp(),
@@ -732,13 +1013,10 @@ class PresenceChallengeService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // MARK MISSED — with duplicate guard
+  // MARK MISSED (offline-safe)
   // ═══════════════════════════════════════════════════════════
   Future<void> _markMissed(PresenceChallenge c) async {
-    if (_notifiedMissed.contains(c.id)) {
-      _log('⏭️ [Mark Missed] Already notified: ${c.id} — skip');
-      return;
-    }
+    if (_notifiedMissed.contains(c.id)) return;
     _notifiedMissed.add(c.id);
 
     String? zone;
@@ -752,89 +1030,104 @@ class PresenceChallengeService {
       distance = geo.distanceMeters;
     } catch (_) {}
 
+    // 🎯 Queue instead of direct write
     try {
-      await _col.doc(c.id).update({
-        'status': 'missed',
-        'resolvedAt': FieldValue.serverTimestamp(),
-        'resolvedBy': 'auto_audit',
-        if (zone != null) 'zoneAtExpiry': zone,
-        if (distance != null) 'distanceAtExpiry': distance,
-      });
-      _log('💾 Marked MISSED: ${c.id} (zone=$zone)');
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'presence_challenges',
+        docId: c.id,
+        data: {
+          'status': 'missed',
+          'resolvedAt': FieldValue.serverTimestamp(),
+          'resolvedBy': 'auto_audit',
+          if (zone != null) 'zoneAtExpiry': zone,
+          if (distance != null) 'distanceAtExpiry': distance,
+        },
+      );
+      _log('💾 MISSED queued: ${c.id} (zone=$zone)');
     } catch (e) {
-      _log('⚠️ _markMissed update failed: $e');
+      _log('⚠️ _markMissed failed: $e');
+    }
+
+    // Update local cache
+    _cachedMissedCount++;
+    if (_activeEmployeeId != null) {
+      await _cacheMissedCount(_activeEmployeeId!, _cachedMissedCount);
     }
 
     unawaited(_notifyAdminMissed(c, zone: zone, distance: distance));
   }
 
-  // 🆕 Cancel (not missed) kapag user ay nasa labas
   Future<void> _cancelOutside(PresenceChallenge c) async {
-    if (_notifiedMissed.contains(c.id)) {
-      _log('⏭️ [Cancel Outside] Already processed: ${c.id} — skip');
-      return;
-    }
+    if (_notifiedMissed.contains(c.id)) return;
     _notifiedMissed.add(c.id);
 
     try {
-      await _col.doc(c.id).update({
-        'status': 'cancelled',
-        'resolvedAt': FieldValue.serverTimestamp(),
-        'resolvedBy': 'outside_zone_at_expiry',
-        'cancelReason': 'user_outside_at_expiry',
-      });
-      _log('📍 Marked CANCELLED (outside): ${c.id}');
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'presence_challenges',
+        docId: c.id,
+        data: {
+          'status': 'cancelled',
+          'resolvedAt': FieldValue.serverTimestamp(),
+          'resolvedBy': 'outside_zone_at_expiry',
+          'cancelReason': 'user_outside_at_expiry',
+        },
+      );
+      _log('📍 CANCELLED (outside) queued: ${c.id}');
     } catch (e) {
-      _log('⚠️ _cancelOutside update failed: $e');
+      _log('⚠️ _cancelOutside failed: $e');
     }
 
-    // Notify admin — mas mild kaysa missed
     try {
       final name = await _resolveEmployeeName(c.employeeId);
-      await _adminNotifCol.add({
-        'type': 'challenge_cancelled_outside',
-        'title': '📍 Presence Check — Cancelled (Outside Zone)',
-        'message':
-        '$name was outside the work zone when the random check expired. '
-            'Cancelled instead of marked missed.',
-        'employeeId': c.employeeId,
-        'employeeName': name,
-        'priority': 'normal',
-        'metadata': {
-          'challengeId': c.id,
-          'reason': 'user_outside_at_expiry',
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'admin_notifications',
+        data: {
+          'type': 'challenge_cancelled_outside',
+          'title': '📍 Presence Check — Cancelled (Outside Zone)',
+          'message':
+          '$name was outside when the random check expired. '
+              'Cancelled instead of missed.',
+          'employeeId': c.employeeId,
+          'employeeName': name,
+          'priority': 'normal',
+          'metadata': {
+            'challengeId': c.id,
+            'reason': 'user_outside_at_expiry',
+          },
+          'timestamp': FieldValue.serverTimestamp(),
+          'read': false,
         },
-        'timestamp': FieldValue.serverTimestamp(),
-        'read': false,
-      });
-      _log('📢 [Admin] Notified: challenge_cancelled_outside for ${c.id}');
+      );
     } catch (e) {
-      _log('⚠️ [Admin] notify cancelled_outside failed: $e');
+      _log('⚠️ notify cancelled failed: $e');
     }
   }
 
   Future<void> _cancelAll() async {
     if (_pending.isEmpty) return;
-    try {
-      final batch = _db.batch();
-      for (final c in _pending) {
-        batch.update(_col.doc(c.id), {
-          'status': 'cancelled',
-          'resolvedAt': FieldValue.serverTimestamp(),
-          'resolvedBy': 'clock_out_detected',
-        });
+
+    for (final c in _pending) {
+      try {
+        await OfflineAttendanceService.instance.enqueue(
+          collection: 'presence_challenges',
+          docId: c.id,
+          data: {
+            'status': 'cancelled',
+            'resolvedAt': FieldValue.serverTimestamp(),
+            'resolvedBy': 'clock_out_detected',
+          },
+        );
+      } catch (e) {
+        _log('⚠️ _cancelAll enqueue failed: $e');
       }
-      await batch.commit();
-      _log('💾 Cancelled ${_pending.length} pending challenge(s)');
-    } catch (e) {
-      _log('⚠️ _cancelAll failed: $e');
     }
+    _log('💾 Cancelled ${_pending.length} pending (queued)');
     _pending.clear();
     _prompted.clear();
   }
 
   // ═══════════════════════════════════════════════════════════
-  // RESOLVE
+  // RESOLVE (offline-safe)
   // ═══════════════════════════════════════════════════════════
   Future<void> submitPassed(
       PresenceChallenge c, {
@@ -843,22 +1136,25 @@ class PresenceChallengeService {
         double? distanceMeters,
         String? deviceBinding,
       }) async {
-    // Mark as processed para hindi na ma-mark missed
     _notifiedMissed.add(c.id);
 
     try {
-      await _col.doc(c.id).update({
-        'status': 'passed',
-        'method': 'face',
-        'faceScore': faceScore,
-        'zone': zone,
-        if (distanceMeters != null) 'distanceMeters': distanceMeters,
-        if (deviceBinding != null) 'deviceBinding': deviceBinding,
-        'respondedAt': FieldValue.serverTimestamp(),
-      });
-      _log('✅ Marked PASSED: ${c.id} (score=$faceScore, zone=$zone)');
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'presence_challenges',
+        docId: c.id,
+        data: {
+          'status': 'passed',
+          'method': 'face',
+          'faceScore': faceScore,
+          'zone': zone,
+          if (distanceMeters != null) 'distanceMeters': distanceMeters,
+          if (deviceBinding != null) 'deviceBinding': deviceBinding,
+          'respondedAt': FieldValue.serverTimestamp(),
+        },
+      );
+      _log('✅ PASSED queued: ${c.id} (score=$faceScore, zone=$zone)');
     } catch (e) {
-      _log('⚠️ submitPassed update failed: $e');
+      _log('⚠️ submitPassed failed: $e');
     }
     _pending.removeWhere((x) => x.id == c.id);
 
@@ -875,22 +1171,25 @@ class PresenceChallengeService {
         required double faceScore,
         required String reason,
       }) async {
-    // Mark as processed para hindi na ma-mark missed
     _notifiedMissed.add(c.id);
 
     try {
-      await _col.doc(c.id).update({
-        'status': 'failed',
-        'attempts': FieldValue.increment(1),
-        'lastFaceScore': faceScore,
-        'lastFailReason': reason,
-        'lastAttemptAt': FieldValue.serverTimestamp(),
-        'resolvedAt': FieldValue.serverTimestamp(),
-        'resolvedBy': 'user_action',
-      });
-      _log('❌ Recorded FAILED: ${c.id} (reason=$reason)');
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'presence_challenges',
+        docId: c.id,
+        data: {
+          'status': 'failed',
+          'attempts': FieldValue.increment(1),
+          'lastFaceScore': faceScore,
+          'lastFailReason': reason,
+          'lastAttemptAt': FieldValue.serverTimestamp(),
+          'resolvedAt': FieldValue.serverTimestamp(),
+          'resolvedBy': 'user_action',
+        },
+      );
+      _log('❌ FAILED queued: ${c.id} ($reason)');
     } catch (e) {
-      _log('⚠️ recordFailedAttempt update failed: $e');
+      _log('⚠️ recordFailedAttempt failed: $e');
     }
 
     _pending.removeWhere((x) => x.id == c.id);
@@ -903,7 +1202,7 @@ class PresenceChallengeService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // ADMIN NOTIFICATION HELPERS
+  // ADMIN NOTIFICATIONS (offline-safe)
   // ═══════════════════════════════════════════════════════════
   Future<String> _resolveEmployeeName(String employeeId) async {
     if (_activeEmployeeName != null &&
@@ -911,6 +1210,8 @@ class PresenceChallengeService {
         _activeEmployeeId == employeeId) {
       return _activeEmployeeName!;
     }
+
+    if (!_isOnline) return employeeId;
 
     try {
       final doc = await _col
@@ -934,28 +1235,28 @@ class PresenceChallengeService {
       }) async {
     try {
       final name = await _resolveEmployeeName(c.employeeId);
-
-      await _adminNotifCol.add({
-        'type': 'challenge_passed',
-        'title': '✅ Presence Check Passed',
-        'message': '$name passed the random presence check '
-            '(${faceScore.toStringAsFixed(1)}% face match, zone: $zone)',
-        'employeeId': c.employeeId,
-        'employeeName': name,
-        'priority': 'normal',
-        'metadata': {
-          'challengeId': c.id,
-          'faceScore': faceScore,
-          'zone': zone,
-          if (distanceMeters != null) 'distanceMeters': distanceMeters,
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'admin_notifications',
+        data: {
+          'type': 'challenge_passed',
+          'title': '✅ Presence Check Passed',
+          'message': '$name passed the random presence check '
+              '(${faceScore.toStringAsFixed(1)}% face match, zone: $zone)',
+          'employeeId': c.employeeId,
+          'employeeName': name,
+          'priority': 'normal',
+          'metadata': {
+            'challengeId': c.id,
+            'faceScore': faceScore,
+            'zone': zone,
+            if (distanceMeters != null) 'distanceMeters': distanceMeters,
+          },
+          'timestamp': FieldValue.serverTimestamp(),
+          'read': false,
         },
-        'timestamp': FieldValue.serverTimestamp(),
-        'read': false,
-      });
-
-      _log('📢 [Admin] Notified: challenge_passed for ${c.id}');
+      );
     } catch (e) {
-      _log('⚠️ [Admin] notify passed failed: $e');
+      _log('⚠️ notify passed failed: $e');
     }
   }
 
@@ -966,26 +1267,26 @@ class PresenceChallengeService {
       }) async {
     try {
       final name = await _resolveEmployeeName(c.employeeId);
-
-      await _adminNotifCol.add({
-        'type': 'challenge_failed',
-        'title': '❌ Presence Check Failed',
-        'message': '$name FAILED the random presence check. Reason: $reason',
-        'employeeId': c.employeeId,
-        'employeeName': name,
-        'priority': 'high',
-        'metadata': {
-          'challengeId': c.id,
-          'faceScore': faceScore,
-          'reason': reason,
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'admin_notifications',
+        data: {
+          'type': 'challenge_failed',
+          'title': '❌ Presence Check Failed',
+          'message': '$name FAILED the random presence check. Reason: $reason',
+          'employeeId': c.employeeId,
+          'employeeName': name,
+          'priority': 'high',
+          'metadata': {
+            'challengeId': c.id,
+            'faceScore': faceScore,
+            'reason': reason,
+          },
+          'timestamp': FieldValue.serverTimestamp(),
+          'read': false,
         },
-        'timestamp': FieldValue.serverTimestamp(),
-        'read': false,
-      });
-
-      _log('📢 [Admin] Notified: challenge_failed for ${c.id}');
+      );
     } catch (e) {
-      _log('⚠️ [Admin] notify failed failed: $e');
+      _log('⚠️ notify failed failed: $e');
     }
   }
 
@@ -996,29 +1297,29 @@ class PresenceChallengeService {
       }) async {
     try {
       final name = await _resolveEmployeeName(c.employeeId);
-
-      await _adminNotifCol.add({
-        'type': 'challenge_missed',
-        'title': '⚠️ Presence Check Missed',
-        'message': '$name did NOT respond to the random presence check '
-            'within ${responseWindow.inMinutes} minutes. '
-            'Possible device abandonment.',
-        'employeeId': c.employeeId,
-        'employeeName': name,
-        'priority': 'high',
-        'metadata': {
-          'challengeId': c.id,
-          'windowMinutes': responseWindow.inMinutes,
-          if (zone != null) 'zoneAtExpiry': zone,
-          if (distance != null) 'distanceAtExpiry': distance,
+      await OfflineAttendanceService.instance.enqueue(
+        collection: 'admin_notifications',
+        data: {
+          'type': 'challenge_missed',
+          'title': '⚠️ Presence Check Missed',
+          'message': '$name did NOT respond to the random presence check '
+              'within ${responseWindow.inMinutes} minutes. '
+              'Possible device abandonment.',
+          'employeeId': c.employeeId,
+          'employeeName': name,
+          'priority': 'high',
+          'metadata': {
+            'challengeId': c.id,
+            'windowMinutes': responseWindow.inMinutes,
+            if (zone != null) 'zoneAtExpiry': zone,
+            if (distance != null) 'distanceAtExpiry': distance,
+          },
+          'timestamp': FieldValue.serverTimestamp(),
+          'read': false,
         },
-        'timestamp': FieldValue.serverTimestamp(),
-        'read': false,
-      });
-
-      _log('📢 [Admin] Notified: challenge_missed for ${c.id}');
+      );
     } catch (e) {
-      _log('⚠️ [Admin] notify missed failed: $e');
+      _log('⚠️ notify missed failed: $e');
     }
   }
 
@@ -1040,14 +1341,18 @@ class PresenceChallengeService {
     'onMissedSummaryHooked': onMissedSummary != null,
     'outOfRangeSince': _outOfRangeSince?.toIso8601String(),
     'autoClockoutTriggeredToday': _autoClockoutTriggeredToday,
+    'autoClockoutTriggeredAt': _autoClockoutTriggeredAt?.toIso8601String(),
     'missedThreshold': missedThresholdForAutoClockout,
     'outOfRangeThresholdMin':
     outOfRangeAutoClockoutThreshold.inMinutes,
+    'cachedMissedCount': _cachedMissedCount,
+    'isOnline': _isOnline,
+    'scheduleLoadedFromCache': _scheduleLoadedFromCache,
   };
 
   void printDebugInfo() {
     debugPrint('═══════════════════════════════════════════');
-    debugPrint('🎯 [PresenceChallengeService] DEBUG INFO');
+    debugPrint('🎯 [PresenceChallengeService] DEBUG');
     debugPrint('═══════════════════════════════════════════');
     debugInfo().forEach((k, v) => debugPrint('   $k: $v'));
     debugPrint('═══════════════════════════════════════════');
