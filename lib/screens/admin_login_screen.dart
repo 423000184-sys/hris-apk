@@ -1,7 +1,5 @@
 // lib/screens/admin_login_screen.dart
-// v3.6: 🎭 Demo Mode support — any credentials work when demo is enabled
-//       🔒 Demo Mode requires internet connection
-//       🔘 Added "Enter Demo Mode" button for quick testing
+// v3.9: 🎭 Fixed navigation by capturing Navigator before async gap
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -101,7 +99,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
 
   bool _showSuccess = false;
 
-  /// 🌐 Live connectivity state (works even in demo)
   bool _isOnline = true;
   StreamSubscription<bool>? _connectivitySub;
 
@@ -141,7 +138,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   static const Color _red = Color(0xFFEF4444);
   static const Color _green = Color(0xFF16A34A);
 
-  // 🎭 DEMO
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
   @override
@@ -149,14 +145,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    // 🌐 Sync initial connectivity
     try {
       _isOnline = ConnectivityService.instance.isOnline;
     } catch (_) {
       _isOnline = true;
     }
 
-    // 🌐 Listen for connectivity changes (works even in demo)
     try {
       _connectivitySub =
           ConnectivityService.instance.onStatusChange.listen((online) {
@@ -171,9 +165,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     _clearSessionAndInitialize();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🎭 DEMO MODE
-  // ═══════════════════════════════════════════════════════════════
   bool _isOnlineSafely() {
     try {
       return ConnectivityService.instance.isOnline;
@@ -195,8 +186,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  custom ??
-                      'Internet connection is required to continue.',
+                  custom ?? 'Internet connection is required to continue.',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
@@ -213,15 +203,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       );
   }
 
-  /// 🎭 Enter demo mode — enables DemoModeService and immediately goes to dashboard.
   Future<void> _enterDemoMode() async {
     if (_loading) return;
 
-    // 🔌 Internet required even for demo
     if (!_isOnlineSafely()) {
       _log('🎭 [DemoMode] BLOCKED — no internet');
-      _showOfflineSnack(
-          'Internet connection is required for Demo Mode.');
+      _showOfflineSnack('Internet connection is required for Demo Mode.');
       return;
     }
 
@@ -239,14 +226,13 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       _infoMessage = null;
     });
 
-    try {
-      // ✅ Enable demo mode globally
-      await DemoModeService.instance.startDemoSession();
+    // 🚨 CAPTURE NAVIGATOR EARLY
+    final nav = Navigator.of(context, rootNavigator: true);
 
-      // Mock a minimal session nonce for the demo run
+    try {
+      await DemoModeService.instance.startDemoSession();
       _sessionNonce = _generateSessionNonce();
 
-      // Best-effort audit log (silently ignored if it fails)
       _fireAndForget(() async {
         await FirebaseFirestore.instance
             .collection('admin_login_logs')
@@ -262,20 +248,17 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
         }).timeout(const Duration(seconds: 3));
       }, tag: 'demoAuditLog');
 
-      // Clear sensitive input just in case
       _passCtrl.clear();
 
       if (!mounted) return;
 
-      // Show success overlay
       setState(() => _showSuccess = true);
       _successCtrl.forward(from: 0);
 
       await Future.delayed(const Duration(milliseconds: 900));
-      if (!mounted) return;
 
-      // 🚀 Navigate to dashboard
-      Navigator.of(context).pushAndRemoveUntil(
+      // 🚨 NAVIGATE USING CAPTURED NAVIGATOR (No mounted check here)
+      nav.pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const AdminDashboard()),
             (_) => false,
       );
@@ -291,9 +274,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SESSION CLEANUP
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _clearSessionAndInitialize() async {
     if (widget.forceLogout) {
       _log('🔒 Force Logout...');
@@ -376,11 +356,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     _waitForAuthRestore();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // AUTH RESTORE
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _waitForAuthRestore() async {
-    // 🎭 In demo mode, skip restore — go straight to form
     if (_isDemo) {
       _log('🎭 [DemoMode] Skipping auth restore');
       if (mounted) {
@@ -445,7 +421,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
         await Future.delayed(const Duration(milliseconds: 300));
         if (!mounted) return;
 
-        Navigator.of(context).pushAndRemoveUntil(
+        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => const AdminDashboard()),
               (_) => false,
         );
@@ -467,9 +443,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // TIMERS
-  // ═══════════════════════════════════════════════════════════════
   void _startTicker() {
     _tickerTimer?.cancel();
     _tickerTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
@@ -497,9 +470,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     } catch (_) {}
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // CAPS LOCK
-  // ═══════════════════════════════════════════════════════════════
   bool _onKeyEvent(KeyEvent event) {
     if (event is KeyDownEvent || event is KeyUpEvent) {
       _checkCapsLock();
@@ -518,9 +488,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     } catch (_) {}
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SECURITY BOOTSTRAP
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _bootstrapSecurity() async {
     try {
       await SecurityHardeningService.instance.enableSecureScreen();
@@ -573,9 +540,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // LIFECYCLE
-  // ═══════════════════════════════════════════════════════════════
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
@@ -584,9 +548,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // HELPERS
-  // ═══════════════════════════════════════════════════════════════
   static String _maskEmail(String email) {
     if (email.isEmpty) return '';
     final parts = email.split('@');
@@ -654,9 +615,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
         .any((d) => domain == d.toLowerCase() || domain.endsWith('.$d'));
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // CLOUD RATE LIMIT
-  // ═══════════════════════════════════════════════════════════════
   Future<Map<String, dynamic>> _checkCloudRateLimit(String email) async {
     try {
       final hash = _hashEmail(email);
@@ -750,9 +708,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // PASSWORD HANDLING
-  // ═══════════════════════════════════════════════════════════════
   void _onPasswordChanged() {
     _autoClearTimer?.cancel();
     if (_passCtrl.text.isEmpty) return;
@@ -824,9 +779,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SAVED STATE
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _loadSavedState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -908,9 +860,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     return const Color(0xFF059669);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // LOCKOUT
-  // ═══════════════════════════════════════════════════════════════
   void _startLockoutCountdown() {
     _lockoutTimer?.cancel();
     _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -1001,11 +950,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     }, tag: 'auditLog');
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // ADMIN VERIFICATION
-  // ═══════════════════════════════════════════════════════════════
   Future<bool> _checkEmailVerified() async {
-    // 🎭 Demo mode — always verified
     if (_isDemo) {
       _log('🎭 [DemoMode] Auto-verified');
       return true;
@@ -1052,29 +997,20 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // LOGIN — MAIN HANDLER
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _handleLogin() async {
     FocusScope.of(context).unfocus();
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — accept ANY credentials (requires internet)
-    // ═══════════════════════════════════════════════════════════
     if (_isDemo) {
       _log('🎭 [DemoMode] _handleLogin — DEMO PATH');
 
-      // 🔌 Internet required even in demo
       if (!_isOnlineSafely()) {
-        _showOfflineSnack(
-            'Internet connection is required for Demo Mode.');
+        _showOfflineSnack('Internet connection is required for Demo Mode.');
         return;
       }
 
       final email = _emailCtrl.text.trim().toLowerCase();
       final password = _passCtrl.text;
 
-      // Basic validation — still need "something" typed
       if (email.isEmpty || password.isEmpty) {
         setState(() {
           _errorMessage =
@@ -1090,6 +1026,9 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
         _infoMessage = null;
       });
 
+      // 🚨 CAPTURE NAVIGATOR EARLY
+      final nav = Navigator.of(context, rootNavigator: true);
+
       await Future.delayed(const Duration(milliseconds: 700));
       if (!mounted) return;
 
@@ -1100,7 +1039,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
         await Clipboard.setData(const ClipboardData(text: ''));
       } catch (_) {}
 
-      // Best-effort audit log (ignored on failure)
       _fireAndForget(() async {
         await FirebaseFirestore.instance
             .collection('admin_login_logs')
@@ -1131,21 +1069,15 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       }
 
       await Future.delayed(const Duration(milliseconds: 900));
-      if (!mounted) return;
 
-      if (widget.onLoginSuccess != null) {
-        widget.onLoginSuccess!();
-        return;
-      }
-
-      Navigator.of(context).pushAndRemoveUntil(
+      // 🚨 NAVIGATE USING CAPTURED NAVIGATOR
+      nav.pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const AdminDashboard()),
             (_) => false,
       );
       return;
     }
 
-    // ─── Local gates ─────────────────────────────────────────
     if (_isLockedOut) {
       setState(() => _errorMessage =
       'Account locked. Try again in ${_remainingLockoutText()}.');
@@ -1317,6 +1249,9 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
 
     if (!mounted) return;
 
+    // 🚨 CAPTURE NAVIGATOR EARLY
+    final nav = Navigator.of(context, rootNavigator: true);
+
     setState(() => _showSuccess = true);
     _successCtrl.forward(from: 0);
     if (!kIsWeb) {
@@ -1325,22 +1260,13 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       } catch (_) {}
     }
     await Future.delayed(const Duration(milliseconds: 900));
-    if (!mounted) return;
 
-    if (widget.onLoginSuccess != null) {
-      widget.onLoginSuccess!();
-      return;
-    }
-
-    Navigator.of(context).pushAndRemoveUntil(
+    nav.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const AdminDashboard()),
           (_) => false,
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // ERROR MESSAGES
-  // ═══════════════════════════════════════════════════════════════
   String _humanizeAuthError(String code) {
     switch (code) {
       case 'user-not-found':
@@ -1387,9 +1313,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     return 'other';
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // BUILD
-  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     if (_sessionClearing || !_authReady || _redirecting) {
@@ -1464,7 +1387,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     );
   }
 
-  // 🌐 Offline banner
   Widget _buildOfflineBanner() {
     return Positioned(
       top: 0,
@@ -1536,9 +1458,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                   ),
                   const SizedBox(height: 20),
                   Text(
-                    isDemoSuccess
-                        ? 'Demo Mode Active'
-                        : 'Login Successful',
+                    isDemoSuccess ? 'Demo Mode Active' : 'Login Successful',
                     style: const TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w800,
@@ -1547,10 +1467,9 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                   const SizedBox(height: 6),
                   Text(
                     isDemoSuccess
-                        ? 'Entering admin dashboard (demo)...'
+                        ? 'Entering admin overview (demo)...'
                         : 'Redirecting to dashboard...',
-                    style: const TextStyle(
-                        fontSize: 13, color: _textMuted),
+                    style: const TextStyle(fontSize: 13, color: _textMuted),
                   ),
                 ],
               ),
@@ -1994,9 +1913,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
             ),
             const SizedBox(height: 12),
 
-            // ═══════════════════════════════════════════════════════════
-            // 🎭 DEMO MODE BUTTON
-            // ═══════════════════════════════════════════════════════════
             if (!_isDemo) ...[
               SizedBox(
                 height: 46,
@@ -2490,7 +2406,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                           decoration: BoxDecoration(
                               color: Colors.white.withValues(alpha: 0.06),
                               borderRadius: BorderRadius.circular(4)),
-                          child: Text('v3.5.0',
+                          child: Text('v3.9.0',
                               style: TextStyle(
                                   fontSize: 9,
                                   fontWeight: FontWeight.w700,

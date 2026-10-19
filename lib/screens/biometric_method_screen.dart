@@ -1,9 +1,12 @@
 // lib/screens/biometric_method_screen.dart
 // ═══════════════════════════════════════════════════════════════════
-// BIOMETRIC METHOD SCREEN  v1.4
+// BIOMETRIC METHOD SCREEN  v1.6
 //   - 🎭 Demo mode: navigates to the ACTUAL biometric screen (no auto clock-in)
 //   - 🔒 Requires internet connection even in Demo Mode
 //   - 🌐 All UI text in English
+//   - 🐛 FIX: Back button goes to the RECENT screen (LoginScreen),
+//          HINDI diretso sa Dashboard.
+//          (Dati kasi: fallback → LandingScreen → auto-redirect → Dashboard)
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:math' as math;
@@ -778,15 +781,12 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
 
   // ═══════════════════════════════════════════════════════════════
   // 🎭 SELECT — FINGERPRINT
-  //    • Demo: navigates to FingerprintScreen (NOT auto clock-in)
-  //    • Requires internet connection even in demo
   // ═══════════════════════════════════════════════════════════════
   Future<void> _selectFingerprint() async {
     _recordUserActivity();
     if (_isNavigating || !_preAuthValid || _loggedOut) return;
     if (!_fingerprintAvailable) return;
 
-    // 🔌 Internet check — required even in demo
     if (!_isOnlineSafely()) {
       _secureLog('🔌 Fingerprint selection BLOCKED — no internet');
       _showOfflineSnack(
@@ -803,14 +803,12 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
 
     try {
-      // 🔌 Re-check internet right before navigation
       if (!_isOnlineSafely()) {
         _showOfflineSnack(
             'Internet connection lost. Please reconnect and try again.');
         return;
       }
 
-      // ✅ Demo bypasses geofence/session revalidate
       final ok = await _revalidateBeforeNavigation();
       if (!ok || !mounted) return;
 
@@ -822,7 +820,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
 
       if (!mounted) return;
 
-      // 🚀 Navigate to FingerprintScreen (same for demo & normal)
       _secureLog('➡️ Navigating to FingerprintScreen '
           '(demo=$_isDemo, standalone=true)');
 
@@ -861,15 +858,12 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
 
   // ═══════════════════════════════════════════════════════════════
   // 🎭 SELECT — FACIAL
-  //    • Demo: navigates to FacialRecognitionScreen (NOT auto clock-in)
-  //    • Requires internet connection even in demo
   // ═══════════════════════════════════════════════════════════════
   Future<void> _selectFacial() async {
     _recordUserActivity();
     if (_isNavigating || !_preAuthValid || _loggedOut) return;
     if (!_facialAvailable) return;
 
-    // 🔌 Internet check — required even in demo
     if (!_isOnlineSafely()) {
       _secureLog('🔌 Facial selection BLOCKED — no internet');
       _showOfflineSnack(
@@ -886,14 +880,12 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
 
     try {
-      // 🔌 Re-check internet right before navigation
       if (!_isOnlineSafely()) {
         _showOfflineSnack(
             'Internet connection lost. Please reconnect and try again.');
         return;
       }
 
-      // ✅ Demo bypasses geofence/session revalidate
       final ok = await _revalidateBeforeNavigation();
       if (!ok || !mounted) return;
 
@@ -906,7 +898,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
 
       if (!mounted) return;
 
-      // 🚀 Navigate to FacialRecognitionScreen (same for demo & normal)
       _secureLog('➡️ Navigating to FacialRecognitionScreen '
           '(demo=$_isDemo)');
 
@@ -976,12 +967,63 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     } catch (_) {}
   }
 
-  void _goBack() {
+  // ═══════════════════════════════════════════════════════════════
+  // 🐛 FIXED _goBack — v1.6
+  //
+  //  ANO ANG MALI DATI:
+  //    - Fallback → LandingScreen
+  //    - LandingScreen ay may session auto-redirect logic
+  //    - Kapag may active session (halimbawa galing sa demo login),
+  //      ang LandingScreen ay mag-a-auto-redirect sa MainScreen (Dashboard)
+  //    - Kaya't ang back button ay "parang" dumiretso sa Dashboard
+  //
+  //  ANG FIX:
+  //    - Sa halip na LandingScreen, diretso sa LoginScreen ang fallback
+  //    - Ang LoginScreen ay HINDI nag-a-auto-redirect (walang session
+  //      auto-restore logic doon) kaya safe
+  //    - Kung may active session pa, i-clear muna bago mag-navigate,
+  //      para kung sakaling may auto-restore sa ibang screen, hindi
+  //      mag-o-auto-login
+  // ═══════════════════════════════════════════════════════════════
+  Future<void> _goBack() async {
     _recordUserActivity();
-    if (_isNavigating) return;
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
+
+    // 🐛 Kung naka-stuck ang _isNavigating (halimbawa napindot ang back
+    //    habang nag-o-open pa lang ang FingerprintScreen), i-force reset.
+    if (_isNavigating) {
+      _secureLog('⚠️ _goBack called while _isNavigating — forcing reset');
+      _isNavigating = false;
+      _lastMethodTapAt = null;
     }
+
+    final nav = Navigator.of(context);
+
+    // ✅ Kung may previous route — normal pop lang (bumalik sa recent screen)
+    if (nav.canPop()) {
+      _secureLog('⬅️ Popping previous route (recent screen)');
+      nav.pop();
+      return;
+    }
+
+    // 🐛 WALANG previous route (na-remove ng pushAndRemoveUntil sa LoginScreen).
+    //    Fallback: pumunta sa LoginScreen (NOT LandingScreen!).
+    //    Iwasan ang LandingScreen dahil may session auto-redirect siya.
+    _secureLog('⬅️ No previous route — fallback to LoginScreen '
+        '(demo=$_isDemo)');
+
+    // I-clear ang pre-auth keys para hindi mag-auto-restore ang session
+    // sa susunod na pagpasok ng LoginScreen.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kPreAuthEmpKey);
+      await prefs.remove(_kPreAuthTimeKey);
+      await prefs.remove(_kPreAuthNonceKey);
+    } catch (_) {}
+
+    if (!mounted) return;
+    nav.pushReplacement(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
   }
 
   @override
@@ -1119,9 +1161,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔌 OFFLINE BANNER
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildOfflineBanner() {
     return Container(
       width: double.infinity,
@@ -1393,7 +1432,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
   }
 
   Widget _buildMethodButtons(_ThemeColors tc) {
-    // Methods disabled when offline OR navigating
     final fpEnabled = _fingerprintAvailable && !_isNavigating && _isOnline;
     final faceEnabled = _facialAvailable && !_isNavigating && _isOnline;
 

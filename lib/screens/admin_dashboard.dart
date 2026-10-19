@@ -1,4 +1,5 @@
 // lib/screens/admin_dashboard.dart
+// v1.1: 🎭 Added Demo Mode bypass in Auth Guard
 import 'dart:async';
 import 'dart:math' show sin, cos, asin, sqrt, pi;
 import 'package:flutter/material.dart';
@@ -20,11 +21,12 @@ import 'admin_assign_client_meeting_page.dart';
 import 'admin_add_client_location_page.dart';
 import 'admin_login_screen.dart';
 import 'admin_presence_monitor_screen.dart';
-import 'admin_password_change_requests_page.dart'; // 🔑 NEW
+import 'admin_password_change_requests_page.dart';
 
 import '../widgets/admin_notification_bell.dart';
 import '../services/employee_notification_service.dart';
 import '../services/admin_auth_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Idinagdag para sa Demo Mode
 
 import '../services/presence_monitor_service.dart';
 import '../services/presence_backup_service.dart';
@@ -120,7 +122,7 @@ class AdminDashboardState extends State<AdminDashboard>
       case 7:
         return 'Search not available here';
       case 15:
-        return 'Search password change requests...'; // 🔑 NEW
+        return 'Search password change requests...';
       default:
         return 'Search...';
     }
@@ -298,11 +300,15 @@ class AdminDashboardState extends State<AdminDashboard>
     await AdminAuthService.instance.signOut();
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✅ Signed out.'),
-        backgroundColor: Color(0xFF16A34A),
-      ),
+    // 🎭 Kung Demo Mode, i-off ito bago mag-sign out
+    if (DemoModeService.instance.isEnabled) {
+      await DemoModeService.instance.endDemoSession();
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AdminLoginScreen(forceLogout: true)),
+          (_) => false,
     );
   }
 
@@ -871,6 +877,22 @@ class AdminDashboardState extends State<AdminDashboard>
 
   @override
   Widget build(BuildContext context) {
+    // 🎭 1. DEMO MODE BYPASS
+    // Kung naka-Demo mode, wag na tignan ang Firebase Auth.
+    // Deretso na agad sa Dashboard Shell!
+    if (DemoModeService.instance.isEnabled) {
+      return AnimatedBuilder(
+        animation: ThemeProvider.instance,
+        builder: (context, _) {
+          return Theme(
+            data: ThemeProvider.instance.theme,
+            child: _buildShell(context),
+          );
+        },
+      );
+    }
+
+    // 2. NORMAL AUTH CHECK (Kung hindi Demo Mode)
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
@@ -1758,7 +1780,6 @@ class AdminDashboardState extends State<AdminDashboard>
           onTabNavigate: (idx) => _handleNavTap(idx),
         );
 
-    // 🔑 NEW — Password Change Requests Page
       case 15:
         return const PasswordChangeRequestsPage();
 

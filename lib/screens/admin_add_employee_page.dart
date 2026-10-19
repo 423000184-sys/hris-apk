@@ -1,4 +1,5 @@
 // lib/screens/admin_add_employee_page.dart
+// v2.1: 🎭 Demo Mode Mock Data & Action Blocking
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -16,6 +17,7 @@ import '../services/face_matcher.dart';
 import '../services/admin_employee_service.dart';
 import '../utils/file_download.dart';
 import '../widgets/bootstrap_grid.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 
 // ══════════════════════════════════════════════════════════════
 // SALARY MATRIX
@@ -72,6 +74,15 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
 
   AdminColors get tc => AdminTheme.getColors(context);
 
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
   String get _actorEmail =>
       FirebaseAuth.instance.currentUser?.email?.toLowerCase().trim() ??
           'unknown';
@@ -87,6 +98,56 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
+  }
+
+  // 🎭 Demo Block Helper
+  void _demoBlock() {
+    _snack('Action disabled in Demo Mode.', error: true);
+  }
+
+  // 🎭 MOCK DATA for Demo Mode
+  List<Map<String, dynamic>> _getMockEmployees() {
+    return [
+      {
+        'id': 'demo_emp_1',
+        'employeeId': 'DEMO-001',
+        'firstName': 'John',
+        'lastName': 'Doe',
+        'name': 'John Doe',
+        'role': 'Manager',
+        'department': 'Operation',
+        'gender': 'male',
+        'status': 'Active',
+        'faceEmbeddingsCount': 3,
+        'joiningDate': DateTime.now().subtract(const Duration(days: 30)),
+      },
+      {
+        'id': 'demo_emp_2',
+        'employeeId': 'DEMO-002',
+        'firstName': 'Jane',
+        'lastName': 'Smith',
+        'name': 'Jane Smith',
+        'role': 'Accountant',
+        'department': 'Accounting',
+        'gender': 'female',
+        'status': 'Inactive',
+        'faceEmbeddingsCount': 0,
+        'joiningDate': DateTime.now().subtract(const Duration(days: 15)),
+      },
+      {
+        'id': 'demo_emp_3',
+        'employeeId': 'DEMO-003',
+        'firstName': 'Mike',
+        'lastName': 'Johnson',
+        'name': 'Mike Johnson',
+        'role': 'Driver',
+        'department': 'HR/Admin',
+        'gender': 'male',
+        'status': 'Active',
+        'faceEmbeddingsCount': 2,
+        'joiningDate': DateTime.now().subtract(const Duration(days: 5)),
+      },
+    ];
   }
 
   String _getInitials(String firstName, String lastName) {
@@ -142,6 +203,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   // CSV EXPORT WITH PII MASKING
   // ══════════════════════════════════════════════════════════════
   Future<void> _exportEmployeesToCsv() async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
     if (_exporting) return;
 
     final confirmed = await showDialog<bool>(
@@ -498,6 +560,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // 🎭 DEMO BANNER
+                          if (_isDemo) ...[
+                            _buildDemoBanner(),
+                            const SizedBox(height: 24),
+                          ],
                           _buildPageHeader(),
                           const SizedBox(height: 24),
                           _buildFilterCard(),
@@ -513,8 +580,9 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                   bottom: 24,
                   right: 24,
                   child: FloatingActionButton(
-                    onPressed: () =>
-                        _snack('Print report — coming soon.', error: true),
+                    onPressed: _isDemo
+                        ? () => _snack('Print report disabled in Demo Mode.', error: true)
+                        : () => _snack('Print report — coming soon.', error: true),
                     backgroundColor: tc.orange,
                     foregroundColor: tc.onOrange,
                     elevation: 4,
@@ -526,6 +594,50 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
           ),
         );
       },
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🎭 DEMO BANNER
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample data. Adding, exporting, and terminating employees is disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -558,18 +670,21 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       );
 
       final exportBtn = OutlinedButton.icon(
-        onPressed: _exporting ? null : _exportEmployeesToCsv,
+        onPressed: (_isDemo || _exporting) ? null : _exportEmployeesToCsv,
         icon: _exporting
             ? SizedBox(
             width: 14,
             height: 14,
             child: CircularProgressIndicator(
                 strokeWidth: 2, color: tc.text))
-            : Icon(Icons.download_rounded, size: 16, color: tc.text),
+            : Icon(Icons.download_rounded, size: 16,
+            color: _isDemo ? tc.muted : tc.text),
         label: Text(
           _exporting ? 'Exporting...' : 'Export CSV',
           style: TextStyle(
-              color: tc.text, fontWeight: FontWeight.w700, fontSize: 14),
+              color: _isDemo ? tc.muted : tc.text,
+              fontWeight: FontWeight.w700,
+              fontSize: 14),
         ),
         style: OutlinedButton.styleFrom(
           backgroundColor: tc.card,
@@ -581,15 +696,16 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       );
 
       final manualBtn = ElevatedButton.icon(
-        onPressed: _openAddDialog,
-        icon: Icon(Icons.add_rounded, size: 16, color: tc.onOrange),
+        onPressed: _isDemo ? null : _openAddDialog,
+        icon: Icon(Icons.add_rounded, size: 16,
+            color: _isDemo ? tc.muted : tc.onOrange),
         label: Text('Manual Entry',
             style: TextStyle(
-                color: tc.onOrange,
+                color: _isDemo ? tc.muted : tc.onOrange,
                 fontWeight: FontWeight.w700,
                 fontSize: 14)),
         style: ElevatedButton.styleFrom(
-          backgroundColor: tc.orange,
+          backgroundColor: _isDemo ? tc.border : tc.orange,
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           elevation: 0,
@@ -726,6 +842,11 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       final r = BsResponsive(c.maxWidth);
       final isMobile = !r.up(BsSize.md);
 
+      // 🎭 USE MOCK DATA IF IN DEMO MODE
+      final stream = _isDemo
+          ? Stream.value(_getMockEmployees())
+          : AdminDatabase.streamEmployees();
+
       return Container(
         decoration: BoxDecoration(
           color: tc.card,
@@ -736,7 +857,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
           children: [
             if (!isMobile) _buildTableHeader(),
             StreamBuilder<List<Map<String, dynamic>>>(
-              stream: AdminDatabase.streamEmployees(),
+              stream: stream,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return Padding(
@@ -1144,6 +1265,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       tooltip: 'Actions',
       onSelected: (value) async {
         if (docId.isEmpty) return;
+        if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
 
         switch (value) {
           case 'edit':
@@ -1158,19 +1280,25 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         PopupMenuItem<String>(
           value: 'edit',
           child: Row(children: [
-            Icon(Icons.edit_outlined, size: 16, color: tc.orange),
+            Icon(Icons.edit_outlined, size: 16,
+                color: _isDemo ? tc.muted : tc.orange),
             const SizedBox(width: 10),
             Text('Edit in Directory',
-                style: TextStyle(color: tc.text, fontSize: 13)),
+                style: TextStyle(
+                    color: _isDemo ? tc.muted : tc.text,
+                    fontSize: 13)),
           ]),
         ),
         PopupMenuItem<String>(
           value: 'terminate',
           child: Row(children: [
-            Icon(Icons.person_remove_rounded, size: 16, color: tc.red),
+            Icon(Icons.person_remove_rounded, size: 16,
+                color: _isDemo ? tc.muted : tc.red),
             const SizedBox(width: 10),
             Text('Terminate',
-                style: TextStyle(color: tc.red, fontSize: 13)),
+                style: TextStyle(
+                    color: _isDemo ? tc.muted : tc.red,
+                    fontSize: 13)),
           ]),
         ),
       ],
@@ -1178,6 +1306,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   }
 
   Future<void> _confirmTerminate(String docId, String name) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final reasonCtrl = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
@@ -1273,6 +1403,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   // SECURE ADD DIALOG
   // ══════════════════════════════════════════════════════════════
   void _openAddDialog() {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     _profileImageBytes = null;
     _saving = false;
     _selectedRole = 'Employee';
@@ -1558,6 +1690,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       TextEditingController bankNameCtrl,
       TextEditingController accountNumberCtrl,
       ) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
     if (_saving) return;
 
     if (!(_fKey.currentState?.validate() ?? false)) return;
@@ -1687,6 +1820,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
 
   Future<void> _processFaceWithFeedback(
       String email, Uint8List imageBytes) async {
+    if (_isDemo) return; // 🎭 Block in Demo
+
     try {
       final query = await FirebaseFirestore.instance
           .collection('employees')
@@ -1751,6 +1886,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         children: [
           InkWell(
             onTap: () async {
+              if (_isDemo) return _demoBlock();
               final result = await FilePicker.platform.pickFiles(
                   type: FileType.image, allowMultiple: false);
               if (result != null && result.files.single.bytes != null) {

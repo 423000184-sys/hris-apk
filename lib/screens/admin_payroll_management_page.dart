@@ -1,11 +1,5 @@
 // lib/screens/admin_payroll_management_page.dart
-// ═══════════════════════════════════════════════════════════════════
-// SECURED ADMIN PAYROLL MANAGEMENT PAGE  v2.2
-// Hardened: admin guard, audit trail, rate limit, filename
-//           sanitization, URL validation, error sanitization,
-//           kDebugMode-gated logs, double-submit guards.
-//           v2.2: Aligned sa bagong PayrollBreakdown schema.
-// ═══════════════════════════════════════════════════════════════════
+// v2.3: 🎭 Demo Mode Support (Mock Breakdown & Action Blocking)
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
@@ -23,6 +17,7 @@ import '../services/payroll_calculator.dart';
 import '../services/employee_notification_service.dart';
 import '../services/attendance_hours_service.dart';
 import '../services/admin_auth_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 
 class AdminPayrollManagementPage extends StatefulWidget {
   final Map<String, dynamic> employeeData;
@@ -43,6 +38,15 @@ class _AdminPayrollManagementPageState
     extends State<AdminPayrollManagementPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
   PayrollBreakdown _b = PayrollBreakdown.empty;
   EmployeeHoursSummary _hours = EmployeeHoursSummary.empty;
   bool _loading = true;
@@ -55,6 +59,11 @@ class _AdminPayrollManagementPageState
   DateTime? _lastNotifyAt;
 
   static const Duration _notifyCooldown = Duration(minutes: 5);
+
+  // 🎭 DEMO BLOCK HELPER
+  void _demoBlock() {
+    _toast('Action disabled in Demo Mode.', error: true);
+  }
 
   // ══════════════════════════════════════════════════════════════
   // 🔒 SECURITY HELPERS
@@ -116,6 +125,7 @@ class _AdminPayrollManagementPageState
   }
 
   Future<bool> _ensureAdmin() async {
+    if (_isDemo) return true;
     return FirebaseAuth.instance.currentUser != null;
   }
 
@@ -125,6 +135,7 @@ class _AdminPayrollManagementPageState
     required String targetType,
     Map<String, dynamic>? metadata,
   }) async {
+    if (_isDemo) return;
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid == null) return;
@@ -220,13 +231,63 @@ class _AdminPayrollManagementPageState
     return (_hours.totalOvertimeMinutes / 60.0) * hourlyRate;
   }
 
-  // ✅ FIX: `allowances` → `otherIncomeAllowance`
   double get _autoGrossPay {
     return _b.basicSalary + _b.otherIncomeAllowance + _autoOvertimePay;
   }
 
   double get _autoNetPay {
     return _autoGrossPay - _b.totalDeductions;
+  }
+
+  // 🎭 MOCK PAYROLL BREAKDOWN
+  PayrollBreakdown _getMockBreakdown() {
+    return PayrollBreakdown(
+      regularPay: 50000.0,
+      basicSalary: 45000.0,
+      basicHours: 176.0,
+      absentAmount: 2045.45,
+      absentHours: 8.0,
+      lateAmount: 0.0,
+      lateHours: 0.0,
+      undertimeAmount: 0.0,
+      undertimeHours: 0.0,
+      dayOffOtAmount: 0.0,
+      dayOffOtHours: 0.0,
+      overtimeAmount: 2500.0,
+      overtimeHours: 8.0,
+      nightDiffAmount: 0.0,
+      nightDiffHours: 0.0,
+      holidayAmount: 0.0,
+      otherIncomeAllowance: 5000.0,
+      totalAdjustmentsMade: 0.0,
+      grossPay: 52500.0,
+      thirteenthMonth: 3750.0,
+      silCredits: 10227.27,
+      totalBenefits: 13977.27,
+      workingDays: 22,
+      workingDaysPerMonth: 22,
+      presentDays: 21,
+      absentDays: 1,
+      dailyRate: 2045.45,
+      workRawMinutes: 10368,
+      workLunchMinutes: 1056,
+      workNetMinutes: 9312,
+      workOvertimeMinutes: 480,
+      daysWithLogs: 21,
+      daysWithLunchApplied: 21,
+      salarySource: 'manual',
+      sss: 2025.0,
+      philhealth: 1125.0,
+      pagibig: 900.0,
+      taxableIncome: 48450.0,
+      taxWithheld: 0.0,
+      totalLoanDeductions: 0.0,
+      totalDeductions: 6095.45,
+      netPay: 46404.55,
+      sickLeaveBalance: 120.0,
+      vacationLeaveBalance: 120.0,
+      riceAllowance: 0.0,
+    );
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -239,6 +300,27 @@ class _AdminPayrollManagementPageState
   }
 
   Future<void> _verifyAndLoad() async {
+    if (_isDemo) {
+      // 🎭 Mock data for demo
+      setState(() {
+        _isAdminVerified = true;
+        _b = _getMockBreakdown();
+        // ✅ FIXED: totalRawMinutes provided (net 9312 + lunch 1056 = 10368)
+        //           and dailyBreakdown provided so the constructor is complete.
+        _hours = const EmployeeHoursSummary(
+          totalRawMinutes: 10368,
+          totalLunchDeductedMinutes: 1056,
+          totalNetMinutes: 9312,
+          totalOvertimeMinutes: 480,
+          daysWithLogs: 21,
+          daysWithLunchApplied: 21,
+          dailyBreakdown: <DailyHours>[],
+        );
+        _loading = false;
+      });
+      return;
+    }
+
     final ok = await _ensureAdmin();
     if (!mounted) return;
     if (!ok) {
@@ -252,6 +334,7 @@ class _AdminPayrollManagementPageState
   }
 
   Future<void> _load() async {
+    if (_isDemo) return;
     if (!_isAdminVerified) return;
     setState(() => _loading = true);
 
@@ -280,6 +363,7 @@ class _AdminPayrollManagementPageState
   }
 
   Future<EmployeeHoursSummary> _loadHoursSummary() async {
+    if (_isDemo) return EmployeeHoursSummary.empty;
     try {
       final map = await AttendanceHoursService.instance.fetchHoursMap(
         periodStart: _periodStart,
@@ -429,7 +513,6 @@ class _AdminPayrollManagementPageState
           ]),
           pw.SizedBox(height: 14),
 
-          // ✅ FIX: `allowances` → `otherIncomeAllowance`
           _pdfSection('EARNINGS', [
             _pdfRow('Basic Salary', PayrollCalculator.peso(_b.basicSalary)),
             _pdfRow('Allowances',
@@ -442,7 +525,6 @@ class _AdminPayrollManagementPageState
           ]),
           pw.SizedBox(height: 14),
 
-          // ✅ FIX: `absenceDeduction` → `absentAmount`
           _pdfSection('DEDUCTIONS', [
             if (_b.absentDays > 0)
               _pdfRow('Absences (${_b.absentDays} day/s)',
@@ -535,6 +617,7 @@ class _AdminPayrollManagementPageState
   // 🖨️ PRINT
   // ══════════════════════════════════════════════════════════════
   Future<void> _handlePrint() async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
     if (_printing) return;
 
     final ok = await _ensureAdmin();
@@ -588,6 +671,7 @@ class _AdminPayrollManagementPageState
   // 💾 DOWNLOAD
   // ══════════════════════════════════════════════════════════════
   Future<void> _handleDownload() async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
     if (_downloading) return;
 
     final ok = await _ensureAdmin();
@@ -645,6 +729,8 @@ class _AdminPayrollManagementPageState
   }
 
   Future<void> _notifyEmployeePayroll() async {
+    if (_isDemo) return;
+
     final now = DateTime.now();
     if (_lastNotifyAt != null &&
         now.difference(_lastNotifyAt!) < _notifyCooldown) {
@@ -688,7 +774,7 @@ class _AdminPayrollManagementPageState
   // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    if (!_isAdminVerified && !_loading) {
+    if (!_isAdminVerified && !_loading && !_isDemo) {
       return PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, _) {
@@ -749,6 +835,11 @@ class _AdminPayrollManagementPageState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // 🎭 DEMO BANNER
+                if (_isDemo) ...[
+                  _buildDemoBanner(),
+                  const SizedBox(height: 16),
+                ],
                 _buildBackButton(),
                 const SizedBox(height: 12),
                 _buildProfileCard(),
@@ -761,6 +852,48 @@ class _AdminPayrollManagementPageState
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  // 🎭 DEMO BANNER
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample payslip. Print, download, and notifications are disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -892,7 +1025,7 @@ class _AdminPayrollManagementPageState
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: _printing ? null : _handlePrint,
+                onPressed: (_printing || _isDemo) ? null : _handlePrint,
                 icon: _printing
                     ? SizedBox(
                   width: 14,
@@ -900,10 +1033,12 @@ class _AdminPayrollManagementPageState
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: tc.text),
                 )
-                    : const Icon(Icons.print_rounded, size: 16),
+                    : Icon(Icons.print_rounded, size: 16,
+                    color: _isDemo ? tc.muted : tc.text),
                 label: Text(_printing ? 'Printing...' : 'Print',
                     style: TextStyle(
-                        color: tc.text, fontWeight: FontWeight.w600)),
+                        color: _isDemo ? tc.muted : tc.text,
+                        fontWeight: FontWeight.w600)),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(color: tc.border),
                   shape: RoundedRectangleBorder(
@@ -913,7 +1048,7 @@ class _AdminPayrollManagementPageState
                 ),
               ),
               ElevatedButton.icon(
-                onPressed: _downloading ? null : _handleDownload,
+                onPressed: (_downloading || _isDemo) ? null : _handleDownload,
                 icon: _downloading
                     ? const SizedBox(
                   width: 14,
@@ -921,13 +1056,15 @@ class _AdminPayrollManagementPageState
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: Colors.white),
                 )
-                    : const Icon(Icons.download_rounded, size: 16),
+                    : Icon(Icons.download_rounded, size: 16,
+                    color: _isDemo ? tc.muted : Colors.white),
                 label: Text(
                     _downloading ? 'Downloading...' : 'Download Payslip',
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w600)),
+                    style: TextStyle(
+                        color: _isDemo ? tc.muted : Colors.white,
+                        fontWeight: FontWeight.w600)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: tc.orange,
+                  backgroundColor: _isDemo ? tc.border : tc.orange,
                   disabledBackgroundColor:
                   tc.orange.withValues(alpha: 0.5),
                   elevation: 0,
@@ -1090,7 +1227,6 @@ class _AdminPayrollManagementPageState
   Widget _earningsCard() {
     final hasOT = _autoOvertimePay > 0;
 
-    // ✅ FIX: `allowances` → `otherIncomeAllowance`
     return _panel(
       title: 'Earnings Breakdown',
       badge: PayrollCalculator.peso(_autoGrossPay),
@@ -1173,7 +1309,6 @@ class _AdminPayrollManagementPageState
   Widget _absencesCard() {
     final hasHours = _hours.totalNetMinutes > 0;
 
-    // ✅ FIX: `absenceDeduction` → `absentAmount`
     return _panel(
       title: 'Attendance & Hours',
       badge: _b.absentDays > 0
@@ -1271,7 +1406,6 @@ class _AdminPayrollManagementPageState
   }
 
   Widget _govtCard() {
-    // ✅ FIX: `withholdingTax` → `taxWithheld`
     final total =
         _b.sss + _b.philhealth + _b.pagibig + _b.taxWithheld;
     return _panel(

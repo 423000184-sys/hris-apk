@@ -1,24 +1,20 @@
 // lib/screens/admin_presence_monitor_screen.dart
+// v1.1: 🎭 Demo Mode Support (Mock Rows & Stream Bypass)
 import 'dart:async';
-import 'dart:convert';                        // ✅ ADDED — para sa base64Decode
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
-import 'package:flutter/gestures.dart';       // ✅ ADDED — para sa PointerDeviceKind
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_theme.dart';
 import '../widgets/bootstrap_grid.dart';
-
-// ═══════════════════════════════════════════════════════════════
-// 🎯 LIVE PRESENCE MONITOR — Admin screen
-//    Shows: 🟢 present / 🟡 idle / 🔴 offline for all employees
-// ═══════════════════════════════════════════════════════════════
+import '../services/demo_mode_service.dart'; // 🎭 Added
 
 void _secureLog(String m) {
   debugPrint('[PresenceMonitor] $m');
 }
 
-// ─── Status enum ─────────────────────────────────────────────
 enum PresenceStatus { present, idle, offline, unknown }
 
 extension PresenceStatusX on PresenceStatus {
@@ -38,13 +34,13 @@ extension PresenceStatusX on PresenceStatus {
   Color get color {
     switch (this) {
       case PresenceStatus.present:
-        return const Color(0xFF22C55E); // green
+        return const Color(0xFF22C55E);
       case PresenceStatus.idle:
-        return const Color(0xFFF59E0B); // amber
+        return const Color(0xFFF59E0B);
       case PresenceStatus.offline:
-        return const Color(0xFFEF4444); // red
+        return const Color(0xFFEF4444);
       case PresenceStatus.unknown:
-        return const Color(0xFF9CA3AF); // gray
+        return const Color(0xFF9CA3AF);
     }
   }
 
@@ -62,9 +58,8 @@ extension PresenceStatusX on PresenceStatus {
   }
 }
 
-// ─── Merged row data ─────────────────────────────────────────
 class PresenceRow {
-  final String employeeId; // employeeId or docId
+  final String employeeId;
   final String docId;
   final String name;
   final String role;
@@ -72,9 +67,8 @@ class PresenceRow {
   final String photoUrl;
   final bool wfhAccess;
   final bool isDriver;
-
   final DateTime? lastUpdated;
-  final String zone; // inside | outside | unknown
+  final String zone;
   final bool inRange;
   final double? distanceMeters;
   final double? accuracyMeters;
@@ -101,18 +95,11 @@ class PresenceRow {
     required this.checkCount,
   });
 
-  /// Compute status based on how fresh `lastUpdated` is.
   PresenceStatus get status {
     if (lastUpdated == null) return PresenceStatus.unknown;
     final diff = DateTime.now().difference(lastUpdated!);
-
-    // 🔴 Offline = > 15 mins walang ping
     if (diff.inMinutes >= 15) return PresenceStatus.offline;
-
-    // 🟡 Idle = 5–15 mins (stale heartbeat)
     if (diff.inMinutes >= 5) return PresenceStatus.idle;
-
-    // 🟢 Present = < 5 mins
     return PresenceStatus.present;
   }
 
@@ -141,9 +128,6 @@ class PresenceRow {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// MAIN WIDGET
-// ═══════════════════════════════════════════════════════════════
 class AdminPresenceMonitorScreen extends StatefulWidget {
   const AdminPresenceMonitorScreen({super.key});
 
@@ -156,32 +140,120 @@ class _AdminPresenceMonitorScreenState
     extends State<AdminPresenceMonitorScreen> {
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // ─── Data ───
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
   List<PresenceRow> _rows = [];
   bool _loading = true;
   String? _error;
 
-  // ─── Streams ───
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _presenceSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _employeesSub;
 
   Map<String, Map<String, dynamic>> _employeesById = {};
   Map<String, Map<String, dynamic>> _presenceById = {};
 
-  // ─── Filters ───
   final _searchCtrl = TextEditingController();
   String _search = '';
   String _statusFilter = 'All';
   String _sort = 'Status';
 
-  // ─── Auto-refresh relative time ───
   Timer? _tickTimer;
+
+  // 🎭 MOCK ROWS
+  List<PresenceRow> _getMockRows() {
+    final now = DateTime.now();
+    return [
+      PresenceRow(
+        employeeId: 'DEMO-001',
+        docId: 'demo_emp_1',
+        name: 'John Doe',
+        role: 'Manager',
+        department: 'Operation',
+        photoUrl: '',
+        wfhAccess: false,
+        isDriver: false,
+        lastUpdated: now.subtract(const Duration(seconds: 30)),
+        zone: 'inside',
+        inRange: true,
+        distanceMeters: 45.0,
+        accuracyMeters: 8.0,
+        isOnline: true,
+        outsideSince: null,
+        checkCount: 12,
+      ),
+      PresenceRow(
+        employeeId: 'DEMO-002',
+        docId: 'demo_emp_2',
+        name: 'Jane Smith',
+        role: 'Accountant',
+        department: 'Accounting',
+        photoUrl: '',
+        wfhAccess: true,
+        isDriver: false,
+        lastUpdated: now.subtract(const Duration(minutes: 8)),
+        zone: 'outside',
+        inRange: false,
+        distanceMeters: 12400.0,
+        accuracyMeters: 25.0,
+        isOnline: true,
+        outsideSince: now.subtract(const Duration(minutes: 8)),
+        checkCount: 5,
+      ),
+      PresenceRow(
+        employeeId: 'DEMO-003',
+        docId: 'demo_emp_3',
+        name: 'Mike Johnson',
+        role: 'Driver',
+        department: 'HR/Admin',
+        photoUrl: '',
+        wfhAccess: false,
+        isDriver: true,
+        lastUpdated: now.subtract(const Duration(minutes: 2)),
+        zone: 'outside',
+        inRange: false,
+        distanceMeters: 890.0,
+        accuracyMeters: 15.0,
+        isOnline: true,
+        outsideSince: now.subtract(const Duration(minutes: 15)),
+        checkCount: 22,
+      ),
+      PresenceRow(
+        employeeId: 'DEMO-004',
+        docId: 'demo_emp_4',
+        name: 'Sarah Lee',
+        role: 'Broker',
+        department: 'Operation',
+        photoUrl: '',
+        wfhAccess: false,
+        isDriver: false,
+        lastUpdated: now.subtract(const Duration(minutes: 45)),
+        zone: 'unknown',
+        inRange: false,
+        distanceMeters: null,
+        accuracyMeters: null,
+        isOnline: false,
+        outsideSince: null,
+        checkCount: 0,
+      ),
+    ];
+  }
 
   @override
   void initState() {
     super.initState();
-    _startStreams();
-    // Re-compute "last seen" text every 30s
+    if (_isDemo) {
+      _rows = _getMockRows();
+      _loading = false;
+    } else {
+      _startStreams();
+    }
     _tickTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted) setState(() {});
     });
@@ -197,10 +269,18 @@ class _AdminPresenceMonitorScreenState
   }
 
   void _startStreams() {
+    if (_isDemo) {
+      setState(() {
+        _rows = _getMockRows();
+        _loading = false;
+        _error = null;
+      });
+      return;
+    }
+
     _loading = true;
     _error = null;
 
-    // 1️⃣ Stream employees (may name, role, dept, photo)
     try {
       _employeesSub?.cancel();
       _employeesSub = FirebaseFirestore.instance
@@ -213,8 +293,6 @@ class _AdminPresenceMonitorScreenState
             final data = d.data();
             final empId = (data['employeeId'] ?? '').toString();
             final entry = <String, dynamic>{...data, 'id': d.id};
-
-            // Index by both docId AND employeeId for lookup flexibility
             map[d.id] = entry;
             if (empId.isNotEmpty) map[empId] = entry;
           }
@@ -235,7 +313,6 @@ class _AdminPresenceMonitorScreenState
       debugPrint('❌ employees stream setup: $e');
     }
 
-    // 2️⃣ Stream presence
     try {
       _presenceSub?.cancel();
       _presenceSub = FirebaseFirestore.instance
@@ -265,23 +342,19 @@ class _AdminPresenceMonitorScreenState
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // Merge employees + presence into rows
-  // ═══════════════════════════════════════════════════════════════
   void _rebuildRows() {
+    if (_isDemo) return;
     if (!mounted) return;
 
     final list = <PresenceRow>[];
     final seenDocIds = <String>{};
 
-    // Iterate unique employees (by docId) from _employeesById
     for (final entry in _employeesById.values) {
       final docId = (entry['id'] ?? '').toString();
       if (docId.isEmpty) continue;
       if (seenDocIds.contains(docId)) continue;
       seenDocIds.add(docId);
 
-      // Skip terminated
       if (entry['terminated'] == true) continue;
 
       final empId = (entry['employeeId'] ?? '').toString();
@@ -353,16 +426,10 @@ class _AdminPresenceMonitorScreenState
       _rows = list;
       _loading = false;
     });
-
-    _secureLog('📊 Rebuilt rows: ${list.length}');
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // Filter + sort
-  // ═══════════════════════════════════════════════════════════════
   List<PresenceRow> get _filtered {
     var out = _rows.where((r) {
-      // Status filter
       if (_statusFilter == 'Present' &&
           r.status != PresenceStatus.present) {
         return false;
@@ -375,7 +442,6 @@ class _AdminPresenceMonitorScreenState
         return false;
       }
 
-      // Search
       final q = _search.trim().toLowerCase();
       if (q.isEmpty) return true;
       return r.name.toLowerCase().contains(q) ||
@@ -386,7 +452,6 @@ class _AdminPresenceMonitorScreenState
 
     out.sort((a, b) {
       if (_sort == 'Status') {
-        // Offline → Idle → Present → Unknown
         final order = {
           PresenceStatus.offline: 0,
           PresenceStatus.idle: 1,
@@ -410,7 +475,6 @@ class _AdminPresenceMonitorScreenState
     return out;
   }
 
-  // Stats
   int get _countPresent =>
       _rows.where((r) => r.status == PresenceStatus.present).length;
   int get _countIdle =>
@@ -420,9 +484,6 @@ class _AdminPresenceMonitorScreenState
   int get _countUnknown =>
       _rows.where((r) => r.status == PresenceStatus.unknown).length;
 
-  // ═══════════════════════════════════════════════════════════════
-  // BUILD
-  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -435,6 +496,12 @@ class _AdminPresenceMonitorScreenState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (_isDemo) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+                    child: _buildDemoBanner(),
+                  ),
+                ],
                 _buildHeader(),
                 _buildStatsBar(),
                 _buildFilterBar(),
@@ -448,7 +515,48 @@ class _AdminPresenceMonitorScreenState
     );
   }
 
-  // ─── Header ───────────────────────────────────────────────────
+  // 🎭 DEMO BANNER
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample presence data. Real-time updates are disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
@@ -492,9 +600,10 @@ class _AdminPresenceMonitorScreenState
             ),
           ),
           IconButton(
-            onPressed: _startStreams,
-            tooltip: 'Refresh',
-            icon: Icon(Icons.refresh_rounded, color: tc.text),
+            onPressed: _isDemo ? null : _startStreams,
+            tooltip: _isDemo ? 'Refresh disabled in Demo' : 'Refresh',
+            icon: Icon(Icons.refresh_rounded,
+                color: _isDemo ? tc.muted : tc.text),
           ),
         ],
       ),
@@ -528,7 +637,6 @@ class _AdminPresenceMonitorScreenState
     );
   }
 
-  // ─── Stats bar ────────────────────────────────────────────────
   Widget _buildStatsBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
@@ -651,7 +759,6 @@ class _AdminPresenceMonitorScreenState
     );
   }
 
-  // ─── Filter bar ───────────────────────────────────────────────
   Widget _buildFilterBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 4),
@@ -774,7 +881,6 @@ class _AdminPresenceMonitorScreenState
     );
   }
 
-  // ─── Body ─────────────────────────────────────────────────────
   Widget _buildBody() {
     if (_loading) {
       return const Center(
@@ -802,10 +908,10 @@ class _AdminPresenceMonitorScreenState
               ),
               const SizedBox(height: 16),
               ElevatedButton.icon(
-                onPressed: _startStreams,
+                onPressed: _isDemo ? null : _startStreams,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: tc.orange,
-                  foregroundColor: Colors.white,
+                  backgroundColor: _isDemo ? tc.border : tc.orange,
+                  foregroundColor: _isDemo ? tc.muted : Colors.white,
                 ),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
                 label: const Text('Retry'),
@@ -851,6 +957,13 @@ class _AdminPresenceMonitorScreenState
       ),
       child: RefreshIndicator(
         onRefresh: () async {
+          if (_isDemo) {
+            setState(() {
+              _rows = _getMockRows();
+            });
+            await Future.delayed(const Duration(milliseconds: 400));
+            return;
+          }
           _startStreams();
           await Future.delayed(const Duration(milliseconds: 600));
         },
@@ -865,7 +978,6 @@ class _AdminPresenceMonitorScreenState
     );
   }
 
-  // ─── Employee presence card ───────────────────────────────────
   Widget _presenceCard(PresenceRow r) {
     final status = r.status;
     final statusColor = status.color;
@@ -886,7 +998,6 @@ class _AdminPresenceMonitorScreenState
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Avatar + status dot
             Stack(
               children: [
                 Container(
@@ -916,13 +1027,10 @@ class _AdminPresenceMonitorScreenState
               ],
             ),
             const SizedBox(width: 14),
-
-            // Info
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Row 1: Name + status pill
                   Row(
                     children: [
                       Expanded(
@@ -956,8 +1064,6 @@ class _AdminPresenceMonitorScreenState
                     ],
                   ),
                   const SizedBox(height: 3),
-
-                  // Row 2: role + dept
                   Text(
                     '${r.role.isEmpty ? "—" : r.role} • ${r.department.isEmpty ? "—" : r.department}',
                     style: TextStyle(
@@ -968,8 +1074,6 @@ class _AdminPresenceMonitorScreenState
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 8),
-
-                  // Row 3: meta chips
                   Wrap(
                     spacing: 6,
                     runSpacing: 6,
@@ -1007,8 +1111,6 @@ class _AdminPresenceMonitorScreenState
                 ],
               ),
             ),
-
-            // Trailing
             Padding(
               padding: const EdgeInsets.only(left: 8),
               child: Icon(
@@ -1142,7 +1244,6 @@ class _AdminPresenceMonitorScreenState
     return '${diff.inDays}d';
   }
 
-  // ─── Details dialog ───────────────────────────────────────────
   void _showDetailsDialog(PresenceRow r) {
     showDialog(
       context: context,
@@ -1266,9 +1367,6 @@ class _AdminPresenceMonitorScreenState
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Pulsing dot — LIVE indicator
-// ═══════════════════════════════════════════════════════════════
 class _PulsingDot extends StatefulWidget {
   final Color color;
   const _PulsingDot({required this.color});

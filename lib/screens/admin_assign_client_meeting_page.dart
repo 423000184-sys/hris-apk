@@ -1,4 +1,5 @@
 // lib/screens/admin_assign_client_meeting_page.dart
+// v1.1: 🎭 Demo Mode Support (Mock Data & Action Blocking)
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../models/client_meeting_assignment.dart';
 import '../services/client_meeting_assignment_service.dart';
 import '../services/employee_notification_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 import 'admin_theme.dart';
 import 'admin_add_client_location_page.dart';
 
@@ -35,6 +37,20 @@ class AdminAssignClientMeetingPage extends StatefulWidget {
 class _AdminAssignClientMeetingPageState
     extends State<AdminAssignClientMeetingPage> {
   AdminColors get tc => AdminTheme.getColors(context);
+
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 🎭 Demo Block Helper
+  void _demoBlock() {
+    _showSnack('Action disabled in Demo Mode.', isError: true);
+  }
 
   List<ClientMeetingAssignment> _assignments = [];
   bool _loading = true;
@@ -72,12 +88,122 @@ class _AdminAssignClientMeetingPageState
     super.dispose();
   }
 
+  // 🎭 MOCK CLIENTS
+  List<Map<String, dynamic>> _getMockClients() {
+    return [
+      {
+        'id': 'demo_client_1',
+        'name': 'Acme Corporation',
+        'address': '123 Ayala Ave, Makati City',
+        'lat': 14.5547,
+        'lng': 121.0244,
+        'radiusMeters': 100,
+        'isActive': true,
+      },
+      {
+        'id': 'demo_client_2',
+        'name': 'Global Tech Solutions',
+        'address': '456 BGC, Taguig City',
+        'lat': 14.5500,
+        'lng': 121.0500,
+        'radiusMeters': 150,
+        'isActive': true,
+      },
+      {
+        'id': 'demo_client_3',
+        'name': 'Sunrise Ventures',
+        'address': '789 Ortigas Center, Pasig',
+        'lat': 14.5800,
+        'lng': 121.0600,
+        'radiusMeters': 120,
+        'isActive': true,
+      },
+    ];
+  }
+
+  // 🎭 MOCK ASSIGNMENTS
+  List<ClientMeetingAssignment> _getMockAssignments() {
+    final now = DateTime.now();
+    return [
+      ClientMeetingAssignment(
+        id: 'demo_assign_1',
+        employeeId: 'DEMO-001',
+        employeeName: 'John Doe',
+        employeeEmail: 'john@demo.local',
+        clientId: 'demo_client_1',
+        clientName: 'Acme Corporation',
+        clientAddress: '123 Ayala Ave, Makati City',
+        clientLat: 14.5547,
+        clientLng: 121.0244,
+        clientRadius: 100,
+        purpose: 'Quarterly business review',
+        notes: 'Bring updated contract documents',
+        scheduledStart: now.add(const Duration(hours: 2)),
+        scheduledEnd: now.add(const Duration(hours: 4)),
+        assignedBy: 'demo_admin',
+        assignedByName: 'Demo Admin',
+        status: AssignmentStatus.active,
+        createdAt: now.subtract(const Duration(hours: 1)),
+      ),
+      ClientMeetingAssignment(
+        id: 'demo_assign_2',
+        employeeId: 'DEMO-002',
+        employeeName: 'Jane Smith',
+        employeeEmail: 'jane@demo.local',
+        clientId: 'demo_client_2',
+        clientName: 'Global Tech Solutions',
+        clientAddress: '456 BGC, Taguig City',
+        clientLat: 14.5500,
+        clientLng: 121.0500,
+        clientRadius: 150,
+        purpose: 'Initial product demo',
+        notes: null,
+        scheduledStart: now.add(const Duration(days: 1, hours: 3)),
+        scheduledEnd: now.add(const Duration(days: 1, hours: 5)),
+        assignedBy: 'demo_admin',
+        assignedByName: 'Demo Admin',
+        status: AssignmentStatus.active,
+        createdAt: now.subtract(const Duration(hours: 5)),
+      ),
+      ClientMeetingAssignment(
+        id: 'demo_assign_3',
+        employeeId: 'DEMO-003',
+        employeeName: 'Mike Johnson',
+        employeeEmail: 'mike@demo.local',
+        clientId: 'demo_client_3',
+        clientName: 'Sunrise Ventures',
+        clientAddress: '789 Ortigas Center, Pasig',
+        clientLat: 14.5800,
+        clientLng: 121.0600,
+        clientRadius: 120,
+        purpose: 'Partnership discussion',
+        notes: 'Client will provide lunch',
+        scheduledStart: now.subtract(const Duration(days: 2, hours: 3)),
+        scheduledEnd: now.subtract(const Duration(days: 2, hours: 1)),
+        assignedBy: 'demo_admin',
+        assignedByName: 'Demo Admin',
+        status: AssignmentStatus.used,
+        createdAt: now.subtract(const Duration(days: 3)),
+      ),
+    ];
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // DATA LOADING
   // ═══════════════════════════════════════════════════════════════
 
   Future<void> _loadClients() async {
     if (!mounted) return;
+
+    // 🎭 Demo Mode — use mock clients
+    if (_isDemo) {
+      setState(() {
+        _clients = _getMockClients();
+        _loadingClients = false;
+      });
+      return;
+    }
+
     setState(() => _loadingClients = true);
 
     try {
@@ -112,6 +238,21 @@ class _AdminAssignClientMeetingPageState
 
   Future<void> _loadAssignments() async {
     if (!mounted) return;
+
+    // 🎭 Demo Mode — use mock assignments
+    if (_isDemo) {
+      var list = _getMockAssignments();
+      if (_filterStatus != null) {
+        list = list.where((a) => a.status == _filterStatus).toList();
+      }
+      setState(() {
+        _assignments = list;
+        _loading = false;
+        _listError = null;
+      });
+      return;
+    }
+
     setState(() {
       _loading = true;
       _listError = null;
@@ -139,6 +280,8 @@ class _AdminAssignClientMeetingPageState
   }
 
   Future<void> _openAddClientPage() async {
+    if (_isDemo) return _demoBlock();
+
     if (widget.onTabNavigate != null) {
       debugPrint('🧭 [AssignMeeting] → switching to Add Client tab (8)');
       widget.onTabNavigate!(8);
@@ -228,6 +371,8 @@ class _AdminAssignClientMeetingPageState
   }
 
   Future<void> _createAssignment() async {
+    if (_isDemo) return _demoBlock();
+
     if (!_formKey.currentState!.validate()) return;
 
     if (_selectedEmployee == null) {
@@ -346,6 +491,8 @@ class _AdminAssignClientMeetingPageState
   }
 
   Future<void> _cancelAssignment(ClientMeetingAssignment a) async {
+    if (_isDemo) return _demoBlock();
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -401,6 +548,8 @@ class _AdminAssignClientMeetingPageState
   }
 
   Future<void> _editAssignment(ClientMeetingAssignment a) async {
+    if (_isDemo) return _demoBlock();
+
     debugPrint('✏️ [Edit] Opening edit dialog for assignment ${a.id}');
 
     final updated = await showDialog<bool>(
@@ -435,6 +584,8 @@ class _AdminAssignClientMeetingPageState
   }
 
   Future<void> _deleteAssignment(ClientMeetingAssignment a) async {
+    if (_isDemo) return _demoBlock();
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -558,6 +709,7 @@ class _AdminAssignClientMeetingPageState
   }
 
   void _showSnack(String msg, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
@@ -582,6 +734,12 @@ class _AdminAssignClientMeetingPageState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 🎭 DEMO BANNER
+                if (_isDemo) ...[
+                  _buildDemoBanner(),
+                  const SizedBox(height: 16),
+                ],
+
                 if (!widget.embedded) _buildTopBar(),
                 if (widget.embedded) _buildEmbeddedHeader(),
 
@@ -595,6 +753,48 @@ class _AdminAssignClientMeetingPageState
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  // 🎭 DEMO BANNER
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample assignments. Create, edit, cancel, and delete are disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -706,7 +906,6 @@ class _AdminAssignClientMeetingPageState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ✅ FIXED: Responsive header para sa mobile
             LayoutBuilder(builder: (context, c) {
               final isNarrow = c.maxWidth < 420;
 
@@ -734,13 +933,13 @@ class _AdminAssignClientMeetingPageState
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   TextButton.icon(
-                    onPressed: _openAddClientPage,
+                    onPressed: _isDemo ? _demoBlock : _openAddClientPage,
                     icon: Icon(Icons.add_location_alt_rounded,
-                        size: 16, color: tc.orange),
+                        size: 16, color: _isDemo ? tc.muted : tc.orange),
                     label: Text(
                       'Add Client',
                       style: TextStyle(
-                          color: tc.orange,
+                          color: _isDemo ? tc.muted : tc.orange,
                           fontWeight: FontWeight.w700,
                           fontSize: 13),
                     ),
@@ -905,8 +1104,10 @@ class _AdminAssignClientMeetingPageState
                 ),
                 const Spacer(),
                 ElevatedButton.icon(
-                  onPressed: _submitting ? null : _createAssignment,
-                  icon: _submitting
+                  onPressed: (_submitting || _isDemo)
+                      ? (_isDemo ? _demoBlock : null)
+                      : _createAssignment,
+                  icon: (_submitting)
                       ? const SizedBox(
                     width: 14,
                     height: 14,
@@ -915,14 +1116,23 @@ class _AdminAssignClientMeetingPageState
                       color: Colors.white,
                     ),
                   )
-                      : const Icon(Icons.check_rounded, size: 16),
+                      : Icon(
+                    _isDemo
+                        ? Icons.lock_outline_rounded
+                        : Icons.check_rounded,
+                    size: 16,
+                  ),
                   label: Text(
-                    _submitting ? 'Creating...' : 'Create Assignment',
+                    _submitting
+                        ? 'Creating...'
+                        : (_isDemo
+                        ? 'Create Disabled (Demo)'
+                        : 'Create Assignment'),
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: tc.orange,
-                    foregroundColor: Colors.white,
+                    backgroundColor: _isDemo ? tc.border : tc.orange,
+                    foregroundColor: _isDemo ? tc.muted : Colors.white,
                     padding: const EdgeInsets.symmetric(
                         horizontal: 20, vertical: 14),
                     shape: RoundedRectangleBorder(
@@ -1011,7 +1221,7 @@ class _AdminAssignClientMeetingPageState
             ),
             const SizedBox(width: 8),
             TextButton.icon(
-              onPressed: _openAddClientPage,
+              onPressed: _isDemo ? _demoBlock : _openAddClientPage,
               icon: Icon(Icons.add_rounded,
                   size: 14, color: tc.orangeText),
               label: Text(
@@ -1317,7 +1527,6 @@ class _AdminAssignClientMeetingPageState
     return LayoutBuilder(builder: (context, c) {
       final isNarrow = c.maxWidth < 600;
 
-      // Status pill
       final statusPill = Container(
         padding: const EdgeInsets.symmetric(
             horizontal: 10, vertical: 4),
@@ -1337,35 +1546,34 @@ class _AdminAssignClientMeetingPageState
         ),
       );
 
-      // Action buttons
       final actions = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (canEdit)
             IconButton(
-              onPressed: () => _editAssignment(a),
+              onPressed: _isDemo ? _demoBlock : () => _editAssignment(a),
               icon: Icon(Icons.edit_rounded,
-                  size: 18, color: tc.orange),
-              tooltip: 'Edit assignment',
+                  size: 18, color: _isDemo ? tc.muted : tc.orange),
+              tooltip: _isDemo ? 'Edit disabled in Demo' : 'Edit assignment',
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(
                   minWidth: 36, minHeight: 36),
             ),
           if (canCancel)
             IconButton(
-              onPressed: () => _cancelAssignment(a),
+              onPressed: _isDemo ? _demoBlock : () => _cancelAssignment(a),
               icon: Icon(Icons.cancel_outlined,
-                  size: 18, color: tc.red),
-              tooltip: 'Cancel',
+                  size: 18, color: _isDemo ? tc.muted : tc.red),
+              tooltip: _isDemo ? 'Cancel disabled in Demo' : 'Cancel',
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(
                   minWidth: 36, minHeight: 36),
             ),
           IconButton(
-            onPressed: () => _deleteAssignment(a),
+            onPressed: _isDemo ? _demoBlock : () => _deleteAssignment(a),
             icon: Icon(Icons.delete_forever_rounded,
-                size: 18, color: tc.red),
-            tooltip: 'Delete permanently',
+                size: 18, color: _isDemo ? tc.muted : tc.red),
+            tooltip: _isDemo ? 'Delete disabled in Demo' : 'Delete permanently',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(
                 minWidth: 36, minHeight: 36),
@@ -1383,7 +1591,6 @@ class _AdminAssignClientMeetingPageState
       );
 
       if (isNarrow) {
-        // MOBILE: stack vertically
         return Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -1480,7 +1687,6 @@ class _AdminAssignClientMeetingPageState
         );
       }
 
-      // DESKTOP: horizontal row (original layout)
       return Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(

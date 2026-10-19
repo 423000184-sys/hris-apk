@@ -23,8 +23,7 @@ class AttendanceHoursService {
   }) async {
     try {
       final snap = await _logsCol
-          .where('date',
-          isGreaterThanOrEqualTo: _fmtDate(periodStart))
+          .where('date', isGreaterThanOrEqualTo: _fmtDate(periodStart))
           .where('date', isLessThanOrEqualTo: _fmtDate(periodEnd))
           .get();
 
@@ -51,8 +50,7 @@ class AttendanceHoursService {
         result[entry.key] = await _computeForEmployee(entry.value);
       }
 
-      debugPrint(
-          '🍱 [HoursService] Computed for ${result.length} employees');
+      debugPrint('🍱 [HoursService] Computed for ${result.length} employees');
       return result;
     } catch (e) {
       debugPrint('❌ [HoursService] Fetch error: $e');
@@ -174,7 +172,18 @@ class EmployeeHoursSummary {
     required this.totalOvertimeMinutes,
     required this.daysWithLogs,
     required this.daysWithLunchApplied,
-    required this.dailyBreakdown,
+    this.dailyBreakdown = const <DailyHours>[],
+  });
+
+  /// Convenience factory for demo / preview data.
+  const EmployeeHoursSummary.mock({
+    this.totalRawMinutes = 0,
+    this.totalLunchDeductedMinutes = 0,
+    this.totalNetMinutes = 0,
+    this.totalOvertimeMinutes = 0,
+    this.daysWithLogs = 0,
+    this.daysWithLunchApplied = 0,
+    this.dailyBreakdown = const <DailyHours>[],
   });
 
   static const empty = EmployeeHoursSummary(

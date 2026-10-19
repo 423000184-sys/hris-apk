@@ -1,4 +1,5 @@
 // lib/screens/admin_pick_location_page.dart
+// v1.1: 🎭 Demo Mode Support (Confirm Button Blocked + Banner)
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'admin_theme.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 
 /// Result returned from the map picker
 class PickedLocation {
@@ -29,12 +31,7 @@ class AdminPickLocationPage extends StatefulWidget {
   final double? initialLat;
   final double? initialLng;
   final String? initialAddress;
-
-  /// Callback para sa nav — kapag may tinap na ibang tab sa sidebar,
-  /// i-pop ang picker tapos tatawagin ito para lumipat sa dashboard.
   final void Function(int index)? onTabNavigate;
-
-  /// For top bar display
   final String? currentAdminName;
 
   const AdminPickLocationPage({
@@ -54,6 +51,20 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
   late final MapController _mapController;
   late LatLng _center;
 
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 🎭 Demo Block Helper
+  void _demoBlock(AdminColors tc) {
+    _showSnack('Confirm disabled in Demo Mode.', tc, isError: true);
+  }
+
   String _address = 'Loading address...';
   bool _loadingAddress = false;
   Timer? _debounce;
@@ -63,7 +74,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
   static const double _fallbackLat = 14.5995;
   static const double _fallbackLng = 120.9842;
 
-  // Same as dashboard — currently active tab is 9 (Pick Location)
   static const int _currentNavIndex = 9;
 
   static const List<_NavItem> _navItems = [
@@ -105,20 +115,14 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // NAV — handle sidebar tap
-  // ═══════════════════════════════════════════════════════════════
   void _handleNavTap(int index) {
-    if (index == _currentNavIndex) return; // already on this tab
+    if (index == _currentNavIndex) return;
 
     debugPrint('🧭 [MapPicker Nav] → tab $index');
-    Navigator.of(context).pop(); // close picker first
-    widget.onTabNavigate?.call(index); // then navigate in dashboard
+    Navigator.of(context).pop();
+    widget.onTabNavigate?.call(index);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // REVERSE GEOCODE — with timeout handling
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _reverseGeocode(LatLng point) async {
     if (!mounted) return;
     setState(() => _loadingAddress = true);
@@ -193,7 +197,11 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
     });
   }
 
-  void _confirmSelection() {
+  void _confirmSelection(AdminColors tc) {
+    if (_isDemo) {
+      _demoBlock(tc);
+      return;
+    }
     Navigator.of(context).pop(
       PickedLocation(
         lat: _center.latitude,
@@ -333,9 +341,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // BUILD — with sidebar + top bar
-  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -379,9 +384,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // TOP BAR — katulad ng dashboard pero may "Pick Location" title
-  // ═══════════════════════════════════════════════════════════════
   PreferredSizeWidget _buildTopBar(AdminColors c, bool wide) {
     return AppBar(
       backgroundColor: c.topBarBg,
@@ -412,6 +414,31 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
               fontFamily: 'sans-serif',
             ),
           ),
+          if (_isDemo) ...[
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: c.orange.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: c.orange.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.science_rounded, size: 11, color: c.orange),
+                  const SizedBox(width: 4),
+                  Text('DEMO',
+                      style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          color: c.orange,
+                          letterSpacing: 0.5)),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
       actions: [
@@ -445,9 +472,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SIDEBAR — same structure ng dashboard
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildSidebar(AdminColors c) {
     return Container(
       width: 240,
@@ -613,14 +637,12 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // CONTENT — Search bar + Map + Bottom sheet
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildContent(AdminColors tc) {
     return Container(
       color: tc.background,
       child: Column(
         children: [
+          if (_isDemo) _buildDemoBanner(tc),
           _buildSearchBar(tc),
           Expanded(
             child: Stack(
@@ -645,7 +667,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
                   ],
                 ),
 
-                // Center pin
                 const Center(
                   child: Padding(
                     padding: EdgeInsets.only(bottom: 40),
@@ -664,7 +685,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
                   ),
                 ),
 
-                // Hint
                 if (!_isDraggingMap)
                   Positioned(
                     top: 16,
@@ -698,7 +718,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
                     ),
                   ),
 
-                // Center on me button
                 Positioned(
                   right: 12,
                   bottom: 20,
@@ -716,7 +735,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
                   ),
                 ),
 
-                // Zoom controls
                 Positioned(
                   right: 12,
                   top: 60,
@@ -747,7 +765,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
                   ),
                 ),
 
-                // Coordinate overlay
                 Positioned(
                   top: 16,
                   right: 12,
@@ -795,6 +812,36 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
             ),
           ),
           _buildBottomSheet(tc),
+        ],
+      ),
+    );
+  }
+
+  // 🎭 DEMO BANNER
+  Widget _buildDemoBanner(AdminColors tc) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Demo Mode — you can explore the map, but confirming a location is disabled.',
+              style: TextStyle(
+                fontSize: 11,
+                color: tc.orange,
+                fontWeight: FontWeight.w600,
+                height: 1.35,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1006,18 +1053,23 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _confirmSelection,
-              icon: const Icon(Icons.check_rounded, size: 18),
-              label: const Text(
-                'Confirm This Location',
-                style: TextStyle(
+              onPressed: _isDemo ? () => _demoBlock(tc) : () => _confirmSelection(tc),
+              icon: Icon(
+                _isDemo ? Icons.lock_outline_rounded : Icons.check_rounded,
+                size: 18,
+              ),
+              label: Text(
+                _isDemo
+                    ? 'Confirm Disabled (Demo)'
+                    : 'Confirm This Location',
+                style: const TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 14,
                 ),
               ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: tc.orange,
-                foregroundColor: Colors.white,
+                backgroundColor: _isDemo ? tc.border : tc.orange,
+                foregroundColor: _isDemo ? tc.muted : Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10),

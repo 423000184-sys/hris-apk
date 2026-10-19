@@ -25,6 +25,45 @@ class AdminCreateLeaveRequestPage extends StatefulWidget {
 class _AdminCreateLeaveRequestPageState
     extends State<AdminCreateLeaveRequestPage> {
   // ══════════════════════════════════════════════════════════════
+  // DEMO MODE
+  // TRUE = hides real employees + blocks real Firestore writes.
+  // Tap the eye icon in the heading to toggle at runtime.
+  // ══════════════════════════════════════════════════════════════
+  bool _demoMode = true;
+
+  // ── Sample employees (demo only) ──────────────────────────────
+  static const List<Map<String, dynamic>> _demoEmployees = [
+    {
+      'id': 'demo-001',
+      'name': 'Juan Dela Cruz',
+      'position': 'Sales Associate',
+      'department': 'Sales',
+      'employeeId': 'EMP-0012',
+      'email': 'juan.delacruz@example.com',
+    },
+    {
+      'id': 'demo-002',
+      'name': 'Maria Santos',
+      'position': 'Cashier',
+      'department': 'Finance',
+      'employeeId': 'EMP-0034',
+      'email': 'maria.santos@example.com',
+    },
+    {
+      'id': 'demo-003',
+      'name': 'Pedro Reyes',
+      'position': 'Warehouse Staff',
+      'department': 'Logistics',
+      'employeeId': 'EMP-0056',
+      'email': 'pedro.reyes@example.com',
+    },
+  ];
+
+  // ── Effective employee list (respects demo mode) ──────────────
+  List<Map<String, dynamic>> get _effectiveEmployees =>
+      _demoMode ? _demoEmployees : widget.employees;
+
+  // ══════════════════════════════════════════════════════════════
   // THEME ACCESSOR
   // ══════════════════════════════════════════════════════════════
   AdminColors get tc => AdminTheme.getColors(context);
@@ -125,12 +164,49 @@ class _AdminCreateLeaveRequestPageState
                 _buildBackLink(),
                 const SizedBox(height: 8),
                 _buildPageHeading(),
+                if (_demoMode) ...[
+                  const SizedBox(height: 12),
+                  _buildDemoBanner(),
+                ],
                 const SizedBox(height: 24),
                 _buildFormCard(),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // DEMO BANNER
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildDemoBanner() {
+    return Container(
+      width: double.infinity,
+      padding:
+      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.visibility_off_rounded,
+              size: 16, color: tc.orange),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "DEMO MODE — sample employees only; submissions are not saved.",
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: tc.orange,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -160,36 +236,90 @@ class _AdminCreateLeaveRequestPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // PAGE HEADING — responsive font
+  // PAGE HEADING — with demo toggle icon
   // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeading() {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
-      return Column(
+      return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "Create Leave Request",
-            style: TextStyle(
-              fontSize: r.responsive<double>(
-                xs: 22, sm: 26, md: 28, lg: 32,
-              ),
-              fontWeight: FontWeight.w700,
-              color: tc.text,
-              letterSpacing: -0.3,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        "Create Leave Request",
+                        style: TextStyle(
+                          fontSize: r.responsive<double>(
+                            xs: 22, sm: 26, md: 28, lg: 32,
+                          ),
+                          fontWeight: FontWeight.w700,
+                          color: tc.text,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                    ),
+                    if (_demoMode) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: tc.orange.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          "DEMO",
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            color: tc.orange,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  "Application for Leave of Absence",
+                  style: TextStyle(
+                    fontSize: r.responsive<double>(xs: 13, md: 16),
+                    fontWeight: FontWeight.w500,
+                    color: tc.orange,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 2),
-          Text(
-            "Application for Leave of Absence",
-            style: TextStyle(
-              fontSize: r.responsive<double>(xs: 13, md: 16),
-              fontWeight: FontWeight.w500,
-              color: tc.orange,
+          IconButton(
+            tooltip: _demoMode
+                ? "Demo mode ON — sample data only"
+                : "Demo mode OFF — real data",
+            onPressed: _toggleDemo,
+            icon: Icon(
+              _demoMode
+                  ? Icons.visibility_off_rounded
+                  : Icons.visibility_rounded,
+              color: _demoMode ? tc.orange : tc.muted,
+              size: 20,
             ),
           ),
         ],
       );
+    });
+  }
+
+  void _toggleDemo() {
+    setState(() {
+      _demoMode = !_demoMode;
+      // Reset employee selection so it doesn't carry across modes
+      _selectedEmployeeId = null;
     });
   }
 
@@ -299,7 +429,7 @@ class _AdminCreateLeaveRequestPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // RESPONSIVE GRID HELPER (2 columns on md+, 1 column on xs/sm)
+  // RESPONSIVE GRID HELPER
   // ══════════════════════════════════════════════════════════════
   Widget _responsiveGrid({required List<Widget> children}) {
     return LayoutBuilder(builder: (_, c) {
@@ -356,8 +486,7 @@ class _AdminCreateLeaveRequestPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ⭐ IMPROVED — Flexible name matching
-  //    Order: exact → starts-with → unique-contains
+  // FLEXIBLE NAME MATCHING (uses _effectiveEmployees)
   // ══════════════════════════════════════════════════════════════
   void _tryFindEmployee(String value) {
     final String typedName = value.trim().toLowerCase();
@@ -368,8 +497,10 @@ class _AdminCreateLeaveRequestPageState
       return;
     }
 
+    final List<Map<String, dynamic>> source = _effectiveEmployees;
+
     // 1️⃣ Exact match muna
-    for (final employee in widget.employees) {
+    for (final employee in source) {
       final String employeeName = _empName(employee).trim().toLowerCase();
       if (employeeName == typedName) {
         final id = (employee['id'] ?? '').toString();
@@ -380,8 +511,8 @@ class _AdminCreateLeaveRequestPageState
       }
     }
 
-    // 2️⃣ Starts-with match (e.g. "April" → "April Vincent C. De Guia")
-    for (final employee in widget.employees) {
+    // 2️⃣ Starts-with match
+    for (final employee in source) {
       final String employeeName = _empName(employee).trim().toLowerCase();
       if (employeeName.startsWith(typedName)) {
         final id = (employee['id'] ?? '').toString();
@@ -392,8 +523,8 @@ class _AdminCreateLeaveRequestPageState
       }
     }
 
-    // 3️⃣ Contains match — kung unique lang (1 match) para safe
-    final matches = widget.employees.where((e) {
+    // 3️⃣ Contains match — unique only
+    final matches = source.where((e) {
       final name = _empName(e).trim().toLowerCase();
       return name.contains(typedName);
     }).toList();
@@ -406,7 +537,6 @@ class _AdminCreateLeaveRequestPageState
       return;
     }
 
-    // Walang match (o maraming ambiguous match)
     if (_selectedEmployeeId != null) {
       setState(() => _selectedEmployeeId = null);
     }
@@ -788,7 +918,7 @@ class _AdminCreateLeaveRequestPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // APPROVAL WORKFLOW — responsive
+  // APPROVAL WORKFLOW
   // ══════════════════════════════════════════════════════════════
   Widget _buildApprovalWorkflow() {
     return Container(
@@ -917,7 +1047,7 @@ class _AdminCreateLeaveRequestPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ACTION BUTTONS — stack on narrow
+  // ACTION BUTTONS
   // ══════════════════════════════════════════════════════════════
   Widget _buildActionButtons() {
     return LayoutBuilder(builder: (_, c) {
@@ -994,10 +1124,7 @@ class _AdminCreateLeaveRequestPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ⭐ SUBMIT LEAVE REQUEST — Fixed logic
-  //    1. Multi-identifier save (6 fields) para mag-match sa mobile
-  //    2. Single source of truth (leave_applications lang)
-  //    3. Walang duplicate array save
+  // SUBMIT — demo mode short-circuits BEFORE touching Firestore
   // ══════════════════════════════════════════════════════════════
   Future<void> _submitLeaveRequest() async {
     final parsedFrom = _parseDate(_fromDateController.text);
@@ -1038,14 +1165,39 @@ class _AdminCreateLeaveRequestPageState
     _totalHours = double.tryParse(_hoursController.text.trim()) ?? 0;
     _daysController.text = _totalDays.toString();
 
+    // ═══════════════════════════════════════════════════════════
+    // DEMO MODE — fake success, no Firestore write
+    // ═══════════════════════════════════════════════════════════
+    if (_demoMode) {
+      if (!mounted) return;
+      setState(() => _isSubmitting = true);
+
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+              "🧪 Demo mode — request NOT saved (sample data only)."),
+          backgroundColor: tc.orange,
+        ),
+      );
+
+      // Reset form so demo can be repeated cleanly
+      _resetForm();
+      return;
+    }
+
     if (!mounted) return;
     setState(() => _isSubmitting = true);
 
     try {
-      // ⭐ Kunin ang buong employee object para sa extra identifiers
+      // ⭐ Use effective employee list (real path)
       Map<String, dynamic> selectedEmp = {};
       try {
-        selectedEmp = widget.employees.firstWhere(
+        selectedEmp = _effectiveEmployees.firstWhere(
               (e) => (e['id'] ?? '').toString() == _selectedEmployeeId,
         );
       } catch (_) {
@@ -1068,8 +1220,6 @@ class _AdminCreateLeaveRequestPageState
           .trim()
           .toLowerCase();
 
-      // ⭐ BUILD leave data — MARAMING identifier fields
-      //    para siguradong mag-match sa mobile kahit anong ID ang gamitin
       final leaveData = <String, dynamic>{
         // ─── TARGET EMPLOYEE IDs (multi-identifier) ───
         'employeeId': _selectedEmployeeId,
@@ -1098,17 +1248,13 @@ class _AdminCreateLeaveRequestPageState
             : null,
         'reason': _reasonController.text.trim(),
 
-        // ─── STATUS (lowercase 'pending') ───
+        // ─── STATUS ───
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': 'admin',
         'source': 'admin',
       };
 
-      // ⭐ SAVE sa leave_applications lang (single source of truth)
-      //    Ito ang binabasa ng:
-      //      - Admin Activity → Pending Leave Requests
-      //      - Mobile Apply Leave → Leave History
       final docRef = await FirebaseFirestore.instance
           .collection('leave_applications')
           .add(leaveData);
@@ -1123,7 +1269,6 @@ class _AdminCreateLeaveRequestPageState
       debugPrint('   Leave: $_selectedLeaveType, ${_totalDays.toInt()} day(s)');
       debugPrint('═══════════════════════════════════════════');
 
-      // ─── Optional: Activity log ───
       try {
         await FirebaseFirestore.instance.collection('activity logs').add({
           'type': 'leave_created_by_admin',
@@ -1137,9 +1282,6 @@ class _AdminCreateLeaveRequestPageState
       } catch (e) {
         debugPrint('⚠️ Activity log warning: $e');
       }
-
-      // ⚠️ REMOVED: Ang array save sa employees/{id}/leaveRequests
-      //    (ito ang nagdudulot ng DUPLICATE sa Admin Activity page)
 
       if (!mounted) return;
 
@@ -1164,6 +1306,31 @@ class _AdminCreateLeaveRequestPageState
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
+  }
+
+  // ── Reset form (used in demo mode for repeatability) ──────────
+  void _resetForm() {
+    _nameController.clear();
+    _positionController.clear();
+    _departmentController.clear();
+    _relieverController.clear();
+    _fromDateController.clear();
+    _toDateController.clear();
+    _returnDateController.clear();
+    _returnTimeController.clear();
+    _reasonController.clear();
+    _daysController.text = "0";
+    _hoursController.text = "0";
+    setState(() {
+      _dateFrom = null;
+      _dateTo = null;
+      _returnDate = null;
+      _returnTime = null;
+      _totalDays = 0;
+      _totalHours = 0;
+      _selectedEmployeeId = null;
+      _selectedLeaveType = "SL";
+    });
   }
 
   void _showError(String message) {

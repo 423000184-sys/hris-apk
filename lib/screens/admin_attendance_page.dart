@@ -1,4 +1,5 @@
 // lib/screens/admin_attendance_page.dart
+// v2.1: 🎭 Demo Mode Support (Mock Logs & Action Blocking)
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -12,6 +13,7 @@ import 'admin_dashboard.dart';
 import 'admin_database.dart';
 import 'admin_theme.dart';
 import '../services/admin_employee_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 import '../utils/file_download.dart';
 import '../widgets/bootstrap_grid.dart';
 
@@ -57,6 +59,15 @@ class AdminAttendancePage extends StatefulWidget {
 
 class _AdminAttendancePageState extends State<AdminAttendancePage> {
   AdminColors get tc => AdminTheme.getColors(context);
+
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
 
   // ─── Filter state ───
   String _selectedEventType = 'All Events';
@@ -105,7 +116,11 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     super.initState();
     _localEmployees = widget.employees;
     _buildEmployeeLookup();
-    _listenToEmployees();
+
+    // 🎭 Only listen to real employees if NOT in demo mode
+    if (!_isDemo) {
+      _listenToEmployees();
+    }
   }
 
   @override
@@ -126,6 +141,68 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     super.dispose();
   }
 
+  // 🎭 DEMO BLOCK HELPER
+  void _demoBlock() {
+    _showSnack('Action disabled in Demo Mode.', error: true);
+  }
+
+  // 🎭 MOCK LOGS GENERATION
+  List<Map<String, dynamic>> _getMockLogs() {
+    final now = DateTime.now();
+    return [
+      {
+        'id': 'demo_log_1',
+        'employee_id': 'DEMO-001',
+        'employee_name': 'John Doe',
+        'type': 'IN',
+        'timestamp': now.subtract(const Duration(hours: 1, minutes: 15)),
+        'department': 'Operation',
+        'position': 'Manager',
+        'registeredDevice': 'iPhone 14 Pro',
+      },
+      {
+        'id': 'demo_log_2',
+        'employee_id': 'DEMO-002',
+        'employee_name': 'Jane Smith',
+        'type': 'IN',
+        'timestamp': now.subtract(const Duration(hours: 2, minutes: 30)),
+        'department': 'Accounting',
+        'position': 'Accountant',
+        'registeredDevice': 'Samsung Galaxy S23',
+      },
+      {
+        'id': 'demo_log_3',
+        'employee_id': 'DEMO-001',
+        'employee_name': 'John Doe',
+        'type': 'OUT',
+        'timestamp': now.subtract(const Duration(hours: 3)),
+        'department': 'Operation',
+        'position': 'Manager',
+        'registeredDevice': 'iPhone 14 Pro',
+      },
+      {
+        'id': 'demo_log_4',
+        'employee_id': 'DEMO-003',
+        'employee_name': 'Mike Johnson',
+        'type': 'IN',
+        'timestamp': now.subtract(const Duration(hours: 5, minutes: 45)),
+        'department': 'HR/Admin',
+        'position': 'Driver',
+        'registeredDevice': 'Xiaomi Redmi Note 12',
+      },
+      {
+        'id': 'demo_log_5',
+        'employee_id': 'DEMO-004',
+        'employee_name': 'Sarah Lee',
+        'type': 'OUT',
+        'timestamp': now.subtract(const Duration(hours: 6, minutes: 10)),
+        'department': 'Operation',
+        'position': 'Broker',
+        'registeredDevice': 'MacBook Pro (Web)',
+      },
+    ];
+  }
+
   // ══════════════════════════════════════════════════════════════
   // EMPLOYEE STREAM (bounded)
   // ══════════════════════════════════════════════════════════════
@@ -135,7 +212,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         .listen(
           (emps) {
         if (!mounted) return;
-        // Hard cap: never hold more than 5000 employees in memory
         final bounded = emps.length > 5000 ? emps.sublist(0, 5000) : emps;
         setState(() {
           _localEmployees = bounded.isNotEmpty ? bounded : widget.employees;
@@ -173,7 +249,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   String _sanitizeKey(dynamic v) {
     if (v == null) return '';
-    // Strip control chars, normalize whitespace, cap length
     var s = v.toString().replaceAll(
       RegExp(r'[\u0000-\u001F\u007F\u2028\u2029]'),
       '',
@@ -267,7 +342,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return '';
   }
 
-  /// Returns a masked email for display, e.g., "a***@company.com"
   String _maskEmail(String email) {
     if (email.isEmpty) return '';
     final at = email.indexOf('@');
@@ -304,7 +378,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return null;
   }
 
-  /// Allow only http(s) and data:image URLs.
   bool _isSafeUrl(String url) {
     if (url.startsWith('data:image/')) return true;
     if (url.startsWith('https://')) return true;
@@ -336,7 +409,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   List<String> get _departments {
     final depts = <String>{..._predefinedDeptRoles.keys};
 
-    for (final log in widget.logs) {
+    for (final log in (_isDemo ? _getMockLogs() : widget.logs)) {
       final dept = _resolveDepartment(log);
       if (dept.isNotEmpty && dept != 'No Department') depts.add(dept);
     }
@@ -352,7 +425,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       for (final roles in _predefinedDeptRoles.values) {
         positions.addAll(roles);
       }
-      for (final log in widget.logs) {
+      for (final log in (_isDemo ? _getMockLogs() : widget.logs)) {
         final pos = _resolvePosition(log);
         if (pos.isNotEmpty) positions.add(pos);
       }
@@ -360,7 +433,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       final predefined = _predefinedDeptRoles[_selectedDepartment];
       if (predefined != null) positions.addAll(predefined);
 
-      for (final log in widget.logs) {
+      for (final log in (_isDemo ? _getMockLogs() : widget.logs)) {
         if (_resolveDepartment(log) == _selectedDepartment) {
           final pos = _resolvePosition(log);
           if (pos.isNotEmpty) positions.add(pos);
@@ -374,7 +447,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   List<String> get _years {
     final years = <int>{};
-    for (final log in widget.logs) {
+    for (final log in (_isDemo ? _getMockLogs() : widget.logs)) {
       final dt = _toDateTime(log['timestamp']);
       if (dt != null) years.add(dt.year);
     }
@@ -386,14 +459,16 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   // FILTERING
   // ══════════════════════════════════════════════════════════════
   List<Map<String, dynamic>> get _filteredLogs {
-    // Use APPLIED filter values so filter changes require explicit Apply
     final eventType = _appliedEventType ?? _selectedEventType;
     final department = _appliedDepartment ?? _selectedDepartment;
     final position = _appliedPosition ?? _selectedPosition;
     final year = _appliedYear ?? _selectedYear;
     final dateRange = _appliedDateRange ?? _selectedDateRange;
 
-    var filtered = widget.logs.where((log) {
+    // 🎭 Use mock data if in Demo Mode
+    final sourceLogs = _isDemo ? _getMockLogs() : widget.logs;
+
+    var filtered = sourceLogs.where((log) {
       final name = _resolveName(log).toLowerCase();
       final id = _sanitizeKey(log['employee_id'] ?? log['employeeId']).toLowerCase();
       final email = _resolveEmail(log).toLowerCase();
@@ -486,12 +561,12 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // CSV EXPORT (with confirmation, audit, and PII masking)
+  // CSV EXPORT
   // ══════════════════════════════════════════════════════════════
   Future<void> _exportLogsToCsv() async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
     if (_exporting) return;
 
-    // Rate limit check
     if (_lastExportAt != null) {
       final elapsed = DateTime.now().difference(_lastExportAt!);
       if (elapsed < _exportCooldown) {
@@ -515,7 +590,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       return;
     }
 
-    // Confirm before exporting PII
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -604,7 +678,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         content: buffer.toString(),
       );
 
-      // Audit log entry
       try {
         await FirebaseFirestore.instance.collection('admin_audit_log').add({
           'action': 'attendance_csv_exported',
@@ -643,7 +716,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     }
   }
 
-  /// Strip control chars and normalize CSV cell value.
   String _sanitizeCsvCell(String v) {
     var s = v.replaceAll(RegExp(r'[\u0000-\u001F\u007F\u2028\u2029]'), '');
     s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -651,7 +723,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return s;
   }
 
-  /// Prevents CSV formula injection (=, +, -, @).
   String _csvEscape(String value) {
     var v = value;
     if (v.isNotEmpty) {
@@ -896,6 +967,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   // APPROVE / FLAG — with audit logging
   // ══════════════════════════════════════════════════════════════
   Future<void> _approveLog(Map<String, dynamic> log) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final logId = (log['id'] ?? '').toString();
     if (logId.isEmpty) {
       _showSnack('Missing log ID.', error: true);
@@ -937,6 +1010,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   }
 
   Future<void> _flagLog(Map<String, dynamic> log) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final logId = (log['id'] ?? '').toString();
     if (logId.isEmpty) {
       _showSnack('Missing log ID.', error: true);
@@ -1053,6 +1128,11 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 🎭 DEMO BANNER
+              if (_isDemo) ...[
+                _buildDemoBanner(),
+                const SizedBox(height: 24),
+              ],
               _buildPageHeader(),
               const SizedBox(height: 24),
               _buildFilterBar(),
@@ -1064,6 +1144,50 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🎭 DEMO BANNER
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample data. Exporting, approving, and flagging are disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1108,10 +1232,10 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       final exportBtn = _buildActionButton(
         icon: Icons.download_rounded,
         label: _exporting ? 'Exporting...' : 'Export Logs',
-        onPressed: _exporting ? () {} : _exportLogsToCsv,
-        bgColor: tc.orange,
-        textColor: tc.isDark ? tc.onOrange : Colors.white,
-        borderColor: tc.orange,
+        onPressed: (_isDemo || _exporting) ? () {} : _exportLogsToCsv,
+        bgColor: _isDemo ? tc.border : tc.orange,
+        textColor: _isDemo ? tc.muted : (tc.isDark ? tc.onOrange : Colors.white),
+        borderColor: _isDemo ? tc.border : tc.orange,
         showSpinner: _exporting,
       );
 
@@ -1418,7 +1542,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     if (photoUrl.startsWith('data:image')) {
       try {
         final b64 = photoUrl.split(',').last;
-        // Guard against oversized base64 payloads
         if (b64.length > kMaxBase64PhotoBytes * 2) {
           return _initialsAvatar(
               initials: initials, size: size, fontSize: fontSize);
@@ -1761,19 +1884,25 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             PopupMenuItem<String>(
               value: 'approve',
               child: Row(children: [
-                Icon(Icons.check_circle_outline, size: 16, color: tc.green),
+                Icon(Icons.check_circle_outline, size: 16,
+                    color: _isDemo ? tc.muted : tc.green),
                 const SizedBox(width: 10),
                 Text('Approve',
-                    style: TextStyle(color: tc.text, fontSize: 13)),
+                    style: TextStyle(
+                        color: _isDemo ? tc.muted : tc.text,
+                        fontSize: 13)),
               ]),
             ),
             PopupMenuItem<String>(
               value: 'flag',
               child: Row(children: [
-                Icon(Icons.flag_outlined, size: 16, color: tc.red),
+                Icon(Icons.flag_outlined, size: 16,
+                    color: _isDemo ? tc.muted : tc.red),
                 const SizedBox(width: 10),
                 Text('Flag for Review',
-                    style: TextStyle(color: tc.text, fontSize: 13)),
+                    style: TextStyle(
+                        color: _isDemo ? tc.muted : tc.text,
+                        fontSize: 13)),
               ]),
             ),
           ],
@@ -1882,8 +2011,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     });
   }
 
-  /// Returns a bounded set of page numbers to render.
-  /// Prevents rendering thousands of widgets when there are many pages.
   List<int> _computeVisiblePages(int totalPages) {
     if (totalPages <= kMaxVisiblePages) {
       return List<int>.generate(totalPages, (i) => i + 1);
@@ -1897,7 +2024,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
     final sorted = pages.toList()..sort();
 
-    // Insert ellipsis markers (represented as -1)
     final out = <int>[];
     for (var i = 0; i < sorted.length; i++) {
       if (i > 0 && sorted[i] - sorted[i - 1] > 1) out.add(-1);
@@ -2044,7 +2170,9 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () {
+              onPressed: _isDemo
+                  ? _demoBlock
+                  : () {
                 _showSnack('Compliance report coming soon.');
               },
               style: ElevatedButton.styleFrom(

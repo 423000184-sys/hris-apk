@@ -1,12 +1,15 @@
 // lib/screens/admin_overview_page.dart
+// v2.2: 🎭 Demo Mode Mock Data — Actual data is hidden when Demo Mode is active
 import 'dart:math' show max;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'admin_theme.dart';
+import 'admin_login_screen.dart';
+import '../services/demo_mode_service.dart';
 import '../widgets/bootstrap_grid.dart';
 
-class AdminOverviewPage extends StatelessWidget {
+class AdminOverviewPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
   final List<Map<String, dynamic>> loginLogs;
   final List<Map<String, dynamic>> logoutLogs;
@@ -34,9 +37,23 @@ class AdminOverviewPage extends StatelessWidget {
     required this.onTabNavigate,
   });
 
+  @override
+  State<AdminOverviewPage> createState() => _AdminOverviewPageState();
+}
+
+class _AdminOverviewPageState extends State<AdminOverviewPage> {
   static const int _officeStartHour = 9;
   static const int _officeStartMinute = 0;
   static const int _graceMinutes = 15;
+
+  // 🎭 Demo getter — read the global demo flag
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
 
   // ══════════════════════════════════════════════════════════════
   // HELPERS
@@ -112,10 +129,23 @@ class AdminOverviewPage extends StatelessWidget {
   }
 
   // ══════════════════════════════════════════════════════════════
+  // 🎭 DEMO: exit demo and return to admin login
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _exitDemo() async {
+    try {
+      await DemoModeService.instance.endDemoSession(); // ✅ Ginamit ang tamang method
+    } catch (_) {}
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => const AdminLoginScreen(forceLogout: true),
+      ),
+          (_) => false,
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // TIME-BASED GREETING
-  // 05:00 – 11:59  → Good morning
-  // 12:00 – 17:59  → Good afternoon
-  // 18:00 – 04:59  → Good evening
   // ══════════════════════════════════════════════════════════════
   static String _greetingForHour(int hour) {
     if (hour >= 5 && hour < 12) return 'Good morning';
@@ -126,26 +156,95 @@ class AdminOverviewPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tc = AdminTheme.getColors(context);
+    final isDemo = _isDemo;
+
+    // ═══════════════════════════════════════════════════════════
+    // 🎭 DATA SELECTION (MOCK VS ACTUAL)
+    // ═══════════════════════════════════════════════════════════
+    List<Map<String, dynamic>> activeEmployeesList;
+    List<Map<String, dynamic>> activeLoginLogs;
+    List<Map<String, dynamic>> activeLogoutLogs;
+    List<Map<String, dynamic>> activeRegLogs;
+    List<Map<String, dynamic>> activeLocations;
+
+    if (isDemo) {
+      // Gumamit ng Mock Data kapag Demo Mode
+      final now = DateTime.now();
+      activeEmployeesList = List.generate(5, (i) => {
+        'id': 'DEMO-00$i',
+        'employeeId': 'EMP-00$i',
+        'firstName': 'Demo',
+        'lastName': 'User $i',
+        'role': 'Staff',
+        'department': 'Operations',
+        'status': 'Active',
+      });
+
+      activeLoginLogs = List.generate(3, (i) => {
+        'id': 'DEMO-LOGIN-$i',
+        'employee_id': 'DEMO-00$i',
+        'employee_name': 'Demo User $i',
+        'type': 'LOGIN',
+        'timestamp': now.subtract(Duration(minutes: 15 + (i * 10))),
+      });
+
+      activeLogoutLogs = List.generate(2, (i) => {
+        'id': 'DEMO-LOGOUT-$i',
+        'employee_id': 'DEMO-00${i + 3}',
+        'employee_name': 'Demo User ${i + 3}',
+        'type': 'LOGOUT',
+        'timestamp': now.subtract(Duration(minutes: 5 + (i * 10))),
+      });
+
+      activeRegLogs = List.generate(2, (i) => {
+        'id': 'DEMO-REG-$i',
+        'employee_name': 'New Demo User $i',
+        'type': 'REGISTRATION',
+        'timestamp': now.subtract(Duration(hours: 1, minutes: i * 5)),
+      });
+
+      // Mock Locations (kalat-kalat)
+      activeLocations = List.generate(4, (i) {
+        final isOutside = i > 2;
+        return {
+          'id': 'DEMO-LOC-$i',
+          'latitude': widget.officeLat + (isOutside ? 0.05 : 0.001 * i),
+          'longitude': widget.officeLng + (isOutside ? 0.05 : 0.001 * i),
+        };
+      });
+
+    } else {
+      // Totoong Data mula sa Firebase
+      activeEmployeesList = widget.employees;
+      activeLoginLogs = widget.loginLogs;
+      activeLogoutLogs = widget.logoutLogs;
+      activeRegLogs = widget.regLogs;
+      activeLocations = widget.locations;
+    }
 
     // ─── Compute stats ───
-    final inRangeCount = locations.where((l) {
+    final inRangeCount = activeLocations.where((l) {
       final lat = (l['latitude'] as num?)?.toDouble();
       final lng = (l['longitude'] as num?)?.toDouble();
       if (lat == null || lng == null) return false;
-      return distanceCalculator(lat, lng, officeLat, officeLng) <= radiusLimit;
+      return widget.distanceCalculator(
+          lat, lng, widget.officeLat, widget.officeLng) <=
+          widget.radiusLimit;
     }).length;
 
-    final outOfRangeCount = locations.where((l) {
+    final outOfRangeCount = activeLocations.where((l) {
       final lat = (l['latitude'] as num?)?.toDouble();
       final lng = (l['longitude'] as num?)?.toDouble();
       if (lat == null || lng == null) return false;
-      return distanceCalculator(lat, lng, officeLat, officeLng) > radiusLimit;
+      return widget.distanceCalculator(
+          lat, lng, widget.officeLat, widget.officeLng) >
+          widget.radiusLimit;
     }).length;
 
     final List<Map<String, dynamic>> contextActivity = [
-      ...loginLogs,
-      ...logoutLogs,
-      ...regLogs,
+      ...activeLoginLogs,
+      ...activeLogoutLogs,
+      ...activeRegLogs,
     ];
     contextActivity.sort((a, b) {
       final ta = _toDateTime(a['timestamp']);
@@ -159,9 +258,10 @@ class AdminOverviewPage extends StatelessWidget {
     final todayStart = DateTime(now.year, now.month, now.day);
     final yesterdayStart = todayStart.subtract(const Duration(days: 1));
 
-    final todayActiveIds = _computeActiveOnDay(now, loginLogs, logoutLogs);
+    final todayActiveIds =
+    _computeActiveOnDay(now, activeLoginLogs, activeLogoutLogs);
     final yesterdayActiveIds =
-    _computeActiveOnDay(yesterdayStart, loginLogs, logoutLogs);
+    _computeActiveOnDay(yesterdayStart, activeLoginLogs, activeLogoutLogs);
 
     final activeEmployees = todayActiveIds.length;
     final yesterdayActive = yesterdayActiveIds.length;
@@ -177,12 +277,12 @@ class AdminOverviewPage extends StatelessWidget {
               .round();
     }
 
-    final activePercent = employees.isEmpty
+    final activePercent = activeEmployeesList.isEmpty
         ? 0
-        : ((activeEmployees / employees.length) * 100).round();
+        : ((activeEmployees / activeEmployeesList.length) * 100).round();
 
     final todaysLogins =
-    loginLogs.where((l) => _isToday(l['timestamp'])).toList();
+    activeLoginLogs.where((l) => _isToday(l['timestamp'])).toList();
     final clockedIn = todaysLogins.length;
 
     final lateLogs = todaysLogins.where((l) {
@@ -221,17 +321,25 @@ class AdminOverviewPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ═══════════════════════════════════════════════════
+                // ═══════════════════════════════════════════════
+                // 🎭 DEMO BANNER
+                // ═══════════════════════════════════════════════
+                if (isDemo) ...[
+                  _buildDemoBanner(tc),
+                  const SizedBox(height: 16),
+                ],
+
+                // ═══════════════════════════════════════════════
                 // HERO + WORKFORCE
-                // ═══════════════════════════════════════════════════
+                // ═══════════════════════════════════════════════
                 BsResponsiveRow(
                   stackBelow: BsSize.lg,
                   children: [
-                    _heroCard(tc, totalAlerts, greeting),
+                    _heroCard(tc, totalAlerts, greeting, isDemo),
                     _workforceCard(
                       tc,
                       activePercent,
-                      employees.length,
+                      activeEmployeesList.length,
                       activeEmployees,
                       changePercent,
                       yesterdayActive,
@@ -241,9 +349,9 @@ class AdminOverviewPage extends StatelessWidget {
 
                 const SizedBox(height: 20),
 
-                // ═══════════════════════════════════════════════════
+                // ═══════════════════════════════════════════════
                 // STAT CARDS — 4 columns on lg+
-                // ═══════════════════════════════════════════════════
+                // ═══════════════════════════════════════════════
                 BsGrid(
                   xs: 1,
                   sm: 2,
@@ -255,7 +363,7 @@ class AdminOverviewPage extends StatelessWidget {
                     _statCard(
                       tc,
                       title: 'TOTAL STAFF',
-                      value: '${employees.length}',
+                      value: '${activeEmployeesList.length}',
                       footer: 'Active',
                       footerIcon: Icons.check_circle_outline,
                       footerColor: tc.green,
@@ -264,9 +372,10 @@ class AdminOverviewPage extends StatelessWidget {
                       tc,
                       title: 'CLOCKED IN',
                       value: '$clockedIn',
-                      progress: employees.isEmpty
+                      progress: activeEmployeesList.isEmpty
                           ? 0
-                          : (clockedIn / employees.length).clamp(0.0, 1.0),
+                          : (clockedIn / activeEmployeesList.length)
+                          .clamp(0.0, 1.0),
                     ),
                     _statCard(
                       tc,
@@ -276,7 +385,8 @@ class AdminOverviewPage extends StatelessWidget {
                       footer: lateArrivals > 0
                           ? 'Avg: ${avgLateMinutes}m delay'
                           : 'None today',
-                      footerColor: lateArrivals > 0 ? tc.textMuted : tc.green,
+                      footerColor:
+                      lateArrivals > 0 ? tc.textMuted : tc.green,
                     ),
                     _statCard(
                       tc,
@@ -294,9 +404,9 @@ class AdminOverviewPage extends StatelessWidget {
 
                 const SizedBox(height: 20),
 
-                // ═══════════════════════════════════════════════════
+                // ═══════════════════════════════════════════════
                 // CHART + ACTIVITY
-                // ═══════════════════════════════════════════════════
+                // ═══════════════════════════════════════════════
                 BsResponsiveRow(
                   stackBelow: BsSize.lg,
                   children: [
@@ -313,9 +423,67 @@ class AdminOverviewPage extends StatelessWidget {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // HERO CARD — walang search, time-based greeting
+  // 🎭 DEMO BANNER
   // ══════════════════════════════════════════════════════════════
-  Widget _heroCard(AdminColors tc, int alerts, String greeting) {
+  Widget _buildDemoBanner(AdminColors tc) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample data for demonstration purposes. '
+                      'No real records are affected.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: _exitDemo,
+            style: TextButton.styleFrom(
+              foregroundColor: tc.orange,
+              padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            ),
+            child: const Text(
+              'Exit Demo',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // HERO CARD
+  // ══════════════════════════════════════════════════════════════
+  Widget _heroCard(
+      AdminColors tc, int alerts, String greeting, bool isDemo) {
     final alertsText = alerts == 0
         ? 'All operations running smoothly.'
         : '$alerts alert${alerts == 1 ? '' : 's'} require your immediate attention.';
@@ -366,12 +534,19 @@ class AdminOverviewPage extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              if (isDemo) ...[
+                _demoChip(tc),
+                const SizedBox(height: 10),
+              ],
               titleWidget,
               const SizedBox(height: 12),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 448),
                 child: Text(
-                  'Operations are running within normal parameters. $alertsText',
+                  isDemo
+                      ? 'You are exploring the admin overview in Demo Mode. '
+                      'Sample data is shown below — $alertsText'
+                      : 'Operations are running within normal parameters. $alertsText',
                   style: TextStyle(
                     color: tc.navText,
                     fontSize: 16,
@@ -386,8 +561,35 @@ class AdminOverviewPage extends StatelessWidget {
     );
   }
 
+  Widget _demoChip(AdminColors tc) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.science_rounded, size: 12, color: tc.orange),
+          const SizedBox(width: 5),
+          Text(
+            'DEMO MODE',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: tc.orange,
+              letterSpacing: 0.8,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ══════════════════════════════════════════════════════════════
-  // WORKFORCE CARD (orange, solid)
+  // WORKFORCE CARD
   // ══════════════════════════════════════════════════════════════
   Widget _workforceCard(
       AdminColors tc,
@@ -419,7 +621,6 @@ class AdminOverviewPage extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           const SizedBox(height: 4),
-
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -444,9 +645,7 @@ class AdminOverviewPage extends StatelessWidget {
               ),
             ],
           ),
-
           const SizedBox(height: 14),
-
           Row(
             children: [
               Icon(changeIcon, color: Colors.white, size: 18),
@@ -559,7 +758,7 @@ class AdminOverviewPage extends StatelessWidget {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // CHART CARD — ✅ FIXED: responsive header para sa mobile
+  // CHART CARD
   // ══════════════════════════════════════════════════════════════
   Widget _chartCard(AdminColors tc, List<int> data) {
     final maxVal = data.isEmpty ? 0.0 : data.reduce(max).toDouble();
@@ -594,7 +793,6 @@ class AdminOverviewPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ✅ Responsive header
               if (isNarrow) ...[
                 Text(
                   'Attendance Trend',
@@ -607,8 +805,8 @@ class AdminOverviewPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 6),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: tc.border),
@@ -783,8 +981,7 @@ class AdminOverviewPage extends StatelessWidget {
                     ? Center(
                   child: Text(
                     'No recent activity',
-                    style:
-                    TextStyle(color: tc.textMuted, fontSize: 13),
+                    style: TextStyle(color: tc.textMuted, fontSize: 13),
                   ),
                 )
                     : ListView.builder(
@@ -797,19 +994,18 @@ class AdminOverviewPage extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
-                  onPressed: () => onTabNavigate(4),
+                  onPressed: () => widget.onTabNavigate(4),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: tc.orange,
-                    side: BorderSide(
-                        color: tc.orange.withValues(alpha: 0.4)),
+                    side: BorderSide(color: tc.orange.withValues(alpha: 0.4)),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8)),
                   ),
                   child: const Text(
                     'View Detailed Log',
-                    style: TextStyle(
-                        fontWeight: FontWeight.w700, fontSize: 14),
+                    style:
+                    TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
                   ),
                 ),
               ),
@@ -877,8 +1073,8 @@ class AdminOverviewPage extends StatelessWidget {
         decoration: BoxDecoration(
           color: tc.elevated,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-              color: tc.border.withValues(alpha: 0.3), width: 1),
+          border:
+          Border.all(color: tc.border.withValues(alpha: 0.3), width: 1),
         ),
         child: Row(
           children: [

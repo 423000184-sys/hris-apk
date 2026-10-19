@@ -1,4 +1,5 @@
 // lib/screens/admin_password_change_requests_page.dart
+// v1.1: 🎭 Demo Mode Support (Mock Requests & Action Blocking)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' show Random;
@@ -13,6 +14,7 @@ import 'package:intl/intl.dart';
 import '../models/admin_notification.dart';
 import '../services/admin_notification_service.dart';
 import '../services/security_hardening_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 import 'admin_theme.dart';
 
 void _secureLog(String msg) {
@@ -41,10 +43,112 @@ class _PasswordChangeRequestsPageState
   static const int _maxDestructive = 5;
   static const Duration _rateWindow = Duration(seconds: 30);
 
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _demoBlock() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Action disabled in Demo Mode.'),
+        backgroundColor: Color(0xFFEF4444),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(10)),
+        ),
+        margin: EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  // 🎭 MOCK REQUESTS
+  List<AdminNotification> _getMockRequests() {
+    final now = DateTime.now();
+    return [
+      AdminNotification(
+        id: 'demo_pwd_1',
+        type: 'password_change',
+        title: 'Password change requested',
+        message: 'John Doe forgot their PIN and is requesting a reset.',
+        timestamp: now.subtract(const Duration(minutes: 12)),
+        read: false,
+        priority: 'high',
+        employeeName: 'John Doe',
+        employeeId: 'DEMO-001',
+        employeeIdentifier: 'DEMO-001',
+        employeeEmail: 'john.doe@demo.local',
+        reason: 'Forgot old PIN, cannot access account',
+        status: 'pending',
+        metadata: const {},
+      ),
+      AdminNotification(
+        id: 'demo_pwd_2',
+        type: 'password_change',
+        title: 'Password change requested',
+        message: 'Jane Smith needs PIN reset after switching phones.',
+        timestamp: now.subtract(const Duration(hours: 2)),
+        read: false,
+        priority: 'high',
+        employeeName: 'Jane Smith',
+        employeeId: 'DEMO-002',
+        employeeIdentifier: 'DEMO-002',
+        employeeEmail: 'jane.smith@demo.local',
+        reason: 'Changed device, old PIN no longer works',
+        status: 'pending',
+        metadata: const {},
+      ),
+      AdminNotification(
+        id: 'demo_pwd_3',
+        type: 'password_change',
+        title: 'Password change requested',
+        message: 'Mike Johnson requested a new PIN.',
+        timestamp: now.subtract(const Duration(hours: 5)),
+        read: true,
+        priority: 'normal',
+        employeeName: 'Mike Johnson',
+        employeeId: 'DEMO-003',
+        employeeIdentifier: 'DEMO-003',
+        employeeEmail: 'mike.johnson@demo.local',
+        reason: 'Suspected PIN leak',
+        status: 'approved',
+        metadata: const {
+          'approvedByEmail': 'admin@demo.local',
+          'newPin': '4821',
+        },
+      ),
+      AdminNotification(
+        id: 'demo_pwd_4',
+        type: 'password_change',
+        title: 'Password change requested',
+        message: 'Sarah Lee requested a PIN reset.',
+        timestamp: now.subtract(const Duration(days: 1)),
+        read: true,
+        priority: 'normal',
+        employeeName: 'Sarah Lee',
+        employeeId: 'DEMO-004',
+        employeeIdentifier: 'DEMO-004',
+        employeeEmail: 'sarah.lee@demo.local',
+        reason: 'Tried too many times, locked out',
+        status: 'rejected',
+        metadata: const {
+          'rejectReason': 'Contact HR in person',
+        },
+      ),
+    ];
+  }
+
   @override
   void initState() {
     super.initState();
-    _logAudit('page_opened', 'Admin opened password change requests page');
+    if (!_isDemo) {
+      _logAudit('page_opened', 'Admin opened password change requests page');
+    }
   }
 
   @override
@@ -55,6 +159,7 @@ class _PasswordChangeRequestsPageState
   }
 
   Future<void> _logAudit(String action, String details) async {
+    if (_isDemo) return;
     try {
       final empId =
       await SecurityHardeningService.instance.getCurrentEmployeeId();
@@ -105,9 +210,6 @@ class _PasswordChangeRequestsPageState
     return s;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🆕 PIN helpers
-  // ═══════════════════════════════════════════════════════════════
   String _generateNewPin() {
     final rnd = Random.secure();
     return (rnd.nextInt(9000) + 1000).toString();
@@ -124,10 +226,11 @@ class _PasswordChangeRequestsPageState
     return sha256.convert(bytes).toString();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔓 APPROVE — reset PIN + notify employee via local notif
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _approveRequest(AdminNotification n) async {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
     if (!_checkRateLimit()) {
       _showSnack('⚠️ Too fast. Please wait a few seconds.');
       return;
@@ -159,7 +262,6 @@ class _PasswordChangeRequestsPageState
         return;
       }
 
-      // 1️⃣ Update employee doc with new PIN
       await FirebaseFirestore.instance
           .collection('employees')
           .doc(empDocId)
@@ -178,7 +280,6 @@ class _PasswordChangeRequestsPageState
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      // 2️⃣ Update admin notification
       await FirebaseFirestore.instance
           .collection('admin_notifications')
           .doc(n.id)
@@ -192,7 +293,6 @@ class _PasswordChangeRequestsPageState
         'metadata.pinGeneratedAt': FieldValue.serverTimestamp(),
       });
 
-      // 3️⃣ Send notification to employee — WITH THE NEW PIN
       try {
         await FirebaseFirestore.instance
             .collection('employee_notifications')
@@ -208,12 +308,10 @@ class _PasswordChangeRequestsPageState
           'read': false,
           'timestamp': FieldValue.serverTimestamp(),
         });
-        _secureLog('✅ [EmployeeNotif] Sent PIN to employee $empDocId');
       } catch (e) {
         _secureLog('⚠️ Employee notification failed: $e');
       }
 
-      // 4️⃣ Activity log
       try {
         await FirebaseFirestore.instance
             .collection('activity_logs')
@@ -245,10 +343,11 @@ class _PasswordChangeRequestsPageState
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🆕 REGENERATE PIN for already-approved requests
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _regeneratePinForApproved(AdminNotification n) async {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
     if (!_checkRateLimit()) {
       _showSnack('⚠️ Too fast. Please wait a few seconds.');
       return;
@@ -302,7 +401,6 @@ class _PasswordChangeRequestsPageState
         'metadata.pinRegeneratedBy': adminId,
       });
 
-      // Notify employee
       try {
         await FirebaseFirestore.instance
             .collection('employee_notifications')
@@ -333,9 +431,6 @@ class _PasswordChangeRequestsPageState
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🆕 Show PIN dialog
-  // ═══════════════════════════════════════════════════════════════
   void _showNewPinDialog(AdminNotification n, String newPin) {
     final tc = AdminTheme.getColors(context);
     showDialog(
@@ -470,10 +565,11 @@ class _PasswordChangeRequestsPageState
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔒 REJECT
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _rejectRequest(AdminNotification n, String reason) async {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
     if (!_checkRateLimit()) {
       _showSnack('⚠️ Too fast. Please wait a few seconds.');
       return;
@@ -562,10 +658,11 @@ class _PasswordChangeRequestsPageState
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // ↩️ RESET
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _resetStatusToPending(AdminNotification n) async {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
     if (!_checkRateLimit()) {
       _showSnack('⚠️ Too fast. Please wait a few seconds.');
       return;
@@ -674,15 +771,19 @@ class _PasswordChangeRequestsPageState
         ),
         actions: [
           IconButton(
-            tooltip: 'Refresh',
-            icon: Icon(Icons.refresh_rounded, color: tc.textMuted, size: 20),
-            onPressed: () => setState(() {}),
+            tooltip: _isDemo ? 'Refresh disabled in Demo' : 'Refresh',
+            icon: Icon(Icons.refresh_rounded,
+                color: _isDemo ? tc.muted : tc.textMuted, size: 20),
+            onPressed: _isDemo ? null : () => setState(() {}),
           ),
           const SizedBox(width: 8),
         ],
       ),
-      body: StreamBuilder<List<AdminNotification>>(
-        stream: AdminNotificationService.instance.streamAll(limit: 200),
+      body: _isDemo
+          ? _buildDemoBody(tc)
+          : StreamBuilder<List<AdminNotification>>(
+        stream:
+        AdminNotificationService.instance.streamAll(limit: 200),
         builder: (context, snap) {
           if (snap.hasError) {
             return _errorState(tc, '${snap.error}');
@@ -722,6 +823,57 @@ class _PasswordChangeRequestsPageState
             ],
           );
         },
+      ),
+    );
+  }
+
+  // 🎭 DEMO BODY
+  Widget _buildDemoBody(AdminColors tc) {
+    final all = _getMockRequests();
+    final filtered = _applyFilter(all);
+
+    return Column(
+      children: [
+        _buildDemoBanner(tc),
+        _buildToolbar(tc, all),
+        Expanded(
+          child: filtered.isEmpty
+              ? _emptyState(tc)
+              : ListView.builder(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+            itemCount: filtered.length,
+            itemBuilder: (_, i) => _buildCard(tc, filtered[i]),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDemoBanner(AdminColors tc) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Demo Mode — showing sample requests. Approve, reject, and reset actions are disabled.',
+              style: TextStyle(
+                fontSize: 11,
+                color: tc.orange,
+                fontWeight: FontWeight.w600,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1095,8 +1247,9 @@ class _PasswordChangeRequestsPageState
                           ),
                         ),
                         TextButton.icon(
-                          onPressed: () =>
-                              _regeneratePinForApproved(n),
+                          onPressed: _isDemo
+                              ? _demoBlock
+                              : () => _regeneratePinForApproved(n),
                           icon: const Icon(Icons.refresh_rounded,
                               size: 14, color: Colors.orange),
                           label: const Text(
@@ -1133,43 +1286,43 @@ class _PasswordChangeRequestsPageState
                         tc,
                         label: 'Reject',
                         icon: Icons.close_rounded,
-                        color: tc.red,
-                        onTap: () => _confirmReject(tc, n),
+                        color: _isDemo ? tc.muted : tc.red,
+                        onTap: _isDemo ? _demoBlock : () => _confirmReject(tc, n),
                       ),
                       const SizedBox(width: 6),
                       _smallButton(
                         tc,
                         label: 'Approve & Reset',
                         icon: Icons.check_rounded,
-                        color: Colors.green,
-                        filled: true,
-                        onTap: () => _confirmApprove(tc, n),
+                        color: _isDemo ? tc.muted : Colors.green,
+                        filled: !_isDemo,
+                        onTap: _isDemo ? _demoBlock : () => _confirmApprove(tc, n),
                       ),
                     ] else if (status == 'approved' && hasPin) ...[
                       _smallButton(
                         tc,
                         label: 'Show PIN',
                         icon: Icons.visibility_rounded,
-                        color: tc.orange,
-                        onTap: () => _showNewPinDialog(n, savedPin),
+                        color: _isDemo ? tc.muted : tc.orange,
+                        onTap: _isDemo ? _demoBlock : () => _showNewPinDialog(n, savedPin),
                       ),
                       const SizedBox(width: 6),
                       _smallButton(
                         tc,
                         label: 'Regenerate',
                         icon: Icons.refresh_rounded,
-                        color: Colors.green,
-                        filled: true,
-                        onTap: () => _regeneratePinForApproved(n),
+                        color: _isDemo ? tc.muted : Colors.green,
+                        filled: !_isDemo,
+                        onTap: _isDemo ? _demoBlock : () => _regeneratePinForApproved(n),
                       ),
                     ] else if (status == 'approved') ...[
                       _smallButton(
                         tc,
                         label: 'Generate PIN',
                         icon: Icons.vpn_key_rounded,
-                        color: Colors.green,
-                        filled: true,
-                        onTap: () => _regeneratePinForApproved(n),
+                        color: _isDemo ? tc.muted : Colors.green,
+                        filled: !_isDemo,
+                        onTap: _isDemo ? _demoBlock : () => _regeneratePinForApproved(n),
                       ),
                     ] else
                       _smallButton(
@@ -1209,8 +1362,7 @@ class _PasswordChangeRequestsPageState
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon,
-                size: 13, color: filled ? Colors.white : color),
+            Icon(icon, size: 13, color: filled ? Colors.white : color),
             const SizedBox(width: 4),
             Text(
               label,
@@ -1418,7 +1570,9 @@ class _PasswordChangeRequestsPageState
                             ),
                             const SizedBox(width: 8),
                             TextButton.icon(
-                              onPressed: () {
+                              onPressed: _isDemo
+                                  ? _demoBlock
+                                  : () {
                                 Navigator.pop(ctx);
                                 _regeneratePinForApproved(n);
                               },
@@ -1480,7 +1634,9 @@ class _PasswordChangeRequestsPageState
                         ),
                         const SizedBox(height: 10),
                         FilledButton.icon(
-                          onPressed: () {
+                          onPressed: _isDemo
+                              ? _demoBlock
+                              : () {
                             Navigator.pop(ctx);
                             _regeneratePinForApproved(n);
                           },
@@ -1522,18 +1678,21 @@ class _PasswordChangeRequestsPageState
                   if (status == 'pending') ...[
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () async {
+                        onPressed: _isDemo
+                            ? _demoBlock
+                            : () async {
                           Navigator.pop(ctx);
                           await _confirmReject(tc, n);
                         },
                         icon: Icon(Icons.close_rounded,
-                            size: 16, color: tc.red),
+                            size: 16, color: _isDemo ? tc.muted : tc.red),
                         label: Text('Reject',
                             style: TextStyle(
-                                color: tc.red,
+                                color: _isDemo ? tc.muted : tc.red,
                                 fontWeight: FontWeight.w700)),
                         style: OutlinedButton.styleFrom(
-                          side: BorderSide(color: tc.red),
+                          side: BorderSide(
+                              color: _isDemo ? tc.border : tc.red),
                           padding:
                           const EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -1542,15 +1701,22 @@ class _PasswordChangeRequestsPageState
                     const SizedBox(width: 10),
                     Expanded(
                       child: FilledButton.icon(
-                        onPressed: () async {
+                        onPressed: _isDemo
+                            ? _demoBlock
+                            : () async {
                           Navigator.pop(ctx);
                           await _confirmApprove(tc, n);
                         },
-                        icon: const Icon(Icons.check_rounded, size: 16),
-                        label: const Text('Approve & Reset',
-                            style: TextStyle(fontWeight: FontWeight.w700)),
+                        icon: Icon(Icons.check_rounded,
+                            size: 16,
+                            color: _isDemo ? tc.muted : Colors.white),
+                        label: Text('Approve & Reset',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: _isDemo ? tc.muted : Colors.white)),
                         style: FilledButton.styleFrom(
-                          backgroundColor: Colors.green,
+                          backgroundColor:
+                          _isDemo ? tc.border : Colors.green,
                           padding:
                           const EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -1559,18 +1725,21 @@ class _PasswordChangeRequestsPageState
                   ] else
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () {
+                        onPressed: _isDemo
+                            ? _demoBlock
+                            : () {
                           Navigator.pop(ctx);
                           _resetStatusToPending(n);
                         },
                         icon: Icon(Icons.undo_rounded,
-                            size: 16, color: tc.orange),
+                            size: 16, color: _isDemo ? tc.muted : tc.orange),
                         label: Text('Reset to Pending',
                             style: TextStyle(
-                                color: tc.orange,
+                                color: _isDemo ? tc.muted : tc.orange,
                                 fontWeight: FontWeight.w700)),
                         style: OutlinedButton.styleFrom(
-                          side: BorderSide(color: tc.orange),
+                          side: BorderSide(
+                              color: _isDemo ? tc.border : tc.orange),
                           padding:
                           const EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -1630,6 +1799,11 @@ class _PasswordChangeRequestsPageState
   }
 
   Future<void> _confirmApprove(AdminColors tc, AdminNotification n) async {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1692,6 +1866,11 @@ class _PasswordChangeRequestsPageState
   }
 
   Future<void> _confirmReject(AdminColors tc, AdminNotification n) async {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
+
     final reasonCtrl = TextEditingController();
 
     final ok = await showDialog<bool>(

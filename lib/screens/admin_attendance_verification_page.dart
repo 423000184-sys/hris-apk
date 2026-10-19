@@ -1,10 +1,12 @@
 // lib/screens/admin_attendance_verification_page.dart
+// v1.1: 🎭 Demo Mode Support (Skip Firebase Fetch & Block Actions)
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'admin_theme.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 import '../widgets/bootstrap_grid.dart';
 
 class AdminAttendanceVerificationPage extends StatefulWidget {
@@ -32,13 +34,34 @@ class _AdminAttendanceVerificationPageState
   Map<String, dynamic>? _employeeData;
   Map<String, dynamic>? _locationData;
   String? _deviceInfoOverride;
-  String _deviceStatus = 'none'; // 'registered' | 'unregistered' | 'legacy' | 'none'
+  String _deviceStatus = 'none';
   String _registeredDeviceValue = '';
   String _actualDeviceValue = '';
   String? _clientInfoOverride;
   bool _loading = true;
 
   AdminColors get tc => AdminTheme.getColors(context);
+
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 🎭 Demo Block Helper
+  void _demoBlock() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Action disabled in Demo Mode.'),
+        backgroundColor: tc.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -89,29 +112,14 @@ class _AdminAttendanceVerificationPageState
 
   // ══════════════════════════════════════════════════════════════
   // ⭐ DEVICE MATCH HELPER
-  //
-  // Determines kung ang `actualDevice` ay tumutugma sa
-  // `registeredDevice`. Strict token-based matching para sa
-  // specific device models (e.g., "Samsung SM-A546E").
-  //
-  // Rules:
-  //   1. Exact match (case-insensitive) → MATCH
-  //   2. Both generic (e.g., "Web Browser") → exact only
-  //   3. One generic + one specific → NO MATCH
-  //   4. Both specific → token containment check:
-  //      lahat ng tokens ng shorter string ay present sa longer
-  //      (para "Samsung SM-A546E" vs "Samsung SM-A546F" = NO MATCH)
   // ══════════════════════════════════════════════════════════════
   bool _fuzzyDeviceMatch(String registered, String actual) {
     final regLower = registered.toLowerCase().trim();
     final actLower = actual.toLowerCase().trim();
 
     if (regLower.isEmpty || actLower.isEmpty) return false;
-
-    // Exact match
     if (regLower == actLower) return true;
 
-    // Clean suffixes / normalize whitespace
     String clean(String s) {
       return s
           .replaceAll(RegExp(r'\(web\)', caseSensitive: false), '')
@@ -125,7 +133,6 @@ class _AdminAttendanceVerificationPageState
     if (regClean.isEmpty || actClean.isEmpty) return false;
     if (regClean == actClean) return true;
 
-    // Generic terms — walang specific brand/model info
     const genericTerms = {
       'mobile app',
       'web browser',
@@ -147,16 +154,11 @@ class _AdminAttendanceVerificationPageState
     final regIsGeneric = genericTerms.contains(regClean);
     final actIsGeneric = genericTerms.contains(actClean);
 
-    // Isa lang ang generic → hindi match
     if (regIsGeneric != actIsGeneric) return false;
-
-    // Pareho generic → dapat exact
     if (regIsGeneric && actIsGeneric) {
       return regClean == actClean;
     }
 
-    // ─── Both specific → token containment ───
-    // Split by space, dash, underscore, comma, dot
     final regTokens = regClean
         .split(RegExp(r'[\s\-_\,\.]+'))
         .where((t) => t.length >= 2)
@@ -168,17 +170,14 @@ class _AdminAttendanceVerificationPageState
 
     if (regTokens.isEmpty || actTokens.isEmpty) return false;
 
-    // Determine shorter / longer
     final shorter =
     regTokens.length <= actTokens.length ? regTokens : actTokens;
     final longer =
     regTokens.length <= actTokens.length ? actTokens : regTokens;
 
-    // Lahat ng tokens ng shorter ay dapat present sa longer
     return shorter.every((t) => longer.contains(t));
   }
 
-  /// Check kung ang value ay "legacy" generic na dating format
   bool _isLegacyDeviceValue(String value) {
     final v = value.toLowerCase().trim();
     return v == 'mobile app' ||
@@ -189,26 +188,10 @@ class _AdminAttendanceVerificationPageState
         v == 'linux app';
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ⭐ EXTRACT DEVICE INFO WITH REGISTRATION CHECK
-  //
-  // Returns:
-  //   {
-  //     'displayValue': String,       — ano ipapakita
-  //     'status': 'registered'        — matched ang registered device
-  //             | 'unregistered'      — may registered pero iba ang ginamit
-  //             | 'legacy'            — registered is old generic format
-  //             | 'none',             — walang registered device
-  //     'registeredDevice': String,
-  //     'actualDevice': String,
-  //   }
-  // ══════════════════════════════════════════════════════════════
   Map<String, dynamic> _extractDeviceInfoWithSource(
       Map<String, dynamic> log) {
-    // ─── 1. Get registered device from employee profile ───
     String registeredDevice = '';
     if (_employeeData != null) {
-      // Priority: registeredDevice → deviceModel → deviceName
       final candidates = [
         _employeeData!['registeredDevice'],
         _employeeData!['deviceModel'],
@@ -227,8 +210,6 @@ class _AdminAttendanceVerificationPageState
       }
     }
 
-    // ─── 2. Get ACTUAL device used in this attendance log ───
-    //         Specific keys muna bago generic na 'device'
     String actualDevice = '';
 
     const specificKeys = [
@@ -251,7 +232,6 @@ class _AdminAttendanceVerificationPageState
       }
     }
 
-    // Fallback sa generic 'device'
     if (actualDevice.isEmpty) {
       final v = (log['device'] ?? '').toString().trim();
       if (v.isNotEmpty && v != '—' && v.toLowerCase() != 'null') {
@@ -259,7 +239,6 @@ class _AdminAttendanceVerificationPageState
       }
     }
 
-    // Fallback sa platform / os
     if (actualDevice.isEmpty) {
       const fallbackKeys = ['platform', 'os', 'userAgent', 'browser'];
       for (final key in fallbackKeys) {
@@ -274,12 +253,8 @@ class _AdminAttendanceVerificationPageState
     debugPrint('📱 [Device] registered="$registeredDevice" | '
         'actual="$actualDevice"');
 
-    // ─── 3. Compare and decide status ───
     if (registeredDevice.isNotEmpty) {
-      // 🔶 Legacy check — kung generic pa ang registered
       if (_isLegacyDeviceValue(registeredDevice)) {
-        // Kung ang actual ay specific na (bagong format), flag as legacy
-        // para ma-update ng employee.
         if (actualDevice.isNotEmpty && !_isLegacyDeviceValue(actualDevice)) {
           return {
             'displayValue': actualDevice,
@@ -288,18 +263,15 @@ class _AdminAttendanceVerificationPageState
             'actualDevice': actualDevice,
           };
         }
-        // Kung pareho legacy — i-treat as registered
         return {
           'displayValue': registeredDevice,
           'status': 'registered',
           'registeredDevice': registeredDevice,
-          'actualDevice': actualDevice.isNotEmpty
-              ? actualDevice
-              : registeredDevice,
+          'actualDevice':
+          actualDevice.isNotEmpty ? actualDevice : registeredDevice,
         };
       }
 
-      // Walang actual info
       if (actualDevice.isEmpty) {
         return {
           'displayValue': registeredDevice,
@@ -309,11 +281,9 @@ class _AdminAttendanceVerificationPageState
         };
       }
 
-      // ⭐ Fuzzy match
       final matches = _fuzzyDeviceMatch(registeredDevice, actualDevice);
 
       if (matches) {
-        // ✅ MATCH — same device
         return {
           'displayValue': registeredDevice,
           'status': 'registered',
@@ -321,7 +291,6 @@ class _AdminAttendanceVerificationPageState
           'actualDevice': actualDevice,
         };
       } else {
-        // ⚠️ MISMATCH — ibang device ang ginamit
         return {
           'displayValue': actualDevice,
           'status': 'unregistered',
@@ -331,7 +300,6 @@ class _AdminAttendanceVerificationPageState
       }
     }
 
-    // Walang registered device sa profile
     if (actualDevice.isNotEmpty) {
       return {
         'displayValue': actualDevice,
@@ -376,6 +344,44 @@ class _AdminAttendanceVerificationPageState
   // FETCH EMPLOYEE + LOCATION + DEVICE
   // ══════════════════════════════════════════════════════════════
   Future<void> _fetchRelatedData() async {
+    // 🎭 DEMO MODE — skip Firebase completely
+    if (_isDemo) {
+      final log = widget.logData;
+      _clientInfoOverride = _extractClientInfo(log);
+
+      // Mock employee data from logData
+      _employeeData = {
+        'name': log['employee_name'] ?? log['name'] ?? 'Demo Employee',
+        'employeeId': log['employee_id'] ?? log['employeeId'] ?? 'DEMO-001',
+        'department': log['department'] ?? 'Operations',
+        'role': log['position'] ?? 'Staff',
+        'photoUrl': '',
+        'deviceName': log['registeredDevice'] ?? 'iPhone 14 Pro',
+      };
+
+      // Mock device — always registered in demo
+      _deviceInfoOverride =
+          log['registeredDevice']?.toString() ?? 'iPhone 14 Pro';
+      _deviceStatus = 'registered';
+      _registeredDeviceValue = _deviceInfoOverride!;
+      _actualDeviceValue = _deviceInfoOverride!;
+
+      // Mock location from log (if any)
+      final logCoords = _extractLatLng(log);
+      if (logCoords != null) {
+        _locationData = {
+          'latitude': logCoords.latitude,
+          'longitude': logCoords.longitude,
+          'locationName': log['locationName'] ?? 'Makati Office',
+          'timestamp': log['timestamp'],
+        };
+      }
+
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+
+    // ─── NORMAL MODE: Fetch from Firebase ───
     final log = widget.logData;
     final empId = (log['employee_id'] ?? log['employeeId'] ?? '').toString();
     final empAuthUid = (log['authUid'] ?? log['auth_uid'] ?? '').toString();
@@ -385,10 +391,6 @@ class _AdminAttendanceVerificationPageState
 
     debugPrint('═══════════════════════════════════════════════════');
     debugPrint('🔍 [VERIFY] Fetch: name="$empName" id="$empId" email="$empEmail"');
-    debugPrint('🔍 [VERIFY] Log timestamp: $logTs');
-    debugPrint('🔍 [VERIFY] Log device keys: '
-        'device=${log['device']} deviceModel=${log['deviceModel']} '
-        'deviceName=${log['deviceName']}');
 
     _clientInfoOverride = _extractClientInfo(log);
 
@@ -400,11 +402,9 @@ class _AdminAttendanceVerificationPageState
         'locationName': log['locationName'] ?? log['location_name'],
         'timestamp': log['timestamp'],
       };
-      debugPrint('✅ [VERIFY] Coords IN LOG: '
-          '${logCoords.latitude}, ${logCoords.longitude}');
     }
 
-    // ═══ 1. Fetch employee doc FIRST (need registered device) ═══
+    // Fetch employee
     try {
       Map<String, dynamic>? found;
 
@@ -416,7 +416,6 @@ class _AdminAttendanceVerificationPageState
             .get();
         if (s.docs.isNotEmpty) {
           found = {...s.docs.first.data(), 'id': s.docs.first.id};
-          debugPrint('✅ [VERIFY] Emp by authUid');
         }
       }
 
@@ -427,7 +426,6 @@ class _AdminAttendanceVerificationPageState
             .get();
         if (doc.exists && doc.data() != null) {
           found = {...doc.data()!, 'id': doc.id};
-          debugPrint('✅ [VERIFY] Emp by doc id');
         }
       }
 
@@ -439,7 +437,6 @@ class _AdminAttendanceVerificationPageState
             .get();
         if (s.docs.isNotEmpty) {
           found = {...s.docs.first.data(), 'id': s.docs.first.id};
-          debugPrint('✅ [VERIFY] Emp by name');
         }
       }
 
@@ -451,7 +448,6 @@ class _AdminAttendanceVerificationPageState
             .get();
         if (s.docs.isNotEmpty) {
           found = {...s.docs.first.data(), 'id': s.docs.first.id};
-          debugPrint('✅ [VERIFY] Emp by nfcTagId');
         }
       }
 
@@ -463,44 +459,21 @@ class _AdminAttendanceVerificationPageState
             .get();
         if (s.docs.isNotEmpty) {
           found = {...s.docs.first.data(), 'id': s.docs.first.id};
-          debugPrint('✅ [VERIFY] Emp by email');
         }
       }
 
       _employeeData = found;
-
-      if (found != null) {
-        debugPrint('✅ [VERIFY] Employee deviceName: '
-            '${found['deviceName'] ?? '(none)'}');
-        debugPrint('✅ [VERIFY] Employee registeredDevice: '
-            '${found['registeredDevice'] ?? '(none)'}');
-        debugPrint('✅ [VERIFY] Employee deviceModel: '
-            '${found['deviceModel'] ?? '(none)'}');
-      }
     } catch (e) {
       debugPrint('❌ [VERIFY] Emp error: $e');
     }
 
-    // ═══ 2. Extract device info WITH registration check ═══
+    // Extract device info
     final deviceResult = _extractDeviceInfoWithSource(log);
     _deviceInfoOverride = deviceResult['displayValue'] as String;
     _deviceStatus = deviceResult['status'] as String;
     _registeredDeviceValue =
         deviceResult['registeredDevice'] as String? ?? '';
     _actualDeviceValue = deviceResult['actualDevice'] as String? ?? '';
-
-    debugPrint('📱 [VERIFY] Device resolved: "$_deviceInfoOverride" '
-        '(status=$_deviceStatus)');
-    if (_deviceStatus == 'unregistered') {
-      debugPrint('⚠️ [VERIFY] MISMATCH! '
-          'Registered="$_registeredDeviceValue" '
-          'Actual="$_actualDeviceValue"');
-    }
-    if (_deviceStatus == 'legacy') {
-      debugPrint('🔶 [VERIFY] LEGACY format — '
-          'Registered="$_registeredDeviceValue" '
-          'Actual="$_actualDeviceValue"');
-    }
 
     final Set<String> empIds = {};
     empIds.add(empId);
@@ -519,7 +492,7 @@ class _AdminAttendanceVerificationPageState
     }
     empEmails.removeWhere((e) => e.isEmpty);
 
-    // ═══ 3. Fetch GPS from user locations ═══
+    // Fetch GPS from user locations
     if (_locationData == null) {
       const locationCollections = [
         'user locations',
@@ -578,7 +551,6 @@ class _AdminAttendanceVerificationPageState
                 }
 
                 _locationData = {...data, 'id': d.id};
-                debugPrint('✅ [VERIFY] Location found in "$coll"');
                 break;
               }
             } catch (e) {
@@ -801,11 +773,16 @@ class _AdminAttendanceVerificationPageState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 🎭 DEMO BANNER
+              if (_isDemo) ...[
+                _buildDemoBanner(),
+                const SizedBox(height: 16),
+              ],
               _buildBreadcrumb(tc),
               const SizedBox(height: 8),
               _buildPageHeader(context, tc),
               const SizedBox(height: 24),
-              if (_loading)
+              if (_loading && !_isDemo)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Row(
@@ -899,8 +876,50 @@ class _AdminAttendanceVerificationPageState
     );
   }
 
+  // 🎭 DEMO BANNER
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample verification data. Approve and Flag actions are disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ══════════════════════════════════════════════════════════════
-  // BREADCRUMB (Clean Back Button)
+  // BREADCRUMB
   // ══════════════════════════════════════════════════════════════
   Widget _buildBreadcrumb(AdminColors tc) {
     if (widget.onBack == null) return const SizedBox.shrink();
@@ -929,7 +948,7 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // PAGE HEADER (Title + Subtitle + Action)
+  // PAGE HEADER
   // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeader(BuildContext context, AdminColors tc) {
     return LayoutBuilder(builder: (_, c) {
@@ -950,14 +969,16 @@ class _AdminAttendanceVerificationPageState
           ),
           const SizedBox(height: 4),
           Text(
-            'Off-site Client Meeting Proof', // Subtitle
+            'Off-site Client Meeting Proof',
             style: TextStyle(fontSize: 13, color: tc.muted),
           ),
         ],
       );
 
       final approveBtn = ElevatedButton.icon(
-        onPressed: () {
+        onPressed: _isDemo
+            ? _demoBlock
+            : () {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text('Marked as approved.'),
@@ -965,12 +986,17 @@ class _AdminAttendanceVerificationPageState
             ),
           );
         },
-        icon: const Icon(Icons.done_all_rounded, size: 16),
-        label: const Text('Approve All',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+        icon: Icon(
+          _isDemo ? Icons.lock_outline_rounded : Icons.done_all_rounded,
+          size: 16,
+        ),
+        label: Text(
+          _isDemo ? 'Approve Disabled (Demo)' : 'Approve All',
+          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+        ),
         style: ElevatedButton.styleFrom(
-          backgroundColor: tc.orange,
-          foregroundColor: Colors.white,
+          backgroundColor: _isDemo ? tc.border : tc.orange,
+          foregroundColor: _isDemo ? tc.muted : Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
           shape:
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -1308,7 +1334,6 @@ class _AdminAttendanceVerificationPageState
     final statusLabel =
     isLate ? 'Late' : (isLogin ? 'On Time' : 'Clocked Out');
 
-    // Sub info — device model muna, tapos location / keyfob
     final deviceFromEntry = _s(
         entry['deviceModel'] ??
             entry['deviceName'] ??
@@ -1509,7 +1534,9 @@ class _AdminAttendanceVerificationPageState
               ),
               const SizedBox(width: 12),
               InkWell(
-                onTap: () {
+                onTap: _isDemo
+                    ? _demoBlock
+                    : () {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: const Text('Flagged for review.'),
@@ -1523,10 +1550,15 @@ class _AdminAttendanceVerificationPageState
                   height: 40,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(color: tc.red.withValues(alpha: 0.3)),
+                    border: Border.all(
+                        color: (_isDemo ? tc.border : tc.red)
+                            .withValues(alpha: 0.3)),
                   ),
-                  child:
-                  Icon(Icons.flag_outlined, size: 18, color: tc.red),
+                  child: Icon(
+                    _isDemo ? Icons.lock_outline_rounded : Icons.flag_outlined,
+                    size: 18,
+                    color: _isDemo ? tc.muted : tc.red,
+                  ),
                 ),
               ),
             ],
@@ -1544,7 +1576,6 @@ class _AdminAttendanceVerificationPageState
                 label: 'CLIENT',
                 value: client);
 
-            // ⭐ DEVICE BOX — specialized widget with registration check
             final deviceBox = _buildDeviceInfoBox(
               tc,
               deviceStatus: deviceStatus,
@@ -1577,7 +1608,7 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ⭐ DEVICE INFO BOX — with registered / unregistered / legacy
+  // DEVICE INFO BOX
   // ══════════════════════════════════════════════════════════════
   Widget _buildDeviceInfoBox(
       AdminColors tc, {
@@ -1591,7 +1622,6 @@ class _AdminAttendanceVerificationPageState
     final bool isLegacy = deviceStatus == 'legacy';
     final bool isUnknown = deviceStatus == 'none';
 
-    // Colors per state
     Color boxBg;
     Color boxBorder;
     Color iconColor;
@@ -1603,7 +1633,6 @@ class _AdminAttendanceVerificationPageState
     String? badgeText;
 
     if (isRegistered) {
-      // ✅ Registered — green
       boxBg = const Color(0xFFDCFCE7);
       boxBorder = const Color(0xFF22C55E);
       iconColor = const Color(0xFF166534);
@@ -1614,7 +1643,6 @@ class _AdminAttendanceVerificationPageState
       badgeTextColor = Colors.white;
       badgeText = 'REGISTERED';
     } else if (isUnregistered) {
-      // ⚠️ Unregistered — red alert
       boxBg = const Color(0xFFFEE2E2);
       boxBorder = const Color(0xFFEF4444);
       iconColor = const Color(0xFF991B1B);
@@ -1625,7 +1653,6 @@ class _AdminAttendanceVerificationPageState
       badgeTextColor = Colors.white;
       badgeText = 'UNREGISTERED';
     } else if (isLegacy) {
-      // 🔶 Legacy — amber (registered is old generic format)
       boxBg = const Color(0xFFFEF3C7);
       boxBorder = const Color(0xFFF59E0B);
       iconColor = const Color(0xFF92400E);
@@ -1636,7 +1663,6 @@ class _AdminAttendanceVerificationPageState
       badgeTextColor = Colors.white;
       badgeText = 'NEEDS UPDATE';
     } else {
-      // Normal — surface
       boxBg = tc.surface;
       boxBorder = tc.border;
       iconColor = tc.muted;
@@ -1658,7 +1684,6 @@ class _AdminAttendanceVerificationPageState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Label row
           Row(
             children: [
               Icon(icon, size: 12, color: iconColor),
@@ -1695,8 +1720,6 @@ class _AdminAttendanceVerificationPageState
             ],
           ),
           const SizedBox(height: 8),
-
-          // Value (actual device)
           Text(
             displayValue,
             style: TextStyle(
@@ -1707,8 +1730,6 @@ class _AdminAttendanceVerificationPageState
             overflow: TextOverflow.ellipsis,
             maxLines: 2,
           ),
-
-          // Unregistered — show registered device
           if (isUnregistered && registeredDevice.isNotEmpty) ...[
             const SizedBox(height: 8),
             Container(
@@ -1756,8 +1777,6 @@ class _AdminAttendanceVerificationPageState
               ),
             ),
           ],
-
-          // Legacy — show note to update
           if (isLegacy && registeredDevice.isNotEmpty) ...[
             const SizedBox(height: 8),
             Container(
@@ -1805,8 +1824,6 @@ class _AdminAttendanceVerificationPageState
               ),
             ),
           ],
-
-          // Info hint for registered
           if (isRegistered && actualDevice.isNotEmpty) ...[
             const SizedBox(height: 6),
             Row(
@@ -1828,8 +1845,6 @@ class _AdminAttendanceVerificationPageState
               ],
             ),
           ],
-
-          // Hint for unknown
           if (isUnknown && displayValue == 'Not recorded') ...[
             const SizedBox(height: 4),
             Text(
@@ -2045,8 +2060,7 @@ class _AdminAttendanceVerificationPageState
                     color: coords != null ? tc.pillGreenBg : tc.pillWarnBg,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color:
-                      (coords != null ? tc.pillGreenTx : tc.pillWarnTx)
+                      color: (coords != null ? tc.pillGreenTx : tc.pillWarnTx)
                           .withValues(alpha: 0.3),
                     ),
                   ),
@@ -2116,7 +2130,7 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // SUB DETAIL BOX (generic — para sa CLIENT lang)
+  // SUB DETAIL BOX
   // ══════════════════════════════════════════════════════════════
   Widget _subDetailBox(
       AdminColors tc, {

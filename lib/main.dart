@@ -134,15 +134,9 @@ void main() async {
       // ═══════════════════════════════════════════════════════════════
       if (!kIsWeb) {
         try {
-          // Set log level (verbose for debugging — pwede mong bawasan sa production)
           OneSignal.Debug.setLogLevel(OSLogLevel.none);
-
-          // Initialize with App ID
           OneSignal.initialize(kOneSignalAppId);
-
-          // Request notification permission
           OneSignal.Notifications.requestPermission(true);
-
           debugPrint('🔔 [OneSignal] Initialized — App ID: $kOneSignalAppId');
         } catch (e) {
           debugPrint('⚠️ [OneSignal] Init failed: $e');
@@ -200,9 +194,6 @@ void main() async {
         debugPrint('⚠️ NotificationBackupService init failed: $e');
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // 🆕 INITIALIZE FCM SERVICE
-      // ═══════════════════════════════════════════════════════════════
       try {
         await FcmService.instance.init();
         debugPrint('🔔 [FCM] FcmService initialized');
@@ -241,9 +232,6 @@ void main() async {
         debugPrint('⚠️ Offline attendance init failed: $e');
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // 🔔 LOCAL NOTIFICATIONS + GLOBAL LISTENER
-      // ═══════════════════════════════════════════════════════════════
       try {
         await LocalNotificationService.instance.init();
         debugPrint('🔔 LocalNotificationService initialized');
@@ -264,9 +252,6 @@ void main() async {
           await LocalNotificationService.instance.runDiagnostics();
         }
 
-        // ═══════════════════════════════════════════════════════════
-        // 🆕 START GLOBAL NOTIFICATION LISTENER
-        // ═══════════════════════════════════════════════════════════
         try {
           final prefs = await SharedPreferences.getInstance();
           final lastEmpId =
@@ -288,9 +273,6 @@ void main() async {
       }
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // 🆕 GLOBAL LISTENER FOR WEB (browser-based)
-    // ═══════════════════════════════════════════════════════════════
     if (kIsWeb) {
       try {
         await LocalNotificationService.instance.init();
@@ -319,9 +301,6 @@ void main() async {
       debugPrint('🌗 Reset error: $e');
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // 🔥 WAIT FOR FIREBASE AUTH TO RESTORE SESSION
-    // ═══════════════════════════════════════════════════════════════
     if (kIsWeb) {
       debugPrint('🔍 [Auth] Waiting for session restore...');
       for (int i = 0; i < 6; i++) {
@@ -339,16 +318,13 @@ void main() async {
       }
     }
 
-    const String startPage =
-    String.fromEnvironment('page', defaultValue: 'landing');
-
     runApp(
       MultiProvider(
         providers: [
           ChangeNotifierProvider(create: (_) => ThemeNotifier()),
           ChangeNotifierProvider.value(value: LanguageService.instance),
         ],
-        child: const MyApp(startPage: startPage),
+        child: const MyApp(),
       ),
     );
   }, (error, stack) {
@@ -361,12 +337,13 @@ Future<void> _initAppCheck() async {
 }
 
 class MyApp extends StatelessWidget {
-  final String startPage;
-  const MyApp({super.key, required this.startPage});
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final bool isAdmin = startPage == 'admin';
+    // 💻 KAPAG WEB (PC/Laptop/Mac) = AUTOMATIC NA ADMIN DASHBOARD
+    // 📱 KAPAG MOBILE (APK/iOS) = AUTOMATIC NA EMPLOYEE LANDING SCREEN
+    final bool isAdmin = kIsWeb;
 
     return Consumer2<ThemeNotifier, LanguageService>(
       builder: (context, themeNotifier, langService, child) {
@@ -385,15 +362,17 @@ class MyApp extends StatelessWidget {
             scrollbars: false,
           ),
           builder: (context, child) {
+            // Kung Admin, wag na lagyan ng NetworkGate para hindi mag-clash
             if (isAdmin) return child ?? const SizedBox.shrink();
             return NetworkGate(
               showBannerOnly: true,
               child: child ?? const SizedBox.shrink(),
             );
           },
+          // 🔥 AUTO-ROUTING BASE SA DEVICE
           home: isAdmin
-              ? const AdminLoginScreen()
-              : SplashScreen(startPage: startPage),
+              ? const AdminLoginScreen() // Kung naka-browser, deretso Admin Login
+              : const SplashScreen(startPage: 'landing'), // Kung mobile, deretso Employee Landing
         );
       },
     );

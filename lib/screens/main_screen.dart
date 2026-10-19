@@ -1,4 +1,7 @@
 // lib/screens/main_screen.dart
+// v2.1: ⏰ Auto-recover OT reminders sa startup + on resume
+//       🌐 All English strings
+//       🎭 Demo mode — skip lahat ng listeners
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
@@ -18,7 +21,9 @@ import '../services/motion_detection_service.dart';
 import '../services/geofence_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/presence_challenge_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 NEW
+import '../services/demo_mode_service.dart';
+import '../services/overtime_reminder_service.dart'; // 🆕
+import '../services/trusted_time_service.dart'; // 🆕
 import 'dashboard_screen.dart';
 import 'clock_screen.dart';
 import 'attendance_history_screen.dart';
@@ -88,12 +93,37 @@ class MainScreenState extends State<MainScreen>
 
   static const Color _navActive = Color(0xFFFF8A00);
   static const Color _navInactive = Color(0xFF71717A);
-  // 🎭 Demo mode uses SAME orange theme para consistent
   static const Color _demoAccent = Color(0xFFFF8A00);
   static const Color _demoAccentDark = Color(0xFFF54900);
 
   // ══════════════════════════════════════════════════════════════
-  // FINGERPRINT HELPERS
+  // ⏰ OVERTIME REMINDER RECOVERY
+  //    Kapag nag-restart ang app habang naka-clock in pa,
+  //    i-recover ang scheduled OT reminders.
+  //    Kapag nag-clock out na, i-cancel lahat.
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _recoverOvertimeReminders() async {
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping OT reminder recovery');
+      return;
+    }
+
+    final emp = widget.employee;
+    if (emp == null) return;
+
+    final empId = emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
+    if (empId.isEmpty) return;
+
+    try {
+      _secureLog('🔄 [OT] Recovering overtime reminders for $empId');
+      await OvertimeReminderService.instance.recoverIfStillClockedIn(empId);
+    } catch (e) {
+      _secureLog('⚠️ [OT] Recovery failed: $e');
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🔐 FINGERPRINT HELPERS
   // ══════════════════════════════════════════════════════════════
   bool _isEnrolledFromData(Map<String, dynamic>? data) {
     if (data == null) return false;
@@ -104,7 +134,6 @@ class MainScreenState extends State<MainScreen>
   }
 
   void _startFingerprintListener() {
-    // 🎭 DEMO — skip
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping fingerprint listener');
       _fpStatusLoaded = true;
@@ -156,7 +185,6 @@ class MainScreenState extends State<MainScreen>
   }
 
   Future<void> _openFingerprintRegistration() async {
-    // 🎭 DEMO — skip
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Fingerprint registration not needed');
       return;
@@ -184,13 +212,15 @@ class MainScreenState extends State<MainScreen>
 
     if (!mounted) return;
     _secureLog('🔐 Returned from FingerprintScreen');
+
+    // ⏰ Refresh OT reminders in case nag-register at nag-clock in
+    unawaited(_recoverOvertimeReminders());
   }
 
   // ══════════════════════════════════════════════════════════════
   // PRESENCE CHALLENGE HANDLER
   // ══════════════════════════════════════════════════════════════
   Future<void> _handlePresenceChallenge(ChallengeDue due) async {
-    // 🎭 DEMO — skip
     if (_isDemo) return;
 
     if (!mounted) return;
@@ -386,7 +416,6 @@ class MainScreenState extends State<MainScreen>
   }
 
   void _handleMissedSummary(int missedCount) {
-    // 🎭 DEMO — skip
     if (_isDemo) return;
 
     if (!mounted) return;
@@ -476,7 +505,6 @@ class MainScreenState extends State<MainScreen>
   // PRESENCE HELPERS
   // ══════════════════════════════════════════════════════════════
   String? get _presenceDocId {
-    // 🎭 DEMO — walang totoong doc ID
     if (_isDemo) return null;
 
     final id = widget.employee?.id;
@@ -485,7 +513,6 @@ class MainScreenState extends State<MainScreen>
   }
 
   Future<void> _markOnline() async {
-    // 🎭 DEMO — skip DB write
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping _markOnline DB write');
       return;
@@ -510,7 +537,6 @@ class MainScreenState extends State<MainScreen>
   }
 
   Future<void> _markOffline() async {
-    // 🎭 DEMO — skip DB write
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping _markOffline DB write');
       return;
@@ -534,7 +560,6 @@ class MainScreenState extends State<MainScreen>
   }
 
   void _startPresenceHeartbeat() {
-    // 🎭 DEMO — skip
     if (_isDemo) return;
 
     _presenceHeartbeat?.cancel();
@@ -548,7 +573,6 @@ class MainScreenState extends State<MainScreen>
   // GEOFENCE LISTENER
   // ══════════════════════════════════════════════════════════════
   void _startGeofenceListener() {
-    // 🎭 DEMO — skip
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping geofence listener');
       return;
@@ -586,7 +610,6 @@ class MainScreenState extends State<MainScreen>
   // LOGOUT
   // ══════════════════════════════════════════════════════════════
   Future<void> _handleLogout() async {
-    // 🎭 DEMO — special exit
     if (_isDemo) {
       final confirm = await showDialog<bool>(
         context: context,
@@ -628,6 +651,11 @@ class MainScreenState extends State<MainScreen>
       if (confirm != true) return;
 
       DemoModeService.instance.disable();
+
+      // 🚫 Cancel any OT reminders that might have been scheduled
+      try {
+        await OvertimeReminderService.instance.cancelAll();
+      } catch (_) {}
 
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
@@ -671,6 +699,12 @@ class MainScreenState extends State<MainScreen>
     );
 
     if (confirm != true) return;
+
+    // 🚫 Cancel OT reminders kapag nag-logout
+    try {
+      await OvertimeReminderService.instance.cancelAll();
+      _secureLog('🚫 [OT] Reminders cancelled on logout');
+    } catch (_) {}
 
     try {
       await _markOffline();
@@ -753,7 +787,6 @@ class MainScreenState extends State<MainScreen>
   // OPEN CLOCK SCREEN
   // ══════════════════════════════════════════════════════════════
   void _openClockOverlay() {
-    // 🎭 DEMO MODE — bypass lahat ng checks
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Opening clock overlay (bypassing all checks)');
       setState(() => _showClockOverlay = true);
@@ -862,6 +895,9 @@ class MainScreenState extends State<MainScreen>
       _selectedIndex = 0;
     });
     _refreshDashboard();
+
+    // ⏰ Refresh OT reminders after clock action
+    unawaited(_recoverOvertimeReminders());
   }
 
   void _showOfflineSnack(String msg) {
@@ -884,7 +920,6 @@ class MainScreenState extends State<MainScreen>
   }
 
   Future<void> _bootstrapChallengeService(model.Employee emp) async {
-    // 🎭 DEMO — skip
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping challenge bootstrap');
       return;
@@ -931,12 +966,12 @@ class MainScreenState extends State<MainScreen>
       _secureLog('   • Skipping geofence listener');
       _secureLog('   • Skipping fingerprint listener');
       _secureLog('   • Skipping challenge service');
+      _secureLog('   • Skipping OT reminder recovery');
       _secureLog('═══════════════════════════════════════════');
 
       _fpStatusLoaded = true;
       _fingerprintEnrolled = true;
 
-      // Only network listener (no DB)
       try {
         _isOnline = ConnectivityService.instance.isOnline;
       } catch (_) {
@@ -953,10 +988,10 @@ class MainScreenState extends State<MainScreen>
         _secureLog('⚠️ connectivity failed: $e');
       }
 
-      return; // ← HUWAG mag-setup ng ibang services
+      return;
     }
 
-    // NORMAL MODE (existing behavior)
+    // NORMAL MODE
     try {
       SecurityHardeningService.instance.enableSecureScreen();
     } catch (_) {}
@@ -965,6 +1000,27 @@ class MainScreenState extends State<MainScreen>
 
     _startGeofenceListener();
     _startFingerprintListener();
+
+    // ⏰ Init OvertimeReminderService + recover
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+
+      try {
+        await OvertimeReminderService.instance.init();
+      } catch (e) {
+        _secureLog('⚠️ [OT] init failed: $e');
+      }
+
+      // Sync server time for anti-tamper check
+      try {
+        await TrustedTimeService.instance.syncWithServer();
+      } catch (e) {
+        _secureLog('⚠️ [TrustedTime] sync failed: $e');
+      }
+
+      // ⏰ Recover OT reminders kung naka-clock in pa
+      await _recoverOvertimeReminders();
+    });
 
     final empId = widget.employee?.employeeId ?? '';
     if (empId.isNotEmpty) {
@@ -1029,6 +1085,11 @@ class MainScreenState extends State<MainScreen>
               try {
                 PresenceChallengeService.instance.checkNow();
               } catch (_) {}
+              // ⏰ Sync trusted time + recover OT reminders kapag bumalik ang net
+              try {
+                TrustedTimeService.instance.syncWithServer(force: true);
+              } catch (_) {}
+              unawaited(_recoverOvertimeReminders());
             }
           });
     } catch (e) {
@@ -1068,7 +1129,6 @@ class MainScreenState extends State<MainScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
 
-    // 🎭 DEMO — skip
     if (_isDemo) return;
 
     if (_presenceDocId == null) return;
@@ -1083,6 +1143,12 @@ class MainScreenState extends State<MainScreen>
           GeofenceService.instance.forceReload();
           _secureLog('🔄 Geofence zones refreshed');
         } catch (_) {}
+
+        // ⏰ Recover OT reminders + sync trusted time on resume
+        try {
+          TrustedTimeService.instance.syncWithServer(force: false);
+        } catch (_) {}
+        unawaited(_recoverOvertimeReminders());
 
         _resumeDebounce?.cancel();
         _resumeDebounce = Timer(const Duration(milliseconds: 600), () {
@@ -1204,7 +1270,6 @@ class MainScreenState extends State<MainScreen>
                     ),
                   ),
 
-                // 🎭 DEMO MODE badge
                 if (_isDemo)
                   Positioned(
                     top: 0,
@@ -1220,7 +1285,7 @@ class MainScreenState extends State<MainScreen>
                     !_fingerprintEnrolled &&
                     !_fpPromptDismissed &&
                     _isOnline &&
-                    !_isDemo && // 🎭 skip kapag demo
+                    !_isDemo &&
                     widget.employee != null &&
                     !_showClockOverlay)
                   Positioned(
@@ -1266,7 +1331,6 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
-  // 🎭 DEMO MODE BADGE
   Widget _buildDemoBadge() {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -1474,7 +1538,6 @@ class MainScreenState extends State<MainScreen>
   }
 
   Widget _buildClockFab(BuildContext context) {
-    // 🎭 DEMO — always enabled, always fingerprint icon
     if (_isDemo) {
       final overlayOpen = _showClockOverlay;
       return AnimatedContainer(

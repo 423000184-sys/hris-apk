@@ -1,7 +1,9 @@
 // lib/screens/facial_recognition_screen.dart
-// v2.4: 🌐 All UI strings converted to English
+// v2.5: ⏰ Auto-schedule overtime reminders pagkatapos ng clock-in
+//       🚫 Auto-cancel kapag nag-clock out
+//       🚨 Trusted time check (anti-tamper)
+//       🌐 All UI strings in English
 //       🔒 Demo mode requires internet connection
-//       ✅ Online → real camera + liveness (always pass)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -27,6 +29,8 @@ import '../services/face_liveness.dart';
 import '../services/security_hardening_service.dart';
 import '../services/presence_challenge_service.dart';
 import '../services/demo_mode_service.dart';
+import '../services/overtime_reminder_service.dart';
+import '../services/trusted_time_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_screens.dart';
 import 'main_screen.dart';
@@ -899,17 +903,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!mounted || _isScanning || _isCheckingTemplate) return;
     if (_authMode == _AuthMode.unknown) return;
 
-    // ═══════════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — REQUIRES INTERNET
-    //    • Offline → snackbar + block
-    //    • Online  → real camera + liveness, always pass
-    // ═══════════════════════════════════════════════════════════════
     if (_isDemo) {
       _secureLog('═══════════════════════════════════════════');
       _secureLog('🎭 [DemoMode] _startScan() STARTED');
       _secureLog('═══════════════════════════════════════════');
 
-      // 🔌 STEP 1: CHECK INTERNET FIRST
       final online = _isOnlineSafely();
       _secureLog('🎭 [DemoMode] online check = $online');
 
@@ -949,12 +947,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       }
 
       if (!cameraOk) {
-        // 🔁 Fallback: auto-succeed (no camera / web)
         _secureLog('🎭 [DemoMode] No camera — auto-succeed fallback');
         await Future.delayed(const Duration(milliseconds: 1500));
         if (!mounted) return;
 
-        // 🔌 Re-check internet before proceeding
         if (!_isOnlineSafely()) {
           _isScanning = false;
           setState(() {
@@ -978,7 +974,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         _isScanning = false;
         _scanLineCtrl.stop();
 
-        // 🔌 Re-check internet before proceeding
         if (!_isOnlineSafely()) {
           setState(() {
             _faceState = _FaceState.idle;
@@ -1043,11 +1038,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     await _camCtrl!.startImageStream(_onCameraImage);
   }
 
-  // 🎭 Demo helper: instant success + proceed (requires internet)
   Future<void> _demoAutoSucceed() async {
     if (!mounted) return;
 
-    // 🔌 Re-check internet before succeeding
     if (_isDemo && !_isOnlineSafely()) {
       _secureLog('🎭 [DemoMode] _demoAutoSucceed — offline, blocking');
       _isScanning = false;
@@ -1083,7 +1076,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     await Future.delayed(const Duration(milliseconds: 1400));
     if (!mounted) return;
 
-    // 🔌 Re-check internet before navigation
     if (_isDemo && !_isOnlineSafely()) {
       _secureLog('🎭 [DemoMode] Lost internet before navigation');
       setState(() {
@@ -1320,7 +1312,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _onCameraImage(CameraImage image) async {
-    // 🎭 Demo mode: still process real frames for liveness
     if (!_isScanning || _isProcessing || !mounted) return;
 
     _isProcessing = true;
@@ -1360,7 +1351,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _handleEnrollFrame(CameraImage image, Face face) async {
-    // Enroll path is skipped in demo (authMode = verify)
     if (_isSavingEnroll) {
       _isProcessing = false;
       return;
@@ -1617,7 +1607,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   Future<void> _handleVerifyFailure() async {
     if (_isDemo) {
-      // Demo never fails — auto-succeed
       await _demoAutoSucceed();
       return;
     }
@@ -2069,6 +2058,62 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     return 'inside';
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // ⏰ OVERTIME REMINDERS + 🚨 TRUSTED TIME
+  //    • Clock IN → schedule reminders + tamper check
+  //    • Clock OUT → cancel reminders
+  // ═══════════════════════════════════════════════════════════
+  Future<void> _onAttendanceTypeDetermined({
+    required bool isClockIn,
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping OT reminders + time check');
+      return;
+    }
+
+    try {
+      if (isClockIn) {
+        // ⏰ Auto-schedule OT reminders (per-employee shift end from Firestore)
+        try {
+          await OvertimeReminderService.instance.scheduleForEmployee(
+            employeeId: employeeId,
+            maxOvertimeHours: 6,
+          );
+          _secureLog('⏰ [Face] OT reminders scheduled for $employeeId');
+        } catch (e) {
+          _secureLog('⚠️ [Face] OT schedule failed: $e');
+        }
+
+        // 🚨 Anti-tamper: check device time vs server time
+        try {
+          await TrustedTimeService.instance.syncWithServer(force: true);
+          if (TrustedTimeService.instance.isTampered) {
+            await TrustedTimeService.instance.logTamperEvent(
+              employeeId: employeeId,
+              employeeName: employeeName,
+              context: 'clock_in_facial',
+            );
+            _secureLog('🚨 [Face] Time tampering detected on clock-in');
+          }
+        } catch (e) {
+          _secureLog('⚠️ [Face] Time check failed: $e');
+        }
+      } else {
+        // 🚫 Nag-clock out na → cancel lahat ng OT reminders
+        try {
+          await OvertimeReminderService.instance.cancelAll();
+          _secureLog('🚫 [Face] OT reminders cancelled');
+        } catch (e) {
+          _secureLog('⚠️ [Face] OT cancel failed: $e');
+        }
+      }
+    } catch (e) {
+      _secureLog('⚠️ [Face] _onAttendanceTypeDetermined failed: $e');
+    }
+  }
+
   Future<void> _writeAttendanceLog() async {
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping attendance log write');
@@ -2098,6 +2143,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final remarks = _geofenceVerifiedOffline
           ? 'face_match:${_matchPercent.toStringAsFixed(0)}|pending_geofence_verification'
           : 'face_match:${_matchPercent.toStringAsFixed(0)}';
+
+      // ═══════════════════════════════════════════════════════════
+      // ⏰ Schedule / Cancel OT reminders + Trusted time check
+      //    Tawagin bago mag-log para hindi ma-block ng anumang error
+      // ═══════════════════════════════════════════════════════════
+      await _onAttendanceTypeDetermined(
+        isClockIn: isClockIn,
+        employeeId: employeeId,
+        employeeName: employeeName,
+      );
 
       AttendanceResult? offlineResult;
       try {
@@ -2263,7 +2318,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     await Future.delayed(const Duration(milliseconds: 2000));
     if (!mounted) return;
 
-    // 🔌 Demo mode — re-check internet before proceeding
     if (_isDemo && !_isOnlineSafely()) {
       _secureLog('🎭 [DemoMode] Lost internet before navigation');
       _showOfflineSnack(
@@ -2287,7 +2341,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       await Future.delayed(const Duration(milliseconds: 800));
       if (!mounted) return;
 
-      // 🔌 Re-check internet before popping
       if (!_isOnlineSafely()) {
         _showOfflineSnack(
             'No internet connection. Internet is required to continue.');
@@ -3560,7 +3613,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return 'Checking your role and location...';
     }
 
-    // 🔌 Demo offline message
     if (_isDemo && _isOffline) {
       switch (_faceState) {
         case _FaceState.idle:

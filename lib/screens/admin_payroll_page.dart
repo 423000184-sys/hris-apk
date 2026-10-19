@@ -1,12 +1,5 @@
 // lib/screens/admin_payroll_page.dart
-// ═══════════════════════════════════════════════════════════════════
-// SECURED ADMIN PAYROLL PAGE  v2.2
-// Hardened: admin guard, CSV injection defense, audit trail,
-//           rate limit, PII masking, error sanitization,
-//           kDebugMode-gated logs, double-submit guard.
-//           v2.2: Aligned sa bagong PayrollBreakdown schema.
-//           v2.2.1: Fixed num->double / num->int clamp type errors.
-// ═══════════════════════════════════════════════════════════════════
+// v2.4: 🎭 Demo Mode Support (Mock Employees & Export Blocking)
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -19,6 +12,7 @@ import '../widgets/bootstrap_grid.dart';
 import '../services/payroll_calculator.dart';
 import '../services/attendance_hours_service.dart';
 import '../services/admin_auth_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 
 class AdminPayrollPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
@@ -38,6 +32,15 @@ class AdminPayrollPage extends StatefulWidget {
 
 class _AdminPayrollPageState extends State<AdminPayrollPage> {
   AdminColors get tc => AdminTheme.getColors(context);
+
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
 
   String _selectedPayPeriod = 'Current Month';
   String _selectedDepartment = 'All Departments';
@@ -66,10 +69,72 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     return DateTime(n.year, n.month + 1, 0, 23, 59, 59);
   }
 
+  // 🎭 MOCK EMPLOYEES
+  List<Map<String, dynamic>> _getMockEmployees() {
+    return [
+      {
+        'id': 'demo_emp_1',
+        'employeeId': 'DEMO-001',
+        'name': 'John Doe',
+        'firstName': 'John',
+        'lastName': 'Doe',
+        'department': 'Operation',
+        'role': 'Manager',
+        'basicSalary': 45000.0,
+        'allowances': 5000.0,
+        'workingDaysPerMonth': 22,
+        'payrollStatus': 'PROCESSED',
+        'accountNumber': '1234567890',
+        'bankName': 'BDO',
+      },
+      {
+        'id': 'demo_emp_2',
+        'employeeId': 'DEMO-002',
+        'name': 'Jane Smith',
+        'firstName': 'Jane',
+        'lastName': 'Smith',
+        'department': 'Accounting',
+        'role': 'Accountant',
+        'basicSalary': 25000.0,
+        'allowances': 3000.0,
+        'workingDaysPerMonth': 22,
+        'payrollStatus': 'PENDING',
+        'accountNumber': '0987654321',
+        'bankName': 'BPI',
+      },
+      {
+        'id': 'demo_emp_3',
+        'employeeId': 'DEMO-003',
+        'name': 'Mike Johnson',
+        'firstName': 'Mike',
+        'lastName': 'Johnson',
+        'department': 'HR/Admin',
+        'role': 'Driver',
+        'basicSalary': 16000.0,
+        'allowances': 1500.0,
+        'workingDaysPerMonth': 22,
+        'payrollStatus': 'PROCESSED',
+        'accountNumber': '1122334455',
+        'bankName': 'Metrobank',
+      },
+    ];
+  }
+
   @override
   void initState() {
     super.initState();
-    _verifyAndLoad();
+    if (_isDemo) {
+      _isAdminVerified = true;
+      _loadingAttendance = false;
+      // Mock attendance data so it doesn't show 0s
+      _presentDaysMap = {
+        'demo_emp_1': 22,
+        'demo_emp_2': 20,
+        'demo_emp_3': 18,
+      };
+    } else {
+      _verifyAndLoad();
+    }
   }
 
   @override
@@ -81,6 +146,9 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   // ══════════════════════════════════════════════════════════════
   // 🔒 SECURITY HELPERS
   // ══════════════════════════════════════════════════════════════
+  void _demoBlock() {
+    _toast('Action disabled in Demo Mode.', error: true);
+  }
 
   static String _sanitize(dynamic raw, {int maxLen = 200}) {
     if (raw == null) return '';
@@ -110,6 +178,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   }
 
   Future<bool> _ensureAdmin() async {
+    if (_isDemo) return true;
     return FirebaseAuth.instance.currentUser != null;
   }
 
@@ -158,6 +227,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     required String targetType,
     Map<String, dynamic>? metadata,
   }) async {
+    if (_isDemo) return;
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid == null) return;
@@ -189,6 +259,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   // LOAD + ADMIN GUARD
   // ══════════════════════════════════════════════════════════════
   Future<void> _verifyAndLoad() async {
+    if (_isDemo) return;
     final ok = await _ensureAdmin();
     if (!mounted) return;
     if (!ok) {
@@ -202,6 +273,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   }
 
   Future<void> _loadAll() async {
+    if (_isDemo) return;
     if (!_isAdminVerified) return;
     setState(() => _loadingAttendance = true);
 
@@ -232,6 +304,9 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   }
 
   EmployeeHoursSummary _getHoursFor(Map<String, dynamic> emp) {
+    if (_isDemo) {
+      return EmployeeHoursSummary.empty;
+    }
     for (final k in [
       'id',
       'employeeId',
@@ -295,7 +370,6 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
 
     final wd = workingDays > 0 ? workingDays : 22;
     final p = present ?? 0;
-    // ✅ FIX: .toInt() para siguradong int ang result ng clamp
     final absent = (wd - p).clamp(0, wd).toInt();
     final absenceDeduction = dailyRate * absent;
 
@@ -312,7 +386,6 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     final otMinutes = hrs.totalOvertimeMinutes;
     final rawMinutes = netMinutes + lunchMinutes;
 
-    // ✅ FIX: .toDouble() para siguradong double ang result ng clamp
     final taxable =
     (gross - (sss + ph + pi)).clamp(0.0, double.infinity).toDouble();
 
@@ -399,6 +472,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   // 📤 CSV EXPORT
   // ══════════════════════════════════════════════════════════════
   Future<void> _exportPayrollToCsv() async {
+    if (_isDemo) return _demoBlock();
     if (_exporting) return;
 
     final ok = await _ensureAdmin();
@@ -424,7 +498,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
     final departments = <String>['All Departments', ...canonicalDepts];
 
     final seenLower = departments.map((d) => d.toLowerCase()).toSet();
-    for (var emp in widget.employees) {
+    for (var emp in (_isDemo ? _getMockEmployees() : widget.employees)) {
       final dept = emp['department']?.toString().trim();
       if (dept == null || dept.isEmpty) continue;
       if (seenLower.contains(dept.toLowerCase())) continue;
@@ -432,7 +506,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
       seenLower.add(dept.toLowerCase());
     }
 
-    final filtered = widget.employees.where((emp) {
+    final filtered = (_isDemo ? _getMockEmployees() : widget.employees).where((emp) {
       final name = (emp['name'] ??
           '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}')
           .toString()
@@ -615,7 +689,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
   // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    if (!_isAdminVerified && !_loadingAttendance) {
+    if (!_isAdminVerified && !_loadingAttendance && !_isDemo) {
       return Container(
         color: tc.background,
         child: Center(
@@ -652,8 +726,10 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
 
     final departments = <String>['All Departments', ...canonicalDepts];
 
+    final sourceEmployees = _isDemo ? _getMockEmployees() : widget.employees;
+
     final seenLower = departments.map((d) => d.toLowerCase()).toSet();
-    for (var emp in widget.employees) {
+    for (var emp in sourceEmployees) {
       final dept = emp['department']?.toString().trim();
       if (dept == null || dept.isEmpty) continue;
       if (seenLower.contains(dept.toLowerCase())) continue;
@@ -661,7 +737,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
       seenLower.add(dept.toLowerCase());
     }
 
-    final filtered = widget.employees.where((emp) {
+    final filtered = sourceEmployees.where((emp) {
       final name = (emp['name'] ??
           '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}')
           .toString()
@@ -710,6 +786,11 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // 🎭 DEMO BANNER
+              if (_isDemo) ...[
+                _buildDemoBanner(),
+                const SizedBox(height: 24),
+              ],
               _buildPageHeader(),
               const SizedBox(height: 20),
               _buildSearchBar(),
@@ -745,13 +826,54 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
               _buildTable(filtered),
               const SizedBox(height: 16),
               Text(
-                'Showing ${filtered.length} of ${widget.employees.length} employees',
+                'Showing ${filtered.length} of ${sourceEmployees.length} employees',
                 style: TextStyle(fontSize: 12, color: tc.muted),
               ),
               const SizedBox(height: 40),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample data. Exporting payroll is disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -778,11 +900,11 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
       );
 
       final refresh = OutlinedButton.icon(
-        onPressed: _loadingAttendance ? null : _loadAll,
-        icon: Icon(Icons.refresh, size: 16, color: tc.text),
+        onPressed: (_loadingAttendance || _isDemo) ? null : _loadAll,
+        icon: Icon(Icons.refresh, size: 16, color: _isDemo ? tc.muted : tc.text),
         label: Text('Refresh',
             style: TextStyle(
-                color: tc.text, fontWeight: FontWeight.w600, fontSize: 13)),
+                color: _isDemo ? tc.muted : tc.text, fontWeight: FontWeight.w600, fontSize: 13)),
         style: OutlinedButton.styleFrom(
           backgroundColor: tc.card,
           side: BorderSide(color: tc.border),
@@ -794,7 +916,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
 
       final export = ElevatedButton.icon(
         onPressed:
-        (_exporting || _loadingAttendance) ? null : _exportPayrollToCsv,
+        (_exporting || _loadingAttendance || _isDemo) ? null : _exportPayrollToCsv,
         icon: _exporting
             ? const SizedBox(
           width: 14,
@@ -802,16 +924,16 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
           child: CircularProgressIndicator(
               strokeWidth: 2, color: Colors.white),
         )
-            : const Icon(Icons.download, size: 16, color: Colors.white),
+            : Icon(Icons.download, size: 16, color: _isDemo ? tc.muted : Colors.white),
         label: Text(
           _exporting ? 'Exporting...' : 'Export to CSV',
-          style: const TextStyle(
-              color: Colors.white,
+          style: TextStyle(
+              color: _isDemo ? tc.muted : Colors.white,
               fontWeight: FontWeight.w600,
               fontSize: 13),
         ),
         style: ElevatedButton.styleFrom(
-          backgroundColor: tc.orange,
+          backgroundColor: _isDemo ? tc.border : tc.orange,
           disabledBackgroundColor: tc.orange.withValues(alpha: 0.5),
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

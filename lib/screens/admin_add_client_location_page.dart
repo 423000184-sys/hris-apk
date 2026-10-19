@@ -1,4 +1,5 @@
 // lib/screens/admin_add_client_location_page.dart
+// v1.1: 🎭 Demo Mode Support (Mock Clients & Action Blocking)
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -11,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'admin_theme.dart';
 import 'admin_pick_location_page.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 
 class AdminAddClientLocationPage extends StatefulWidget {
   final VoidCallback? onSaved;
@@ -35,6 +37,20 @@ class _AdminAddClientLocationPageState
     extends State<AdminAddClientLocationPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 🎭 Demo Block Helper
+  void _demoBlock() {
+    _showSnack('Action disabled in Demo Mode.', isError: true);
+  }
+
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
@@ -56,6 +72,39 @@ class _AdminAddClientLocationPageState
 
   List<Map<String, dynamic>> _clients = [];
   bool _loadingClients = true;
+
+  // 🎭 MOCK CLIENTS
+  List<Map<String, dynamic>> _getMockClients() {
+    return [
+      {
+        'id': 'demo_client_1',
+        'name': 'Acme Corporation HQ',
+        'address': '123 Ayala Ave, Makati City',
+        'lat': 14.5547,
+        'lng': 121.0244,
+        'radiusMeters': 100,
+        'isActive': true,
+      },
+      {
+        'id': 'demo_client_2',
+        'name': 'Global Tech Solutions',
+        'address': '456 BGC, Taguig City',
+        'lat': 14.5500,
+        'lng': 121.0500,
+        'radiusMeters': 150,
+        'isActive': true,
+      },
+      {
+        'id': 'demo_client_3',
+        'name': 'Sunrise Ventures',
+        'address': '789 Ortigas Center, Pasig',
+        'lat': 14.5800,
+        'lng': 121.0600,
+        'radiusMeters': 120,
+        'isActive': false,
+      },
+    ];
+  }
 
   @override
   void initState() {
@@ -240,6 +289,8 @@ class _AdminAddClientLocationPageState
   }
 
   Future<void> _pickOnMap() async {
+    if (_isDemo) return _demoBlock();
+
     final lat = double.tryParse(_latCtrl.text.trim());
     final lng = double.tryParse(_lngCtrl.text.trim());
     final currentAddr = _addressCtrl.text.trim();
@@ -298,6 +349,8 @@ class _AdminAddClientLocationPageState
   }
 
   Future<void> _testConnection() async {
+    if (_isDemo) return _demoBlock();
+
     setState(() => _testingConnection = true);
     try {
       debugPrint('🧪 Testing Firestore connection...');
@@ -327,6 +380,16 @@ class _AdminAddClientLocationPageState
 
   Future<void> _loadClients() async {
     if (!mounted) return;
+
+    // 🎭 Demo Mode — use mock clients
+    if (_isDemo) {
+      setState(() {
+        _clients = _getMockClients();
+        _loadingClients = false;
+      });
+      return;
+    }
+
     setState(() => _loadingClients = true);
     try {
       debugPrint('📥 [Clients] Loading from client_locations...');
@@ -427,6 +490,8 @@ class _AdminAddClientLocationPageState
   }
 
   Future<void> _saveClient() async {
+    if (_isDemo) return _demoBlock();
+
     debugPrint('═══════════════════════════════════════════');
     debugPrint('💾 [Save] Starting save...');
 
@@ -695,6 +760,8 @@ class _AdminAddClientLocationPageState
   }
 
   Future<void> _editClient(Map<String, dynamic> client) async {
+    if (_isDemo) return _demoBlock();
+
     debugPrint('✏️ [Edit] Opening edit dialog for client ${client['id']}');
 
     final updated = await showDialog<bool>(
@@ -712,6 +779,8 @@ class _AdminAddClientLocationPageState
   }
 
   Future<void> _deleteClient(Map<String, dynamic> client) async {
+    if (_isDemo) return _demoBlock();
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -752,6 +821,8 @@ class _AdminAddClientLocationPageState
   }
 
   Future<void> _toggleActive(Map<String, dynamic> client) async {
+    if (_isDemo) return _demoBlock();
+
     try {
       final current = client['isActive'] == true;
       await FirebaseFirestore.instance
@@ -793,6 +864,11 @@ class _AdminAddClientLocationPageState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 🎭 DEMO BANNER
+              if (_isDemo) ...[
+                _buildDemoBanner(),
+                const SizedBox(height: 20),
+              ],
               _buildHeader(),
               const SizedBox(height: 20),
               _buildForm(),
@@ -812,6 +888,48 @@ class _AdminAddClientLocationPageState
     return Scaffold(
       backgroundColor: tc.background,
       body: SafeArea(child: body),
+    );
+  }
+
+  // 🎭 DEMO BANNER
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample clients. Adding, editing, and deleting are disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -904,11 +1022,15 @@ class _AdminAddClientLocationPageState
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Tooltip(
-                    message: 'Test Firestore connection',
+                    message: _isDemo
+                        ? 'Test disabled in Demo'
+                        : 'Test Firestore connection',
                     child: Material(
                       color: Colors.transparent,
                       child: InkWell(
-                        onTap: _testingConnection ? null : _testConnection,
+                        onTap: (_testingConnection || _isDemo)
+                            ? (_isDemo ? _demoBlock : null)
+                            : _testConnection,
                         borderRadius: BorderRadius.circular(8),
                         child: Padding(
                           padding: const EdgeInsets.all(6),
@@ -921,7 +1043,7 @@ class _AdminAddClientLocationPageState
                           )
                               : Icon(
                             Icons.wifi_tethering_rounded,
-                            color: tc.orange,
+                            color: _isDemo ? tc.muted : tc.orange,
                             size: 20,
                           ),
                         ),
@@ -1201,19 +1323,20 @@ class _AdminAddClientLocationPageState
               );
 
               final mapBtn = OutlinedButton.icon(
-                onPressed: _pickOnMap,
+                onPressed: _isDemo ? _demoBlock : _pickOnMap,
                 icon: Icon(Icons.map_rounded,
-                    size: 16, color: tc.orange),
+                    size: 16, color: _isDemo ? tc.muted : tc.orange),
                 label: Text(
                   'Pick on Map',
                   style: TextStyle(
-                    color: tc.orange,
+                    color: _isDemo ? tc.muted : tc.orange,
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
                   ),
                 ),
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: tc.orange, width: 1.5),
+                  side: BorderSide(
+                      color: _isDemo ? tc.border : tc.orange, width: 1.5),
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 12),
                   shape: RoundedRectangleBorder(
@@ -1272,8 +1395,10 @@ class _AdminAddClientLocationPageState
               children: [
                 Switch(
                   value: _isActive,
-                  onChanged: (v) => setState(() => _isActive = v),
-                  activeColor: tc.orange,
+                  onChanged: _isDemo
+                      ? null
+                      : (v) => setState(() => _isActive = v),
+                  activeColor: _isDemo ? tc.muted : tc.orange,
                 ),
                 const SizedBox(width: 8),
                 Text(
@@ -1300,8 +1425,10 @@ class _AdminAddClientLocationPageState
                 ),
                 const Spacer(),
                 ElevatedButton.icon(
-                  onPressed: _submitting ? null : _saveClient,
-                  icon: _submitting
+                  onPressed: (_submitting || _isDemo)
+                      ? (_isDemo ? _demoBlock : null)
+                      : _saveClient,
+                  icon: (_submitting)
                       ? const SizedBox(
                     width: 14,
                     height: 14,
@@ -1310,14 +1437,23 @@ class _AdminAddClientLocationPageState
                       color: Colors.white,
                     ),
                   )
-                      : const Icon(Icons.save_rounded, size: 16),
+                      : Icon(
+                    _isDemo
+                        ? Icons.lock_outline_rounded
+                        : Icons.save_rounded,
+                    size: 16,
+                  ),
                   label: Text(
-                    _submitting ? 'Saving...' : 'Save Client',
+                    _submitting
+                        ? 'Saving...'
+                        : (_isDemo
+                        ? 'Save Disabled (Demo)'
+                        : 'Save Client'),
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: tc.orange,
-                    foregroundColor: Colors.white,
+                    backgroundColor: _isDemo ? tc.border : tc.orange,
+                    foregroundColor: _isDemo ? tc.muted : Colors.white,
                     padding: const EdgeInsets.symmetric(
                         horizontal: 20, vertical: 14),
                     shape: RoundedRectangleBorder(
@@ -1469,27 +1605,29 @@ class _AdminAddClientLocationPageState
               _showSnack('⚠️ No coordinates to view.', isError: true);
             }
           },
-          icon: Icon(Icons.map_rounded, color: tc.orange, size: 18),
+          icon: Icon(Icons.map_rounded,
+              color: _isDemo ? tc.muted : tc.orange, size: 18),
           tooltip: 'View on Google Maps',
           padding: EdgeInsets.zero,
           constraints:
           const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
         IconButton(
-          onPressed: () => _editClient(c),
-          icon: Icon(Icons.edit_rounded, color: tc.orange, size: 18),
-          tooltip: 'Edit client',
+          onPressed: _isDemo ? _demoBlock : () => _editClient(c),
+          icon: Icon(Icons.edit_rounded,
+              color: _isDemo ? tc.muted : tc.orange, size: 18),
+          tooltip: _isDemo ? 'Edit disabled in Demo' : 'Edit client',
           padding: EdgeInsets.zero,
           constraints:
           const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
         IconButton(
-          onPressed: () => _toggleActive(c),
+          onPressed: _isDemo ? _demoBlock : () => _toggleActive(c),
           icon: Icon(
             isActive
                 ? Icons.toggle_on_rounded
                 : Icons.toggle_off_rounded,
-            color: isActive ? tc.green : tc.muted,
+            color: _isDemo ? tc.muted : (isActive ? tc.green : tc.muted),
             size: 22,
           ),
           tooltip: isActive ? 'Disable' : 'Enable',
@@ -1498,10 +1636,10 @@ class _AdminAddClientLocationPageState
           const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
         IconButton(
-          onPressed: () => _deleteClient(c),
+          onPressed: _isDemo ? _demoBlock : () => _deleteClient(c),
           icon: Icon(Icons.delete_outline_rounded,
-              color: tc.red, size: 18),
-          tooltip: 'Delete',
+              color: _isDemo ? tc.muted : tc.red, size: 18),
+          tooltip: _isDemo ? 'Delete disabled in Demo' : 'Delete',
           padding: EdgeInsets.zero,
           constraints:
           const BoxConstraints(minWidth: 36, minHeight: 36),
@@ -1684,6 +1822,26 @@ class _EditClientDialog extends StatefulWidget {
 
 class _EditClientDialogState extends State<_EditClientDialog> {
   AdminColors get tc => AdminTheme.getColors(context);
+
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _demoBlock() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Action disabled in Demo Mode.'),
+        backgroundColor: tc.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 
   final _formKey = GlobalKey<FormState>();
 
@@ -1898,6 +2056,8 @@ class _EditClientDialogState extends State<_EditClientDialog> {
   }
 
   Future<void> _pickOnMap() async {
+    if (_isDemo) return _demoBlock();
+
     final lat = double.tryParse(_latCtrl.text.trim());
     final lng = double.tryParse(_lngCtrl.text.trim());
     final currentAddr = _addressCtrl.text.trim();
@@ -1993,6 +2153,8 @@ class _EditClientDialogState extends State<_EditClientDialog> {
   }
 
   Future<void> _save() async {
+    if (_isDemo) return _demoBlock();
+
     if (!_formKey.currentState!.validate()) return;
 
     final name = _nameCtrl.text.trim();
@@ -2194,7 +2356,7 @@ class _EditClientDialogState extends State<_EditClientDialog> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Icon(Icons.edit_location_alt_rounded,
-                        color: tc.orange, size: 20),
+                        color: _isDemo ? tc.muted : tc.orange, size: 20),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -2403,20 +2565,22 @@ class _EditClientDialogState extends State<_EditClientDialog> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: OutlinedButton.icon(
-                                onPressed: _pickOnMap,
+                                onPressed: _isDemo ? _demoBlock : _pickOnMap,
                                 icon: Icon(Icons.map_rounded,
-                                    size: 16, color: tc.orange),
+                                    size: 16,
+                                    color: _isDemo ? tc.muted : tc.orange),
                                 label: Text(
                                   'Pick on Map',
                                   style: TextStyle(
-                                    color: tc.orange,
+                                    color: _isDemo ? tc.muted : tc.orange,
                                     fontWeight: FontWeight.w700,
                                     fontSize: 12,
                                   ),
                                 ),
                                 style: OutlinedButton.styleFrom(
                                   side: BorderSide(
-                                      color: tc.orange, width: 1.5),
+                                      color: _isDemo ? tc.border : tc.orange,
+                                      width: 1.5),
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 12, vertical: 12),
                                   shape: RoundedRectangleBorder(
@@ -2494,20 +2658,22 @@ class _EditClientDialogState extends State<_EditClientDialog> {
                         SizedBox(
                           width: double.infinity,
                           child: OutlinedButton.icon(
-                            onPressed: _pickOnMap,
+                            onPressed: _isDemo ? _demoBlock : _pickOnMap,
                             icon: Icon(Icons.map_rounded,
-                                size: 16, color: tc.orange),
+                                size: 16,
+                                color: _isDemo ? tc.muted : tc.orange),
                             label: Text(
                               'Pick on Map',
                               style: TextStyle(
-                                color: tc.orange,
+                                color: _isDemo ? tc.muted : tc.orange,
                                 fontWeight: FontWeight.w700,
                                 fontSize: 12,
                               ),
                             ),
                             style: OutlinedButton.styleFrom(
                               side: BorderSide(
-                                  color: tc.orange, width: 1.5),
+                                  color: _isDemo ? tc.border : tc.orange,
+                                  width: 1.5),
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 12, vertical: 12),
                               shape: RoundedRectangleBorder(
@@ -2548,11 +2714,11 @@ class _EditClientDialogState extends State<_EditClientDialog> {
                         children: [
                           Switch(
                             value: _isActive,
-                            onChanged: _saving
+                            onChanged: (_saving || _isDemo)
                                 ? null
                                 : (v) =>
                                 setState(() => _isActive = v),
-                            activeColor: tc.orange,
+                            activeColor: _isDemo ? tc.muted : tc.orange,
                           ),
                           const SizedBox(width: 8),
                           Text(
@@ -2588,7 +2754,9 @@ class _EditClientDialogState extends State<_EditClientDialog> {
                   ),
                   const Spacer(),
                   ElevatedButton.icon(
-                    onPressed: _saving ? null : _save,
+                    onPressed: (_saving || _isDemo)
+                        ? (_isDemo ? _demoBlock : null)
+                        : _save,
                     icon: _saving
                         ? const SizedBox(
                       width: 14,
@@ -2598,15 +2766,24 @@ class _EditClientDialogState extends State<_EditClientDialog> {
                         color: Colors.white,
                       ),
                     )
-                        : const Icon(Icons.save_rounded, size: 16),
+                        : Icon(
+                      _isDemo
+                          ? Icons.lock_outline_rounded
+                          : Icons.save_rounded,
+                      size: 16,
+                    ),
                     label: Text(
-                      _saving ? 'Saving...' : 'Save Changes',
+                      _saving
+                          ? 'Saving...'
+                          : (_isDemo
+                          ? 'Save Disabled (Demo)'
+                          : 'Save Changes'),
                       style:
                       const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: tc.orange,
-                      foregroundColor: Colors.white,
+                      backgroundColor: _isDemo ? tc.border : tc.orange,
+                      foregroundColor: _isDemo ? tc.muted : Colors.white,
                       padding: const EdgeInsets.symmetric(
                           horizontal: 20, vertical: 14),
                       shape: RoundedRectangleBorder(

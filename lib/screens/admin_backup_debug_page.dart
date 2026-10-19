@@ -1,11 +1,22 @@
 // lib/screens/admin_backup_debug_page.dart
+// v1.1: 🎭 Demo Mode Support (Action Blocking)
 import 'package:flutter/material.dart';
 import '../services/presence_monitor_service.dart';
 import '../services/presence_backup_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 import 'admin_theme.dart';
 
 class AdminBackupDebugPage extends StatelessWidget {
   const AdminBackupDebugPage({super.key});
+
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -25,17 +36,34 @@ class AdminBackupDebugPage extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          // 🎭 DEMO BANNER
+          if (_isDemo) ...[
+            _buildDemoBanner(context, tc),
+            const SizedBox(height: 16),
+          ],
           _section(tc, '🛰️ Presence Monitor'),
           _btn(tc, '🛰️ Print debug info', () async {
+            if (_isDemo) {
+              _demoBlock(context, tc);
+              return;
+            }
             PresenceMonitorService.instance.printDebugInfo();
           }),
           _btn(tc, '💾 Force backup now', () async {
+            if (_isDemo) {
+              _demoBlock(context, tc);
+              return;
+            }
             await PresenceMonitorService.instance.forceBackup();
           }),
 
           const SizedBox(height: 24),
           _section(tc, '📄 Backup Service'),
           _btn(tc, '📄 List local backups', () async {
+            if (_isDemo) {
+              _demoBlock(context, tc);
+              return;
+            }
             final files =
             await PresenceBackupService.instance.listLocalBackups();
             debugPrint('═══════════════════════════════');
@@ -47,6 +75,10 @@ class AdminBackupDebugPage extends StatelessWidget {
             debugPrint('═══════════════════════════════');
           }),
           _btn(tc, '☁️ List cloud backups (emp-01-2026)', () async {
+            if (_isDemo) {
+              _demoBlock(context, tc);
+              return;
+            }
             final files = await PresenceBackupService.instance
                 .listCloudBackups('emp-01-2026');
             debugPrint('═══════════════════════════════');
@@ -58,6 +90,47 @@ class AdminBackupDebugPage extends StatelessWidget {
             debugPrint('═══════════════════════════════');
           }),
         ],
+      ),
+    );
+  }
+
+  // 🎭 DEMO BANNER
+  Widget _buildDemoBanner(BuildContext context, AdminColors tc) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Demo Mode — debug actions are disabled.',
+              style: TextStyle(
+                fontSize: 11.5,
+                color: tc.orange,
+                fontWeight: FontWeight.w700,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _demoBlock(BuildContext context, AdminColors tc) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Action disabled in Demo Mode.'),
+        backgroundColor: tc.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
       ),
     );
   }
@@ -83,15 +156,28 @@ class AdminBackupDebugPage extends StatelessWidget {
           child: FilledButton(
             onPressed: () => onTap(),
             style: FilledButton.styleFrom(
-              backgroundColor: tc.orange,
+              backgroundColor: _isDemo ? tc.border : tc.orange,
+              foregroundColor: _isDemo ? tc.muted : Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            child: Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w700),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (_isDemo) ...[
+                  Icon(Icons.lock_outline_rounded,
+                      size: 14, color: tc.muted),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  label,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: _isDemo ? tc.muted : Colors.white),
+                ),
+              ],
             ),
           ),
         ),

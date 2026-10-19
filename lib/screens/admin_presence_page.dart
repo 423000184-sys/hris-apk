@@ -1,9 +1,11 @@
 // lib/screens/admin_presence_page.dart
+// v1.1: 🎭 Demo Mode Support (Mock Data & Action Blocking)
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'admin_theme.dart';
 import 'admin_backup_list_page.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 
 class AdminPresencePage extends StatefulWidget {
   const AdminPresencePage({super.key});
@@ -13,6 +15,64 @@ class AdminPresencePage extends StatefulWidget {
 }
 
 class _AdminPresencePageState extends State<AdminPresencePage> {
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _demoBlock() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Action disabled in Demo Mode.'),
+        backgroundColor: Color(0xFFEF4444),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  // 🎭 MOCK DATA
+  List<Map<String, dynamic>> _getMockPresenceList() {
+    final now = DateTime.now();
+    return [
+      {
+        'id': 'demo_presence_1',
+        'employeeName': 'John Doe',
+        'inRange': true,
+        'distanceMeters': 45.0,
+        'accuracyMeters': 8.0,
+        'lastUpdated': now.subtract(const Duration(minutes: 2)),
+      },
+      {
+        'id': 'demo_presence_2',
+        'employeeName': 'Jane Smith',
+        'inRange': false,
+        'distanceMeters': 12400.0,
+        'accuracyMeters': 25.0,
+        'lastUpdated': now.subtract(const Duration(minutes: 8)),
+      },
+      {
+        'id': 'demo_presence_3',
+        'employeeName': 'Mike Johnson',
+        'inRange': true,
+        'distanceMeters': 120.0,
+        'accuracyMeters': 15.0,
+        'lastUpdated': now.subtract(const Duration(minutes: 1)),
+      },
+      {
+        'id': 'demo_presence_4',
+        'employeeName': 'Sarah Lee',
+        'inRange': false,
+        'distanceMeters': 890.0,
+        'accuracyMeters': 30.0,
+        'lastUpdated': now.subtract(const Duration(hours: 2)), // Stale
+      },
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final tc = AdminTheme.getColors(context);
@@ -35,9 +95,10 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Refresh',
-            onPressed: () => setState(() {}),
-            icon: Icon(Icons.refresh_rounded, color: tc.textMuted, size: 20),
+            tooltip: _isDemo ? 'Refresh disabled in Demo' : 'Refresh',
+            onPressed: _isDemo ? null : () => setState(() {}),
+            icon: Icon(Icons.refresh_rounded,
+                color: _isDemo ? tc.muted : tc.textMuted, size: 20),
           ),
           const SizedBox(width: 8),
         ],
@@ -46,7 +107,9 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
           child: Container(height: 1, color: tc.border),
         ),
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      body: _isDemo
+          ? _buildDemoBody(tc)
+          : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: FirebaseFirestore.instance
             .collection('employee_presence')
             .orderBy('lastUpdated', descending: true)
@@ -100,6 +163,220 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
     );
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 🎭 DEMO BODY
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildDemoBody(AdminColors tc) {
+    final mockData = _getMockPresenceList();
+
+    int insideCount = 0;
+    int outsideCount = 0;
+    for (final d in mockData) {
+      if (d['inRange'] == true) {
+        insideCount++;
+      } else {
+        outsideCount++;
+      }
+    }
+
+    return Column(
+      children: [
+        _buildDemoBanner(tc),
+        _buildSummary(tc, insideCount, outsideCount, mockData.length),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: mockData.length,
+            separatorBuilder: (_, __) => Divider(
+              height: 1,
+              color: tc.border,
+              indent: 16,
+            ),
+            itemBuilder: (_, i) => _buildDemoTile(context, tc, mockData[i]),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDemoBanner(AdminColors tc) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample presence data. Real-time updates are disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDemoTile(
+      BuildContext context, AdminColors tc, Map<String, dynamic> data) {
+    final name = data['employeeName'] as String;
+    final inRange = data['inRange'] == true;
+    final distance = (data['distanceMeters'] as num?)?.toDouble() ?? 0;
+    final accuracy = (data['accuracyMeters'] as num?)?.toDouble();
+    final lastUpdated = data['lastUpdated'] as DateTime;
+
+    final isStale =
+        DateTime.now().difference(lastUpdated).inMinutes > 10;
+
+    final accent = isStale
+        ? tc.textMuted
+        : (inRange ? tc.green : tc.red);
+
+    return InkWell(
+      onTap: _demoBlock,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+                border: Border.all(color: accent, width: 2),
+              ),
+              child: Icon(
+                isStale
+                    ? Icons.hourglass_empty_rounded
+                    : (inRange
+                    ? Icons.check_rounded
+                    : Icons.close_rounded),
+                color: accent,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: tc.text,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          isStale
+                              ? 'STALE'
+                              : (inRange ? 'IN RANGE' : 'OUT'),
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                            color: accent,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.location_on_rounded,
+                        size: 11,
+                        color: tc.muted,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${distance.toStringAsFixed(0)}m from office',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: tc.textMuted,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      if (accuracy != null) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          '· ±${accuracy.toStringAsFixed(0)}m',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: tc.muted,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Last check: ${_fmtTime(lastUpdated)}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: tc.muted,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              Icons.chevron_right_rounded,
+              color: tc.muted,
+              size: 20,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // SHARED WIDGETS
+  // ══════════════════════════════════════════════════════════════
   Widget _buildSummary(
       AdminColors tc, int inside, int outside, int total) {
     return Container(
@@ -118,13 +395,11 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
           ),
           Container(width: 1, height: 40, color: tc.border),
           Expanded(
-            // ⭐ Now uses theme green (warm) instead of hardcoded #16A34A
             child: _statBox(tc, '$inside', 'IN RANGE',
                 tc.green, Icons.check_circle_rounded),
           ),
           Container(width: 1, height: 40, color: tc.border),
           Expanded(
-            // ⭐ Now uses theme red (warm) instead of hardcoded #EF4444
             child: _statBox(tc, '$outside', 'OUT',
                 tc.red, Icons.cancel_rounded),
           ),
@@ -163,6 +438,7 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
     );
   }
 
+  // For real stream
   Widget _tile(
       BuildContext context,
       AdminColors tc,
@@ -180,7 +456,6 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
     final isStale = lastUpdated == null ||
         DateTime.now().difference(lastUpdated).inMinutes > 10;
 
-    // ⭐ Now uses theme green/red instead of hardcoded colors
     final accent = isStale
         ? tc.textMuted
         : (inRange ? tc.green : tc.red);

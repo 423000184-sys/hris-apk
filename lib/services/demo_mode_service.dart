@@ -1,8 +1,4 @@
 // lib/services/demo_mode_service.dart
-// ═══════════════════════════════════════════════════════════════════
-// DEMO MODE SERVICE — Session-Only (Walang DB Writes)
-//   v1.3 — Fixed: enable()/disable() are void, removed await
-// ═══════════════════════════════════════════════════════════════════
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -208,7 +204,6 @@ class DemoModeService {
     }
   }
 
-  /// ✅ `void` method — hindi i-await ng caller
   void enable() {
     if (_enabled) return;
     _enabled = true;
@@ -222,7 +217,6 @@ class DemoModeService {
     debugPrint('═══════════════════════════════════════════════════════');
   }
 
-  /// ✅ `void` method — hindi i-await ng caller
   void disable() {
     if (!_enabled) return;
     _enabled = false;
@@ -266,7 +260,6 @@ class DemoModeService {
   }
 
   /// 🎭 One-shot: enable + prepare session
-  /// ✅ enable() is void — walang await
   Future<void> startDemoSession() async {
     enable();
     await prepareDemoSession();
@@ -274,7 +267,6 @@ class DemoModeService {
   }
 
   /// 🎭 Cleanup — para sa logout
-  /// ✅ disable() is void — walang await
   Future<void> endDemoSession() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -288,5 +280,10 @@ class DemoModeService {
       debugPrint('⚠️ [DemoMode] endDemoSession failed: $e');
     }
     disable();
+  }
+
+  /// 🎭 Alias para hindi mag-error kung sakaling may tumawag ng stopDemoSession
+  Future<void> stopDemoSession() async {
+    await endDemoSession();
   }
 }

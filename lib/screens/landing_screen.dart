@@ -1,6 +1,7 @@
 // lib/screens/landing_screen.dart
-// v2.2: 🔒 Demo mode now REQUIRES internet connection
-//       ⚠️ Offline users cannot enter demo mode — snackbar shown
+// v2.5: 🔒 REMOVED visible Admin Login buttons
+//       🔑 Added Secret Keyboard Shortcut: Ctrl + Shift + A
+//       🕵️ Kept 5-tap / Long-press on logo as fallback
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -13,6 +14,7 @@ import '../models/employee.dart';
 import '../services/demo_mode_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/security_service.dart';
+import '../services/session_lock_service.dart';
 import '../widgets/bootstrap_grid.dart';
 import 'admin_login_screen.dart';
 import 'login_screen.dart';
@@ -119,6 +121,14 @@ class _LandingScreenState extends State<LandingScreen>
   bool _autoRedirecting = false;
 
   // ═══════════════════════════════════════════════════════════════════════
+  // 🔐 SESSION LOCK — one device one login
+  // ═══════════════════════════════════════════════════════════════════════
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sessionSub;
+  Timer? _heartbeatTimer;
+  String? _activeEmployeeId;
+  bool _revokeDialogShown = false;
+
+  // ═══════════════════════════════════════════════════════════════════════
   // 🔒 HIDDEN ADMIN — hardened
   // ═══════════════════════════════════════════════════════════════════════
   Timer? _adminHoldTimer;
@@ -176,7 +186,7 @@ class _LandingScreenState extends State<LandingScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🔌 CONNECTIVITY LISTENER — real-time online/offline state
+  // 🔌 CONNECTIVITY LISTENER
   // ═══════════════════════════════════════════════════════════════════════
   void _initConnectivityListener() {
     try {
@@ -268,6 +278,164 @@ class _LandingScreenState extends State<LandingScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // 🔐 SESSION LOCK — real-time listener + heartbeat
+  // ═══════════════════════════════════════════════════════════════════════
+  void _startSessionLockWatch(String employeeId) {
+    _activeEmployeeId = employeeId;
+    _revokeDialogShown = false;
+
+    _sessionSub?.cancel();
+    _heartbeatTimer?.cancel();
+
+    try {
+      _sessionSub = SessionLockService.instance
+          .watchSession(employeeId)
+          .listen((snap) async {
+        if (!mounted) return;
+        final data = snap.data();
+        if (data == null) return;
+
+        if (!snap.exists) {
+          _secureLog('ℹ️ Session doc deleted');
+          return;
+        }
+
+        final revoked = data['revoked'] == true;
+        if (!revoked) return;
+
+        final reason = (data['revokedReason'] ?? '').toString();
+        _secureLog('🚨 Session revoked: $reason');
+
+        _sessionSub?.cancel();
+        _sessionSub = null;
+        _heartbeatTimer?.cancel();
+        _heartbeatTimer = null;
+
+        try {
+          await SecurityHardeningService.instance.clearSession();
+        } catch (_) {}
+        try {
+          await SecurityService.instance.clearSession();
+        } catch (_) {}
+        try {
+          await FirebaseAuth.instance.signOut();
+        } catch (_) {}
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('force_show_landing', true);
+        } catch (_) {}
+
+        if (!mounted) return;
+        if (_revokeDialogShown) return;
+        _revokeDialogShown = true;
+
+        _showSessionRevokedDialog(reason);
+      }, onError: (e) {
+        _secureLog('⚠️ session watch error: $e');
+      });
+    } catch (e) {
+      _secureLog('⚠️ session watch failed: $e');
+    }
+
+    _heartbeatTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      if (!mounted) return;
+      final empId = _activeEmployeeId;
+      if (empId == null || empId.isEmpty) return;
+      unawaited(SessionLockService.instance.heartbeat(employeeId: empId));
+    });
+  }
+
+  void _stopSessionLockWatch() {
+    _sessionSub?.cancel();
+    _sessionSub = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    _activeEmployeeId = null;
+  }
+
+  void _showSessionRevokedDialog(String reason) {
+    if (!mounted) return;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+        contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+        title: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              alignment: Alignment.center,
+              child: const Icon(Icons.logout_rounded,
+                  color: Colors.red, size: 20),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Signed Out',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.3,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          reason.isEmpty
+              ? 'Your session has ended.\n\n'
+              'Another device may have signed in with the same account, '
+              'or an administrator has revoked your access.'
+              : 'Your session has ended.\n\nReason: $reason',
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                if (!mounted) return;
+                Navigator.of(context, rootNavigator: true)
+                    .pushAndRemoveUntil(
+                  MaterialPageRoute(
+                      builder: (_) => const LandingScreen()),
+                      (_) => false,
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _T.ctaSolid,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                elevation: 0,
+              ),
+              child: const Text(
+                'OK',
+                style: TextStyle(
+                    fontWeight: FontWeight.w700, letterSpacing: 0.3),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // 🔒 SESSION CHECK + AUTO-REDIRECT
   // ═══════════════════════════════════════════════════════════════════════
   Future<void> _checkExistingSession() async {
@@ -276,7 +444,6 @@ class _LandingScreenState extends State<LandingScreen>
     try {
       _secureLog('🔍 Checking existing session...');
 
-      // 1. SecurityHardeningService (secure storage + TTL)
       String? empId;
       try {
         empId = await SecurityHardeningService.instance
@@ -286,7 +453,6 @@ class _LandingScreenState extends State<LandingScreen>
         _secureLog('Session token check failed: $e');
       }
 
-      // 2. Legacy SecurityService fallback
       if (empId == null || empId.isEmpty) {
         try {
           empId = await SecurityService.instance
@@ -295,7 +461,6 @@ class _LandingScreenState extends State<LandingScreen>
         } catch (_) {}
       }
 
-      // 3. Firebase Auth fallback
       if ((empId == null || empId.isEmpty) &&
           FirebaseAuth.instance.currentUser != null) {
         try {
@@ -318,7 +483,6 @@ class _LandingScreenState extends State<LandingScreen>
         return;
       }
 
-      // 4. Load employee + status (single query)
       _secureLog('✅ Session found: $empId — loading employee');
       Employee? employee;
       String status = '';
@@ -352,7 +516,6 @@ class _LandingScreenState extends State<LandingScreen>
         return;
       }
 
-      // 5. Verify account status
       const blocked = {
         'suspended',
         'terminated',
@@ -376,10 +539,42 @@ class _LandingScreenState extends State<LandingScreen>
         return;
       }
 
-      // 6. Auto-redirect
+      try {
+        final lockCheck = await SessionLockService.instance.checkLock(
+          employeeId: employee.id,
+          deviceBindingOverride: _deviceBinding,
+        );
+
+        if (lockCheck.isLocked) {
+          _secureLog('🔒 Session locked by another device — '
+              'clearing local session');
+          await _logSecurityEvent(
+            type: 'landing_auto_redirect_blocked',
+            severity: 'high',
+            details: 'Auto-redirect blocked: active on '
+                '${lockCheck.otherDeviceModel}',
+          );
+          try {
+            await SecurityHardeningService.instance.clearSession();
+            await SecurityService.instance.clearSession();
+            await FirebaseAuth.instance.signOut();
+          } catch (_) {}
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('force_show_landing', true);
+          } catch (_) {}
+          if (mounted) setState(() => _checkingSession = false);
+          return;
+        }
+      } catch (e) {
+        _secureLog('⚠️ Session lock check failed: $e — proceeding');
+      }
+
       if (!mounted) return;
       _autoRedirecting = true;
       _secureLog('➡️ Auto-redirecting to dashboard');
+
+      _startSessionLockWatch(employee.id);
 
       try {
         await Navigator.of(context, rootNavigator: true).pushReplacement(
@@ -391,6 +586,7 @@ class _LandingScreenState extends State<LandingScreen>
       } catch (e) {
         _secureLog('Auto-redirect failed: $e');
         _autoRedirecting = false;
+        _stopSessionLockWatch();
         if (mounted) setState(() => _checkingSession = false);
       }
     } catch (e) {
@@ -439,6 +635,8 @@ class _LandingScreenState extends State<LandingScreen>
     WidgetsBinding.instance.removeObserver(this);
     _adminHoldTimer?.cancel();
     _connectivitySub?.cancel();
+    _sessionSub?.cancel();
+    _heartbeatTimer?.cancel();
     _fadeCtrl.dispose();
     SecurityHardeningService.instance.disableSecureScreen();
     super.dispose();
@@ -510,7 +708,7 @@ class _LandingScreenState extends State<LandingScreen>
 
       if (!online) {
         _showOfflineSnack(
-            'Need a internet connection to login');
+            'Internet connection is required to log in.');
         return;
       }
 
@@ -529,8 +727,6 @@ class _LandingScreenState extends State<LandingScreen>
 
   // ═══════════════════════════════════════════════════════════════════════
   // 🎭 DEMO MODE — REQUIRES INTERNET
-  //    • Kung offline → snackbar, hindi tuloy
-  //    • Kung online → enable demo + navigate to LOGIN SCREEN (Step 1)
   // ═══════════════════════════════════════════════════════════════════════
   Future<void> _openDemoMode() async {
     if (_isNavigating) return;
@@ -541,13 +737,12 @@ class _LandingScreenState extends State<LandingScreen>
       return;
     }
 
-    // 🔌 CHECK INTERNET FIRST — bago mag-navigate
     final online = _isOnlineSafely();
     _secureLog('🎭 Demo tap — online=$online');
 
     if (!online) {
       _showOfflineSnack(
-          'Kailangan ng internet para magamit ang Demo Mode.');
+          'Internet connection is required for Demo Mode.');
       _secureLog('🎭 Demo BLOCKED — no internet connection');
       return;
     }
@@ -562,7 +757,6 @@ class _LandingScreenState extends State<LandingScreen>
         } catch (_) {}
       }
 
-      // ✅ Enable demo + prepare pre-auth keys
       await DemoModeService.instance.startDemoSession();
 
       _secureLog('🎭 Demo mode activated — routing to LOGIN SCREEN');
@@ -577,9 +771,6 @@ class _LandingScreenState extends State<LandingScreen>
 
       if (!mounted) return;
 
-      // 🎯 Navigate to LoginScreen (Step 1)
-      //    Login screen will detect DemoModeService.isEnabled
-      //    and intercept the PIN/Key Fob taps → auto-login.
       await Navigator.of(context, rootNavigator: true).push(
         MaterialPageRoute(
           builder: (_) => const LoginScreen(),
@@ -858,35 +1049,55 @@ class _LandingScreenState extends State<LandingScreen>
       );
     }
 
-    return Scaffold(
-      backgroundColor: useDesktop ? _T.desktopBg : tc.scaffoldBg,
-      body: Stack(
-        children: [
-          FadeTransition(
-            opacity: _fadeAnim,
-            child: Column(
+    // 🔒 SECRET KEYBOARD SHORTCUT: Ctrl + Shift + A
+    return Shortcuts(
+      shortcuts: const {
+        SingleActivator(LogicalKeyboardKey.keyA, control: true, shift: true):
+        ActivateIntent(),
+      },
+      child: Actions(
+        actions: {
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (intent) {
+              _openAdminLogin();
+              return null;
+            },
+          ),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
+            backgroundColor: useDesktop ? _T.desktopBg : tc.scaffoldBg,
+            body: Stack(
               children: [
-                _buildNavbar(useDesktop: useDesktop),
-                if (!_isOnline) _buildOfflineBanner(),
-                Expanded(
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    child: useDesktop
-                        ? _buildDesktopBody()
-                        : _buildMobileBody(tc),
+                FadeTransition(
+                  opacity: _fadeAnim,
+                  child: Column(
+                    children: [
+                      _buildNavbar(useDesktop: useDesktop),
+                      if (!_isOnline) _buildOfflineBanner(),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          physics: const BouncingScrollPhysics(),
+                          child: useDesktop
+                              ? _buildDesktopBody()
+                              : _buildMobileBody(tc),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+                if (_obscureContent) _buildPrivacyShield(),
               ],
             ),
           ),
-          if (_obscureContent) _buildPrivacyShield(),
-        ],
+        ),
       ),
     );
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🔌 OFFLINE BANNER — visible kapag walang net
+  // 🔌 OFFLINE BANNER
   // ═══════════════════════════════════════════════════════════════════════
   Widget _buildOfflineBanner() {
     return Container(
@@ -902,7 +1113,7 @@ class _LandingScreenState extends State<LandingScreen>
           SizedBox(width: 8),
           Flexible(
             child: Text(
-              'No internet - need a network to login or demo.',
+              'No internet — connection required to log in or use demo',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 12,
@@ -1040,6 +1251,7 @@ class _LandingScreenState extends State<LandingScreen>
                 ),
               ],
               const Spacer(),
+              // Employee Sign In ONLY (Admin Button Removed)
               GestureDetector(
                 onTap: _goToLogin,
                 behavior: HitTestBehavior.opaque,
@@ -1102,6 +1314,7 @@ class _LandingScreenState extends State<LandingScreen>
                 ),
               ),
               const Spacer(),
+              // Mobile Log In ONLY (Admin Button Removed)
               GestureDetector(
                 onTap: _goToLogin,
                 child: Container(

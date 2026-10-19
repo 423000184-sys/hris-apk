@@ -1,8 +1,5 @@
 // lib/screens/admin_tracking_page.dart
-// ═══════════════════════════════════════════════════════════════════
-// SECURED ADMIN TRACKING PAGE  v2.2
-// v2.2: Map picker sa dialog, Haversine helpers, accurate pin.
-// ═══════════════════════════════════════════════════════════════════
+// v2.3: 🎭 Demo Mode Support (Mock Zones & Action Blocking)
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -18,6 +15,7 @@ import '../utils/geo_utils.dart';
 import '../services/geofence_service.dart';
 import '../services/employee_notification_service.dart';
 import '../services/admin_auth_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 import '../widgets/bootstrap_grid.dart';
 
 class AdminTrackingPage extends StatefulWidget {
@@ -43,6 +41,15 @@ class AdminTrackingPage extends StatefulWidget {
 class _AdminTrackingPageState extends State<AdminTrackingPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
   final MapController _mapController = MapController();
 
   late double _currentLat;
@@ -67,14 +74,51 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   final Set<String> _inFlight = <String>{};
   bool _notifyingAll = false;
 
+  // 🎭 DEMO BLOCK HELPER
+  void _demoBlock() {
+    _snack('Action disabled in Demo Mode.', error: true);
+  }
+
+  // 🎭 MOCK ZONES
+  List<Map<String, dynamic>> _getMockZones() {
+    return [
+      {
+        'id': 'demo_loc_1',
+        'name': 'Main Office (Demo)',
+        'address': '123 Ayala Ave, Makati City',
+        'lat': 14.5547,
+        'lng': 121.0244,
+        'radius': 150.0,
+        'active': true,
+      },
+      {
+        'id': 'demo_loc_2',
+        'name': 'Warehouse (Demo)',
+        'address': '456 Quezon Ave, Quezon City',
+        'lat': 14.6760,
+        'lng': 121.0437,
+        'radius': 200.0,
+        'active': false,
+      },
+    ];
+  }
+
   @override
   void initState() {
     super.initState();
     _currentLat = widget.officeLat;
     _currentLng = widget.officeLng;
     _currentRadius = widget.radiusLimit.clamp(50.0, 2000.0);
-    _loadSettingsFromFirestore();
-    _listenToLocations();
+
+    if (_isDemo) {
+      _zones = _getMockZones();
+      _loadingZones = false;
+      _autoClockOut = true;
+      _geofenceViolation = true;
+    } else {
+      _loadSettingsFromFirestore();
+      _listenToLocations();
+    }
   }
 
   @override
@@ -127,11 +171,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   }
 
   Future<String?> _ensureAdmin() async {
+    if (_isDemo) return 'Admin actions disabled in Demo Mode.';
     final admin = await _currentAdmin();
     if (admin == null) return 'Session expired. Please sign in again.';
-    // 🚨 DEV BYPASS — i-uncomment kapag may admins/{uid} doc na.
-    // final ok = await AdminAuthService.instance.isAdmin(admin);
-    // if (!ok) return 'Walang permission. Admin-only action.';
     return null;
   }
 
@@ -225,6 +267,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   // AUTO-SAVE
   // ══════════════════════════════════════════════════════════════
   Future<void> _autoSaveConfig() async {
+    if (_isDemo) return; // 🎭 Block in Demo
     if (!_guard.tryAcquire('autosave_config')) return;
     if (_inFlight.contains('autosave')) return;
 
@@ -269,6 +312,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   // FORCE SAVE
   // ══════════════════════════════════════════════════════════════
   Future<void> _saveConfigToFirestore() async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
     if (_inFlight.contains('force_save')) return;
     if (!_guard.tryAcquire('force_save')) {
       _snack('Masyadong mabilis. Please wait a moment.', error: true);
@@ -333,6 +377,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   // HOLIDAY BLAST NOTIFICATION
   // ══════════════════════════════════════════════════════════════
   Future<void> _sendHolidayNotification() async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
     if (_notifyingAll) return;
     if (!_guard.tryAcquire('holiday_notify')) {
       _snack('Masyadong mabilis.', error: true);
@@ -413,6 +458,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   // CRUD LOCATIONS
   // ══════════════════════════════════════════════════════════════
   Future<void> _openAddLocationDialog() async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final err = await _ensureAdmin();
     if (err != null) {
       _snack(err, error: true);
@@ -434,6 +481,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   }
 
   Future<void> _openEditLocationDialog(Map<String, dynamic> loc) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final id = (loc['id'] ?? '').toString();
     if (!_isValidDocId(id)) {
       _snack('Invalid location reference.', error: true);
@@ -457,6 +506,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   }
 
   Future<void> _confirmDeleteLocation(Map<String, dynamic> loc) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final id = (loc['id'] ?? '').toString();
     if (!_isValidDocId(id)) {
       _snack('Invalid location reference.', error: true);
@@ -533,6 +584,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   }
 
   Future<void> _toggleLocationActive(Map<String, dynamic> loc) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final id = (loc['id'] ?? '').toString();
     if (!_isValidDocId(id)) {
       _snack('Invalid location reference.', error: true);
@@ -606,6 +659,11 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // 🎭 DEMO BANNER
+              if (_isDemo) ...[
+                _buildDemoBanner(),
+                const SizedBox(height: 24),
+              ],
               _buildHeader(),
               const SizedBox(height: 20),
               _buildMainGrid(),
@@ -617,6 +675,50 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🎭 DEMO BANNER
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample data. Modifying geofence settings and locations is disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -646,20 +748,20 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: tc.green.withValues(alpha: 0.12),
+                color: _isDemo ? tc.border : tc.green.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: tc.green.withValues(alpha: 0.3)),
+                border: Border.all(color: _isDemo ? tc.border : tc.green.withValues(alpha: 0.3)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.cloud_done_rounded, size: 11, color: tc.green),
+                  Icon(Icons.cloud_done_rounded, size: 11, color: _isDemo ? tc.muted : tc.green),
                   const SizedBox(width: 4),
-                  Text('AUTO-SAVE ON',
+                  Text(_isDemo ? 'AUTO-SAVE OFF' : 'AUTO-SAVE ON',
                       style: TextStyle(
                           fontSize: 9,
                           fontWeight: FontWeight.w800,
-                          color: tc.green,
+                          color: _isDemo ? tc.muted : tc.green,
                           letterSpacing: 0.5)),
                 ],
               ),
@@ -882,16 +984,16 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
               Tooltip(
                 message: 'Add new location',
                 child: InkWell(
-                  onTap: _openAddLocationDialog,
+                  onTap: _isDemo ? _demoBlock : _openAddLocationDialog,
                   child: Container(
                     width: 28,
                     height: 28,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFFF8A00),
+                    decoration: BoxDecoration(
+                      color: _isDemo ? tc.border : const Color(0xFFFF8A00),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.add,
-                        color: Colors.white, size: 18),
+                    child: Icon(Icons.add,
+                        color: _isDemo ? tc.muted : Colors.white, size: 18),
                   ),
                 ),
               ),
@@ -947,31 +1049,31 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       ),
                     ),
                     Icon(Icons.cloud_done_rounded,
-                        size: 11, color: tc.green),
+                        size: 11, color: _isDemo ? tc.muted : tc.green),
                     const SizedBox(width: 4),
-                    Text('auto',
+                    Text(_isDemo ? 'off' : 'auto',
                         style: TextStyle(
                             fontSize: 9,
                             fontWeight: FontWeight.w700,
-                            color: tc.green)),
+                            color: _isDemo ? tc.muted : tc.green)),
                   ],
                 ),
                 const SizedBox(height: 8),
                 SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 6,
-                    activeTrackColor: tc.orange,
+                    activeTrackColor: _isDemo ? tc.muted : tc.orange,
                     inactiveTrackColor: tc.border,
-                    thumbColor: tc.card,
+                    thumbColor: _isDemo ? tc.muted : tc.card,
                     thumbShape: const RoundSliderThumbShape(
                         enabledThumbRadius: 8, elevation: 2),
-                    overlayColor: tc.orange.withValues(alpha: 0.2),
+                    overlayColor: (_isDemo ? tc.muted : tc.orange).withValues(alpha: 0.2),
                   ),
                   child: Slider(
                     value: _currentRadius.clamp(50.0, 2000.0),
                     min: 50.0,
                     max: 2000.0,
-                    onChanged: (val) {
+                    onChanged: _isDemo ? null : (val) {
                       setState(() => _currentRadius = val);
                       _radiusDebounce?.cancel();
                       _radiusDebounce = Timer(
@@ -979,7 +1081,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                         _autoSaveConfig,
                       );
                     },
-                    onChangeEnd: (_) {
+                    onChangeEnd: _isDemo ? null : (_) {
                       _radiusDebounce?.cancel();
                       _autoSaveConfig();
                     },
@@ -999,7 +1101,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w800,
-                          color: tc.orange),
+                          color: _isDemo ? tc.muted : tc.orange),
                     ),
                     Expanded(
                       child: Text('2000m',
@@ -1043,12 +1145,12 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
-            onPressed: _openAddLocationDialog,
+            onPressed: _isDemo ? _demoBlock : _openAddLocationDialog,
             icon: const Icon(Icons.add_location_alt_rounded, size: 14),
             label: const Text('Add First Location'),
             style: OutlinedButton.styleFrom(
-              foregroundColor: tc.orange,
-              side: BorderSide(color: tc.orange),
+              foregroundColor: _isDemo ? tc.muted : tc.orange,
+              side: BorderSide(color: _isDemo ? tc.border : tc.orange),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8)),
             ),
@@ -1089,7 +1191,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected
-                ? tc.orange
+                ? (_isDemo ? tc.border : tc.orange)
                 : (!isActive
                 ? tc.border.withValues(alpha: 0.5)
                 : tc.border),
@@ -1132,14 +1234,14 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   height: 14,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: isSelected ? tc.orange : Colors.transparent,
+                    color: isSelected ? (_isDemo ? tc.border : tc.orange) : Colors.transparent,
                     border: Border.all(
-                      color: isSelected ? tc.orange : tc.muted,
+                      color: isSelected ? (_isDemo ? tc.border : tc.orange) : tc.muted,
                     ),
                   ),
                   child: isSelected
-                      ? const Icon(Icons.check,
-                      size: 10, color: Colors.white)
+                      ? Icon(Icons.check,
+                      size: 10, color: _isDemo ? tc.muted : Colors.white)
                       : null,
                 ),
               ],
@@ -1205,21 +1307,21 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   icon: isActive
                       ? Icons.toggle_off_rounded
                       : Icons.toggle_on_rounded,
-                  color: isActive ? tc.muted : tc.green,
+                  color: _isDemo ? tc.muted : (isActive ? tc.muted : tc.green),
                   tooltip: isActive ? 'Disable' : 'Enable',
                   onTap: () => _toggleLocationActive(loc),
                 ),
                 const SizedBox(width: 4),
                 _miniBtn(
                   icon: Icons.edit_outlined,
-                  color: tc.orange,
+                  color: _isDemo ? tc.muted : tc.orange,
                   tooltip: 'Edit',
                   onTap: () => _openEditLocationDialog(loc),
                 ),
                 const SizedBox(width: 4),
                 _miniBtn(
                   icon: Icons.delete_outline_rounded,
-                  color: tc.red,
+                  color: _isDemo ? tc.muted : tc.red,
                   tooltip: 'Delete',
                   onTap: () => _confirmDeleteLocation(loc),
                 ),
@@ -1337,7 +1439,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 onChanged: (v) async {
                   setState(() => _eventAndHoliday = v);
                   await _autoSaveConfig();
-                  if (v) {
+                  if (v && !_isDemo) {
                     await _sendHolidayNotification();
                   }
                 },
@@ -1369,7 +1471,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         color: tc.card,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: value ? tc.orange.withValues(alpha: 0.5) : tc.border,
+          color: value ? (_isDemo ? tc.border : tc.orange.withValues(alpha: 0.5)) : tc.border,
           width: value ? 1.5 : 1,
         ),
       ),
@@ -1395,7 +1497,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       height: 6,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: value ? tc.green : tc.muted,
+                        color: value ? (_isDemo ? tc.muted : tc.green) : tc.muted,
                       ),
                     ),
                     const SizedBox(width: 4),
@@ -1404,7 +1506,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       style: TextStyle(
                           fontSize: 9,
                           fontWeight: FontWeight.w800,
-                          color: value ? tc.green : tc.muted,
+                          color: value ? (_isDemo ? tc.muted : tc.green) : tc.muted,
                           letterSpacing: 0.3),
                     ),
                     const SizedBox(width: 6),
@@ -1423,11 +1525,11 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           const SizedBox(width: 8),
           Switch(
             value: value,
-            activeColor: tc.orange,
-            activeTrackColor: tc.orange.withValues(alpha: 0.4),
+            activeColor: _isDemo ? tc.muted : tc.orange,
+            activeTrackColor: (_isDemo ? tc.muted : tc.orange).withValues(alpha: 0.4),
             inactiveThumbColor: Colors.white,
             inactiveTrackColor: tc.muted,
-            onChanged: onChanged,
+            onChanged: _isDemo ? null : onChanged,
           ),
         ],
       ),
@@ -1455,14 +1557,14 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         );
 
         final addBtn = ElevatedButton.icon(
-          onPressed: _openAddLocationDialog,
+          onPressed: _isDemo ? _demoBlock : _openAddLocationDialog,
           icon: const Icon(Icons.add_location_alt_rounded, size: 16),
           label: const Text('Add Location'),
           style: ElevatedButton.styleFrom(
-            backgroundColor: tc.green,
-            foregroundColor: Colors.white,
+            backgroundColor: _isDemo ? tc.border : tc.green,
+            foregroundColor: _isDemo ? tc.muted : Colors.white,
             elevation: 2,
-            shadowColor: tc.green.withValues(alpha: 0.3),
+            shadowColor: (_isDemo ? tc.border : tc.green).withValues(alpha: 0.3),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -1470,7 +1572,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         );
 
         final saveBtn = ElevatedButton.icon(
-          onPressed: _isSaving ? null : _saveConfigToFirestore,
+          onPressed: (_isDemo || _isSaving) ? null : _saveConfigToFirestore,
           icon: _isSaving
               ? const SizedBox(
             width: 16,
@@ -1481,10 +1583,10 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
               : const Icon(Icons.refresh_rounded, size: 16),
           label: Text(_isSaving ? 'Saving...' : 'Force Sync Now'),
           style: ElevatedButton.styleFrom(
-            backgroundColor: tc.orange,
-            foregroundColor: Colors.white,
+            backgroundColor: _isDemo ? tc.border : tc.orange,
+            foregroundColor: _isDemo ? tc.muted : Colors.white,
             elevation: 2,
-            shadowColor: tc.orange.withValues(alpha: 0.3),
+            shadowColor: (_isDemo ? tc.border : tc.orange).withValues(alpha: 0.3),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -1687,10 +1789,6 @@ class _LocationDialogState extends State<_LocationDialog> {
       });
     }
 
-    if (kDebugMode) {
-      debugPrint('🗺️ [Geocode] Auto-fill triggered');
-    }
-
     try {
       final uri = Uri.https(
         'nominatim.openstreetmap.org',
@@ -1774,7 +1872,6 @@ class _LocationDialogState extends State<_LocationDialog> {
       _latCtrl.text = lat.toStringAsFixed(6);
       _lngCtrl.text = lon.toStringAsFixed(6);
 
-      // ✅ I-update ang map pin
       _pickedPoint = LatLng(lat, lon);
       try {
         _dialogMapCtrl.move(_pickedPoint!, 17.0);
@@ -1949,9 +2046,6 @@ class _LocationDialogState extends State<_LocationDialog> {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🗺️ MAP PICKER WIDGET
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildMapPicker(AdminColors tc) {
     final center = _pickedPoint ?? const LatLng(14.598050, 120.989170);
     final radius =
@@ -2127,7 +2221,6 @@ class _LocationDialogState extends State<_LocationDialog> {
 
                 const SizedBox(height: 14),
 
-                // ⬇️ MAP PICKER
                 _label('PIN SA MAPA (RECOMMENDED)', tc),
                 _buildMapPicker(tc),
                 const SizedBox(height: 14),

@@ -1,11 +1,5 @@
 // lib/screens/admin_notification_page.dart
-// ═══════════════════════════════════════════════════════════════════
-// ADMIN NOTIFICATION PAGE  v1.8
-// Updates:
-//   - pdf_password case: "Show current password" + "Reset password"
-//     with confirmation dialog and 3-step re-download instructions.
-//   - All user-facing text in English.
-// ═══════════════════════════════════════════════════════════════════
+// v1.9: 🎭 Demo Mode Support (Mock Notifications & Action Blocking)
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint, kDebugMode;
@@ -18,6 +12,7 @@ import '../services/admin_notification_alert_service.dart';
 import '../services/admin_support_actions_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/support_reply_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 import 'admin_theme.dart';
 import 'admin_password_change_requests_page.dart';
 
@@ -51,13 +46,152 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
 
   Timer? _searchDebounce;
 
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _demoBlock() {
+    _showSnack('Action disabled in Demo Mode.');
+  }
+
+  // 🎭 MOCK NOTIFICATIONS
+  List<AdminNotification> _getMockNotifications() {
+    final now = DateTime.now();
+    return [
+      AdminNotification(
+        id: 'demo_n1',
+        type: 'support_request',
+        title: 'Support: Cannot download payslip PDF',
+        message: 'Hi admin, hindi ko ma-download yung payslip ko. Error: file not found.',
+        timestamp: now.subtract(const Duration(minutes: 5)),
+        read: false,
+        priority: 'high',
+        employeeName: 'John Doe',
+        employeeId: 'DEMO-001',
+        metadata: const {
+          'status': 'pending',
+          'category': 'pdf_download',
+          'categoryLabel': 'PDF Download',
+        },
+      ),
+      AdminNotification(
+        id: 'demo_n2',
+        type: 'support_request',
+        title: 'Support: Forgot PDF password',
+        message: 'Nakalimutan ko yung password ng payslip PDF ko. Paano ito ma-open?',
+        timestamp: now.subtract(const Duration(minutes: 18)),
+        read: false,
+        priority: 'high',
+        employeeName: 'Jane Smith',
+        employeeId: 'DEMO-002',
+        metadata: const {
+          'status': 'in_progress',
+          'category': 'pdf_password',
+          'categoryLabel': 'PDF Password',
+          'lastReplyBy': 'admin@racoma.com',
+        },
+      ),
+      AdminNotification(
+        id: 'demo_n3',
+        type: 'clock_in',
+        title: 'Clocked in',
+        message: 'Mike Johnson clocked in at 8:55 AM.',
+        timestamp: now.subtract(const Duration(minutes: 32)),
+        read: false,
+        priority: 'normal',
+        employeeName: 'Mike Johnson',
+        employeeId: 'DEMO-003',
+        // ✅ FIXED: zone info moved into metadata
+        metadata: const {
+          'zoneLabel': 'Inside office',
+          'zoneEmoji': '🟢',
+        },
+      ),
+      AdminNotification(
+        id: 'demo_n4',
+        type: 'geofence_alert',
+        title: 'Geofence violation',
+        message: 'Sarah Lee attempted to clock in outside the office geofence (1.2 km away).',
+        timestamp: now.subtract(const Duration(hours: 1)),
+        read: false,
+        priority: 'high',
+        employeeName: 'Sarah Lee',
+        employeeId: 'DEMO-004',
+        // ✅ FIXED: zone info moved into metadata
+        metadata: const {
+          'zoneLabel': 'Outside office',
+          'zoneEmoji': '🔴',
+        },
+      ),
+      AdminNotification(
+        id: 'demo_n5',
+        type: 'leave_request',
+        title: 'Leave request submitted',
+        message: 'John Doe requested 3 days of vacation leave from Nov 15-17.',
+        timestamp: now.subtract(const Duration(hours: 2)),
+        read: true,
+        priority: 'normal',
+        employeeName: 'John Doe',
+        employeeId: 'DEMO-001',
+        metadata: const {},
+      ),
+      AdminNotification(
+        id: 'demo_n6',
+        type: 'clock_out',
+        title: 'Clocked out',
+        message: 'Jane Smith clocked out at 5:03 PM.',
+        timestamp: now.subtract(const Duration(hours: 3)),
+        read: true,
+        priority: 'normal',
+        employeeName: 'Jane Smith',
+        employeeId: 'DEMO-002',
+        // ✅ FIXED: zone info moved into metadata
+        metadata: const {
+          'zoneLabel': 'Inside office',
+          'zoneEmoji': '🟠',
+        },
+      ),
+      AdminNotification(
+        id: 'demo_n7',
+        type: 'password_change_request',
+        title: 'Password change request',
+        message: 'Mike Johnson requested a PIN reset.',
+        timestamp: now.subtract(const Duration(hours: 5)),
+        read: true,
+        priority: 'high',
+        employeeName: 'Mike Johnson',
+        employeeId: 'DEMO-003',
+        metadata: const {'requestId': 'demo_pc_1'},
+      ),
+      AdminNotification(
+        id: 'demo_n8',
+        type: 'wfh_toggle',
+        title: 'WFH access enabled',
+        message: 'Admin enabled WFH for Sarah Lee.',
+        timestamp: now.subtract(const Duration(hours: 8)),
+        read: true,
+        priority: 'normal',
+        employeeName: 'Sarah Lee',
+        employeeId: 'DEMO-004',
+        metadata: const {},
+      ),
+    ];
+  }
+
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
     _tabs.addListener(_onTabChanged);
     _loadSoundPref();
-    _logAudit('page_opened', 'Admin opened notifications page');
+    if (!_isDemo) {
+      _logAudit('page_opened', 'Admin opened notifications page');
+    }
   }
 
   void _onTabChanged() {
@@ -84,10 +218,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔒 SECURITY HELPERS
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _logAudit(String action, String details) async {
+    if (_isDemo) return;
     try {
       final empId =
       await SecurityHardeningService.instance.getCurrentEmployeeId();
@@ -127,10 +259,11 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     return s;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SAFE ACTIONS
-  // ═══════════════════════════════════════════════════════════════
   Future<bool> _safeDelete(AdminNotification n) async {
+    if (_isDemo) {
+      _demoBlock();
+      return false;
+    }
     if (!_checkRateLimit()) {
       _showSnack('⚠️ Too fast. Please wait a few seconds.');
       return false;
@@ -155,6 +288,10 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
   }
 
   Future<bool> _safeClearAll() async {
+    if (_isDemo) {
+      _demoBlock();
+      return false;
+    }
     if (!_checkRateLimit()) {
       _showSnack('⚠️ Too fast. Please wait a few seconds.');
       return false;
@@ -192,9 +329,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔑 ALERT CLASSIFIER
-  // ═══════════════════════════════════════════════════════════════
   bool _isAlertNotification(AdminNotification n) {
     if (n.priority == 'high') return true;
     if (n.type == 'geofence_alert') return true;
@@ -211,9 +345,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     return false;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // FILTER + SORT
-  // ═══════════════════════════════════════════════════════════════
   List<AdminNotification> _applyFilterAndSort(
       List<AdminNotification> input) {
     var list = List<AdminNotification>.from(input);
@@ -258,9 +389,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     return list;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // BUILD
-  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final tc = AdminTheme.getColors(context);
@@ -268,24 +396,30 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     return Scaffold(
       backgroundColor: tc.background,
       appBar: _buildAppBar(tc),
-      body: StreamBuilder<List<AdminNotification>>(
-        stream: AdminNotificationService.instance.streamAll(limit: 100),
+      body: _isDemo
+          ? _buildDemoBody(tc)
+          : StreamBuilder<List<AdminNotification>>(
+        stream:
+        AdminNotificationService.instance.streamAll(limit: 100),
         builder: (context, snap) {
           final all = snap.data;
 
           if (all != null) {
             final filtered = _applyFilterAndSort(all);
-
-            final unreadList = filtered.where((n) => !n.read).toList();
+            final unreadList =
+            filtered.where((n) => !n.read).toList();
             final alertsList =
             filtered.where(_isAlertNotification).toList();
 
             return TabBarView(
               controller: _tabs,
               children: [
-                _buildList(context, tc, filtered, allNotifications: all),
-                _buildList(context, tc, unreadList, allNotifications: all),
-                _buildList(context, tc, alertsList, allNotifications: all),
+                _buildList(context, tc, filtered,
+                    allNotifications: all),
+                _buildList(context, tc, unreadList,
+                    allNotifications: all),
+                _buildList(context, tc, alertsList,
+                    allNotifications: all),
               ],
             );
           }
@@ -296,6 +430,61 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
 
           return _skeletonLoader(tc);
         },
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🎭 DEMO BODY
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildDemoBody(AdminColors tc) {
+    final all = _getMockNotifications();
+    final filtered = _applyFilterAndSort(all);
+    final unreadList = filtered.where((n) => !n.read).toList();
+    final alertsList = filtered.where(_isAlertNotification).toList();
+
+    return Column(
+      children: [
+        _buildDemoBanner(tc),
+        Expanded(
+          child: TabBarView(
+            controller: _tabs,
+            children: [
+              _buildList(context, tc, filtered, allNotifications: all),
+              _buildList(context, tc, unreadList, allNotifications: all),
+              _buildList(context, tc, alertsList, allNotifications: all),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDemoBanner(AdminColors tc) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Demo Mode — showing sample notifications. Delete, clear, reply, and status updates are disabled.',
+              style: TextStyle(
+                fontSize: 11,
+                color: tc.orange,
+                fontWeight: FontWeight.w600,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -336,8 +525,12 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
           ],
         ),
         IconButton(
-          tooltip: _soundOn ? 'Mute sounds' : 'Unmute sounds',
-          onPressed: () async {
+          tooltip: _isDemo
+              ? 'Sound toggle disabled in Demo'
+              : (_soundOn ? 'Mute sounds' : 'Unmute sounds'),
+          onPressed: _isDemo
+              ? null
+              : () async {
             final newValue = !_soundOn;
             setState(() => _soundOn = newValue);
             try {
@@ -349,20 +542,25 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
           },
           icon: Icon(
             _soundOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-            color: tc.textMuted,
+            color: _isDemo ? tc.muted : tc.textMuted,
             size: 20,
           ),
         ),
         TextButton(
-          onPressed: () async {
+          onPressed: _isDemo
+              ? _demoBlock
+              : () async {
             try {
-              await AdminNotificationService.instance.markAllAsRead();
+              await AdminNotificationService.instance
+                  .markAllAsRead();
               _logAudit('mark_all_read', 'Marked all as read');
               _showSnack('✅ All notifications marked as read.');
             } on AdminSessionExpiredException {
-              _showSnack('🚨 Session expired. Please log in again.');
+              _showSnack(
+                  '🚨 Session expired. Please log in again.');
             } on AdminPermissionDeniedException {
-              _showSnack('🚫 Permission denied. You cannot mark all as read.');
+              _showSnack(
+                  '🚫 Permission denied. You cannot mark all as read.');
             } catch (e) {
               _showSnack('⚠️ Failed to mark all as read.');
               _secureLog('markAllAsRead error: $e');
@@ -371,7 +569,7 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
           child: Text(
             'Mark all read',
             style: TextStyle(
-              color: tc.orange,
+              color: _isDemo ? tc.muted : tc.orange,
               fontWeight: FontWeight.w700,
               fontSize: 13,
             ),
@@ -383,6 +581,10 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
           shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12)),
           onSelected: (v) async {
+            if (_isDemo) {
+              _demoBlock();
+              return;
+            }
             if (v == 'clear') {
               final ok = await _confirmClear(context, tc);
               if (ok == true) {
@@ -405,10 +607,14 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               value: 'password_requests',
               child: Row(
                 children: [
-                  Icon(Icons.lock_reset_rounded, size: 16, color: tc.orange),
+                  Icon(Icons.lock_reset_rounded,
+                      size: 16,
+                      color: _isDemo ? tc.muted : tc.orange),
                   const SizedBox(width: 10),
                   Text('Password change requests',
-                      style: TextStyle(color: tc.text, fontSize: 13)),
+                      style: TextStyle(
+                          color: _isDemo ? tc.muted : tc.text,
+                          fontSize: 13)),
                 ],
               ),
             ),
@@ -416,10 +622,14 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               value: 'clear',
               child: Row(
                 children: [
-                  Icon(Icons.delete_sweep_rounded, size: 16, color: tc.red),
+                  Icon(Icons.delete_sweep_rounded,
+                      size: 16,
+                      color: _isDemo ? tc.muted : tc.red),
                   const SizedBox(width: 10),
                   Text('Clear all',
-                      style: TextStyle(color: tc.text, fontSize: 13)),
+                      style: TextStyle(
+                          color: _isDemo ? tc.muted : tc.text,
+                          fontSize: 13)),
                 ],
               ),
             ),
@@ -449,34 +659,59 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               tabs: [
                 const Tab(text: 'All'),
                 Tab(
-                  child: StreamBuilder<List<AdminNotification>>(
-                    stream: AdminNotificationService.instance
-                        .streamAll(limit: 100),
-                    builder: (context, snap) {
-                      final count = (snap.data ?? [])
+                  child: _tabWithBadgeFromCount(
+                      'Unread',
+                      (_isDemo
+                          ? _getMockNotifications()
+                          : const <AdminNotification>[])
                           .where((n) => !n.read)
-                          .length;
-                      return _tabWithBadge('Unread', count, tc);
-                    },
-                  ),
+                          .length,
+                      tc),
                 ),
                 Tab(
-                  child: StreamBuilder<List<AdminNotification>>(
-                    stream: AdminNotificationService.instance
-                        .streamAll(limit: 100),
-                    builder: (context, snap) {
-                      final count = (snap.data ?? [])
+                  child: _tabWithBadgeFromCount(
+                      'Alerts',
+                      (_isDemo
+                          ? _getMockNotifications()
+                          : const <AdminNotification>[])
                           .where(_isAlertNotification)
-                          .length;
-                      return _tabWithBadge('Alerts', count, tc);
-                    },
-                  ),
+                          .length,
+                      tc),
                 ),
               ],
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _tabWithBadgeFromCount(String label, int count, AdminColors tc) {
+    if (count <= 0) return Text(label);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label),
+        const SizedBox(width: 5),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+          decoration: BoxDecoration(
+            color: tc.orange,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          constraints: const BoxConstraints(minWidth: 18),
+          child: Text(
+            count > 99 ? '99+' : '$count',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -568,37 +803,9 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
   }
 
   Widget _tabWithBadge(String label, int count, AdminColors tc) {
-    if (count <= 0) return Text(label);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(label),
-        const SizedBox(width: 5),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-          decoration: BoxDecoration(
-            color: tc.orange,
-            borderRadius: BorderRadius.circular(999),
-          ),
-          constraints: const BoxConstraints(minWidth: 18),
-          child: Text(
-            count > 99 ? '99+' : '$count',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w800,
-              color: Colors.white,
-              letterSpacing: 0.2,
-            ),
-          ),
-        ),
-      ],
-    );
+    return _tabWithBadgeFromCount(label, count, tc);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // LIST
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildList(
       BuildContext context,
       AdminColors tc,
@@ -656,13 +863,11 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     switch (type) {
       case 'support_request':
         return 'SUPPORT REQUESTS';
-
       case 'challenge_failed':
       case 'challenge_missed':
         return 'CHALLENGE ALERTS';
       case 'challenge_passed':
         return 'CHALLENGE PASSED';
-
       case 'password_change_request':
       case 'password_change':
         return 'PASSWORD REQUESTS';
@@ -701,7 +906,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
             const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: tc.orange.withValues(alpha: tc.isDark ? 0.12 : 0.08),
-              border: Border(bottom: BorderSide(color: tc.border, width: 1)),
+              border:
+              Border(bottom: BorderSide(color: tc.border, width: 1)),
             ),
             child: Row(
               children: [
@@ -754,6 +960,9 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
 
     return Dismissible(
       key: ValueKey('notif_${n.id}'),
+      direction: _isDemo
+          ? DismissDirection.none
+          : DismissDirection.horizontal,
       background: Container(
         color: n.read
             ? tc.orange.withValues(alpha: 0.12)
@@ -774,6 +983,10 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         child: Icon(Icons.delete_outline_rounded, color: tc.red, size: 22),
       ),
       confirmDismiss: (direction) async {
+        if (_isDemo) {
+          _demoBlock();
+          return false;
+        }
         if (direction == DismissDirection.startToEnd) {
           try {
             if (!n.read) {
@@ -800,7 +1013,7 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         color: Colors.transparent,
         child: InkWell(
           onTap: () {
-            if (!n.read) {
+            if (!n.read && !_isDemo) {
               AdminNotificationService.instance
                   .markAsRead(n.id)
                   .catchError((e) {
@@ -838,7 +1051,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                           color: style.color.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                              color: style.color.withValues(alpha: 0.35),
+                              color:
+                              style.color.withValues(alpha: 0.35),
                               width: 1),
                         ),
                         child: Center(
@@ -871,7 +1085,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
-                                color: style.color.withValues(alpha: 0.12),
+                                color:
+                                style.color.withValues(alpha: 0.12),
                                 borderRadius: BorderRadius.circular(4)),
                             child: Text(_typeLabel(n.type),
                                 style: TextStyle(
@@ -1042,14 +1257,12 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     switch (type) {
       case 'support_request':
         return 'SUPPORT';
-
       case 'challenge_failed':
         return 'CHALLENGE FAIL';
       case 'challenge_missed':
         return 'CHALLENGE MISS';
       case 'challenge_passed':
         return 'CHALLENGE OK';
-
       case 'password_change_request':
       case 'password_change':
         return 'PASSWORD REQ';
@@ -1072,9 +1285,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SUPPORT STATUS HELPERS
-  // ═══════════════════════════════════════════════════════════════
   String _supportStatusLabel(AdminNotification n) {
     final s =
         (n.metadata['status'] as String?)?.toLowerCase() ?? 'pending';
@@ -1114,10 +1324,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // DETAILS SHEET
-  // ═══════════════════════════════════════════════════════════════
-  void _showDetail(BuildContext context, AdminColors tc, AdminNotification n) {
+  void _showDetail(
+      BuildContext context, AdminColors tc, AdminNotification n) {
     final isSupport = n.type == 'support_request';
 
     showModalBottomSheet(
@@ -1180,6 +1388,10 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               children: [
                 OutlinedButton.icon(
                   onPressed: () async {
+                    if (_isDemo) {
+                      _demoBlock();
+                      return;
+                    }
                     final ok = await _confirmSingleDelete(context, tc, n);
                     if (ok == true) {
                       final deleted = await _safeDelete(n);
@@ -1189,10 +1401,11 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                     }
                   },
                   icon: Icon(Icons.delete_outline_rounded,
-                      size: 16, color: tc.red),
+                      size: 16, color: _isDemo ? tc.muted : tc.red),
                   label: Text('Delete',
                       style: TextStyle(
-                          color: tc.red, fontWeight: FontWeight.w700)),
+                          color: _isDemo ? tc.muted : tc.red,
+                          fontWeight: FontWeight.w700)),
                   style: OutlinedButton.styleFrom(
                     side: BorderSide(color: tc.border),
                     padding: const EdgeInsets.symmetric(
@@ -1209,13 +1422,15 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                   ),
                   child: Text('Close',
                       style: TextStyle(
-                          color: tc.textMuted, fontWeight: FontWeight.w700)),
+                          color: tc.textMuted,
+                          fontWeight: FontWeight.w700)),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: FilledButton.icon(
                     onPressed: () => _navigateToTarget(context, n),
-                    icon: const Icon(Icons.arrow_forward_rounded, size: 16),
+                    icon:
+                    const Icon(Icons.arrow_forward_rounded, size: 16),
                     label: const Text('Go To',
                         style: TextStyle(fontWeight: FontWeight.w700)),
                     style: FilledButton.styleFrom(
@@ -1232,18 +1447,19 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // NAVIGATION
-  // ═══════════════════════════════════════════════════════════════
   void _navigateToTarget(BuildContext context, AdminNotification n) {
     final tc = AdminTheme.getColors(context);
     Navigator.pop(context);
+
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
 
     switch (n.type) {
       case 'support_request':
         _showSupportActions(context, tc, n);
         break;
-
       case 'challenge_failed':
       case 'challenge_missed':
         _showSnack(
@@ -1251,9 +1467,9 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                 'check employee attendance.');
         break;
       case 'challenge_passed':
-        _showSnack('✅ ${n.employeeName ?? "Employee"} verified presence.');
+        _showSnack(
+            '✅ ${n.employeeName ?? "Employee"} verified presence.');
         break;
-
       case 'password_change_request':
       case 'password_change':
         Navigator.push(
@@ -1266,31 +1482,25 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
           ),
         );
         break;
-
       case 'leave_request':
         _showSnack('🔗 Redirecting to Leave Request Details...');
         break;
-
       case 'clock_in':
       case 'clock_out':
         _showSnack(
             '🔗 Redirecting to Attendance Record for ${n.employeeName}...');
         break;
-
       case 'geofence_alert':
       case 'presence_update':
         _showSnack(
             '🔗 Redirecting to Live Map / Location for ${n.employeeName}...');
         break;
-
       case 'wfh_toggle':
         _showSnack('🔗 Redirecting to WFH Request...');
         break;
-
       case 'face_enrollment':
         _showSnack('🔗 Redirecting to Face ID Profile...');
         break;
-
       default:
         _showSnack('No direct link for this notification.');
         break;
@@ -1321,11 +1531,13 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🆘 SUPPORT REQUEST ACTIONS — CATEGORY-DRIVEN
-  // ═══════════════════════════════════════════════════════════════
   void _showSupportActions(
       BuildContext context, AdminColors tc, AdminNotification n) {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
+
     final status =
         (n.metadata['status'] as String?)?.toLowerCase() ?? 'pending';
     final category =
@@ -1343,7 +1555,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // ─── Header ───
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: Row(
@@ -1363,7 +1574,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            _sanitize(n.employeeName ?? 'Employee'),
+                            _sanitize(
+                                n.employeeName ?? 'Employee'),
                             style: TextStyle(
                                 color: tc.text,
                                 fontSize: 14,
@@ -1382,8 +1594,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                 ),
               ),
               Divider(height: 1, color: tc.border),
-
-              // ─── UNIVERSAL: Reply ───
               ListTile(
                 leading: Icon(Icons.reply_rounded, color: tc.orange),
                 title: Text('Reply to employee',
@@ -1396,11 +1606,7 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                   _showReplyDialog(context, tc, n);
                 },
               ),
-
-              // ─── CATEGORY-SPECIFIC ACTIONS ───
               ..._buildCategoryActions(context, tc, n, category, status),
-
-              // ─── STATUS ACTIONS ───
               if (status != 'in_progress' && status != 'resolved')
                 ListTile(
                   leading: Icon(Icons.pending_actions_rounded,
@@ -1409,7 +1615,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                       style: TextStyle(color: tc.text)),
                   subtitle: Text(
                       'Let other admins know someone is handling it',
-                      style: TextStyle(color: tc.muted, fontSize: 11.5)),
+                      style:
+                      TextStyle(color: tc.muted, fontSize: 11.5)),
                   onTap: () async {
                     Navigator.pop(context);
                     final ok = await SupportReplyService.instance
@@ -1435,7 +1642,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                   title: Text('Mark as Resolved',
                       style: TextStyle(color: tc.text)),
                   subtitle: Text('Close the ticket',
-                      style: TextStyle(color: tc.muted, fontSize: 11.5)),
+                      style:
+                      TextStyle(color: tc.muted, fontSize: 11.5)),
                   onTap: () async {
                     Navigator.pop(context);
                     final ok = await SupportReplyService.instance
@@ -1454,14 +1662,13 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                         : '⚠️ Failed to update status.');
                   },
                 ),
-
-              // ─── UTILITY ───
               ListTile(
                 leading: Icon(Icons.copy_rounded, color: tc.textMuted),
                 title: Text('Copy employee ID',
                     style: TextStyle(color: tc.text)),
                 subtitle: Text(_sanitize(n.employeeId ?? '—'),
-                    style: TextStyle(color: tc.muted, fontSize: 11.5)),
+                    style:
+                    TextStyle(color: tc.muted, fontSize: 11.5)),
                 onTap: () {
                   Clipboard.setData(
                       ClipboardData(text: n.employeeId ?? ''));
@@ -1477,7 +1684,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     );
   }
 
-  // ─── Category-specific actions ───
   List<Widget> _buildCategoryActions(
       BuildContext context,
       AdminColors tc,
@@ -1488,12 +1694,10 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     final List<Widget> actions = [];
 
     switch (category) {
-    // ═══════════════════════════════════════════════════════════
-    // 📄 PDF DOWNLOAD ISSUE
-    // ═══════════════════════════════════════════════════════════
       case 'pdf_download':
         actions.add(ListTile(
-          leading: Icon(Icons.help_outline_rounded, color: tc.orange),
+          leading:
+          Icon(Icons.help_outline_rounded, color: tc.orange),
           title: Text('Send fix steps',
               style: TextStyle(
                   color: tc.text, fontWeight: FontWeight.w700)),
@@ -1505,8 +1709,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               context,
               tc,
               n,
-              prefillBody:
-              AdminSupportActionsService.instance.cannedReplyFor(category),
+              prefillBody: AdminSupportActionsService.instance
+                  .cannedReplyFor(category),
               dialogTitle: 'Send fix steps',
             );
           },
@@ -1538,13 +1742,10 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         ));
         break;
 
-    // ═══════════════════════════════════════════════════════════
-    // 🔑 PDF PASSWORD ISSUE — Show current + Reset
-    // ═══════════════════════════════════════════════════════════
       case 'pdf_password':
-      // ── 1. SHOW CURRENT PASSWORD (for existing PDF) ──
         actions.add(ListTile(
-          leading: Icon(Icons.visibility_rounded, color: tc.orange),
+          leading:
+          Icon(Icons.visibility_rounded, color: tc.orange),
           title: Text('Show current password',
               style: TextStyle(
                   color: tc.text, fontWeight: FontWeight.w700)),
@@ -1581,7 +1782,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
             );
           },
         ));
-        // ── 2. RESET PASSWORD (forces re-download) ──
         actions.add(ListTile(
           leading: Icon(Icons.vpn_key_rounded, color: tc.orange),
           title: Text('Reset password (re-download)',
@@ -1594,7 +1794,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
             Navigator.pop(context);
             if (!mounted) return;
 
-            // ── Confirmation dialog ──
             final confirmed = await showDialog<bool>(
               context: context,
               builder: (ctx) => AlertDialog(
@@ -1634,7 +1833,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                     style: FilledButton.styleFrom(
                         backgroundColor: tc.orange),
                     child: const Text('Continue',
-                        style: TextStyle(fontWeight: FontWeight.w700)),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700)),
                   ),
                 ],
               ),
@@ -1644,7 +1844,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
 
             final empId = n.employeeId ?? '';
             if (empId.isEmpty) {
-              _showSnack('⚠️ No employee ID — cannot generate.');
+              _showSnack(
+                  '⚠️ No employee ID — cannot generate.');
               return;
             }
 
@@ -1680,12 +1881,10 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         ));
         break;
 
-    // ═══════════════════════════════════════════════════════════
-    // 💰 SALARY QUESTION — AUTO-FILLED BREAKDOWN
-    // ═══════════════════════════════════════════════════════════
       case 'salary_question':
         actions.add(ListTile(
-          leading: Icon(Icons.receipt_long_rounded, color: tc.orange),
+          leading:
+          Icon(Icons.receipt_long_rounded, color: tc.orange),
           title: Text('Open employee payroll',
               style: TextStyle(
                   color: tc.text, fontWeight: FontWeight.w700)),
@@ -1719,7 +1918,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
 
             final empId = n.employeeId ?? '';
             if (empId.isEmpty) {
-              _showSnack('⚠️ No employee ID on this notification.');
+              _showSnack(
+                  '⚠️ No employee ID on this notification.');
               return;
             }
 
@@ -1738,7 +1938,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
             if (!mounted) return;
 
             if (breakdown == null || breakdown.trim().isEmpty) {
-              _showSnack('⚠️ Could not load salary data. Try again.');
+              _showSnack(
+                  '⚠️ Could not load salary data. Try again.');
               return;
             }
 
@@ -1759,12 +1960,10 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         ));
         break;
 
-    // ═══════════════════════════════════════════════════════════
-    // ⚙️ APP ISSUE
-    // ═══════════════════════════════════════════════════════════
       case 'app_issue':
         actions.add(ListTile(
-          leading: Icon(Icons.restart_alt_rounded, color: tc.orange),
+          leading:
+          Icon(Icons.restart_alt_rounded, color: tc.orange),
           title: Text('Send restart steps',
               style: TextStyle(
                   color: tc.text, fontWeight: FontWeight.w700)),
@@ -1776,17 +1975,14 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               context,
               tc,
               n,
-              prefillBody:
-              AdminSupportActionsService.instance.cannedReplyFor(category),
+              prefillBody: AdminSupportActionsService.instance
+                  .cannedReplyFor(category),
               dialogTitle: 'Send restart steps',
             );
           },
         ));
         break;
 
-    // ═══════════════════════════════════════════════════════════
-    // ❓ OTHER
-    // ═══════════════════════════════════════════════════════════
       default:
         actions.add(ListTile(
           leading: Icon(Icons.quickreply_rounded, color: tc.orange),
@@ -1801,8 +1997,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               context,
               tc,
               n,
-              prefillBody:
-              AdminSupportActionsService.instance.cannedReplyFor(category),
+              prefillBody: AdminSupportActionsService.instance
+                  .cannedReplyFor(category),
               dialogTitle: 'Send acknowledgment',
             );
           },
@@ -1828,7 +2024,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     }
   }
 
-  // ─── Reply dialog (with optional pre-fill) ───
   Future<void> _showReplyDialog(
       BuildContext context,
       AdminColors tc,
@@ -1836,6 +2031,11 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         String? prefillBody,
         String dialogTitle = 'Reply to employee',
       }) async {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
+
     final ctrl = TextEditingController(text: prefillBody ?? '');
     final categoryLabel =
     (n.metadata['categoryLabel'] ?? 'Support').toString();
@@ -1887,7 +2087,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('To: ${_sanitize(n.employeeName ?? "Employee")}',
+                          Text(
+                              'To: ${_sanitize(n.employeeName ?? "Employee")}',
                               style: TextStyle(
                                   color: tc.muted,
                                   fontSize: 11,
@@ -1939,8 +2140,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
-                          borderSide:
-                          BorderSide(color: tc.orange, width: 1.5),
+                          borderSide: BorderSide(
+                              color: tc.orange, width: 1.5),
                         ),
                         counterStyle: TextStyle(
                             color: tc.muted, fontSize: 10),
@@ -1962,7 +2163,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                   onPressed: sending ? null : () => Navigator.pop(ctx),
                   child: Text('Cancel',
                       style: TextStyle(
-                          color: tc.muted, fontWeight: FontWeight.w700)),
+                          color: tc.muted,
+                          fontWeight: FontWeight.w700)),
                 ),
                 FilledButton.icon(
                   onPressed: sending
@@ -2050,9 +2252,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // QUICK ACTIONS
-  // ═══════════════════════════════════════════════════════════════
   void _showQuickActions(
       BuildContext context, AdminColors tc, AdminNotification n) {
     showModalBottomSheet(
@@ -2064,50 +2263,68 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (!n.read)
+            if (_isDemo)
               ListTile(
-                leading: Icon(Icons.done_all_rounded, color: tc.orange),
-                title: Text('Mark as read',
-                    style: TextStyle(color: tc.text)),
-                onTap: () async {
-                  try {
-                    await AdminNotificationService.instance.markAsRead(n.id);
-                    _logAudit('notification_marked_read',
-                        'Notif: ${n.id} (quick action)');
-                  } on AdminSessionExpiredException {
-                    _showSnack('🚨 Session expired. Please log in again.');
-                  } on AdminPermissionDeniedException {
-                    _showSnack('🚫 Permission denied.');
-                  } catch (e) {
-                    _showSnack('⚠️ Error: $e');
-                  }
-                  if (mounted) Navigator.pop(context);
-                },
+                leading: Icon(Icons.science_rounded, color: tc.orange),
+                title: Text('Demo Mode Active',
+                    style: TextStyle(
+                        color: tc.orange,
+                        fontWeight: FontWeight.w700)),
+                subtitle: Text('Actions are disabled',
+                    style: TextStyle(color: tc.muted, fontSize: 11.5)),
+                onTap: () => Navigator.pop(context),
               )
-            else
-              ListTile(
-                leading: Icon(Icons.mark_email_unread_rounded,
-                    color: tc.orange),
-                title: Text('Mark as unread',
-                    style: TextStyle(color: tc.text)),
-                onTap: () async {
-                  try {
-                    await AdminNotificationService.instance
-                        .markAsUnread(n.id);
-                    _logAudit('notification_marked_unread',
-                        'Notif: ${n.id} (quick action)');
-                  } on AdminSessionExpiredException {
-                    _showSnack('🚨 Session expired. Please log in again.');
-                  } on AdminPermissionDeniedException {
-                    _showSnack('🚫 Permission denied.');
-                  } catch (e) {
-                    _showSnack('⚠️ Error: $e');
-                  }
-                  if (mounted) Navigator.pop(context);
-                },
-              ),
+            else ...[
+              if (!n.read)
+                ListTile(
+                  leading: Icon(Icons.done_all_rounded,
+                      color: tc.orange),
+                  title: Text('Mark as read',
+                      style: TextStyle(color: tc.text)),
+                  onTap: () async {
+                    try {
+                      await AdminNotificationService.instance
+                          .markAsRead(n.id);
+                      _logAudit('notification_marked_read',
+                          'Notif: ${n.id} (quick action)');
+                    } on AdminSessionExpiredException {
+                      _showSnack(
+                          '🚨 Session expired. Please log in again.');
+                    } on AdminPermissionDeniedException {
+                      _showSnack('🚫 Permission denied.');
+                    } catch (e) {
+                      _showSnack('⚠️ Error: $e');
+                    }
+                    if (mounted) Navigator.pop(context);
+                  },
+                )
+              else
+                ListTile(
+                  leading: Icon(Icons.mark_email_unread_rounded,
+                      color: tc.orange),
+                  title: Text('Mark as unread',
+                      style: TextStyle(color: tc.text)),
+                  onTap: () async {
+                    try {
+                      await AdminNotificationService.instance
+                          .markAsUnread(n.id);
+                      _logAudit('notification_marked_unread',
+                          'Notif: ${n.id} (quick action)');
+                    } on AdminSessionExpiredException {
+                      _showSnack(
+                          '🚨 Session expired. Please log in again.');
+                    } on AdminPermissionDeniedException {
+                      _showSnack('🚫 Permission denied.');
+                    } catch (e) {
+                      _showSnack('⚠️ Error: $e');
+                    }
+                    if (mounted) Navigator.pop(context);
+                  },
+                ),
+            ],
             ListTile(
-              leading: Icon(Icons.arrow_forward_rounded, color: tc.orange),
+              leading:
+              Icon(Icons.arrow_forward_rounded, color: tc.orange),
               title: Text('Go To / Open',
                   style: TextStyle(
                       color: tc.text, fontWeight: FontWeight.w700)),
@@ -2119,6 +2336,10 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               title: Text('Delete', style: TextStyle(color: tc.text)),
               onTap: () async {
                 Navigator.pop(context);
+                if (_isDemo) {
+                  _demoBlock();
+                  return;
+                }
                 final ok = await _confirmSingleDelete(context, tc, n);
                 if (ok == true) {
                   final deleted = await _safeDelete(n);
@@ -2132,9 +2353,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // CONFIRM DIALOGS
-  // ═══════════════════════════════════════════════════════════════
   Future<bool?> _confirmClear(BuildContext context, AdminColors tc) {
     return showDialog<bool>(
       context: context,
@@ -2143,8 +2361,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16)),
         title: Text('Clear all notifications?',
-            style:
-            TextStyle(color: tc.text, fontWeight: FontWeight.w800)),
+            style: TextStyle(
+                color: tc.text, fontWeight: FontWeight.w800)),
         content: Text('This cannot be undone. Are you sure?',
             style: TextStyle(color: tc.textMuted, fontSize: 13)),
         actions: [
@@ -2152,7 +2370,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               onPressed: () => Navigator.pop(context, false),
               child: Text('Cancel',
                   style: TextStyle(
-                      color: tc.textMuted, fontWeight: FontWeight.w700))),
+                      color: tc.textMuted,
+                      fontWeight: FontWeight.w700))),
           FilledButton(
               onPressed: () => Navigator.pop(context, true),
               style: FilledButton.styleFrom(backgroundColor: tc.red),
@@ -2185,7 +2404,8 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
               onPressed: () => Navigator.pop(context, false),
               child: Text('Cancel',
                   style: TextStyle(
-                      color: tc.textMuted, fontWeight: FontWeight.w700))),
+                      color: tc.textMuted,
+                      fontWeight: FontWeight.w700))),
           FilledButton(
               onPressed: () => Navigator.pop(context, true),
               style: FilledButton.styleFrom(backgroundColor: tc.red),
@@ -2196,9 +2416,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SKELETON
-  // ═══════════════════════════════════════════════════════════════
   Widget _skeletonLoader(AdminColors tc) {
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -2224,9 +2441,11 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                       children: [
                         _shimmer(tc, width: 60, height: 10, radius: 3),
                         const SizedBox(height: 8),
-                        _shimmer(tc, width: 200, height: 12, radius: 3),
+                        _shimmer(tc,
+                            width: 200, height: 12, radius: 3),
                         const SizedBox(height: 6),
-                        _shimmer(tc, width: 150, height: 10, radius: 3),
+                        _shimmer(tc,
+                            width: 150, height: 10, radius: 3),
                       ],
                     ),
                   ),
@@ -2251,9 +2470,6 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // EMPTY / ERROR
-  // ═══════════════════════════════════════════════════════════════
   Widget _emptyState(AdminColors tc, {bool hasFilter = false}) {
     return Center(
       child: Padding(
@@ -2295,14 +2511,16 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
                   _searchCtrl.clear();
                   _onSearchChanged('');
                 },
-                icon: Icon(Icons.clear_rounded, size: 14, color: tc.orange),
+                icon: Icon(Icons.clear_rounded,
+                    size: 14, color: tc.orange),
                 label: Text('Clear filter',
                     style: TextStyle(
                         color: tc.orange,
                         fontWeight: FontWeight.w700,
                         fontSize: 12)),
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: tc.orange.withValues(alpha: 0.4)),
+                  side: BorderSide(
+                      color: tc.orange.withValues(alpha: 0.4)),
                   padding: const EdgeInsets.symmetric(
                       horizontal: 16, vertical: 8),
                   shape: RoundedRectangleBorder(
@@ -2340,62 +2558,82 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // STYLE MAP
-  // ═══════════════════════════════════════════════════════════════
   _NStyle _styleFor(String type, AdminColors tc) {
     switch (type) {
       case 'support_request':
         return _NStyle(
             Icons.support_agent_rounded,
-            tc.isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB));
-
+            tc.isDark
+                ? const Color(0xFF60A5FA)
+                : const Color(0xFF2563EB));
       case 'challenge_failed':
         return _NStyle(
             Icons.gpp_bad_rounded,
-            tc.isDark ? const Color(0xFFFFB4AB) : const Color(0xFFEF4444));
+            tc.isDark
+                ? const Color(0xFFFFB4AB)
+                : const Color(0xFFEF4444));
       case 'challenge_missed':
         return _NStyle(
             Icons.timer_off_rounded,
-            tc.isDark ? const Color(0xFFFFB4AB) : const Color(0xFFEF4444));
+            tc.isDark
+                ? const Color(0xFFFFB4AB)
+                : const Color(0xFFEF4444));
       case 'challenge_passed':
         return _NStyle(
             Icons.verified_user_rounded,
-            tc.isDark ? const Color(0xFF4CE346) : const Color(0xFF16A34A));
-
+            tc.isDark
+                ? const Color(0xFF4CE346)
+                : const Color(0xFF16A34A));
       case 'password_change_request':
       case 'password_change':
         return _NStyle(
             Icons.lock_reset_rounded,
-            tc.isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706));
+            tc.isDark
+                ? const Color(0xFFFBBF24)
+                : const Color(0xFFD97706));
       case 'clock_in':
-        return _NStyle(Icons.login_rounded,
-            tc.isDark ? const Color(0xFF4CE346) : const Color(0xFF16A34A));
+        return _NStyle(
+            Icons.login_rounded,
+            tc.isDark
+                ? const Color(0xFF4CE346)
+                : const Color(0xFF16A34A));
       case 'clock_out':
-        return _NStyle(Icons.logout_rounded,
-            tc.isDark ? const Color(0xFFFFB77D) : const Color(0xFFF59E0B));
+        return _NStyle(
+            Icons.logout_rounded,
+            tc.isDark
+                ? const Color(0xFFFFB77D)
+                : const Color(0xFFF59E0B));
       case 'leave_request':
         return _NStyle(Icons.event_busy_rounded, tc.orange);
       case 'wfh_toggle':
-        return _NStyle(Icons.home_work_rounded,
-            tc.isDark ? const Color(0xFF93C5FD) : const Color(0xFF3B82F6));
+        return _NStyle(
+            Icons.home_work_rounded,
+            tc.isDark
+                ? const Color(0xFF93C5FD)
+                : const Color(0xFF3B82F6));
       case 'face_enrollment':
-        return _NStyle(Icons.face_rounded,
-            tc.isDark ? const Color(0xFFC4B5FD) : const Color(0xFF8B5CF6));
+        return _NStyle(
+            Icons.face_rounded,
+            tc.isDark
+                ? const Color(0xFFC4B5FD)
+                : const Color(0xFF8B5CF6));
       case 'geofence_alert':
-        return _NStyle(Icons.warning_amber_rounded,
-            tc.isDark ? const Color(0xFFFFB4AB) : const Color(0xFFEF4444));
+        return _NStyle(
+            Icons.warning_amber_rounded,
+            tc.isDark
+                ? const Color(0xFFFFB4AB)
+                : const Color(0xFFEF4444));
       case 'presence_update':
-        return _NStyle(Icons.location_searching_rounded,
-            tc.isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB));
+        return _NStyle(
+            Icons.location_searching_rounded,
+            tc.isDark
+                ? const Color(0xFF60A5FA)
+                : const Color(0xFF2563EB));
       default:
         return _NStyle(Icons.notifications_rounded, tc.muted);
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // TIME HELPERS
-  // ═══════════════════════════════════════════════════════════════
   String _fmtTime(DateTime d) {
     final now = DateTime.now();
     final diff = now.difference(d);

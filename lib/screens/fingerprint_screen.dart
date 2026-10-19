@@ -1,7 +1,9 @@
 // lib/screens/fingerprint_screen.dart
-// v2.6: 🌐 All UI strings converted to English
+// v2.7: ⏰ Auto-schedule overtime reminders kapag nag-clock in
+//       🚫 Auto-cancel kapag nag-clock out
+//       🚨 Trusted time check (anti-tamper)
+//       🌐 All UI strings in English
 //       🔒 Demo mode requires internet connection
-//       ✅ Online → native prompt + auto-succeed
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -27,6 +29,8 @@ import '../services/offline_attendance_service.dart';
 import '../services/device_info_service.dart';
 import '../services/presence_challenge_service.dart';
 import '../services/demo_mode_service.dart';
+import '../services/overtime_reminder_service.dart';
+import '../services/trusted_time_service.dart';
 import 'facial_recognition_screen.dart';
 import 'main_screen.dart';
 import 'clock_in_success_screen.dart';
@@ -1284,8 +1288,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   // ═══════════════════════════════════════════════════════════════
   // 🎭 AUTHENTICATE — DEMO requires internet
-  //    • Offline → snackbar + block
-  //    • Online  → force native prompt, always succeed
   // ═══════════════════════════════════════════════════════════════
   Future<void> _authenticate() async {
     if (!mounted) return;
@@ -1298,7 +1300,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       _secureLog('🎭 [DemoMode] _authenticate() STARTED');
       _secureLog('═══════════════════════════════════════════');
 
-      // 🔌 STEP 1: CHECK INTERNET FIRST
       final online = _isOnlineSafely();
       _secureLog('🎭 [DemoMode] online check = $online');
 
@@ -1320,24 +1321,19 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       if (!kIsWeb) {
         try {
-          // 1️⃣ Check if device has biometric hardware
           final isSupported = await _localAuth.isDeviceSupported();
           _secureLog('🎭 [DemoMode] isDeviceSupported = $isSupported');
 
           if (isSupported) {
-            // 2️⃣ Log what's available (for debugging)
             try {
               final canCheck = await _localAuth.canCheckBiometrics;
               final enrolled = await _localAuth.getAvailableBiometrics();
               _secureLog('🎭 [DemoMode] canCheckBiometrics = $canCheck');
               _secureLog('🎭 [DemoMode] enrolled = $enrolled');
-              _secureLog(
-                  '🎭 [DemoMode] hasFingerprint = ${enrolled.contains(BiometricType.fingerprint)}');
             } catch (e) {
               _secureLog('🎭 [DemoMode] Diagnostics error: $e');
             }
 
-            // 3️⃣ FORCE the prompt
             _secureLog('🎭 [DemoMode] 🚀 FORCING authenticate()...');
             attemptedPrompt = true;
 
@@ -1347,7 +1343,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                 localizedReason:
                 'Demo: Scan your fingerprint or enter PIN to continue',
                 options: const AuthenticationOptions(
-                  biometricOnly: false, // 👈 PIN fallback
+                  biometricOnly: false,
                   stickyAuth: true,
                   useErrorDialogs: true,
                 ),
@@ -1383,7 +1379,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       if (!mounted) return;
 
-      // 🔌 STEP 2: Re-check internet before proceeding
       if (!_isOnlineSafely()) {
         _secureLog(
             '🎭 [DemoMode] ⛔ Connection lost during prompt — blocking');
@@ -1398,7 +1393,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       _secureLog('🎭 [DemoMode] ✅ Proceeding to SUCCESS (always)');
 
-      // ✅ ALWAYS SUCCEED in demo
       setState(() {
         _fpState = _FpState.success;
         _justRegistered = false;
@@ -1413,7 +1407,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       if (!mounted) return;
 
-      // 🚀 Direct to Clock-In Success (standalone) or Facial (login flow)
       if (widget.standaloneMode) {
         _goToClockInSuccess();
       } else {
@@ -2009,7 +2002,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     _navTimer = Timer(const Duration(milliseconds: 1400), () async {
       if (!mounted) return;
 
-      // 🔌 Demo mode — re-check internet before proceeding
       if (_isDemo && !_isOnlineSafely()) {
         _secureLog('🎭 [DemoMode] Lost internet before navigation');
         _showOfflineSnack(
@@ -2182,6 +2174,64 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     return 'inside';
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ⏰ OVERTIME REMINDERS
+  //    • Kapag nag-clock IN → schedule hourly reminders
+  //      pagkalagpas ng shift end (per employee)
+  //    • Kapag nag-clock OUT → cancel lahat
+  //    • Trusted time check para sa anti-tamper
+  // ═══════════════════════════════════════════════════════════════
+  Future<void> _onAttendanceTypeDetermined({
+    required bool isClockIn,
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    if (_isDemo) {
+      _secureLog('🎭 [DemoMode] Skipping OT reminders + time check');
+      return;
+    }
+
+    try {
+      if (isClockIn) {
+        // ⏰ Schedule overtime reminders (5PM + hourly, per employee)
+        try {
+          await OvertimeReminderService.instance.scheduleForEmployee(
+            employeeId: employeeId,
+            maxOvertimeHours: 6,
+          );
+          _secureLog('⏰ [FP] Overtime reminders scheduled for $employeeId');
+        } catch (e) {
+          _secureLog('⚠️ [FP] OT schedule failed: $e');
+        }
+
+        // 🚨 Anti-tamper: check device time vs server time
+        try {
+          await TrustedTimeService.instance.syncWithServer(force: true);
+          if (TrustedTimeService.instance.isTampered) {
+            await TrustedTimeService.instance.logTamperEvent(
+              employeeId: employeeId,
+              employeeName: employeeName,
+              context: 'clock_in_fingerprint',
+            );
+            _secureLog('🚨 [FP] Time tampering detected on clock-in');
+          }
+        } catch (e) {
+          _secureLog('⚠️ [FP] Time check failed: $e');
+        }
+      } else {
+        // 🚫 Nag-clock out na → cancel lahat ng OT reminders
+        try {
+          await OvertimeReminderService.instance.cancelAll();
+          _secureLog('🚫 [FP] Overtime reminders cancelled');
+        } catch (e) {
+          _secureLog('⚠️ [FP] OT cancel failed: $e');
+        }
+      }
+    } catch (e) {
+      _secureLog('⚠️ [FP] _onAttendanceTypeDetermined failed: $e');
+    }
+  }
+
   Future<void> _writeAttendanceLog() async {
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping attendance log write');
@@ -2210,6 +2260,16 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final remarks = _geofenceVerifiedOffline
           ? 'fingerprint_match|pending_geofence_verification'
           : 'fingerprint_match';
+
+      // ═══════════════════════════════════════════════════════════
+      // ⏰ Schedule / Cancel OT reminders + Trusted time check
+      //    Tawagin bago mag-log para hindi ma-block ng anumang error
+      // ═══════════════════════════════════════════════════════════
+      await _onAttendanceTypeDetermined(
+        isClockIn: isClockIn,
+        employeeId: employeeId,
+        employeeName: employeeName,
+      );
 
       AttendanceResult? offlineResult;
       try {
@@ -3424,7 +3484,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   String get _stateSubtitle {
     if (_isDemo) {
-      // 🔌 Offline state
       if (_networkState == _NetworkState.offline) {
         switch (_fpState) {
           case _FpState.idle:
@@ -3440,7 +3499,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         }
       }
 
-      // ✅ Online state
       switch (_fpState) {
         case _FpState.idle:
           return 'Tap the scanner to open fingerprint prompt.\n\n'

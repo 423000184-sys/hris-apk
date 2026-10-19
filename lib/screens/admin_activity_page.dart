@@ -1,9 +1,5 @@
 // lib/screens/admin_activity_page.dart
-// ═══════════════════════════════════════════════════════════════════
-// SECURED ADMIN ACTIVITY PAGE  v2.1
-// v2.1: DEV BYPASS ng admin role check (para gumana agad).
-//       I-uncomment ang isAdmin() checks kapag may admins/{uid} doc na.
-// ═══════════════════════════════════════════════════════════════════
+// v2.2: 🎭 Demo Mode Support (Mock Data & Action Blocking)
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -17,6 +13,7 @@ import 'admin_database.dart';
 import '../services/employee_notification_service.dart';
 import '../services/admin_audit_service.dart';
 import '../services/admin_auth_service.dart';
+import '../services/demo_mode_service.dart'; // 🎭 Added
 
 class AdminActivityPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
@@ -24,8 +21,6 @@ class AdminActivityPage extends StatefulWidget {
   final String searchQuery;
   final List<Map<String, dynamic>> loginLogs;
   final VoidCallback? onCreateLeaveRequest;
-
-  /// 🆕 Callback kapag pinindot yung "Assign Client Meeting" button.
   final VoidCallback? onAssignClientMeeting;
 
   const AdminActivityPage({
@@ -45,11 +40,18 @@ class AdminActivityPage extends StatefulWidget {
 class _AdminActivityPageState extends State<AdminActivityPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // ─── SECURITY GUARDS ────────────────────────────────────────
+  // 🎭 Demo Mode Getter
+  bool get _isDemo {
+    try {
+      return DemoModeService.instance.isEnabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
   final _SecurityGuard _guard = _SecurityGuard();
   final Set<String> _inFlight = <String>{};
 
-  // ─── LEAVE APPLICATIONS ─────────────────────────────────────
   StreamSubscription<QuerySnapshot>? _leaveSub;
   List<Map<String, dynamic>> _pendingLeaveApplications = [];
   bool _loadingApplications = true;
@@ -59,13 +61,11 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   int _debugPendingCount = 0;
   final List<String> _debugStatuses = [];
 
-  // ─── CLIENT MEETINGS ────────────────────────────────────────
   StreamSubscription<QuerySnapshot>? _clientMeetingSub;
   List<Map<String, dynamic>> _allClientMeetings = [];
   List<Map<String, dynamic>> _pendingClientMeetings = [];
   bool _loadingClientMeetings = true;
 
-  // ─── FILTERS ────────────────────────────────────────────────
   String _selectedDepartment = 'All Departments';
   String _selectedLeaveType = 'All Types';
   DateTimeRange? _selectedDateRange;
@@ -74,9 +74,79 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     'All Types', 'SL', 'VL', 'EL', 'BL', 'ML', 'Others',
   ];
 
-  // ══════════════════════════════════════════════════════════════
-  // 🔒 SANITIZATION / VALIDATION
-  // ══════════════════════════════════════════════════════════════
+  // 🎭 DEMO BLOCK HELPER
+  void _demoBlock() {
+    _toast('Action disabled in Demo Mode.', error: true);
+  }
+
+  // 🎭 MOCK DATA
+  List<Map<String, dynamic>> _getMockPendingLeaves() {
+    final now = DateTime.now();
+    return [
+      {
+        'employee': {'name': 'John Doe', 'department': 'Operation'},
+        'request': {
+          'id': 'demo_leave_1',
+          'leaveType': 'VL',
+          'dateFrom': now.add(const Duration(days: 2)),
+          'dateTo': now.add(const Duration(days: 4)),
+          'totalDays': 3,
+          'reason': 'Family vacation',
+          'status': 'pending',
+          'createdAt': now.subtract(const Duration(hours: 2)),
+        },
+        'employeeName': 'John Doe',
+        'isFromEmployeeCollection': true,
+        'source': 'employee',
+      },
+      {
+        'employee': {'name': 'Jane Smith', 'department': 'Accounting'},
+        'request': {
+          'id': 'demo_leave_2',
+          'leaveType': 'SL',
+          'dateFrom': now.subtract(const Duration(days: 1)),
+          'dateTo': now.subtract(const Duration(days: 1)),
+          'totalDays': 1,
+          'reason': 'Medical checkup',
+          'status': 'pending',
+          'createdAt': now.subtract(const Duration(hours: 5)),
+        },
+        'employeeName': 'Jane Smith',
+        'isFromEmployeeCollection': true,
+        'source': 'employee',
+      },
+    ];
+  }
+
+  List<Map<String, dynamic>> _getMockClientMeetings() {
+    final now = DateTime.now();
+    return [
+      {
+        'id': 'demo_cm_1',
+        'employee_id': 'DEMO-001',
+        'employee_name': 'John Doe',
+        'location_name': 'Makati Office',
+        'status': 'pending_hr_approval',
+        'timestamp': now.subtract(const Duration(minutes: 30)),
+        'gps_accuracy_meters': 15.0,
+        'is_verified_at_client': true,
+        'assigned_client_name': 'Acme Corp',
+        'assigned_purpose': 'Quarterly review',
+      },
+      {
+        'id': 'demo_cm_2',
+        'employee_id': 'DEMO-003',
+        'employee_name': 'Mike Johnson',
+        'location_name': 'BGC Tower',
+        'status': 'pending_hr_approval',
+        'timestamp': now.subtract(const Duration(hours: 1)),
+        'gps_accuracy_meters': 80.0,
+        'is_verified_at_client': false,
+        'assigned_client_name': 'Global Tech',
+        'assigned_purpose': 'Initial presentation',
+      }
+    ];
+  }
 
   static String _sanitize(dynamic raw, {int maxLen = 120}) {
     if (raw == null) return '';
@@ -131,14 +201,16 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // LIFECYCLE
-  // ══════════════════════════════════════════════════════════════
   @override
   void initState() {
     super.initState();
-    _listenToPendingLeaves();
-    _listenToClientMeetings();
+    if (!_isDemo) {
+      _listenToPendingLeaves();
+      _listenToClientMeetings();
+    } else {
+      _loadingApplications = false;
+      _loadingClientMeetings = false;
+    }
   }
 
   @override
@@ -149,9 +221,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     super.dispose();
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // LEAVE LISTENER
-  // ══════════════════════════════════════════════════════════════
   void _listenToPendingLeaves() {
     _leaveSub?.cancel();
     _leaveSub = FirebaseFirestore.instance
@@ -208,9 +277,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // CLIENT MEETING LISTENER
-  // ══════════════════════════════════════════════════════════════
   void _listenToClientMeetings() {
     _clientMeetingSub?.cancel();
     _clientMeetingSub = FirebaseFirestore.instance
@@ -258,9 +324,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // APPLY FILTERS
-  // ══════════════════════════════════════════════════════════════
   List<Map<String, dynamic>> _applyFilters(
       List<Map<String, dynamic>> list) {
     var filtered = list;
@@ -306,9 +369,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     return filtered;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // REJECTION REASON DIALOG
-  // ══════════════════════════════════════════════════════════════
   Future<String?> _promptRejectionReason({
     required String title,
     required String subtitle,
@@ -378,9 +438,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     return result;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FILTER DIALOG
-  // ══════════════════════════════════════════════════════════════
   Future<void> _openFilterDialog() async {
     String tempDept = _selectedDepartment;
     String tempType = _selectedLeaveType;
@@ -434,7 +491,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                         ],
                       ),
                       Divider(color: dialogTc.border, height: 24),
-
                       Text('DEPARTMENT',
                           style: TextStyle(
                               fontSize: 10,
@@ -473,9 +529,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                           ),
                         ),
                       ),
-
                       const SizedBox(height: 16),
-
                       Text('LEAVE TYPE',
                           style: TextStyle(
                               fontSize: 10,
@@ -517,9 +571,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                           ),
                         ),
                       ),
-
                       const SizedBox(height: 16),
-
                       Text('DATE RANGE (Leave Start Date)',
                           style: TextStyle(
                               fontSize: 10,
@@ -586,11 +638,9 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                                           height: 20),
                                       Expanded(
                                         child: SfDateRangePicker(
-                                          view: DateRangePickerView
-                                              .month,
+                                          view: DateRangePickerView.month,
                                           selectionMode:
-                                          DateRangePickerSelectionMode
-                                              .range,
+                                          DateRangePickerSelectionMode.range,
                                           initialSelectedRange:
                                           tempRange != null
                                               ? PickerDateRange(
@@ -603,82 +653,57 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                                           showActionButtons: false,
                                           enablePastDates: true,
                                           onSelectionChanged:
-                                              (DateRangePickerSelectionChangedArgs
-                                          args) {
-                                            if (args.value
-                                            is PickerDateRange) {
-                                              final range = args.value
-                                              as PickerDateRange;
-                                              if (range.startDate !=
-                                                  null) {
-                                                tempRange2 =
-                                                    DateTimeRange(
-                                                      start:
-                                                      range.startDate!,
-                                                      end: range.endDate ??
-                                                          range.startDate!,
-                                                    );
+                                              (DateRangePickerSelectionChangedArgs args) {
+                                            if (args.value is PickerDateRange) {
+                                              final range = args.value as PickerDateRange;
+                                              if (range.startDate != null) {
+                                                tempRange2 = DateTimeRange(
+                                                  start: range.startDate!,
+                                                  end: range.endDate ?? range.startDate!,
+                                                );
                                               }
                                             }
                                           },
                                           backgroundColor: dateTc.card,
-                                          headerStyle:
-                                          DateRangePickerHeaderStyle(
-                                            backgroundColor:
-                                            dateTc.card,
+                                          headerStyle: DateRangePickerHeaderStyle(
+                                            backgroundColor: dateTc.card,
                                             textStyle: TextStyle(
                                               color: dateTc.text,
-                                              fontWeight:
-                                              FontWeight.w700,
+                                              fontWeight: FontWeight.w700,
                                               fontSize: 15,
                                             ),
                                           ),
-                                          monthCellStyle:
-                                          DateRangePickerMonthCellStyle(
+                                          monthCellStyle: DateRangePickerMonthCellStyle(
                                             textStyle: TextStyle(
                                               color: dateTc.text,
                                               fontSize: 13,
                                             ),
                                             todayTextStyle: TextStyle(
                                               color: dateTc.orange,
-                                              fontWeight:
-                                              FontWeight.w700,
+                                              fontWeight: FontWeight.w700,
                                             ),
-                                            trailingDatesTextStyle:
-                                            TextStyle(
-                                              color: dateTc.muted
-                                                  .withValues(alpha: 0.5),
+                                            trailingDatesTextStyle: TextStyle(
+                                              color: dateTc.muted.withValues(alpha: 0.5),
                                             ),
-                                            leadingDatesTextStyle:
-                                            TextStyle(
-                                              color: dateTc.muted
-                                                  .withValues(alpha: 0.5),
+                                            leadingDatesTextStyle: TextStyle(
+                                              color: dateTc.muted.withValues(alpha: 0.5),
                                             ),
                                           ),
-                                          monthViewSettings:
-                                          DateRangePickerMonthViewSettings(
-                                            viewHeaderStyle:
-                                            DateRangePickerViewHeaderStyle(
+                                          monthViewSettings: DateRangePickerMonthViewSettings(
+                                            viewHeaderStyle: DateRangePickerViewHeaderStyle(
                                               textStyle: TextStyle(
                                                 color: dateTc.muted,
-                                                fontWeight:
-                                                FontWeight.w700,
+                                                fontWeight: FontWeight.w700,
                                                 fontSize: 12,
                                               ),
                                             ),
                                           ),
-                                          rangeSelectionColor: dateTc
-                                              .orange
-                                              .withValues(alpha: 0.25),
-                                          startRangeSelectionColor:
-                                          dateTc.orange,
-                                          endRangeSelectionColor:
-                                          dateTc.orange,
-                                          todayHighlightColor:
-                                          dateTc.orange,
+                                          rangeSelectionColor: dateTc.orange.withValues(alpha: 0.25),
+                                          startRangeSelectionColor: dateTc.orange,
+                                          endRangeSelectionColor: dateTc.orange,
+                                          todayHighlightColor: dateTc.orange,
                                           selectionColor: dateTc.orange,
-                                          selectionTextStyle:
-                                          const TextStyle(
+                                          selectionTextStyle: const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.w700,
                                           ),
@@ -704,8 +729,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                                                 'CLEAR',
                                                 style: TextStyle(
                                                   color: dateTc.muted,
-                                                  fontWeight:
-                                                  FontWeight.w700,
+                                                  fontWeight: FontWeight.w700,
                                                   fontSize: 12,
                                                 ),
                                               ),
@@ -719,8 +743,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                                               'CANCEL',
                                               style: TextStyle(
                                                 color: dateTc.muted,
-                                                fontWeight:
-                                                FontWeight.w700,
+                                                fontWeight: FontWeight.w700,
                                                 fontSize: 12,
                                               ),
                                             ),
@@ -730,29 +753,21 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                                             onPressed: () =>
                                                 Navigator.pop(
                                                     dateCtx, true),
-                                            style:
-                                            ElevatedButton.styleFrom(
-                                              backgroundColor:
-                                              dateTc.orange,
-                                              foregroundColor:
-                                              Colors.white,
-                                              padding: const EdgeInsets
-                                                  .symmetric(
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: dateTc.orange,
+                                              foregroundColor: Colors.white,
+                                              padding: const EdgeInsets.symmetric(
                                                   horizontal: 22,
                                                   vertical: 12),
-                                              shape:
-                                              RoundedRectangleBorder(
-                                                borderRadius:
-                                                BorderRadius
-                                                    .circular(8),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(8),
                                               ),
                                               elevation: 0,
                                             ),
                                             child: const Text(
                                               'APPLY',
                                               style: TextStyle(
-                                                fontWeight:
-                                                FontWeight.w700,
+                                                fontWeight: FontWeight.w700,
                                                 fontSize: 12,
                                                 letterSpacing: 0.5,
                                               ),
@@ -823,11 +838,9 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                           ),
                         ),
                       ),
-
                       const SizedBox(height: 24),
                       Divider(color: dialogTc.border, height: 1),
                       const SizedBox(height: 16),
-
                       Row(
                         children: [
                           TextButton.icon(
@@ -912,6 +925,8 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   // APPROVE / REJECT CLIENT MEETING
   // ══════════════════════════════════════════════════════════════
   Future<void> _approveClientMeeting(Map<String, dynamic> meeting) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final id = (meeting['id'] ?? '').toString();
 
     if (!_isValidDocId(id)) {
@@ -927,7 +942,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     _inFlight.add(id);
     try {
       final admin = await _currentAdmin();
-      // 🚨 DEV BYPASS — i-uncomment kapag may admins/{uid} doc na.
       if (admin == null) {
         _toast('Session expired. Please sign in again.', error: true);
         return;
@@ -1005,6 +1019,8 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   }
 
   Future<void> _rejectClientMeeting(Map<String, dynamic> meeting) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final id = (meeting['id'] ?? '').toString();
     if (!_isValidDocId(id)) {
       _toast('Invalid meeting reference.', error: true);
@@ -1019,7 +1035,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     _inFlight.add(id);
     try {
       final admin = await _currentAdmin();
-      // 🚨 DEV BYPASS — i-uncomment kapag may admins/{uid} doc na.
       if (admin == null) {
         _toast('Session expired. Please sign in again.', error: true);
         return;
@@ -1084,6 +1099,8 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
       Map<String, dynamic> employee,
       bool isFromEmployeeCollection,
       ) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final reqId = (request['id'] ?? '').toString();
     if (!_isValidDocId(reqId)) {
       _toast('Invalid request reference.', error: true);
@@ -1098,7 +1115,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     _inFlight.add('L_$reqId');
     try {
       final admin = await _currentAdmin();
-      // 🚨 DEV BYPASS — i-uncomment kapag may admins/{uid} doc na.
       if (admin == null) {
         _toast('Session expired. Please sign in again.', error: true);
         return;
@@ -1226,6 +1242,8 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
       Map<String, dynamic> employee,
       bool isFromEmployeeCollection,
       ) async {
+    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+
     final reqId = (request['id'] ?? '').toString();
     if (!_isValidDocId(reqId)) {
       _toast('Invalid request reference.', error: true);
@@ -1240,7 +1258,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     _inFlight.add('L_$reqId');
     try {
       final admin = await _currentAdmin();
-      // 🚨 DEV BYPASS — i-uncomment kapag may admins/{uid} doc na.
       if (admin == null) {
         _toast('Session expired. Please sign in again.', error: true);
         return;
@@ -1403,6 +1420,9 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   }
 
   List<String> get _departments {
+    if (_isDemo) {
+      return ['All Departments', 'Operation', 'Accounting', 'HR/Admin'];
+    }
     final depts = <String>{};
     for (final emp in widget.employees) {
       final dept = _sanitize(
@@ -1456,9 +1476,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     return rawName;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ACTUAL ATTENDANCE
-  // ══════════════════════════════════════════════════════════════
   Map<String, dynamic> _computeActualAttendance(DateTime now) {
     final todayStr = DateFormat('yyyy-MM-dd').format(now);
     final Set<String> attendedEmpIds = {};
@@ -1504,8 +1521,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
       }
     }
 
-    debugPrint('📊 [Activity] Attended: ${attendedEmpIds.length}');
-
     return {
       'count': attendedEmpIds.length,
       'ids': attendedEmpIds,
@@ -1513,9 +1528,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     };
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ANTI-FRAUD HELPERS
-  // ══════════════════════════════════════════════════════════════
   Map<String, dynamic> _computeFraudBadge(Map<String, dynamic> m) {
     final isMocked = m['gps_is_mocked'] == true;
     final isVerified = m['is_verified_at_client'] == true;
@@ -1624,44 +1636,50 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
-    final allPendingRequests = <Map<String, dynamic>>[];
 
-    for (var emp in widget.employees) {
-      final requests = (emp['leaveRequests'] as List?) ?? [];
-      for (var req in requests) {
-        final status = (req['status'] ?? '').toString().toLowerCase().trim();
-        if (status == 'pending') {
-          allPendingRequests.add({
-            'employee': emp,
-            'request': req,
-            'employeeName': _empName(emp),
-            'isFromEmployeeCollection': false,
-            'source': 'admin',
-          });
+    // 🎭 INTERCEPT DATA (MOCK VS ACTUAL)
+    List<Map<String, dynamic>> allPendingRequests = [];
+
+    if (_isDemo) {
+      allPendingRequests = _getMockPendingLeaves();
+    } else {
+      for (var emp in widget.employees) {
+        final requests = (emp['leaveRequests'] as List?) ?? [];
+        for (var req in requests) {
+          final status = (req['status'] ?? '').toString().toLowerCase().trim();
+          if (status == 'pending') {
+            allPendingRequests.add({
+              'employee': emp,
+              'request': req,
+              'employeeName': _empName(emp),
+              'isFromEmployeeCollection': false,
+              'source': 'admin',
+            });
+          }
         }
       }
-    }
 
-    for (var app in _pendingLeaveApplications) {
-      final empId = (app['employeeId'] ?? '').toString();
-      final employee = widget.employees.firstWhere(
-            (e) => (e['id'] ?? '').toString() == empId,
-        orElse: () => {
-          'id': empId,
-          'name': _sanitize(app['employeeName'] ?? 'Unknown Employee',
+      for (var app in _pendingLeaveApplications) {
+        final empId = (app['employeeId'] ?? '').toString();
+        final employee = widget.employees.firstWhere(
+              (e) => (e['id'] ?? '').toString() == empId,
+          orElse: () => {
+            'id': empId,
+            'name': _sanitize(app['employeeName'] ?? 'Unknown Employee',
+                maxLen: 80),
+            'department': 'N/A',
+          },
+        );
+        allPendingRequests.add({
+          'employee': employee,
+          'request': _normalizeAppDoc(app),
+          'employeeName': _sanitize(
+              app['employeeName'] ?? _empName(employee),
               maxLen: 80),
-          'department': 'N/A',
-        },
-      );
-      allPendingRequests.add({
-        'employee': employee,
-        'request': _normalizeAppDoc(app),
-        'employeeName': _sanitize(
-            app['employeeName'] ?? _empName(employee),
-            maxLen: 80),
-        'isFromEmployeeCollection': true,
-        'source': 'employee',
-      });
+          'isFromEmployeeCollection': true,
+          'source': 'employee',
+        });
+      }
     }
 
     allPendingRequests.sort((a, b) {
@@ -1682,58 +1700,81 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
 
     final actualPendingLeaveCount = allPendingRequests.length;
 
+    // Metrics Override
     int actualOnLeaveTodayCount = 0;
-    for (var emp in widget.employees) {
-      final status =
-      (emp['status'] ?? emp['workStatus'] ?? '').toString().toLowerCase();
-      final bool isOnLeaveFlag = emp['isOnLeave'] == true;
-      bool isLeaveToday = false;
-      final start = _toDateTime(emp['leaveStartDate']);
-      final end = _toDateTime(emp['leaveEndDate']);
-      if (start != null && end != null) {
-        final todayPure = DateTime(now.year, now.month, now.day);
-        final startPure = DateTime(start.year, start.month, start.day);
-        final endPure = DateTime(end.year, end.month, end.day);
-        if (!todayPure.isBefore(startPure) && !todayPure.isAfter(endPure)) {
-          isLeaveToday = true;
+    int totalEmployees = _isDemo ? 26 : widget.employees.length;
+    int actualAttendanceCount = 0;
+    double attendanceRate = 0.0;
+
+    if (_isDemo) {
+      actualOnLeaveTodayCount = 3;
+      actualAttendanceCount = 24;
+      attendanceRate = 92.3;
+    } else {
+      for (var emp in widget.employees) {
+        final status =
+        (emp['status'] ?? emp['workStatus'] ?? '').toString().toLowerCase();
+        final bool isOnLeaveFlag = emp['isOnLeave'] == true;
+        bool isLeaveToday = false;
+        final start = _toDateTime(emp['leaveStartDate']);
+        final end = _toDateTime(emp['leaveEndDate']);
+        if (start != null && end != null) {
+          final todayPure = DateTime(now.year, now.month, now.day);
+          final startPure = DateTime(start.year, start.month, start.day);
+          final endPure = DateTime(end.year, end.month, end.day);
+          if (!todayPure.isBefore(startPure) && !todayPure.isAfter(endPure)) {
+            isLeaveToday = true;
+          }
+        }
+        if (isOnLeaveFlag ||
+            status == 'on leave' ||
+            status == 'on_leave' ||
+            isLeaveToday) {
+          actualOnLeaveTodayCount++;
         }
       }
-      if (isOnLeaveFlag ||
-          status == 'on leave' ||
-          status == 'on_leave' ||
-          isLeaveToday) {
-        actualOnLeaveTodayCount++;
-      }
+
+      final attendanceData = _computeActualAttendance(now);
+      actualAttendanceCount = attendanceData['count'] as int;
+      attendanceRate = totalEmployees > 0
+          ? (actualAttendanceCount / totalEmployees) * 100
+          : 0.0;
     }
 
-    final totalEmployees = widget.employees.length;
-    final attendanceData = _computeActualAttendance(now);
-    final actualAttendanceCount = attendanceData['count'] as int;
-    final attendanceRate = totalEmployees > 0
-        ? (actualAttendanceCount / totalEmployees) * 100
-        : 0.0;
+    // Client Meetings Intercept
+    final List<Map<String, dynamic>> displayPendingMeetings = _isDemo
+        ? _getMockClientMeetings()
+        : _pendingClientMeetings;
 
-    final allTimelineLogs = <Map<String, dynamic>>[];
-    for (var cm in _allClientMeetings) {
-      final empId = (cm['employee_id'] ?? cm['employeeId'] ?? '').toString();
-      if (_isInvalidEmployeeId(empId)) continue;
+    // Timeline Intercept
+    final List<Map<String, dynamic>> allTimelineLogs = [];
+    if (_isDemo) {
+      allTimelineLogs.addAll(_getMockClientMeetings());
+      for (var m in allTimelineLogs) {
+        m['details'] = 'Client Meeting — ${m['location_name']}';
+      }
+    } else {
+      for (var cm in _allClientMeetings) {
+        final empId = (cm['employee_id'] ?? cm['employeeId'] ?? '').toString();
+        if (_isInvalidEmployeeId(empId)) continue;
 
-      final empName = _resolveDisplayName(cm);
-      final ts = cm['timestamp'] ?? cm['createdAt'];
-      final location = _sanitize(cm['location_name'] ?? '', maxLen: 80);
-      final status = (cm['status'] ?? '').toString();
+        final empName = _resolveDisplayName(cm);
+        final ts = cm['timestamp'] ?? cm['createdAt'];
+        final location = _sanitize(cm['location_name'] ?? '', maxLen: 80);
+        final status = (cm['status'] ?? '').toString();
 
-      allTimelineLogs.add({
-        'id': cm['id'],
-        'employee_name': empName,
-        'employee_id': empId,
-        'type': 'client_meeting',
-        'timestamp': ts,
-        'location_name': location,
-        'status': status,
-        'details':
-        'Client Meeting — ${location.isEmpty ? 'Unknown location' : location}',
-      });
+        allTimelineLogs.add({
+          'id': cm['id'],
+          'employee_name': empName,
+          'employee_id': empId,
+          'type': 'client_meeting',
+          'timestamp': ts,
+          'location_name': location,
+          'status': status,
+          'details':
+          'Client Meeting — ${location.isEmpty ? 'Unknown location' : location}',
+        });
+      }
     }
 
     allTimelineLogs.sort((a, b) {
@@ -1752,6 +1793,11 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // 🎭 DEMO BANNER
+                if (_isDemo) ...[
+                  _buildDemoBanner(),
+                  const SizedBox(height: 24),
+                ],
                 _buildPageHeader(),
                 const SizedBox(height: 24),
 
@@ -1769,8 +1815,8 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                 ),
                 const SizedBox(height: 20),
                 if (_loadingClientMeetings ||
-                    _pendingClientMeetings.isNotEmpty) ...[
-                  _buildClientMeetingsTable(),
+                    displayPendingMeetings.isNotEmpty) ...[
+                  _buildClientMeetingsTable(displayPendingMeetings),
                   const SizedBox(height: 20),
                 ],
                 _recentActivityCard(allTimelineLogs),
@@ -1784,6 +1830,50 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🎭 DEMO BANNER
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildDemoBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.science_rounded, color: tc.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Demo Mode Active',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: tc.orange,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Showing sample data. Approving and rejecting requests are disabled.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: tc.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1889,9 +1979,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PAGE HEADER
-  // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeader() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -2051,9 +2138,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // METRIC GRID
-  // ══════════════════════════════════════════════════════════════
   Widget _buildMetricGrid(
       int pendingCount,
       int onLeaveCount,
@@ -2099,10 +2183,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // CLIENT MEETINGS TABLE
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildClientMeetingsTable() {
+  Widget _buildClientMeetingsTable(List<Map<String, dynamic>> meetings) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
@@ -2141,7 +2222,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        '${_pendingClientMeetings.length}',
+                        '${meetings.length}',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
@@ -2160,7 +2241,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                   ],
                 ),
               ),
-              if (_pendingClientMeetings.isEmpty)
+              if (meetings.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(24),
                   child: Column(
@@ -2176,7 +2257,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                   ),
                 )
               else
-                ..._pendingClientMeetings.map((m) => isMobile
+                ...meetings.map((m) => isMobile
                     ? _buildClientMeetingMobileCard(m)
                     : _buildClientMeetingRow(m)),
             ],
@@ -2297,15 +2378,15 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                   children: [
                     _actionButton(
                       icon: Icons.check,
-                      bgColor: tc.pillWarnBg,
-                      iconColor: tc.pillWarnTx,
+                      bgColor: _isDemo ? tc.surface : tc.pillWarnBg,
+                      iconColor: _isDemo ? tc.muted : tc.pillWarnTx,
                       onTap: () => _approveClientMeeting(m),
                     ),
                     const SizedBox(width: 6),
                     _actionButton(
                       icon: Icons.close,
-                      bgColor: tc.pillErrBg,
-                      iconColor: tc.pillErrTx,
+                      bgColor: _isDemo ? tc.surface : tc.pillErrBg,
+                      iconColor: _isDemo ? tc.muted : tc.pillErrTx,
                       onTap: () => _rejectClientMeeting(m),
                     ),
                   ],
@@ -2661,16 +2742,16 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () => _rejectClientMeeting(m),
-                  icon: Icon(Icons.close, size: 14, color: tc.pillErrTx),
+                  icon: Icon(Icons.close, size: 14, color: _isDemo ? tc.muted : tc.pillErrTx),
                   label: Text('Reject',
                       style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
-                          color: tc.pillErrTx)),
+                          color: _isDemo ? tc.muted : tc.pillErrTx)),
                   style: OutlinedButton.styleFrom(
                     side: BorderSide(
-                        color: tc.pillErrTx.withValues(alpha: 0.3)),
-                    backgroundColor: tc.pillErrBg,
+                        color: (_isDemo ? tc.border : tc.pillErrTx).withValues(alpha: 0.3)),
+                    backgroundColor: _isDemo ? tc.surface : tc.pillErrBg,
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8)),
@@ -2681,15 +2762,14 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               Expanded(
                 child: ElevatedButton.icon(
                   onPressed: () => _approveClientMeeting(m),
-                  icon: const Icon(Icons.check,
-                      size: 14, color: Colors.white),
-                  label: const Text('Approve',
+                  icon: Icon(Icons.check, size: 14, color: _isDemo ? tc.muted : Colors.white),
+                  label: Text('Approve',
                       style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
-                          color: Colors.white)),
+                          color: _isDemo ? tc.muted : Colors.white)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: tc.green,
+                    backgroundColor: _isDemo ? tc.border : tc.green,
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8)),
@@ -2704,9 +2784,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // LEAVE TABLE
-  // ══════════════════════════════════════════════════════════════
   Widget _buildPendingTable(
       List<Map<String, dynamic>> filteredRequests, int totalPending) {
     return LayoutBuilder(
@@ -3049,16 +3126,16 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               children: [
                 _actionButton(
                   icon: Icons.check,
-                  bgColor: tc.pillWarnBg,
-                  iconColor: tc.pillWarnTx,
+                  bgColor: _isDemo ? tc.surface : tc.pillWarnBg,
+                  iconColor: _isDemo ? tc.muted : tc.pillWarnTx,
                   onTap: () => _approveLeaveRequest(
                       context, req, emp, isFromEmployee),
                 ),
                 const SizedBox(width: 6),
                 _actionButton(
                   icon: Icons.close,
-                  bgColor: tc.pillErrBg,
-                  iconColor: tc.pillErrTx,
+                  bgColor: _isDemo ? tc.surface : tc.pillErrBg,
+                  iconColor: _isDemo ? tc.muted : tc.pillErrTx,
                   onTap: () => _rejectLeaveRequest(
                       context, req, emp, isFromEmployee),
                 ),
@@ -3211,18 +3288,18 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                 child: OutlinedButton.icon(
                   onPressed: () => _rejectLeaveRequest(
                       context, req, emp, isFromEmployee),
-                  icon: Icon(Icons.close, size: 14, color: tc.pillErrTx),
+                  icon: Icon(Icons.close, size: 14, color: _isDemo ? tc.muted : tc.pillErrTx),
                   label: Text(
                     'Reject',
                     style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: tc.pillErrTx),
+                        color: _isDemo ? tc.muted : tc.pillErrTx),
                   ),
                   style: OutlinedButton.styleFrom(
                     side: BorderSide(
-                        color: tc.pillErrTx.withValues(alpha: 0.3)),
-                    backgroundColor: tc.pillErrBg,
+                        color: (_isDemo ? tc.border : tc.pillErrTx).withValues(alpha: 0.3)),
+                    backgroundColor: _isDemo ? tc.surface : tc.pillErrBg,
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8)),
@@ -3234,17 +3311,16 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                 child: ElevatedButton.icon(
                   onPressed: () => _approveLeaveRequest(
                       context, req, emp, isFromEmployee),
-                  icon:
-                  const Icon(Icons.check, size: 14, color: Colors.white),
-                  label: const Text(
+                  icon: Icon(Icons.check, size: 14, color: _isDemo ? tc.muted : Colors.white),
+                  label: Text(
                     'Approve',
                     style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: Colors.white),
+                        color: _isDemo ? tc.muted : Colors.white),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: tc.green,
+                    backgroundColor: _isDemo ? tc.border : tc.green,
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8)),
@@ -3280,9 +3356,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // RECENT CLIENT MEETINGS CARD
-  // ══════════════════════════════════════════════════════════════
   Widget _recentActivityCard(List<Map<String, dynamic>> logs) {
     final displayLogs = logs.length > 10 ? logs.sublist(0, 10) : logs;
 
@@ -3458,9 +3531,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // METRIC CARD
-  // ══════════════════════════════════════════════════════════════
   Widget _metricCard(
       String label,
       String value,
@@ -3570,48 +3640,11 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             ),
           ),
         ],
-        if (kDebugMode &&
-            _debugStatuses.isNotEmpty &&
-            _debugPendingCount == 0 &&
-            !_hasActiveFilters) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: tc.surface,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: tc.border),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Found ${_debugStatuses.length} doc(s) but none are "pending":',
-                  style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: tc.muted),
-                ),
-                const SizedBox(height: 6),
-                ..._debugStatuses.take(3).map((s) => Padding(
-                  padding: const EdgeInsets.only(bottom: 2),
-                  child: Text(
-                    s.length > 80 ? '${s.substring(0, 80)}...' : s,
-                    style: TextStyle(fontSize: 9, color: tc.muted),
-                  ),
-                )),
-              ],
-            ),
-          ),
-        ],
       ],
     ),
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// RATE LIMITER (client-side, in-memory)
-// ═══════════════════════════════════════════════════════════════════
 class _SecurityGuard {
   final Map<String, DateTime> _lastCall = {};
   static const Duration _minInterval = Duration(seconds: 2);
