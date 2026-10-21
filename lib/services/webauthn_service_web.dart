@@ -1,6 +1,6 @@
 // lib/services/webauthn_service_web.dart
-import 'dart:js' as js;
-import 'dart:js_util' as js_util;
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -41,14 +41,20 @@ class WebAuthnService {
     final optionsJson = jsonEncode(options);
 
     // ✅ DITO LUMALABAS ANG NATIVE BIOMETRIC PROMPT
-    // FIX: i-await nang tama ang JS Promise gamit promiseToFuture
-    final jsPromise = js.context.callMethod('eval', [
-      'SimpleWebAuthnBrowser.startRegistration($optionsJson)'
-    ]);
-    final jsResult = await js_util.promiseToFuture(jsPromise);
+    final jsPromise = globalContext.callMethod(
+      'eval'.toJS,
+      'SimpleWebAuthnBrowser.startRegistration($optionsJson)'.toJS,
+    ) as JSPromise<JSAny?>;
 
-    // FIX: i-convert ang JS object pabalik sa Dart-readable (JSON string) form
-    final credentialJsonString = js.context['JSON'].callMethod('stringify', [jsResult]);
+    final jsResult = await jsPromise.toDart;
+
+    // 🔥 FIX: Cast getProperty to JSObject para hindi na mag-error sa null safety
+    final jsonObject = globalContext.getProperty('JSON'.toJS) as JSObject;
+
+    final credentialJsonString = jsonObject
+        .callMethod('stringify'.toJS, jsResult)
+        .dartify() as String;
+
     final credential = jsonDecode(credentialJsonString);
 
     final verifyResponse = await http.post(
@@ -84,13 +90,20 @@ class WebAuthnService {
     final optionsJson = jsonEncode(options);
 
     // ✅ DITO LUMALABAS ANG NATIVE BIOMETRIC PROMPT
-    // FIX: i-await nang tama ang JS Promise
-    final jsPromise = js.context.callMethod('eval', [
-      'SimpleWebAuthnBrowser.startAuthentication($optionsJson)'
-    ]);
-    final jsResult = await js_util.promiseToFuture(jsPromise);
+    final jsPromise = globalContext.callMethod(
+      'eval'.toJS,
+      'SimpleWebAuthnBrowser.startAuthentication($optionsJson)'.toJS,
+    ) as JSPromise<JSAny?>;
 
-    final credentialJsonString = js.context['JSON'].callMethod('stringify', [jsResult]);
+    final jsResult = await jsPromise.toDart;
+
+    // 🔥 FIX: Cast getProperty to JSObject
+    final jsonObject = globalContext.getProperty('JSON'.toJS) as JSObject;
+
+    final credentialJsonString = jsonObject
+        .callMethod('stringify'.toJS, jsResult)
+        .dartify() as String;
+
     final credential = jsonDecode(credentialJsonString);
 
     final verifyResponse = await http.post(

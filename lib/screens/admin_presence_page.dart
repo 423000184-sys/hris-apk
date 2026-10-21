@@ -1,11 +1,11 @@
 // lib/screens/admin_presence_page.dart
-// v1.1: 🎭 Demo Mode Support (Mock Data & Action Blocking)
+// v1.2: 🐛 Fixed AdminBackupListPage parameter error (removed employeeName).
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'admin_theme.dart';
 import 'admin_backup_list_page.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/demo_mode_service.dart';
 
 class AdminPresencePage extends StatefulWidget {
   const AdminPresencePage({super.key});
@@ -15,7 +15,6 @@ class AdminPresencePage extends StatefulWidget {
 }
 
 class _AdminPresencePageState extends State<AdminPresencePage> {
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -34,7 +33,6 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
     );
   }
 
-  // 🎭 MOCK DATA
   List<Map<String, dynamic>> _getMockPresenceList() {
     final now = DateTime.now();
     return [
@@ -163,9 +161,6 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🎭 DEMO BODY
-  // ══════════════════════════════════════════════════════════════
   Widget _buildDemoBody(AdminColors tc) {
     final mockData = _getMockPresenceList();
 
@@ -374,9 +369,6 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // SHARED WIDGETS
-  // ══════════════════════════════════════════════════════════════
   Widget _buildSummary(
       AdminColors tc, int inside, int outside, int total) {
     return Container(
@@ -438,7 +430,6 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
     );
   }
 
-  // For real stream
   Widget _tile(
       BuildContext context,
       AdminColors tc,
@@ -462,12 +453,12 @@ class _AdminPresencePageState extends State<AdminPresencePage> {
 
     return InkWell(
       onTap: () {
+        // 🐛 FIX: Tinanggal ang `employeeName` na parameter
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (_) => AdminBackupListPage(
               employeeId: doc.id,
-              employeeName: name,
             ),
           ),
         );

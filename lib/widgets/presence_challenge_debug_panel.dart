@@ -1,13 +1,4 @@
 // lib/widgets/presence_challenge_debug_panel.dart
-// ═══════════════════════════════════════════════════════════════════
-// PRESENCE CHALLENGE DEBUG PANEL
-//
-// ⚠️ DEBUG ONLY — hindi ito kasama sa production build (kDebugMode guard).
-// Ilagay sa MainScreen para makita:
-//   • Live state ng PresenceChallengeService
-//   • Firestore state ng today's challenges
-//   • Manual triggers (force schedule, force check, clear)
-// ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
@@ -123,8 +114,7 @@ class _PresenceChallengeDebugPanelState
   Future<void> _forceCheck() async {
     _log('🔄 Force check triggered...');
     try {
-      // Use debug trigger if available
-      await PresenceChallengeService.instance.forceCheckNow();
+      await PresenceChallengeService.instance.checkNow();
       _log('✅ checkNow() called');
     } catch (e) {
       _log('❌ checkNow failed: $e');
@@ -159,8 +149,6 @@ class _PresenceChallengeDebugPanelState
   Future<void> _forceTriggerOnDue() async {
     _log('⚡ Force-firing onDue callback...');
     try {
-      // Manually query pending+due and call callback
-      final now = DateTime.now();
       final snap = await FirebaseFirestore.instance
           .collection('presence_challenges')
           .where('employeeId', isEqualTo: _employeeId)
@@ -175,11 +163,19 @@ class _PresenceChallengeDebugPanelState
 
       final first = snap.docs.first;
       final data = first.data();
-      final ch = PresenceChallenge(
+
+      // ✅ FIX: Gumawa muna ng PresenceChallenge bago i-wrap sa ChallengeDue
+      final presenceChallenge = PresenceChallenge(
         id: first.id,
         employeeId: data['employeeId'] as String,
         dueAt: (data['dueAt'] as Timestamp).toDate(),
         expiresAt: (data['expiresAt'] as Timestamp).toDate(),
+      );
+
+      // ✅ I-wrap sa ChallengeDue (pinalitan ang true, pwede mong gawing false kung gusto mo i-test)
+      final ch = ChallengeDue(
+        challenge: presenceChallenge,
+        isInside: true,
       );
 
       final cb = PresenceChallengeService.instance.onDue;
@@ -187,7 +183,9 @@ class _PresenceChallengeDebugPanelState
         _log('❌ onDue callback is NULL!');
         return;
       }
-      _log('✅ Firing onDue for ${ch.id}');
+
+      // ✅ FIX: ch.challenge.id ang tamang pag-access
+      _log('✅ Firing onDue for ${ch.challenge.id}');
       cb(ch);
     } catch (e) {
       _log('❌ Force trigger failed: $e');

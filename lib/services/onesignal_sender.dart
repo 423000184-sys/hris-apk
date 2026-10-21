@@ -9,7 +9,7 @@ class OneSignalSender {
 
   // ✅ DITO NAKA-SAVE ANG API KEY PARA GUMANA AGAD
   static const String _restApiKey =
-      '';
+      'os_v2_app_bsdcvyt65bdnxd46m5aoqlaglr35xo6jvfcew74hy2hgqnjnmgthy4gdtw3llfdwtusxeydyl3gfgv6lkcl5kceog6bgvgg37w7vh6q';
 
   static const String _appId = '0c862ae2-7ee8-46db-8f9e-6740e82c065c';
 

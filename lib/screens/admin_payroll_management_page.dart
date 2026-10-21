@@ -1,5 +1,5 @@
 // lib/screens/admin_payroll_management_page.dart
-// v2.4: 🔓 Added "Unlock Payslip" button to allow manual download for employees.
+// v2.5: 🐛 Fixed const expression errors. Translated remaining strings to English.
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
@@ -17,8 +17,8 @@ import '../services/payroll_calculator.dart';
 import '../services/employee_notification_service.dart';
 import '../services/attendance_hours_service.dart';
 import '../services/admin_auth_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
-import '../services/onesignal_sender.dart'; // 🆕 Added for push
+import '../services/demo_mode_service.dart';
+import '../services/onesignal_sender.dart';
 
 class AdminPayrollManagementPage extends StatefulWidget {
   final Map<String, dynamic> employeeData;
@@ -39,7 +39,6 @@ class _AdminPayrollManagementPageState
     extends State<AdminPayrollManagementPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -53,23 +52,17 @@ class _AdminPayrollManagementPageState
   bool _loading = true;
   bool _printing = false;
   bool _downloading = false;
-  bool _unlockingPayslip = false; // 🆕 For unlocking state
+  bool _unlockingPayslip = false;
 
-  // ─── SECURITY GUARDS ────────────────────────────────────────
   final _SecurityGuard _guard = _SecurityGuard();
   bool _isAdminVerified = false;
   DateTime? _lastNotifyAt;
 
   static const Duration _notifyCooldown = Duration(minutes: 5);
 
-  // 🎭 DEMO BLOCK HELPER
   void _demoBlock() {
     _toast('Action disabled in Demo Mode.', error: true);
   }
-
-  // ══════════════════════════════════════════════════════════════
-  // 🔒 SECURITY HELPERS
-  // ══════════════════════════════════════════════════════════════
 
   static String _sanitize(dynamic raw, {int maxLen = 200}) {
     if (raw == null) return '';
@@ -165,9 +158,6 @@ class _AdminPayrollManagementPageState
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // SAFE GETTERS
-  // ══════════════════════════════════════════════════════════════
   String get _name {
     final raw = widget.employeeData['name'];
     if (raw != null && raw.toString().trim().isNotEmpty) {
@@ -241,7 +231,6 @@ class _AdminPayrollManagementPageState
     return _autoGrossPay - _b.totalDeductions;
   }
 
-  // 🎭 MOCK PAYROLL BREAKDOWN
   PayrollBreakdown _getMockBreakdown() {
     return PayrollBreakdown(
       regularPay: 50000.0,
@@ -292,9 +281,6 @@ class _AdminPayrollManagementPageState
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // LIFECYCLE
-  // ══════════════════════════════════════════════════════════════
   @override
   void initState() {
     super.initState();
@@ -303,11 +289,10 @@ class _AdminPayrollManagementPageState
 
   Future<void> _verifyAndLoad() async {
     if (_isDemo) {
-      // 🎭 Mock data for demo
       setState(() {
         _isAdminVerified = true;
         _b = _getMockBreakdown();
-        _hours = const EmployeeHoursSummary(
+        _hours = EmployeeHoursSummary(
           totalRawMinutes: 10368,
           totalLunchDeductedMinutes: 1056,
           totalNetMinutes: 9312,
@@ -326,7 +311,7 @@ class _AdminPayrollManagementPageState
     if (!ok) {
       _isAdminVerified = false;
       setState(() => _loading = false);
-      _toast('Walang permission. Admin-only page.', error: true);
+      _toast('No permission. Admin-only page.', error: true);
       return;
     }
     _isAdminVerified = true;
@@ -398,9 +383,6 @@ class _AdminPayrollManagementPageState
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🔓 UNLOCK PAYSLIP (Allow employee to download)
-  // ══════════════════════════════════════════════════════════════
   Future<void> _handleUnlockPayslip() async {
     if (_isDemo) return _demoBlock();
     if (_unlockingPayslip) return;
@@ -422,7 +404,6 @@ class _AdminPayrollManagementPageState
       final docId = widget.employeeData['id']?.toString() ?? _employeeId;
       if (docId.isEmpty || docId == '—') throw Exception('Invalid employee ID');
 
-      // Update Firestore to unlock the payslip
       await FirebaseFirestore.instance
           .collection('employees')
           .doc(docId)
@@ -443,10 +424,9 @@ class _AdminPayrollManagementPageState
       if (!mounted) return;
       _toast('✅ Payslip unlocked for $_name.', success: true);
 
-      // Send push notification to employee
       try {
         await OneSignalSender.instance.sendToEmployee(
-          employeeId: docId, // or employeeId depending on your logic
+          employeeId: docId,
           title: '🔓 Payslip Unlocked',
           message: 'Your payslip for $_periodLabel is now available for download.',
           type: 'payroll',
@@ -463,9 +443,6 @@ class _AdminPayrollManagementPageState
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 📄 PDF GENERATION
-  // ══════════════════════════════════════════════════════════════
   Future<Uint8List> _generatePdf() async {
     final pdf = pw.Document(
       title: 'Payslip',
@@ -491,7 +468,7 @@ class _AdminPayrollManagementPageState
                           fontSize: 26, fontWeight: pw.FontWeight.bold)),
                   pw.SizedBox(height: 2),
                   pw.Text('Employee Disbursement Statement',
-                      style: const pw.TextStyle(
+                      style: pw.TextStyle(
                           fontSize: 10, color: PdfColors.grey700)),
                 ],
               ),
@@ -504,7 +481,7 @@ class _AdminPayrollManagementPageState
                   pw.SizedBox(height: 2),
                   pw.Text(
                       'Generated: ${DateFormat('MMM d, yyyy • HH:mm').format(DateTime.now())}',
-                      style: const pw.TextStyle(
+                      style: pw.TextStyle(
                           fontSize: 9, color: PdfColors.grey700)),
                 ],
               ),
@@ -526,7 +503,7 @@ class _AdminPayrollManagementPageState
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text('EMPLOYEE',
-                          style: const pw.TextStyle(
+                          style: pw.TextStyle(
                               fontSize: 8, color: PdfColors.grey700)),
                       pw.SizedBox(height: 4),
                       pw.Text(_name,
@@ -541,11 +518,11 @@ class _AdminPayrollManagementPageState
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text('EMPLOYEE ID',
-                          style: const pw.TextStyle(
+                          style: pw.TextStyle(
                               fontSize: 8, color: PdfColors.grey700)),
                       pw.SizedBox(height: 4),
                       pw.Text(_employeeId,
-                          style: const pw.TextStyle(fontSize: 11)),
+                          style: pw.TextStyle(fontSize: 11)),
                     ],
                   ),
                 ),
@@ -554,11 +531,11 @@ class _AdminPayrollManagementPageState
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text('DEPARTMENT',
-                          style: const pw.TextStyle(
+                          style: pw.TextStyle(
                               fontSize: 8, color: PdfColors.grey700)),
                       pw.SizedBox(height: 4),
                       pw.Text(_department,
-                          style: const pw.TextStyle(fontSize: 11)),
+                          style: pw.TextStyle(fontSize: 11)),
                     ],
                   ),
                 ),
@@ -624,7 +601,7 @@ class _AdminPayrollManagementPageState
           pw.SizedBox(height: 6),
           pw.Text(
             'This is a system-generated payslip. No signature required.',
-            style: const pw.TextStyle(
+            style: pw.TextStyle(
                 fontSize: 8,
                 color: PdfColors.grey600,
                 fontStyle: pw.FontStyle.italic),
@@ -673,21 +650,18 @@ class _AdminPayrollManagementPageState
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🖨️ PRINT
-  // ══════════════════════════════════════════════════════════════
   Future<void> _handlePrint() async {
     if (_isDemo) return _demoBlock();
     if (_printing) return;
 
     final ok = await _ensureAdmin();
     if (!ok) {
-      _toast('Walang permission. Admin-only action.', error: true);
+      _toast('No permission. Admin-only action.', error: true);
       return;
     }
 
     if (!_guard.tryAcquire('print_payslip')) {
-      _toast('Masyadong mabilis. Please wait a moment.', error: true);
+      _toast('Too fast. Please wait a moment.', error: true);
       return;
     }
 
@@ -727,21 +701,18 @@ class _AdminPayrollManagementPageState
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 💾 DOWNLOAD
-  // ══════════════════════════════════════════════════════════════
   Future<void> _handleDownload() async {
     if (_isDemo) return _demoBlock();
     if (_downloading) return;
 
     final ok = await _ensureAdmin();
     if (!ok) {
-      _toast('Walang permission. Admin-only action.', error: true);
+      _toast('No permission. Admin-only action.', error: true);
       return;
     }
 
     if (!_guard.tryAcquire('download_payslip')) {
-      _toast('Masyadong mabilis. Please wait a moment.', error: true);
+      _toast('Too fast. Please wait a moment.', error: true);
       return;
     }
 
@@ -820,9 +791,6 @@ class _AdminPayrollManagementPageState
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BUILD
-  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     if (!_isAdminVerified && !_loading && !_isDemo) {
@@ -850,14 +818,14 @@ class _AdminPayrollManagementPageState
                           color: tc.text)),
                   const SizedBox(height: 6),
                   Text(
-                    'Kailangan ng admin role para makita ang payslip.',
+                    'Admin role is required to view the payslip.',
                     style: TextStyle(fontSize: 13, color: tc.muted),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 20),
                   TextButton.icon(
                     onPressed: _handleBack,
-                    icon: Icon(Icons.arrow_back_rounded, size: 16),
+                    icon: const Icon(Icons.arrow_back_rounded, size: 16),
                     label: const Text('Go Back'),
                   ),
                 ],
@@ -886,7 +854,6 @@ class _AdminPayrollManagementPageState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // 🎭 DEMO BANNER
                 if (_isDemo) ...[
                   _buildDemoBanner(),
                   const SizedBox(height: 16),
@@ -911,9 +878,10 @@ class _AdminPayrollManagementPageState
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: tc.orange.withValues(alpha: 0.10),
+        // Ginamit ang withOpacity para sa compatibility
+        color: tc.orange.withOpacity(0.10),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
+        border: Border.all(color: tc.orange.withOpacity(0.45)),
       ),
       child: Row(
         children: [
@@ -1074,7 +1042,6 @@ class _AdminPayrollManagementPageState
             spacing: 10,
             runSpacing: 8,
             children: [
-              // 🆕 UNLOCK PAYSLIP BUTTON
               OutlinedButton.icon(
                 onPressed: (_unlockingPayslip || _isDemo) ? null : _handleUnlockPayslip,
                 icon: _unlockingPayslip
@@ -1098,7 +1065,6 @@ class _AdminPayrollManagementPageState
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 ),
               ),
-
               OutlinedButton.icon(
                 onPressed: (_printing || _isDemo) ? null : _handlePrint,
                 icon: _printing
@@ -1141,7 +1107,7 @@ class _AdminPayrollManagementPageState
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _isDemo ? tc.border : tc.orange,
                   disabledBackgroundColor:
-                  tc.orange.withValues(alpha: 0.5),
+                  tc.orange.withOpacity(0.5),
                   elevation: 0,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
@@ -1305,7 +1271,7 @@ class _AdminPayrollManagementPageState
     return _panel(
       title: 'Earnings Breakdown',
       badge: PayrollCalculator.peso(_autoGrossPay),
-      badgeColor: tc.orange.withValues(alpha: 0.15),
+      badgeColor: tc.orange.withOpacity(0.15),
       badgeTextColor: tc.orangeText,
       children: [
         _item('Basic Salary', 'Regular monthly pay',

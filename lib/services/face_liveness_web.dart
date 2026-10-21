@@ -1,10 +1,10 @@
 // lib/services/face_liveness_web.dart
 //
-// Web implementation — bridges face-api.js to Dart.
+// Web implementation — bridges face-api.js to Dart using modern web interop.
 
-import 'dart:html' as html;
-import 'dart:js' as js;
-import 'dart:js_util' as js_util;
+import 'package:web/web.dart' as web;
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'package:flutter/foundation.dart';
 
 class FaceLivenessResult {
@@ -25,29 +25,33 @@ class FaceLivenessService {
     try {
       if (videoElement == null) return null;
 
-      final hasFn = js.context.hasProperty('detectFaceLiveness');
-      if (!hasFn) {
+      // 🔥 FIX: Safe null check imbes na boolean negation
+      final jsFunction = globalContext.getProperty('detectFaceLiveness'.toJS);
+      if (jsFunction == null || jsFunction.isUndefinedOrNull) {
         debugPrint('⚠️ [FaceLiveness] detectFaceLiveness not on window');
         return null;
       }
 
-      final promise =
-      js.context.callMethod('detectFaceLiveness', [videoElement]);
-      final jsResult = await js_util.promiseToFuture<Object?>(promise);
-      if (jsResult == null) return null;
+      // 2. Call the JS function
+      final promise = globalContext.callMethod(
+        'detectFaceLiveness'.toJS,
+        videoElement as JSAny,
+      ) as JSPromise<JSAny?>;
 
-      final facePresent =
-          js_util.getProperty<bool?>(jsResult, 'facePresent') ?? false;
+      // 3. Await the JS Promise
+      final jsResult = await promise.toDart;
+      if (jsResult == null || jsResult.isUndefinedOrNull) return null;
+
+      // 4. Read properties from the result
+      final resultObj = jsResult as JSObject;
+
+      final facePresent = (resultObj.getProperty('facePresent'.toJS)?.dartify() as bool?) ?? false;
       if (!facePresent) {
         return FaceLivenessResult(facePresent: false);
       }
 
-      final eyeOpen =
-      (js_util.getProperty<num?>(jsResult, 'eyeOpenScore') ?? 1.0)
-          .toDouble();
-      final smile =
-      (js_util.getProperty<num?>(jsResult, 'smileScore') ?? 0.0)
-          .toDouble();
+      final eyeOpen = (resultObj.getProperty('eyeOpenScore'.toJS)?.dartify() as num? ?? 1.0).toDouble();
+      final smile = (resultObj.getProperty('smileScore'.toJS)?.dartify() as num? ?? 0.0).toDouble();
 
       return FaceLivenessResult(
         facePresent: true,
@@ -63,16 +67,22 @@ class FaceLivenessService {
   /// Returns the Flutter camera plugin's <video> element (usually the last).
   dynamic getVideoElement() {
     try {
-      final videos = html.document.getElementsByTagName('video');
-      if (videos.isEmpty) return null;
-      // Prefer the visible one
-      for (final el in videos.reversed) {
-        if (el is html.VideoElement) {
+      final videos = web.document.querySelectorAll('video');
+      if (videos.length == 0) return null;
+
+      // Prefer the visible one (iterate from last to first)
+      for (int i = videos.length - 1; i >= 0; i--) {
+        final el = videos.item(i);
+        if (el is web.HTMLVideoElement) {
           final rect = el.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) return el;
+          if (rect.width > 0 && rect.height > 0) {
+            return el;
+          }
         }
       }
-      return videos.last;
+
+      // Fallback to the first video element if none are visible
+      return videos.item(0);
     } catch (e) {
       debugPrint('⚠️ [FaceLiveness] getVideoElement error: $e');
       return null;

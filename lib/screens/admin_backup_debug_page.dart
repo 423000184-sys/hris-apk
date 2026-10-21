@@ -1,9 +1,10 @@
 // lib/screens/admin_backup_debug_page.dart
+// v1.2: 🐛 Removed 'listCloudBackups' button to fix compilation error.
 // v1.1: 🎭 Demo Mode Support (Action Blocking)
 import 'package:flutter/material.dart';
 import '../services/presence_monitor_service.dart';
 import '../services/presence_backup_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/demo_mode_service.dart';
 import 'admin_theme.dart';
 
 class AdminBackupDebugPage extends StatelessWidget {
@@ -74,21 +75,8 @@ class AdminBackupDebugPage extends StatelessWidget {
             }
             debugPrint('═══════════════════════════════');
           }),
-          _btn(tc, '☁️ List cloud backups (emp-01-2026)', () async {
-            if (_isDemo) {
-              _demoBlock(context, tc);
-              return;
-            }
-            final files = await PresenceBackupService.instance
-                .listCloudBackups('emp-01-2026');
-            debugPrint('═══════════════════════════════');
-            debugPrint('☁️ ${files.length} cloud backups:');
-            for (final f in files) {
-              debugPrint('   • ${f.filename}');
-              debugPrint('     ${f.url}');
-            }
-            debugPrint('═══════════════════════════════');
-          }),
+
+          // 🐛 FIX: Tinanggal ang "List cloud backups" dahil wala pang method na ito sa service.
         ],
       ),
     );

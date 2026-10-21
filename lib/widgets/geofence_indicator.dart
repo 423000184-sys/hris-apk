@@ -2,7 +2,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter/foundation.dart' show kIsWeb; // ✅ BAGONG IMPORT
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../services/geofence_service.dart';
 import '../theme/app_theme.dart';
 
@@ -108,6 +108,7 @@ class _GeofenceStatusCardState extends State<GeofenceStatusCard>
               radarAnim: _radarAnim,
               pulseAnim: _pulseAnim,
               distanceMeters: result?.distanceMeters,
+              radiusUsed: result?.radiusUsed ?? 100.0, // ✅ Pinasahan ng radiusUsed
             ),
           ),
           const SizedBox(width: 14),
@@ -161,7 +162,7 @@ class _GeofenceStatusCardState extends State<GeofenceStatusCard>
   String _buildInfoText(GeofenceResult result) {
     if (result.distanceMeters != null) {
       final d = result.distanceMeters!;
-      final radius = GeofenceService.allowedRadius;
+      final radius = result.radiusUsed ?? 100.0; // ✅ Ginamit ang radiusUsed
       if (result.isInside) {
         return '${d.toStringAsFixed(0)} m from office · ${(radius - d).toStringAsFixed(0)} m to boundary';
       } else {
@@ -178,11 +179,13 @@ class _RadarGraphic extends StatelessWidget {
   final Animation<double> radarAnim;
   final Animation<double> pulseAnim;
   final double? distanceMeters;
+  final double radiusUsed; // ✅ Idinagdag
 
   const _RadarGraphic({
     required this.color, required this.isInside,
     required this.radarAnim, required this.pulseAnim,
     this.distanceMeters,
+    required this.radiusUsed, // ✅ Idinagdag
   });
 
   @override
@@ -194,7 +197,7 @@ class _RadarGraphic extends StatelessWidget {
           color: color, isInside: isInside,
           radarProgress: radarAnim.value, pulseScale: pulseAnim.value,
           distanceFraction: distanceMeters != null
-              ? (distanceMeters! / (GeofenceService.allowedRadius * 3)).clamp(0.0, 1.0)
+              ? (distanceMeters! / (radiusUsed * 3)).clamp(0.0, 1.0) // ✅ Ginamit ang radiusUsed
               : null,
         ),
       ),
@@ -383,11 +386,11 @@ class GeofenceBlockedDialog extends StatelessWidget {
                       valueColor: AppColors.error),
                   const SizedBox(height: 6),
                   _InfoRow(label: 'Allowed radius',
-                      value: '${GeofenceService.allowedRadius.toStringAsFixed(0)} m',
+                      value: '${(result.radiusUsed ?? 100.0).toStringAsFixed(0)} m', // ✅ Ginamit ang radiusUsed
                       valueColor: AppColors.textSecondary),
                   const SizedBox(height: 6),
                   _InfoRow(label: 'Move closer by',
-                      value: '${(result.distanceMeters! - GeofenceService.allowedRadius).toStringAsFixed(0)} m',
+                      value: '${(result.distanceMeters! - (result.radiusUsed ?? 100.0)).toStringAsFixed(0)} m', // ✅ Ginamit ang radiusUsed
                       valueColor: AppColors.warning),
                 ]),
               ),
@@ -418,7 +421,6 @@ class GeofenceBlockedDialog extends StatelessWidget {
                 color: accentColor,
                 onTap: () async {
                   if (kIsWeb) {
-                    // Sa web, hindi pwedeng i-open ang settings — retry na lang
                     onRetry();
                   } else {
                     await Geolocator.openAppSettings();
@@ -433,7 +435,6 @@ class GeofenceBlockedDialog extends StatelessWidget {
                 color: accentColor,
                 onTap: () async {
                   if (kIsWeb) {
-                    // Sa web, hindi pwedeng i-open ang location settings — retry na lang
                     onRetry();
                   } else {
                     await Geolocator.openLocationSettings();

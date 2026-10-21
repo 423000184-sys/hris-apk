@@ -15,13 +15,13 @@ import '../services/demo_mode_service.dart';
 import '../services/onesignal_sender.dart';
 import 'admin_theme.dart';
 
-// 🧭 MGA TOTOONG SCREENS MO
+// 🧭 ACTUAL SCREENS
 import 'admin_challenge_details_screen.dart';
 import 'admin_attendance_page.dart';
 import 'admin_presence_page.dart';
 import 'admin_create_leave_request_page.dart';
 import 'admin_edit_employee_page.dart';
-import 'admin_employees_page.dart'; // Ginamit bilang fallback sa password change
+import 'admin_employees_page.dart'; // Used as fallback for password change
 
 void _secureLog(String msg) {
   if (kDebugMode) debugPrint('[AdminNotif] $msg');
@@ -71,7 +71,7 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         id: 'demo_n1',
         type: 'support_request',
         title: 'Support: Cannot download payslip PDF',
-        message: 'Hi admin, hindi ko ma-download yung payslip ko. Error: file not found.',
+        message: 'Hi admin, I cannot download my payslip. Error: file not found.',
         timestamp: now.subtract(const Duration(minutes: 5)),
         read: false,
         priority: 'high',
@@ -87,7 +87,7 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         id: 'demo_n2',
         type: 'support_request',
         title: 'Support: Forgot PDF password',
-        message: 'Nakalimutan ko yung password ng payslip PDF ko. Paano ito ma-open?',
+        message: 'I forgot the password for my payslip PDF. How can I open it?',
         timestamp: now.subtract(const Duration(minutes: 18)),
         read: false,
         priority: 'high',
@@ -1154,7 +1154,7 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
   // ═══════════════════════════════════════════════════════════
   void _navigateToTarget(BuildContext context, AdminNotification n) {
     final tc = AdminTheme.getColors(context);
-    Navigator.pop(context); // Isara muna bottom sheet
+    Navigator.pop(context); // Close the bottom sheet first
 
     if (_isDemo) {
       _demoBlock();
@@ -1191,7 +1191,7 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
 
       case 'clock_in':
       case 'clock_out':
-      // ✅ SINIGURO NA KUMPLETO ANG PARAMETERS PARA SA ADMINATTENDANCEPAGE
+      // ✅ Ensured all required parameters are passed
         Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => AdminAttendancePage(
             title: 'Attendance Records',
@@ -1206,21 +1206,21 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
 
       case 'geofence_alert':
       case 'presence_update':
-      // ✅ SINIGURO NA KUMPLETO ANG PARAMETERS PARA SA ADMINPRESENCEPAGE
+      // ✅ AdminPresencePage does NOT need those parameters
         Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => AdminPresencePage(
-            employees: const [],
-            onRefreshNeeded: () {},
-            searchQuery: '',
-          ),
+          builder: (_) => const AdminPresencePage(),
         ));
         break;
 
       case 'password_change_request':
       case 'password_change':
-      // ✅ Fallback sa AdminEmployeesPage
+      // ✅ Fallback to AdminEmployeesPage (passing required parameters)
         Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => const AdminEmployeesPage(),
+          builder: (_) => AdminEmployeesPage(
+            employees: const [],
+            onRefreshNeeded: () {},
+            searchQuery: '',
+          ),
         ));
         break;
 
