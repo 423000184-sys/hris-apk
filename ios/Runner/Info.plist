@@ -73,6 +73,14 @@
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>R.A.C.O.M.A. Admin uses your location to view employee attendance on the map and to configure geofences.</string>
 
+    <!-- ✅ iOS 11+ background location -->
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin uses your location in the background to track attendance and verify geofence for employees.</string>
+
+    <!-- ✅ iOS 10 and below fallback -->
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>R.A.C.O.M.A. Admin uses your location in the background to track attendance and verify geofence for employees.</string>
+
     <!-- ═══════════════════════════════════════════════════════
          PRIVACY — PHOTO LIBRARY
     ════════════════════════════════════════════════════════════ -->
@@ -96,15 +104,15 @@
 
     <!-- ═══════════════════════════════════════════════════════
          PRIVACY — MICROPHONE
-         👆 Kailangan ng `noise_meter` para sa finger-snap
-         detection. Ang mic ay ginagamit LANG para sa amplitude
-         analysis (hindi nare-record at hindi nase-save ang audio).
     ════════════════════════════════════════════════════════════ -->
     <key>NSMicrophoneUsageDescription</key>
     <string>R.A.C.O.M.A. uses the microphone to detect a finger-snap gesture for instant logout. No audio is recorded or stored.</string>
 
     <!-- ═══════════════════════════════════════════════════════
          BACKGROUND MODES
+         ✅ remote-notification — ito ang kailangan para sa push
+         ✅ location — para sa attendance tracking
+         ✅ fetch / processing — para sa background tasks
     ════════════════════════════════════════════════════════════ -->
     <key>UIBackgroundModes</key>
     <array>
@@ -144,9 +152,13 @@
 
     <!-- ═══════════════════════════════════════════════════════
          FIREBASE / GOOGLE SERVICE
+         ⚠️ KRITIKAL: Kapag may OneSignal, dapat FALSE ito
+         para hindi sakupin ng Firebase ang APNs token.
+         Kung TRUE, hindi makukuha ng OneSignal ang tamang
+         device token → hindi dumarating ang notification.
     ════════════════════════════════════════════════════════════ -->
     <key>FirebaseAppDelegateProxyEnabled</key>
-    <true/>
+    <false/>
 
     <!-- ═══════════════════════════════════════════════════════
          DEEP LINKING (para sa push notification tap → app open)
@@ -162,5 +174,19 @@
             </array>
         </dict>
     </array>
+
+    <!-- ═══════════════════════════════════════════════════════
+         ONE SIGNAL — App Group para sa Notification Service
+         (Optional, pero recommended para sa rich notifications)
+
+         ⚠️ Kung wala kang NSE (Notification Service Extension),
+            puwede mong i-remove ito. Pero kung gusto mo ng
+            images/badges sa push, kailangan mo ito.
+
+         Ang grupo ay dapat tugma sa Xcode > Signing & Capabilities
+         > App Groups. Halimbawa: group.com.racoma.hris_onesignal
+    ════════════════════════════════════════════════════════════ -->
+    <key>OneSignal_app_groups_key</key>
+    <string>group.com.racoma.hris.onesignal</string>
 </dict>
 </plist>

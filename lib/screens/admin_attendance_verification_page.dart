@@ -1,12 +1,16 @@
 // lib/screens/admin_attendance_verification_page.dart
-// v1.1: 🎭 Demo Mode Support (Skip Firebase Fetch & Block Actions)
+// v1.2: 🎭 Demo Mode Support (Skip Firebase Fetch & Block Actions)
+//       ➕ Manual Clock Out — for employees who forgot to clock out
+//       ➕ Modify Log — to correct or add clock-out time on existing logs
+//       🔒 Both actions require admin reason + write full audit trail
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'admin_theme.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/demo_mode_service.dart';
 import '../widgets/bootstrap_grid.dart';
 
 class AdminAttendanceVerificationPage extends StatefulWidget {
@@ -39,6 +43,7 @@ class _AdminAttendanceVerificationPageState
   String _actualDeviceValue = '';
   String? _clientInfoOverride;
   bool _loading = true;
+  bool _processingAction = false;
 
   AdminColors get tc => AdminTheme.getColors(context);
 
@@ -61,6 +66,17 @@ class _AdminAttendanceVerificationPageState
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  // 🔒 Admin identity for audit trail
+  String get _adminIdentifier {
+    try {
+      final u = FirebaseAuth.instance.currentUser;
+      if (u != null) {
+        return u.email ?? u.uid;
+      }
+    } catch (_) {}
+    return 'Admin';
   }
 
   @override
@@ -349,7 +365,6 @@ class _AdminAttendanceVerificationPageState
       final log = widget.logData;
       _clientInfoOverride = _extractClientInfo(log);
 
-      // Mock employee data from logData
       _employeeData = {
         'name': log['employee_name'] ?? log['name'] ?? 'Demo Employee',
         'employeeId': log['employee_id'] ?? log['employeeId'] ?? 'DEMO-001',
@@ -359,14 +374,12 @@ class _AdminAttendanceVerificationPageState
         'deviceName': log['registeredDevice'] ?? 'iPhone 14 Pro',
       };
 
-      // Mock device — always registered in demo
       _deviceInfoOverride =
           log['registeredDevice']?.toString() ?? 'iPhone 14 Pro';
       _deviceStatus = 'registered';
       _registeredDeviceValue = _deviceInfoOverride!;
       _actualDeviceValue = _deviceInfoOverride!;
 
-      // Mock location from log (if any)
       final logCoords = _extractLatLng(log);
       if (logCoords != null) {
         _locationData = {
@@ -731,6 +744,756 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
+  // 🆕 MANUAL CLOCK OUT — Admin creates OUT log for employee
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _showManualClockOutDialog() async {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
+    if (_processingAction) return;
+
+    final log = widget.logData;
+    final empDocId =
+    (_employeeData?['id'] ?? log['employee_id'] ?? log['employeeId'] ?? '')
+        .toString();
+    final empName = (_employeeData?['name'] ??
+        log['employee_name'] ??
+        log['name'] ??
+        'Employee')
+        .toString();
+
+    if (empDocId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Cannot clock out: employee ID missing.'),
+          backgroundColor: tc.red,
+        ),
+      );
+      return;
+    }
+
+    // Default clock-out time = now
+    DateTime clockOutAt = DateTime.now();
+    final reasonCtrl = TextEditingController();
+    bool submitting = false;
+    String? errMsg;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: !_processingAction,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) {
+          return AlertDialog(
+            backgroundColor: tc.card,
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: tc.red.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(Icons.logout_rounded, color: tc.red, size: 20),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Manual Clock Out',
+                    style:
+                    TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: tc.orange.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border:
+                      Border.all(color: tc.orange.withValues(alpha: 0.3)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Employee',
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: tc.muted,
+                              letterSpacing: 0.4),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(empName,
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: tc.text)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'This will create a new CLOCK OUT record for this '
+                        'employee. Use this when the employee forgot to '
+                        'clock out.',
+                    style: TextStyle(fontSize: 12, color: tc.muted, height: 1.4),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Clock-out time',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: tc.text),
+                  ),
+                  const SizedBox(height: 6),
+                  InkWell(
+                    onTap: submitting
+                        ? null
+                        : () async {
+                      final picked = await showTimePicker(
+                        context: ctx,
+                        initialTime: TimeOfDay.fromDateTime(clockOutAt),
+                      );
+                      if (picked != null) {
+                        setDlg(() {
+                          clockOutAt = DateTime(
+                            clockOutAt.year,
+                            clockOutAt.month,
+                            clockOutAt.day,
+                            picked.hour,
+                            picked.minute,
+                          );
+                        });
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: tc.surface,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: tc.border),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.access_time_rounded,
+                              size: 18, color: tc.orange),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              DateFormat('MMM d, yyyy • hh:mm a')
+                                  .format(clockOutAt),
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: tc.text),
+                            ),
+                          ),
+                          Icon(Icons.edit_rounded,
+                              size: 14, color: tc.muted),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Reason (required)',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: tc.text),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: reasonCtrl,
+                    maxLines: 3,
+                    maxLength: 200,
+                    enabled: !submitting,
+                    onChanged: (_) {
+                      if (errMsg != null) setDlg(() => errMsg = null);
+                    },
+                    style: TextStyle(color: tc.text, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. Employee confirmed forgot to clock out',
+                      hintStyle:
+                      TextStyle(color: tc.muted, fontSize: 12),
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                  if (errMsg != null) ...[
+                    const SizedBox(height: 8),
+                    Text(errMsg!,
+                        style: TextStyle(
+                            color: tc.red,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx, false),
+                child: Text('Cancel',
+                    style: TextStyle(color: tc.muted)),
+              ),
+              ElevatedButton.icon(
+                onPressed: submitting
+                    ? null
+                    : () async {
+                  final reason = reasonCtrl.text.trim();
+                  if (reason.length < 5) {
+                    setDlg(() => errMsg =
+                    'Please provide a clear reason (min 5 chars).');
+                    return;
+                  }
+                  setDlg(() {
+                    submitting = true;
+                    errMsg = null;
+                  });
+                  final ok = await _performManualClockOut(
+                    employeeDocId: empDocId,
+                    employeeName: empName,
+                    clockOutAt: clockOutAt,
+                    reason: reason,
+                  );
+                  if (!ctx.mounted) return;
+                  Navigator.pop(ctx, ok);
+                },
+                icon: submitting
+                    ? SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                )
+                    : const Icon(Icons.check_rounded, size: 16),
+                label: Text(submitting ? 'Saving…' : 'Clock Out'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: tc.red,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    reasonCtrl.dispose();
+
+    if (confirmed == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('✅ Clock-out recorded successfully.'),
+          backgroundColor: tc.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<bool> _performManualClockOut({
+    required String employeeDocId,
+    required String employeeName,
+    required DateTime clockOutAt,
+    required String reason,
+  }) async {
+    if (_isDemo) return false;
+    if (_processingAction) return false;
+    setState(() => _processingAction = true);
+    try {
+      final now = DateTime.now();
+      final adminId = _adminIdentifier;
+      final fs = FirebaseFirestore.instance;
+
+      // ✅ IDAGDAG ITO: Kunin ang original employee_id (badge ID) mula sa logData
+      final originalEmpId = (widget.logData['employee_id'] ??
+          widget.logData['employeeId'] ??
+          employeeDocId)
+          .toString();
+
+      // ✅ Dito na mag-write ang payload gamit ang originalEmpId
+      final payload = <String, dynamic>{
+        'employee_id': originalEmpId,      // For employee stream filter
+        'employeeId': originalEmpId,       // For camelCase fallback
+        'employeeDocId': employeeDocId,    // Keep for admin lookups
+        'employee_name': employeeName,
+        'employeeName': employeeName,
+        'type': 'OUT',
+        'action': 'Manual Clock Out (Admin)',
+        'details': 'Admin manually clocked out employee',
+        'description': 'Manual clock-out by $adminId',
+        'remarks': 'manual_clock_out_by_admin',
+        'date': DateFormat('yyyy-MM-dd').format(clockOutAt),
+        'time': DateFormat('HH:mm:ss').format(clockOutAt),
+        'timestamp': Timestamp.fromDate(clockOutAt),
+        'status': 'approved',
+        'payrollStatus': 'Pending',
+        'source': 'admin_manual',
+        'original_log_id': widget.logId,
+        'modified_by_admin': adminId,
+        'modification_reason': reason,
+        'modified_at': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      };
+
+      final ref = await fs.collection('attendance_logs').add(payload);
+
+      // Audit trail
+      try {
+        await fs.collection('admin_audit_logs').add({
+          'action': 'manual_clock_out',
+          'admin': adminId,
+          'employeeId': employeeDocId,
+          'employeeName': employeeName,
+          'newLogId': ref.id,
+          'originalLogId': widget.logId,
+          'clockOutAt': Timestamp.fromDate(clockOutAt),
+          'reason': reason,
+          'timestamp': FieldValue.serverTimestamp(),
+          'platform': 'admin_panel',
+        });
+      } catch (e) {
+        debugPrint('⚠️ Audit log failed: $e');
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('❌ Manual clock out failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed: $e'),
+            backgroundColor: tc.red,
+          ),
+        );
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _processingAction = false);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 🆕 MODIFY LOG — Admin edits existing log (add/fix clock-out)
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _showModifyLogDialog() async {
+    if (_isDemo) {
+      _demoBlock();
+      return;
+    }
+    if (_processingAction) return;
+
+    final logTs = _toDateTime(widget.logData['timestamp']) ?? DateTime.now();
+    final reasonCtrl = TextEditingController();
+
+    DateTime modifiedTime = logTs;
+    String modifiedType =
+    (widget.logData['type'] ?? 'IN').toString().toUpperCase();
+    if (modifiedType != 'IN' && modifiedType != 'OUT') {
+      modifiedType = 'IN';
+    }
+
+    bool submitting = false;
+    String? errMsg;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) {
+          return AlertDialog(
+            backgroundColor: tc.card,
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: tc.orange.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(Icons.edit_note_rounded,
+                      color: tc.orange, size: 20),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Modify Attendance Log',
+                    style:
+                    TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: tc.surface,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: tc.border),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.receipt_long_rounded,
+                            size: 14, color: tc.muted),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Log ID: ${widget.logId}',
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontFamily: 'monospace',
+                                color: tc.muted),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Type',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: tc.text),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildTypeChip(
+                          label: 'CLOCK IN',
+                          selected: modifiedType == 'IN',
+                          color: tc.green,
+                          onTap: submitting
+                              ? null
+                              : () => setDlg(() => modifiedType = 'IN'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildTypeChip(
+                          label: 'CLOCK OUT',
+                          selected: modifiedType == 'OUT',
+                          color: tc.red,
+                          onTap: submitting
+                              ? null
+                              : () => setDlg(() => modifiedType = 'OUT'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Timestamp',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: tc.text),
+                  ),
+                  const SizedBox(height: 6),
+                  InkWell(
+                    onTap: submitting
+                        ? null
+                        : () async {
+                      final date = await showDatePicker(
+                        context: ctx,
+                        initialDate: modifiedTime,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime.now().add(const Duration(days: 1)),
+                      );
+                      if (date == null || !ctx.mounted) return;
+                      final time = await showTimePicker(
+                        context: ctx,
+                        initialTime:
+                        TimeOfDay.fromDateTime(modifiedTime),
+                      );
+                      if (time == null) return;
+                      setDlg(() {
+                        modifiedTime = DateTime(
+                          date.year,
+                          date.month,
+                          date.day,
+                          time.hour,
+                          time.minute,
+                        );
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: tc.surface,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: tc.border),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.event_rounded,
+                              size: 18, color: tc.orange),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              DateFormat('MMM d, yyyy • hh:mm a')
+                                  .format(modifiedTime),
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: tc.text),
+                            ),
+                          ),
+                          Icon(Icons.edit_rounded,
+                              size: 14, color: tc.muted),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Reason for modification (required)',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: tc.text),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: reasonCtrl,
+                    maxLines: 3,
+                    maxLength: 200,
+                    enabled: !submitting,
+                    onChanged: (_) {
+                      if (errMsg != null) setDlg(() => errMsg = null);
+                    },
+                    style: TextStyle(color: tc.text, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. Correct clock out time — system error',
+                      hintStyle:
+                      TextStyle(color: tc.muted, fontSize: 12),
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                  if (errMsg != null) ...[
+                    const SizedBox(height: 8),
+                    Text(errMsg!,
+                        style: TextStyle(
+                            color: tc.red,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx, false),
+                child: Text('Cancel',
+                    style: TextStyle(color: tc.muted)),
+              ),
+              ElevatedButton.icon(
+                onPressed: submitting
+                    ? null
+                    : () async {
+                  final reason = reasonCtrl.text.trim();
+                  if (reason.length < 5) {
+                    setDlg(() => errMsg =
+                    'Please provide a clear reason (min 5 chars).');
+                    return;
+                  }
+                  setDlg(() {
+                    submitting = true;
+                    errMsg = null;
+                  });
+                  final ok = await _performModifyLog(
+                    newTimestamp: modifiedTime,
+                    newType: modifiedType,
+                    reason: reason,
+                  );
+                  if (!ctx.mounted) return;
+                  Navigator.pop(ctx, ok);
+                },
+                icon: submitting
+                    ? SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                )
+                    : const Icon(Icons.save_rounded, size: 16),
+                label: Text(submitting ? 'Saving…' : 'Save Changes'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: tc.orange,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    reasonCtrl.dispose();
+
+    if (confirmed == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('✅ Log modified successfully.'),
+          backgroundColor: tc.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      // Optionally reload data so UI reflects changes
+      // _fetchRelatedData();
+    }
+  }
+
+  Widget _buildTypeChip({
+    required String label,
+    required bool selected,
+    required Color color,
+    required VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? color.withValues(alpha: 0.12) : tc.surface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? color : tc.border,
+            width: selected ? 1.6 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              selected
+                  ? Icons.check_circle_rounded
+                  : Icons.radio_button_unchecked_rounded,
+              size: 14,
+              color: selected ? color : tc.muted,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: selected ? color : tc.muted,
+                letterSpacing: 0.3,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<bool> _performModifyLog({
+    required DateTime newTimestamp,
+    required String newType,
+    required String reason,
+  }) async {
+    if (_isDemo) return false;
+    if (_processingAction) return false;
+    setState(() => _processingAction = true);
+    try {
+      final adminId = _adminIdentifier;
+      final fs = FirebaseFirestore.instance;
+
+      final beforeSnapshot = Map<String, dynamic>.from(widget.logData);
+
+      final updates = <String, dynamic>{
+        'timestamp': Timestamp.fromDate(newTimestamp),
+        'date': DateFormat('yyyy-MM-dd').format(newTimestamp),
+        'time': DateFormat('HH:mm:ss').format(newTimestamp),
+        'type': newType,
+        'modified_by_admin': adminId,
+        'modification_reason': reason,
+        'modified_at': FieldValue.serverTimestamp(),
+        'previous_value': {
+          'timestamp': beforeSnapshot['timestamp'],
+          'type': beforeSnapshot['type'],
+        },
+      };
+
+      await fs
+          .collection('attendance_logs')
+          .doc(widget.logId)
+          .update(updates);
+
+      // Audit trail
+      try {
+        await fs.collection('admin_audit_logs').add({
+          'action': 'modify_attendance_log',
+          'admin': adminId,
+          'logId': widget.logId,
+          'employeeId': widget.logData['employee_id'] ??
+              widget.logData['employeeId'],
+          'before': {
+            'timestamp': beforeSnapshot['timestamp'],
+            'type': beforeSnapshot['type'],
+          },
+          'after': {
+            'timestamp': Timestamp.fromDate(newTimestamp),
+            'type': newType,
+          },
+          'reason': reason,
+          'timestamp': FieldValue.serverTimestamp(),
+          'platform': 'admin_panel',
+        });
+      } catch (e) {
+        debugPrint('⚠️ Audit log failed: $e');
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('❌ Modify log failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed: $e'),
+            backgroundColor: tc.red,
+          ),
+        );
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _processingAction = false);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // BUILD
   // ══════════════════════════════════════════════════════════════
   @override
@@ -903,7 +1666,8 @@ class _AdminAttendanceVerificationPageState
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Showing sample verification data. Approve and Flag actions are disabled.',
+                  'Showing sample verification data. Approve, Clock Out, '
+                      'Modify, and Flag actions are disabled.',
                   style: TextStyle(
                     fontSize: 11,
                     color: tc.textMuted,
@@ -948,7 +1712,7 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // PAGE HEADER
+  // PAGE HEADER — v1.2 with Manual Clock Out + Modify Log
   // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeader(BuildContext context, AdminColors tc) {
     return LayoutBuilder(builder: (_, c) {
@@ -975,8 +1739,13 @@ class _AdminAttendanceVerificationPageState
         ],
       );
 
-      final approveBtn = ElevatedButton.icon(
-        onPressed: _isDemo
+      // ── ACTION BUTTONS ──
+      final approveBtn = _headerButton(
+        icon: _isDemo ? Icons.lock_outline_rounded : Icons.done_all_rounded,
+        label: _isDemo ? 'Approve (Demo)' : 'Approve',
+        color: _isDemo ? tc.border : tc.orange,
+        fg: _isDemo ? tc.muted : Colors.white,
+        onTap: _isDemo
             ? _demoBlock
             : () {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -986,22 +1755,55 @@ class _AdminAttendanceVerificationPageState
             ),
           );
         },
-        icon: Icon(
-          _isDemo ? Icons.lock_outline_rounded : Icons.done_all_rounded,
-          size: 16,
-        ),
-        label: Text(
-          _isDemo ? 'Approve Disabled (Demo)' : 'Approve All',
-          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-        ),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: _isDemo ? tc.border : tc.orange,
-          foregroundColor: _isDemo ? tc.muted : Colors.white,
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          elevation: 0,
-        ),
+      );
+
+      // 🆕 MANUAL CLOCK OUT
+      final clockOutBtn = _headerButton(
+        icon: _isDemo ? Icons.lock_outline_rounded : Icons.logout_rounded,
+        label: _isDemo ? 'Clock Out (Demo)' : 'Manual Clock Out',
+        color: _isDemo ? tc.border : tc.red,
+        fg: _isDemo ? tc.muted : Colors.white,
+        onTap: _isDemo ? _demoBlock : _showManualClockOutDialog,
+      );
+
+      // 🆕 MODIFY LOG
+      final modifyBtn = _headerButton(
+        icon: _isDemo ? Icons.lock_outline_rounded : Icons.edit_note_rounded,
+        label: _isDemo ? 'Modify (Demo)' : 'Modify Log',
+        color: _isDemo ? tc.border : tc.blue,
+        fg: _isDemo ? tc.muted : Colors.white,
+        onTap: _isDemo ? _demoBlock : _showModifyLogDialog,
+      );
+
+      // Flag button (existing behaviour)
+      final flagBtn = _headerButton(
+        icon: _isDemo ? Icons.lock_outline_rounded : Icons.flag_outlined,
+        label: _isDemo ? 'Flag (Demo)' : 'Flag',
+        color: _isDemo ? tc.border : tc.red.withValues(alpha: 0.85),
+        fg: _isDemo ? tc.muted : Colors.white,
+        outlined: true,
+        onTap: _isDemo
+            ? _demoBlock
+            : () {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Flagged for review.'),
+              backgroundColor: tc.red,
+            ),
+          );
+        },
+      );
+
+      final actions = Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        alignment: narrow ? WrapAlignment.start : WrapAlignment.end,
+        children: [
+          approveBtn,
+          clockOutBtn,
+          modifyBtn,
+          flagBtn,
+        ],
       );
 
       if (narrow) {
@@ -1010,7 +1812,7 @@ class _AdminAttendanceVerificationPageState
           children: [
             title,
             const SizedBox(height: 12),
-            approveBtn,
+            actions,
           ],
         );
       }
@@ -1021,10 +1823,57 @@ class _AdminAttendanceVerificationPageState
         children: [
           Expanded(child: title),
           const SizedBox(width: 12),
-          approveBtn,
+          Flexible(child: actions),
         ],
       );
     });
+  }
+
+  Widget _headerButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required Color fg,
+    required VoidCallback onTap,
+    bool outlined = false,
+  }) {
+    if (outlined) {
+      return OutlinedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 16),
+        label: Text(
+          label,
+          style: const TextStyle(
+              fontWeight: FontWeight.w700, fontSize: 13),
+        ),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: color,
+          side: BorderSide(color: color, width: 1.4),
+          padding:
+          const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+    }
+    return ElevatedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 16),
+      label: Text(
+        label,
+        style:
+        const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: fg,
+        padding:
+        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        shape:
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        elevation: 0,
+      ),
+    );
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -1765,7 +2614,7 @@ class _AdminAttendanceVerificationPageState
                   ),
                   const SizedBox(height: 3),
                   const Text(
-                    'Ibang device ang ginamit kaysa registered',
+                    'A different device was used than the registered one',
                     style: TextStyle(
                       fontSize: 10,
                       color: Color(0xFF991B1B),
@@ -1812,7 +2661,7 @@ class _AdminAttendanceVerificationPageState
                   ),
                   const SizedBox(height: 3),
                   const Text(
-                    'Kailangan i-update ang registered device sa profile',
+                    'The registered device on the profile needs to be updated',
                     style: TextStyle(
                       fontSize: 10,
                       color: Color(0xFF92400E),
@@ -1848,7 +2697,7 @@ class _AdminAttendanceVerificationPageState
           if (isUnknown && displayValue == 'Not recorded') ...[
             const SizedBox(height: 4),
             Text(
-              'Walang device info sa attendance log at profile',
+              'No device info in the attendance log or profile',
               style: TextStyle(
                 fontSize: 10,
                 color: tc.muted,

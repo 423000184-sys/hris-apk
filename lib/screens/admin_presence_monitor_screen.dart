@@ -1,5 +1,7 @@
 // lib/screens/admin_presence_monitor_screen.dart
-// v1.1: 🎭 Demo Mode Support (Mock Rows & Stream Bypass)
+// v1.3: 🎭 Demo Mode Support
+//       🐛 FIX: RangeError sa initials kapag empty o puro spaces ang name.
+//       🐛 FIX: Hindi na mag-render ng "Unnamed" ghost records (walang name & ID).
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,7 +11,7 @@ import 'package:flutter/material.dart';
 
 import 'admin_theme.dart';
 import '../widgets/bootstrap_grid.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/demo_mode_service.dart';
 
 void _secureLog(String m) {
   debugPrint('[PresenceMonitor] $m');
@@ -120,11 +122,21 @@ class PresenceRow {
     return 'Unknown';
   }
 
+  // 🐛 FIX: Safe handling for empty names
   String get initials {
-    final parts = name.trim().split(RegExp(r'\s+'));
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return '?';
+
+    final parts = trimmed.split(RegExp(r'\s+'));
     if (parts.isEmpty) return '?';
-    if (parts.length == 1) return parts[0][0].toUpperCase();
-    return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+
+    if (parts.length == 1) {
+      return parts[0].substring(0, 1).toUpperCase();
+    }
+
+    final first = parts[0].isNotEmpty ? parts[0].substring(0, 1) : '';
+    final second = parts[1].isNotEmpty ? parts[1].substring(0, 1) : '';
+    return '$first$second'.toUpperCase();
   }
 }
 
@@ -136,11 +148,9 @@ class AdminPresenceMonitorScreen extends StatefulWidget {
       _AdminPresenceMonitorScreenState();
 }
 
-class _AdminPresenceMonitorScreenState
-    extends State<AdminPresenceMonitorScreen> {
+class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen> {
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -166,7 +176,6 @@ class _AdminPresenceMonitorScreenState
 
   Timer? _tickTimer;
 
-  // 🎭 MOCK ROWS
   List<PresenceRow> _getMockRows() {
     final now = DateTime.now();
     return [
@@ -358,6 +367,23 @@ class _AdminPresenceMonitorScreenState
       if (entry['terminated'] == true) continue;
 
       final empId = (entry['employeeId'] ?? '').toString();
+
+      // 🐛 Extract raw name
+      final rawName = (entry['name'] ??
+          '${entry['firstName'] ?? ''} ${entry['lastName'] ?? ''}')
+          .toString()
+          .trim();
+
+      // 🐛 SKIP GHOST RECORDS: Kung walang name at walang employeeId, i-skip na.
+      if (rawName.isEmpty && empId.isEmpty) {
+        continue;
+      }
+
+      // 🐛 FALLBACK NAME: Kung walang name pero may ID, ID ang ipakita.
+      final displayName = rawName.isNotEmpty
+          ? rawName
+          : 'Employee (${empId.isNotEmpty ? empId : docId.substring(0, 6)})';
+
       final presence = _presenceById[docId] ??
           (empId.isNotEmpty ? _presenceById[empId] : null);
 
@@ -402,10 +428,7 @@ class _AdminPresenceMonitorScreenState
       list.add(PresenceRow(
         employeeId: empId.isNotEmpty ? empId : docId,
         docId: docId,
-        name: (entry['name'] ??
-            '${entry['firstName'] ?? ''} ${entry['lastName'] ?? ''}')
-            .toString()
-            .trim(),
+        name: displayName, // 👈 Ginamit ang fallback name
         role: role,
         department: dept,
         photoUrl: (entry['photoUrl'] ?? '').toString(),
@@ -515,7 +538,6 @@ class _AdminPresenceMonitorScreenState
     );
   }
 
-  // 🎭 DEMO BANNER
   Widget _buildDemoBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

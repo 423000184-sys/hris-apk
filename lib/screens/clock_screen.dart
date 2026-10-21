@@ -1,7 +1,5 @@
 // lib/screens/clock_screen.dart
-// v1.2: 🎭 DEMO MODE now shows the SAME skeleton loading screen as normal mode.
-//       Skeleton appears briefly (900ms), then fades into demo UI.
-// v1.1: 🎨 Demo mode now uses ORANGE (matches app theme)
+// v1.4: 🚪 Auto sign-out pagkatapos mag-clock out (Real & Demo mode).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
@@ -97,7 +95,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   static const _greenDeep = Color(0xFF166534);
   static const _red = Color(0xFFFF0000);
 
-  // 🎨 DEMO — ORANGE (matches app theme)
   static const _demoAccent = Color(0xFFFF8A00);
   static const _demoAccentMid = Color(0xFFFA6A00);
   static const _demoAccentDark = Color(0xFFF54900);
@@ -111,10 +108,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
   static const String _logoAsset = 'assets/images/logo.png';
 
-  // 🆕 Demo skeleton display duration
   static const Duration _demoSkeletonDuration = Duration(milliseconds: 900);
-  // 🆕 Normal mode initial skeleton display duration
   static const Duration _normalSkeletonDuration = Duration(milliseconds: 600);
+  static const Duration _attendancePollInterval = Duration(seconds: 30);
 
   late bool _isInRange;
   late bool _wfhAccess;
@@ -126,7 +122,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   bool _saving = false;
   bool _clockActionInProgress = false;
 
-  // 🆕 Initial loading flag for skeleton
   bool _isInitialLoading = true;
 
   Employee? _liveEmployee;
@@ -139,6 +134,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   Timer? _overlayDelayTimer;
 
   StreamSubscription<QuerySnapshot>? _attendanceSub;
+  StreamSubscription<QuerySnapshot>? _attendanceSubCamel;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sessionSub;
   StreamSubscription<bool>? _connectivitySub;
@@ -155,9 +151,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   String? _employeeDataHash;
   DateTime? _lastClockActionAt;
   DateTime? _lastUserActivityAt;
+  DateTime? _lastOwnClockActionAt;
   int _totalClockActions = 0;
   Timer? _sessionWatchdog;
   Timer? _heartbeatTimer;
+  Timer? _attendancePollTimer;
   bool _sessionValidated = false;
   bool _loggedOut = false;
   bool _mockLocationDetected = false;
@@ -217,15 +215,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — ipakita ang skeleton sa simula
-    // ═══════════════════════════════════════════════════════════
     if (_isDemo) {
       debugPrint('═══════════════════════════════════════════════════');
       debugPrint('🎭 [DemoMode] ClockScreen in DEMO MODE');
       debugPrint('   • Skipping all DB listeners');
       debugPrint('   • Orange theme applied');
-      debugPrint('   • Skeleton shown for ${_demoSkeletonDuration.inMilliseconds}ms');
       debugPrint('═══════════════════════════════════════════════════');
 
       _isInRange = true;
@@ -233,7 +227,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       _sessionValidated = true;
       _checkingGeofence = false;
 
-      // 🆕 Keep skeleton visible at start
       _isInitialLoading = true;
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -260,19 +253,14 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
       setState(() => _networkState = _NetworkState.online);
 
-      // 🆕 Hide skeleton after short delay
       Future.delayed(_demoSkeletonDuration, () {
         if (!mounted) return;
         setState(() => _isInitialLoading = false);
-        debugPrint('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
       });
 
       return;
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // NORMAL MODE
-    // ═══════════════════════════════════════════════════════════
     _isInRange = widget.initialInRange;
     _wfhAccess = widget.initialWfhAccess || _readWfhFromEmployee();
 
@@ -291,6 +279,15 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     _loadDeviceModel();
     _startSecurityMonitoring();
     _syncServerTime();
+
+    _attendancePollTimer?.cancel();
+    _attendancePollTimer = Timer.periodic(_attendancePollInterval, (_) {
+      if (!mounted || _loggedOut || _isDemo) return;
+      if (_networkState != _NetworkState.online) return;
+      _reloadAttendanceOnce().catchError(
+            (e) => debugPrint('⚠️ Periodic attendance poll failed: $e'),
+      );
+    });
 
     try {
       _connectivitySub =
@@ -334,7 +331,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       });
     });
 
-    // 🆕 Hide initial skeleton after normal load window
     Future.delayed(_normalSkeletonDuration, () {
       if (!mounted) return;
       setState(() => _isInitialLoading = false);
@@ -527,10 +523,12 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     debugPrint('🚨 [ClockScreen] Forced logout: $reason');
 
     _attendanceSub?.cancel();
+    _attendanceSubCamel?.cancel();
     _employeeSub?.cancel();
     _sessionSub?.cancel();
     _sessionWatchdog?.cancel();
     _heartbeatTimer?.cancel();
+    _attendancePollTimer?.cancel();
     _overlayDelayTimer?.cancel();
 
     try {
@@ -556,6 +554,47 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       severity: 'high',
       details: 'Forced logout: $reason',
     );
+
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => const LoginScreen(),
+        settings: const RouteSettings(name: '/login'),
+      ),
+          (route) => false,
+    );
+  }
+
+  // 🆕 AUTO SIGN OUT (Works for both Demo and Real mode)
+  Future<void> _autoSignOut() async {
+    if (!mounted) return;
+    _loggedOut = true;
+    debugPrint('🚪 [ClockScreen] Auto sign-out triggered');
+
+    _attendanceSub?.cancel();
+    _attendanceSubCamel?.cancel();
+    _employeeSub?.cancel();
+    _sessionSub?.cancel();
+    _sessionWatchdog?.cancel();
+    _heartbeatTimer?.cancel();
+    _attendancePollTimer?.cancel();
+    _overlayDelayTimer?.cancel();
+
+    if (!_isDemo) {
+      try {
+        await SecurityHardeningService.instance.clearSession();
+      } catch (_) {}
+      try {
+        await SecurityService.instance.clearSession();
+      } catch (_) {}
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('fp_preauth_employee_id');
+      await prefs.remove('fp_preauth_time');
+      await prefs.remove('fp_preauth_nonce');
+    } catch (_) {}
 
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
@@ -721,6 +760,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       _validateSession(forceRefresh: true).then((valid) {
         if (!valid && mounted && !_loggedOut) {
           _forceLogout('Session invalid on resume');
+        } else if (mounted && !_loggedOut) {
+          _reloadAttendanceOnce().catchError(
+                (e) => debugPrint('⚠️ Resume attendance reload failed: $e'),
+          );
+          _reloadEmployeeOnce().catchError(
+                (e) => debugPrint('⚠️ Resume employee reload failed: $e'),
+          );
         }
       });
     }
@@ -814,12 +860,14 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _attendanceSub?.cancel();
+    _attendanceSubCamel?.cancel();
     _employeeSub?.cancel();
     _sessionSub?.cancel();
     _connectivitySub?.cancel();
     _overlayDelayTimer?.cancel();
     _sessionWatchdog?.cancel();
     _heartbeatTimer?.cancel();
+    _attendancePollTimer?.cancel();
     super.dispose();
   }
 
@@ -1072,18 +1120,62 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     if (_isDemo) return;
 
     final empId = _employeeId;
+    final docId = _employeeDocId;
     if (empId == null || empId.isEmpty) return;
 
     for (int attempt = 0; attempt < _maxAttendanceRetries; attempt++) {
       try {
-        final snap = await FirebaseFirestore.instance
-            .collection('attendance_logs')
-            .where('employee_id', isEqualTo: empId)
-            .where('date', isEqualTo: _todayStr)
-            .get()
-            .timeout(const Duration(seconds: 10));
+        final allDocs = <QueryDocumentSnapshot>[];
+        final seenIds = <String>{};
+
+        try {
+          final snap1 = await FirebaseFirestore.instance
+              .collection('attendance_logs')
+              .where('employee_id', isEqualTo: empId)
+              .where('date', isEqualTo: _todayStr)
+              .get()
+              .timeout(const Duration(seconds: 10));
+          for (final d in snap1.docs) {
+            if (seenIds.add(d.id)) allDocs.add(d);
+          }
+        } catch (e) {
+          debugPrint('⚠️ Reload Q1 failed: $e');
+        }
+
+        try {
+          final snap2 = await FirebaseFirestore.instance
+              .collection('attendance_logs')
+              .where('employeeId', isEqualTo: empId)
+              .where('date', isEqualTo: _todayStr)
+              .get()
+              .timeout(const Duration(seconds: 10));
+          for (final d in snap2.docs) {
+            if (seenIds.add(d.id)) allDocs.add(d);
+          }
+        } catch (e) {
+          debugPrint('⚠️ Reload Q2 failed: $e');
+        }
+
+        if (docId != null && docId.isNotEmpty && docId != empId) {
+          try {
+            final snap3 = await FirebaseFirestore.instance
+                .collection('attendance_logs')
+                .where('employeeId', isEqualTo: docId)
+                .where('date', isEqualTo: _todayStr)
+                .get()
+                .timeout(const Duration(seconds: 10));
+            for (final d in snap3.docs) {
+              if (seenIds.add(d.id)) allDocs.add(d);
+            }
+          } catch (e) {
+            debugPrint('⚠️ Reload Q3 failed: $e');
+          }
+        }
+
         if (!mounted) return;
-        _processAttendance(snap.docs);
+        debugPrint('🔄 [ClockScreen] Reload: found ${allDocs.length} docs '
+            '(empId=$empId, docId=$docId)');
+        _processAttendance(allDocs);
         return;
       } catch (e) {
         debugPrint('⚠️ Attendance load attempt ${attempt + 1}: $e');
@@ -1125,7 +1217,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     if (_isDemo) return;
 
     final empId = _employeeId;
+    final docId = _employeeDocId;
     if (empId == null) return;
+
     _attendanceSub?.cancel();
     _attendanceSub = FirebaseFirestore.instance
         .collection('attendance_logs')
@@ -1137,8 +1231,24 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         if (!mounted) return;
         _processAttendance(snap.docs);
       },
-      onError: (e) => debugPrint('❌ ClockScreen stream error: $e'),
+      onError: (e) => debugPrint('❌ Primary attendance stream error: $e'),
     );
+
+    if (docId != null && docId.isNotEmpty) {
+      _attendanceSubCamel?.cancel();
+      _attendanceSubCamel = FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .where('employeeId', isEqualTo: docId)
+          .where('date', isEqualTo: _todayStr)
+          .snapshots()
+          .listen(
+            (snap) {
+          if (!mounted) return;
+          _processAttendance(snap.docs);
+        },
+        onError: (e) => debugPrint('❌ Secondary attendance stream error: $e'),
+      );
+    }
   }
 
   void _startEmployeeListener() {
@@ -1270,16 +1380,54 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    final changed = _clockInTime?.millisecondsSinceEpoch !=
-        inTime?.millisecondsSinceEpoch ||
-        _clockOutTime?.millisecondsSinceEpoch !=
-            outTime?.millisecondsSinceEpoch;
+    final prevIn = _clockInTime;
+    final prevOut = _clockOutTime;
 
-    if (changed) {
-      setState(() {
-        _clockInTime = inTime;
-        _clockOutTime = outTime;
-      });
+    final changed =
+        prevIn?.millisecondsSinceEpoch != inTime?.millisecondsSinceEpoch ||
+            prevOut?.millisecondsSinceEpoch != outTime?.millisecondsSinceEpoch;
+
+    if (!changed) return;
+
+    setState(() {
+      _clockInTime = inTime;
+      _clockOutTime = outTime;
+    });
+
+    final recentOwnAction = _lastOwnClockActionAt != null &&
+        DateTime.now().difference(_lastOwnClockActionAt!).inSeconds < 5;
+    if (recentOwnAction) {
+      debugPrint('🔄 Attendance updated (own action, no snackbar)');
+      return;
+    }
+
+    final adminAddedOut = prevOut == null && outTime != null;
+    final adminAddedIn = prevIn == null && inTime != null;
+    final adminChangedOut = prevOut != null &&
+        outTime != null &&
+        prevOut.millisecondsSinceEpoch != outTime.millisecondsSinceEpoch;
+    final adminChangedIn = prevIn != null &&
+        inTime != null &&
+        prevIn.millisecondsSinceEpoch != inTime.millisecondsSinceEpoch;
+
+    if (adminAddedOut) {
+      _showSnack(
+        '📝 Admin recorded your clock OUT at ${_formatTime(outTime!)}',
+      );
+    } else if (adminAddedIn) {
+      _showSnack(
+        '📝 Admin recorded your clock IN at ${_formatTime(inTime!)}',
+      );
+    } else if (adminChangedOut) {
+      _showSnack(
+        '📝 Admin updated your clock OUT to ${_formatTime(outTime!)}',
+      );
+    } else if (adminChangedIn) {
+      _showSnack(
+        '📝 Admin updated your clock IN to ${_formatTime(inTime!)}',
+      );
+    } else {
+      _showSnack('📝 Admin updated your attendance.');
     }
   }
 
@@ -1698,6 +1846,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   Future<void> _handleClockIn() async {
     if (_saving || _clockActionInProgress) return;
     _clockActionInProgress = true;
+    _lastOwnClockActionAt = DateTime.now();
     _recordUserActivity();
 
     try {
@@ -1734,6 +1883,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   Future<void> _handleClockOut() async {
     if (_saving || _clockActionInProgress) return;
     _clockActionInProgress = true;
+    _lastOwnClockActionAt = DateTime.now();
     _recordUserActivity();
 
     try {
@@ -1762,12 +1912,20 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
       _showSnack(
         _isDemo
-            ? '🎭 DEMO: Clocked OUT at ${_formatTime(now)}'
-            : '✅ Clocked OUT at ${_formatTime(now)}',
+            ? '🎭 DEMO: Clocked OUT at ${_formatTime(now)}. Signing out...'
+            : '✅ Clocked OUT at ${_formatTime(now)}. Signing out...',
       );
       widget.onClockOut?.call();
+
+      // 🚪 AUTO SIGN-OUT AFTER 2 SECONDS
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) {
+        _autoSignOut();
+      }
     } finally {
-      _clockActionInProgress = false;
+      if (mounted) {
+        _clockActionInProgress = false;
+      }
     }
   }
 
@@ -1792,9 +1950,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     final isOffline = _networkState == _NetworkState.offline;
     final isChecking = _networkState == _NetworkState.checking;
 
-    // ═══════════════════════════════════════════════════════════
-    // 🆕 SKELETON LOADING STATE (works for demo + normal)
-    // ═══════════════════════════════════════════════════════════
     if (_isInitialLoading) {
       return Scaffold(
         backgroundColor: tc.bg,
@@ -1934,7 +2089,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     );
   }
 
-  // 🎭 DEMO MODE badge sa taas — ORANGE
   Widget _buildDemoClockBadge() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),

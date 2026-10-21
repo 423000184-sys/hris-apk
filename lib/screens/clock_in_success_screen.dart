@@ -1,9 +1,11 @@
 ﻿// lib/screens/clock_in_success_screen.dart
 // ═══════════════════════════════════════════════════════════════════
-// CLOCK IN SUCCESS SCREEN  v1.3
-//   - Demo mode: walang Firestore write, DEMO badge
-//   - onContinue() navigation ang tumatawag (hindi auto-pop)
+// CLOCK IN SUCCESS SCREEN  v1.4
+//   - Demo mode: no Firestore write, DEMO badge
+//   - onContinue() navigation is called (not auto-pop)
 //   - ✅ v1.3: Adaptive Light/Dark mode support
+//   - ✅ v1.4: FIXED back button — arrow and "Back" text now aligned
+//             (matches biometric_method_screen.dart exactly)
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
@@ -388,7 +390,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     return Stack(
       clipBehavior: Clip.hardEdge,
       children: [
-        // ✅ Adaptive background
+        // Adaptive background
         Positioned.fill(child: Container(color: tc.scaffoldBg)),
 
         // Top watermark — subtle in both modes
@@ -449,11 +451,15 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
             ),
             child: Stack(
               children: [
+                // ✅ FIXED v1.4: Back button — arrow + text aligned
+                // Explicitly centered on cross axis, and Text has
+                // height: 1.0 so it matches the arrow box perfectly.
                 Positioned(
                   left: 24,
                   top: 48,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       SizedBox(
                         width: 19.99,
@@ -466,7 +472,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
                               color: Colors.white,
                               fontSize: 16,
                               fontWeight: FontWeight.w500,
-                              height: 0.9)),
+                              height: 1.0)),
                     ],
                   ),
                 ),
@@ -766,19 +772,32 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// _BackArrowPainter — v1.4
+//   ✅ FIX: Uses the same coordinates as biometric_method_screen.dart
+//   so the arrow looks identical across all screens.
+//   Design space: 19.99 × 19.99 — arrow vertically centered.
+// ═══════════════════════════════════════════════════════════════
 class _BackArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
+    final s = size.width / 19.99;
+
     final paint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.66602
+      ..strokeWidth = 1.66602 * s
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
+
+    // Same coordinates as biometric screen — arrow centered in box
+    Offset p(double x, double y) => Offset(x * s, y * s);
+
     final path = Path()
-      ..moveTo(size.width * 0.75, size.height * 0.75)
-      ..lineTo(size.width * 0.25, size.height * 0.5)
-      ..lineTo(size.width * 0.75, size.height * 0.25);
+      ..moveTo(p(12.4951, 14.9941).dx, p(12.4951, 14.9941).dy)
+      ..lineTo(p(7.49707, 9.9961).dx, p(7.49707, 9.9961).dy)
+      ..lineTo(p(12.4951, 4.99805).dx, p(12.4951, 4.99805).dy);
+
     canvas.drawPath(path, paint);
   }
 

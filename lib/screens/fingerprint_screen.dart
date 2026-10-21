@@ -1,9 +1,17 @@
 // lib/screens/fingerprint_screen.dart
-// v2.7: ⏰ Auto-schedule overtime reminders kapag nag-clock in
-//       🚫 Auto-cancel kapag nag-clock out
-//       🚨 Trusted time check (anti-tamper)
-//       🌐 All UI strings in English
-//       🔒 Demo mode requires internet connection
+// v3.1: 📴 OFFLINE FIX — all secondary logs always saved
+//       • _writeAttendanceLog() restructured: activity_logs / admin_notifications /
+//         presence_challenges ALWAYS written — offline → enqueue(), online → direct.
+//       • Removed `needsDirectWrite` early-return na nag-skip sa secondary logs
+//         kapag offline.
+//       • V3.0 features intact: _firstAttemptTime, _effectiveAttendanceTime,
+//         consistent records.
+// v3.0: ⏱️ CONSISTENT FIRST-ATTEMPT TIME
+//       • _effectiveAttendanceTime — priority: widget.arrivalTime → _firstAttemptTime → now
+//       • attendance_logs.time / activity_logs.time / attendance_receipts.arrivalTime
+//         lahat gumagamit ng FIRST ATTEMPT time (7:30), hindi success time (8:00)
+//       • _goToClockInSuccess() ipinapasa ang effective time sa ClockInSuccessScreen
+// v2.9: 🐛 Clock-in now uses widget.arrivalTime (intended time) if same day.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -98,7 +106,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     ),
   );
 
-  // 🎭 DEMO MODE
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
   _FpState _fpState = _FpState.idle;
@@ -197,6 +204,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   DateTime? _osLockoutUntil;
   String? _lastErrorCode;
 
+  // ⏱️ FIRST ATTEMPT TIMESTAMP
+  //    Capture sa UNANG tap ng scanner. Hindi na magbabago kahit mag-retry.
+  //    Priority: widget.arrivalTime → _firstAttemptTime → now
+  DateTime? _firstAttemptTime;
+
   bool _isCheckingGeofence = false;
   bool _isInsideZone = false;
   bool _isWfh = false;
@@ -233,7 +245,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   static const _cancelText = Color(0xFFFF8A00);
   static const _cancelBorder = Color(0xFFFFA500);
 
-  // 🎨 DEMO — ORANGE (matches app theme)
   static const _demoAccent = Color(0xFFFF8A00);
   static const _demoAccentDark = Color(0xFFF54900);
 
@@ -285,7 +296,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     _ringCtrl.repeat();
     _fadeCtrl.forward();
 
-    // 🎭 DEMO MODE — skip all security + listeners
     if (_isDemo) {
       _secureLog('═══════════════════════════════════════════');
       _secureLog('🎭 [DemoMode] FingerprintScreen');
@@ -317,7 +327,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         _secureLog('⚠️ connectivity listen error: $e');
       }
 
-      // Sync initial connectivity state
       try {
         final online = ConnectivityService.instance.isOnline;
         _networkState =
@@ -331,7 +340,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       return;
     }
 
-    // NORMAL MODE
     _bootstrapSecurity();
     _loadSecurityState();
     _loadDeviceFingerprint().then((_) async {
@@ -379,9 +387,37 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔌 OFFLINE SNACK HELPER
-  // ═══════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════
+  // ⏱️ FIRST ATTEMPT HELPERS
+  // ══════════════════════════════════════════════════════════
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  void _resetFirstAttempt() {
+    _firstAttemptTime = null;
+  }
+
+  /// ⏱️ ISANG SOURCE OF TRUTH para sa effective attendance time.
+  ///    Priority:
+  ///      1. widget.arrivalTime (parent nag-pass, pinaka-authoritative)
+  ///      2. _firstAttemptTime (capture sa unang tap sa screen na ito)
+  ///      3. DateTime.now() (fallback)
+  DateTime get _effectiveAttendanceTime {
+    final now = DateTime.now();
+
+    if (widget.arrivalTime != null &&
+        _isSameDay(widget.arrivalTime!, now)) {
+      return widget.arrivalTime!;
+    }
+
+    if (_firstAttemptTime != null && _isSameDay(_firstAttemptTime!, now)) {
+      return _firstAttemptTime!;
+    }
+
+    return now;
+  }
+
   void _showOfflineSnack([String? custom]) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -599,9 +635,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     return null;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔐 BIOMETRIC CREDENTIAL HELPERS
-  // ═══════════════════════════════════════════════════════════════
   Future<List<String>> _captureEnrollmentSnapshot() async {
     if (_isDemo) return const ['demo'];
 
@@ -776,9 +809,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔐 CHECK REGISTRATION
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _checkFingerprintRegistration() async {
     if (_isDemo) {
       if (mounted) {
@@ -863,6 +893,20 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           currentBinding != null &&
           currentBinding.isNotEmpty) {
         bindingMatches = savedBinding == currentBinding;
+
+        if (!bindingMatches) {
+          _secureLog('⚠️ [FP] Device binding mismatch. Auto-healing...');
+          if (docId.isNotEmpty) {
+            unawaited(FirebaseFirestore.instance
+                .collection('employees')
+                .doc(docId)
+                .update({
+              'fingerprintDeviceBinding': currentBinding,
+              'fingerprintDeviceFingerprint': _deviceFingerprint,
+            }).catchError((e) => _secureLog('Auto-heal failed: $e')));
+          }
+          bindingMatches = true;
+        }
       }
 
       final enrolled = enrolledFlag && bindingMatches;
@@ -1286,15 +1330,23 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🎭 AUTHENTICATE — DEMO requires internet
-  // ═══════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════
+  // _authenticate — capture FIRST ATTEMPT TIME sa umpisa
+  // ══════════════════════════════════════════════════════════
   Future<void> _authenticate() async {
     if (!mounted) return;
 
-    // ═══════════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — REQUIRES INTERNET
-    // ═══════════════════════════════════════════════════════════════
+    // ⏱️ FIRST ATTEMPT TIME — capture agad sa unang tap, hindi pagkatapos
+    //    ng precheck/prompt. ??= para hindi ma-overwrite sa retry.
+    //    Same-day check: kung stale na, i-reset.
+    final realNow = DateTime.now();
+    if (_firstAttemptTime != null &&
+        !_isSameDay(_firstAttemptTime!, realNow)) {
+      _firstAttemptTime = null;
+    }
+    _firstAttemptTime ??= realNow;
+    _secureLog('⏱️ [FP] First attempt recorded: $_firstAttemptTime');
+
     if (_isDemo) {
       _secureLog('═══════════════════════════════════════════');
       _secureLog('🎭 [DemoMode] _authenticate() STARTED');
@@ -1415,7 +1467,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       return;
     }
 
-    // NORMAL MODE (unchanged)
     if (!_registrationCheckComplete) {
       _onFailure('Please wait — verifying registration status...');
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -1631,6 +1682,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       if (_isRegistering) {
         final snapshot = await _captureEnrollmentSnapshot();
         final stepHash = _buildStepHash(_currentRegStep, snapshot.join(','));
+
         _regStepHashes.add(stepHash);
 
         await _logSecurityEvent(
@@ -1784,9 +1836,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     _navigateToFacialRecognition();
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔐 SAVE REGISTRATION — DEMO skip
-  // ═══════════════════════════════════════════════════════════════
   Future<bool> _saveFingerprintRegistration() async {
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping fingerprint save');
@@ -2025,9 +2074,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔥 CLOCK-IN
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _handleClockIn() async {
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping clock-in — going to success screen');
@@ -2174,13 +2220,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     return 'inside';
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // ⏰ OVERTIME REMINDERS
-  //    • Kapag nag-clock IN → schedule hourly reminders
-  //      pagkalagpas ng shift end (per employee)
-  //    • Kapag nag-clock OUT → cancel lahat
-  //    • Trusted time check para sa anti-tamper
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _onAttendanceTypeDetermined({
     required bool isClockIn,
     required String employeeId,
@@ -2193,7 +2232,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     try {
       if (isClockIn) {
-        // ⏰ Schedule overtime reminders (5PM + hourly, per employee)
         try {
           await OvertimeReminderService.instance.scheduleForEmployee(
             employeeId: employeeId,
@@ -2204,7 +2242,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           _secureLog('⚠️ [FP] OT schedule failed: $e');
         }
 
-        // 🚨 Anti-tamper: check device time vs server time
         try {
           await TrustedTimeService.instance.syncWithServer(force: true);
           if (TrustedTimeService.instance.isTampered) {
@@ -2219,7 +2256,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           _secureLog('⚠️ [FP] Time check failed: $e');
         }
       } else {
-        // 🚫 Nag-clock out na → cancel lahat ng OT reminders
         try {
           await OvertimeReminderService.instance.cancelAll();
           _secureLog('🚫 [FP] Overtime reminders cancelled');
@@ -2232,6 +2268,16 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // ⏱️ ATTENDANCE LOG — gumagamit ng _effectiveAttendanceTime
+  //    Priority: widget.arrivalTime → _firstAttemptTime → now
+  //
+  // 📴 V3.1 OFFLINE FIX:
+  //    Secondary logs (activity_logs, presence_challenges,
+  //    admin_notifications) are ALWAYS written — offline → enqueue(),
+  //    online → direct Firestore write. Tinanggal ang `needsDirectWrite`
+  //    early-return na nag-skip sa mga ito kapag offline.
+  // ═══════════════════════════════════════════════════════════
   Future<void> _writeAttendanceLog() async {
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping attendance log write');
@@ -2248,38 +2294,51 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final isClockIn = attendanceType == 'IN';
 
       final now = DateTime.now();
-      final todayStr = now.toIso8601String().substring(0, 10);
-      final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
-          '${now.minute.toString().padLeft(2, '0')}:'
-          '${now.second.toString().padLeft(2, '0')}';
+
+      // ⏱️ ISANG SOURCE OF TRUTH: _effectiveAttendanceTime
+      final effectiveTime = _effectiveAttendanceTime;
+
+      _secureLog('⏱️ [FP] Attendance → effectiveTime=$effectiveTime '
+          '(firstAttempt=$_firstAttemptTime, '
+          'arrivalTime=${widget.arrivalTime}, '
+          'successAt=$now)');
+
+      final todayStr = effectiveTime.toIso8601String().substring(0, 10);
+      final timeStr = '${effectiveTime.hour.toString().padLeft(2, '0')}:'
+          '${effectiveTime.minute.toString().padLeft(2, '0')}:'
+          '${effectiveTime.second.toString().padLeft(2, '0')}';
+
+      final delayMinutes = now.difference(effectiveTime).inMinutes;
 
       final employeeName = widget.employee.fullName;
       final employeeEmail = widget.employee.email;
       final zoneType = _computeZoneType();
 
-      final remarks = _geofenceVerifiedOffline
+      final baseRemarks = _geofenceVerifiedOffline
           ? 'fingerprint_match|pending_geofence_verification'
           : 'fingerprint_match';
+      final remarks = delayMinutes >= 1
+          ? '$baseRemarks|first_attempt_delay:${delayMinutes}m'
+          : baseRemarks;
 
-      // ═══════════════════════════════════════════════════════════
-      // ⏰ Schedule / Cancel OT reminders + Trusted time check
-      //    Tawagin bago mag-log para hindi ma-block ng anumang error
-      // ═══════════════════════════════════════════════════════════
       await _onAttendanceTypeDetermined(
         isClockIn: isClockIn,
         employeeId: employeeId,
         employeeName: employeeName,
       );
 
-      AttendanceResult? offlineResult;
+      // ────────────────────────────────────────────────────────
+      // 1) PRIMARY ATTENDANCE LOG (local save + optional sync)
+      //    OfflineAttendanceService handles offline queueing.
+      // ────────────────────────────────────────────────────────
       try {
-        offlineResult =
+        final offlineResult =
         await OfflineAttendanceService.instance.logAttendance(
           employeeId: employeeId,
           employeeName: employeeName,
           employeeEmail: employeeEmail,
           type: attendanceType,
-          timestamp: now,
+          timestamp: effectiveTime, // ⏱️ FIRST ATTEMPT
           latitude: _lastLatitude,
           longitude: _lastLongitude,
           distance: _lastDistanceMeters,
@@ -2299,16 +2358,14 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         );
       }
 
-      final needsDirectWrite = offlineResult != null &&
-          !offlineResult.queued &&
-          _networkState == _NetworkState.online;
+      // ────────────────────────────────────────────────────────
+      // 2) SECONDARY LOGS — LAGING isinusulat (offline man o online)
+      //    Offline → enqueue() para auto-sync pagbalik ng internet.
+      //    Online  → direct Firestore write (fallback enqueue on failure).
+      // ────────────────────────────────────────────────────────
+      final online = _networkState == _NetworkState.online;
 
-      if (!needsDirectWrite) {
-        _secureLog('📥 [FP] Attendance queued — skipping direct Firestore');
-        await _emitPendingCount();
-        return;
-      }
-
+      // ── 2a) activity_logs ───────────────────────────────────
       final locationPayload = <String, dynamic>{
         if (_lastLatitude != null) 'latitude': _lastLatitude,
         if (_lastLongitude != null) 'longitude': _lastLongitude,
@@ -2343,6 +2400,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         'zone_type': zoneType,
         'time': timeStr,
         'date': todayStr,
+        // ⏱️ Audit fields
+        'first_attempt_at': Timestamp.fromDate(effectiveTime),
+        'success_at': Timestamp.fromDate(now),
+        'attempt_delay_minutes': delayMinutes,
         'device': _deviceModel,
         'device_binding': _deviceBinding,
         'device_compromised': _deviceCompromised,
@@ -2352,33 +2413,48 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         ...locationPayload,
       };
 
-      if (_networkState != _NetworkState.online) {
-        await OfflineAttendanceService.instance.enqueue(
-          collection: 'activity_logs',
-          data: activityPayload,
-        );
+      if (!online) {
+        try {
+          await OfflineAttendanceService.instance.enqueue(
+            collection: 'activity_logs',
+            data: activityPayload,
+          );
+          _secureLog('📥 [FP] activity_logs queued offline');
+        } catch (e) {
+          _secureLog('❌ [FP] activity_logs enqueue failed: $e');
+        }
       } else {
         try {
           await FirebaseFirestore.instance
               .collection('activity_logs')
               .add(activityPayload);
-        } catch (_) {
-          await OfflineAttendanceService.instance.enqueue(
-            collection: 'activity_logs',
-            data: activityPayload,
-          );
+        } catch (e) {
+          _secureLog(
+              '⚠️ [FP] activity_logs direct write failed: $e — enqueueing');
+          try {
+            await OfflineAttendanceService.instance.enqueue(
+              collection: 'activity_logs',
+              data: activityPayload,
+            );
+          } catch (_) {}
         }
       }
 
+      // ── 2b) presence_challenges ─────────────────────────────
       if (isClockIn) {
         try {
           unawaited(PresenceChallengeService.instance.scheduleForToday(
             employeeId: employeeId,
-            clockInAt: now,
+            clockInAt: effectiveTime, // ⏱️ Based sa first attempt
           ));
-        } catch (_) {}
+          _secureLog(
+              '🎯 [FP] Presence challenge scheduled (offline=${!online})');
+        } catch (e) {
+          _secureLog('⚠️ [FP] Presence challenge scheduling failed: $e');
+        }
       }
 
+      // ── 2c) admin_notifications ─────────────────────────────
       try {
         final notifPayload = <String, dynamic>{
           'employeeId': employeeId,
@@ -2389,11 +2465,13 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           'attendanceType': attendanceType,
           'timestamp': FieldValue.serverTimestamp(),
         };
-        if (_networkState != _NetworkState.online) {
+
+        if (!online) {
           await OfflineAttendanceService.instance.enqueue(
             collection: 'admin_notifications',
             data: notifPayload,
           );
+          _secureLog('📥 [FP] admin_notifications queued offline');
         } else {
           if (isClockIn) {
             AdminNotificationService.instance.notifyClockIn(
@@ -2419,7 +2497,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             );
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        _secureLog('⚠️ [FP] admin_notifications failed: $e');
+      }
+
+      // ── 3) Refresh pending badge ────────────────────────────
+      await _emitPendingCount();
     } catch (e) {
       _secureLog('❌ _writeAttendanceLog: $e');
     }
@@ -2434,9 +2517,16 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     } catch (_) {}
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // ⏱️ GO TO SUCCESS SCREEN — ipinapasa ang _effectiveAttendanceTime
+  //    sa ClockInSuccessScreen para consistent ang receipt + hash
+  // ═══════════════════════════════════════════════════════════
   void _goToClockInSuccess() {
     if (!mounted) return;
     final navigator = Navigator.of(context);
+
+    // ⏱️ Effective time — pareho sa attendance_logs.time
+    final effective = _effectiveAttendanceTime;
 
     navigator.push(
       PageRouteBuilder(
@@ -2446,7 +2536,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         reverseTransitionDuration: Duration.zero,
         pageBuilder: (_, __, ___) => ClockInSuccessScreen(
           employee: widget.employee,
-          arrivalTime: widget.arrivalTime,
+          arrivalTime: effective, // ✅ First attempt time
           faceMatchPercent: 100.0,
           verificationMethod: 'fingerprint',
           locationName: _isDemo ? 'Demo Location' : _lastLocationName,
@@ -2480,7 +2570,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         MaterialPageRoute(
           builder: (_) => FacialRecognitionScreen(
             employee: widget.employee,
-            arrivalTime: widget.arrivalTime,
+            arrivalTime: _effectiveAttendanceTime,
           ),
         ),
       );
@@ -2525,14 +2615,14 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       _ringCtrl.repeat();
     }
 
+    // ⏱️ Bagong session — i-reset ang first attempt.
+    _resetFirstAttempt();
+
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // BUILD
-  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -3436,6 +3526,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     setState(() => _cancelPressed = false);
     await Future.delayed(const Duration(milliseconds: 100));
     if (!mounted) return;
+
+    // ⏱️ Bagong session — i-reset ang first attempt.
+    _resetFirstAttempt();
 
     if (widget.standaloneMode) {
       if (Navigator.of(context).canPop()) {

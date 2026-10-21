@@ -1,5 +1,7 @@
 // lib/screens/admin_dashboard.dart
-// v1.1: 🎭 Added Demo Mode bypass in Auth Guard
+// v1.5: 🧭 LAHAT ng navigation items ay inilagay na sa Left Sidebar (navItems).
+//       🔇 Removed Live Presence and Password Requests from nav & menus.
+//       🐛 Fixed "Assign Client Meeting" routing to tab 8 (was tab 7).
 import 'dart:async';
 import 'dart:math' show sin, cos, asin, sqrt, pi;
 import 'package:flutter/material.dart';
@@ -26,12 +28,15 @@ import 'admin_password_change_requests_page.dart';
 import '../widgets/admin_notification_bell.dart';
 import '../services/employee_notification_service.dart';
 import '../services/admin_auth_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Idinagdag para sa Demo Mode
+import '../services/demo_mode_service.dart';
 
 import '../services/presence_monitor_service.dart';
 import '../services/presence_backup_service.dart';
 import '../services/notification_backup_service.dart';
 import 'notification_backup_list_page.dart';
+
+// 🆕 IMPORT ONESIGNAL SENDER
+import '../services/onesignal_sender.dart';
 
 class _AdminNavItem {
   final int index;
@@ -84,12 +89,123 @@ class AdminDashboardState extends State<AdminDashboard>
 
   AdminColors get _c => ThemeProvider.instance.colors;
 
+  // ── Demo mode accessor (single source of truth) ──
+  bool get _isDemo => DemoModeService.instance.isEnabled;
+
   static const double officeLat = 14.6114;
   static const double officeLng = 120.9936;
   static const double radiusLimit = 1500.0;
 
   // ═══════════════════════════════════════════════════════════════
-  // NAV ITEMS — may Live Presence + Password Requests
+  // DEMO DATA — realistic-looking samples used when _isDemo is true
+  // ═══════════════════════════════════════════════════════════════
+  static final List<Map<String, dynamic>> _demoEmployees = [
+    {
+      'id': 'demo-001',
+      'name': 'Juan Dela Cruz',
+      'firstName': 'Juan',
+      'lastName': 'Dela Cruz',
+      'employeeId': 'EMP-0012',
+      'position': 'Sales Associate',
+      'department': 'Sales',
+      'email': 'juan.delacruz@example.com',
+      'terminated': false,
+    },
+    {
+      'id': 'demo-002',
+      'name': 'Maria Santos',
+      'firstName': 'Maria',
+      'lastName': 'Santos',
+      'employeeId': 'EMP-0034',
+      'position': 'Cashier',
+      'department': 'Finance',
+      'email': 'maria.santos@example.com',
+      'terminated': false,
+    },
+    {
+      'id': 'demo-003',
+      'name': 'Pedro Reyes',
+      'firstName': 'Pedro',
+      'lastName': 'Reyes',
+      'employeeId': 'EMP-0056',
+      'position': 'Warehouse Staff',
+      'department': 'Logistics',
+      'email': 'pedro.reyes@example.com',
+      'terminated': false,
+    },
+  ];
+
+  static final List<Map<String, dynamic>> _demoAttendanceLogs = [
+    {
+      'id': 'demo-log-001',
+      'employee_id': 'demo-001',
+      'name': 'Juan Dela Cruz',
+      'type': 'IN',
+      'status': 'On Time',
+      'timestamp': DateTime.now().subtract(const Duration(hours: 8)),
+    },
+    {
+      'id': 'demo-log-002',
+      'employee_id': 'demo-002',
+      'name': 'Maria Santos',
+      'type': 'IN',
+      'status': 'On Time',
+      'timestamp': DateTime.now().subtract(const Duration(hours: 7, minutes: 30)),
+    },
+    {
+      'id': 'demo-log-003',
+      'employee_id': 'demo-001',
+      'name': 'Juan Dela Cruz',
+      'type': 'OUT',
+      'status': 'On Time',
+      'timestamp': DateTime.now().subtract(const Duration(minutes: 45)),
+    },
+    {
+      'id': 'demo-log-004',
+      'employee_id': 'demo-003',
+      'name': 'Pedro Reyes',
+      'type': 'IN',
+      'status': 'Late',
+      'timestamp': DateTime.now().subtract(const Duration(hours: 2)),
+    },
+  ];
+
+  static final List<Map<String, dynamic>> _demoLocations = [
+    {
+      'employee_id': 'demo-001',
+      'name': 'Juan Dela Cruz',
+      'lat': 14.6114,
+      'lng': 120.9936,
+      'timestamp': DateTime.now().subtract(const Duration(minutes: 5)),
+    },
+    {
+      'employee_id': 'demo-002',
+      'name': 'Maria Santos',
+      'lat': 14.6120,
+      'lng': 120.9941,
+      'timestamp': DateTime.now().subtract(const Duration(minutes: 12)),
+    },
+  ];
+
+  static final List<Map<String, dynamic>> _demoRegLogs = [
+    {
+      'id': 'demo-reg-001',
+      'type': 'registration',
+      'employee_id': 'demo-001',
+      'employee_name': 'Juan Dela Cruz',
+      'timestamp': DateTime.now().subtract(const Duration(days: 30)),
+    },
+    {
+      'id': 'demo-reg-002',
+      'type': 'registration',
+      'employee_id': 'demo-002',
+      'employee_name': 'Maria Santos',
+      'timestamp': DateTime.now().subtract(const Duration(days: 28)),
+    },
+  ];
+
+  // ═══════════════════════════════════════════════════════════════
+  // NAV ITEMS — LAHAT NG TABS AY NANDITO NA PARA SA SIDEBAR
   // ═══════════════════════════════════════════════════════════════
   static const List<_AdminNavItem> _navItems = [
     _AdminNavItem(0, 'Overview', Icons.grid_view_rounded),
@@ -99,8 +215,10 @@ class AdminDashboardState extends State<AdminDashboard>
     _AdminNavItem(4, 'Activity', Icons.checklist_rounded),
     _AdminNavItem(5, 'Tracking', Icons.location_on_rounded),
     _AdminNavItem(6, 'Payroll', Icons.receipt_long_rounded),
-    _AdminNavItem(7, 'Live Presence', Icons.radar_rounded),
-    _AdminNavItem(15, 'Password Requests', Icons.lock_reset_rounded), // 🔑 NEW
+    _AdminNavItem(7, 'Presence Monitor', Icons.security_rounded), // 🆕 Added
+    _AdminNavItem(8, 'Client Meeting', Icons.assignment_ind_rounded), // 🆕 Added
+    _AdminNavItem(9, 'Client Location', Icons.add_location_alt_rounded), // 🆕 Added
+    _AdminNavItem(15, 'Password Requests', Icons.password_rounded), // 🆕 Added
   ];
 
   String get _searchHint {
@@ -150,6 +268,7 @@ class AdminDashboardState extends State<AdminDashboard>
     super.initState();
 
     debugPrint('═══════════════════════════════════════════');
+    debugPrint('🎭 DEMO MODE: ${DemoModeService.instance.isEnabled}');
     debugPrint('🔑 ADMIN UID:   ${FirebaseAuth.instance.currentUser?.uid}');
     debugPrint('📧 ADMIN EMAIL: ${FirebaseAuth.instance.currentUser?.email}');
     debugPrint('═══════════════════════════════════════════');
@@ -165,13 +284,53 @@ class AdminDashboardState extends State<AdminDashboard>
 
     ThemeProvider.instance.addListener(_onThemeChanged);
 
-    NotificationBackupService.instance.init();
-
-    _loadEmployees();
-    _setupStreams();
+    // 🎭 DEMO MODE: load sample data, DO NOT touch Firestore / Auth
+    if (_isDemo) {
+      _loadDemoData();
+    } else {
+      NotificationBackupService.instance.init();
+      _loadEmployees();
+      _setupStreams();
+    }
 
     _searchFocus.addListener(() {
       if (mounted) setState(() {});
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // DEMO DATA LOADER
+  // ═══════════════════════════════════════════════════════════════
+  void _loadDemoData() {
+    final inLogs = _demoAttendanceLogs
+        .where((l) => l['type'] == 'IN' || l['type'] == 'LOGIN')
+        .toList();
+    final outLogs = _demoAttendanceLogs
+        .where((l) => l['type'] == 'OUT' || l['type'] == 'LOGOUT')
+        .toList();
+
+    final Map<String, List<Map<String, dynamic>>> userLogs = {};
+    for (final e in _demoEmployees) {
+      final id = (e['id'] ?? '').toString();
+      userLogs[id] = _demoAttendanceLogs
+          .where((log) => (log['employee_id'] ?? '').toString() == id)
+          .toList();
+    }
+
+    setState(() {
+      _employees = List<Map<String, dynamic>>.from(_demoEmployees);
+      _locations = List<Map<String, dynamic>>.from(_demoLocations);
+      _attendanceLogs =
+      List<Map<String, dynamic>>.from(_demoAttendanceLogs);
+      _loginLogs = inLogs;
+      _logoutLogs = outLogs;
+      _regLogs = List<Map<String, dynamic>>.from(_demoRegLogs)
+        ..addAll(inLogs)
+        ..addAll(outLogs);
+      _userLogs = userLogs;
+      _loading = false;
+      _error = null;
+      _initialLoadDone = true;
     });
   }
 
@@ -271,7 +430,9 @@ class AdminDashboardState extends State<AdminDashboard>
           ],
         ),
         content: Text(
-          'You will be signed out.',
+          _isDemo
+              ? 'You will exit demo mode.'
+              : 'You will be signed out.',
           style: TextStyle(color: c.textMuted, fontSize: 13),
         ),
         actions: [
@@ -297,27 +458,31 @@ class AdminDashboardState extends State<AdminDashboard>
 
     if (confirm != true) return;
 
-    await AdminAuthService.instance.signOut();
-    if (!mounted) return;
-
-    // 🎭 Kung Demo Mode, i-off ito bago mag-sign out
-    if (DemoModeService.instance.isEnabled) {
+    // 🎭 Exit demo first (before signOut), kung naka-demo
+    if (_isDemo) {
       await DemoModeService.instance.endDemoSession();
+    } else {
+      await AdminAuthService.instance.signOut();
     }
-
     if (!mounted) return;
+
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const AdminLoginScreen(forceLogout: true)),
+      MaterialPageRoute(
+          builder: (_) => const AdminLoginScreen(forceLogout: true)),
           (_) => false,
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // SEND UPDATE — with OneSignal Push Notification
+  // ═══════════════════════════════════════════════════════════════
   void _openSendUpdateDialog(BuildContext context, AdminColors c) {
     final titleCtrl = TextEditingController();
     final messageCtrl = TextEditingController();
     String selectedType = 'announcement';
     String selectedRecipient = 'ALL';
     String selectedPriority = 'normal';
+    bool isSending = false; // 🆕 Loading state habang nagpapadala
 
     InputDecoration dropDeco(String hint) => InputDecoration(
       filled: true,
@@ -365,6 +530,7 @@ class AdminDashboardState extends State<AdminDashboard>
 
     showDialog(
       context: context,
+      barrierDismissible: false, // 🆕 Iwasan ma-close habang nagpapadala
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlgState) => AlertDialog(
           backgroundColor: c.card,
@@ -382,6 +548,26 @@ class AdminDashboardState extends State<AdminDashboard>
                   fontSize: 18,
                 ),
               ),
+              if (_isDemo) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: c.orange.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'DEMO',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      color: c.orange,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
           content: SizedBox(
@@ -391,6 +577,37 @@ class AdminDashboardState extends State<AdminDashboard>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (_isDemo)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: c.orange.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color:
+                              c.orange.withValues(alpha: 0.4)),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.visibility_off_rounded,
+                                size: 14, color: c.orange),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Demo mode — no notification will be sent.',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: c.orange,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   Text('Type',
                       style: TextStyle(
                           fontSize: 12,
@@ -417,7 +634,7 @@ class AdminDashboardState extends State<AdminDashboard>
                           value: 'general',
                           child: Text('📋 General', style: itemStyle())),
                     ],
-                    onChanged: (v) => setDlgState(
+                    onChanged: isSending ? null : (v) => setDlgState(
                             () => selectedType = v ?? 'announcement'),
                   ),
                   const SizedBox(height: 12),
@@ -458,7 +675,7 @@ class AdminDashboardState extends State<AdminDashboard>
                         );
                       }).toList(),
                     ],
-                    onChanged: (v) => setDlgState(
+                    onChanged: isSending ? null : (v) => setDlgState(
                             () => selectedRecipient = v ?? 'ALL'),
                   ),
                   const SizedBox(height: 12),
@@ -485,7 +702,7 @@ class AdminDashboardState extends State<AdminDashboard>
                           value: 'high',
                           child: Text('High', style: itemStyle())),
                     ],
-                    onChanged: (v) => setDlgState(
+                    onChanged: isSending ? null : (v) => setDlgState(
                             () => selectedPriority = v ?? 'normal'),
                   ),
                   const SizedBox(height: 12),
@@ -497,6 +714,7 @@ class AdminDashboardState extends State<AdminDashboard>
                   const SizedBox(height: 6),
                   TextField(
                     controller: titleCtrl,
+                    enabled: !isSending,
                     style: TextStyle(color: c.text),
                     cursorColor: c.orange,
                     decoration: fieldDeco('e.g. Team Meeting Tomorrow'),
@@ -511,6 +729,7 @@ class AdminDashboardState extends State<AdminDashboard>
                   TextField(
                     controller: messageCtrl,
                     maxLines: 4,
+                    enabled: !isSending,
                     style: TextStyle(color: c.text),
                     cursorColor: c.orange,
                     decoration: fieldDeco(
@@ -522,24 +741,41 @@ class AdminDashboardState extends State<AdminDashboard>
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: isSending ? null : () => Navigator.pop(ctx),
               child: Text('Cancel', style: TextStyle(color: c.muted)),
             ),
             ElevatedButton.icon(
-              onPressed: () async {
+              onPressed: isSending ? null : () async {
                 final title = titleCtrl.text.trim();
                 final message = messageCtrl.text.trim();
                 if (title.isEmpty || message.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('Please fill in both title and message.'),
+                      content:
+                      Text('Please fill in both title and message.'),
                       backgroundColor: Color(0xFFEF4444),
                     ),
                   );
                   return;
                 }
 
+                // 🎭 DEMO MODE: do not touch Firestore
+                if (_isDemo) {
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text(
+                          '🧪 Demo mode — update NOT sent (sample only).'),
+                      backgroundColor: c.orange,
+                    ),
+                  );
+                  return;
+                }
+
+                setDlgState(() => isSending = true);
+
                 try {
+                  // 1. I-save sa database para lumabas sa listahan ng employee
                   await EmployeeNotificationService.instance.send(
                     type: selectedType,
                     title: title,
@@ -548,20 +784,41 @@ class AdminDashboardState extends State<AdminDashboard>
                     priority: selectedPriority,
                   );
 
+                  // 2. I-trigger ang OneSignal Push Notification
+                  bool pushSent = false;
+                  if (selectedRecipient == 'ALL') {
+                    pushSent = await OneSignalSender.instance.sendToAll(
+                      title: title,
+                      message: message,
+                      type: selectedType,
+                    );
+                  } else {
+                    pushSent = await OneSignalSender.instance.sendToEmployee(
+                      employeeId: selectedRecipient,
+                      title: title,
+                      message: message,
+                      type: selectedType,
+                    );
+                  }
+
                   if (!ctx.mounted) return;
                   Navigator.pop(ctx);
+
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(
-                        selectedRecipient == 'ALL'
-                            ? '✅ Sent to ALL employees'
-                            : '✅ Sent to 1 employee',
+                        pushSent
+                            ? (selectedRecipient == 'ALL'
+                            ? '✅ Sent to ALL employees + Push Notification'
+                            : '✅ Sent to employee + Push Notification')
+                            : '⚠️ Saved to DB, but Push Notification failed. Check API Key.',
                       ),
-                      backgroundColor: const Color(0xFF16A34A),
+                      backgroundColor: pushSent ? const Color(0xFF16A34A) : Colors.orange,
                     ),
                   );
                 } catch (e) {
                   if (!ctx.mounted) return;
+                  setDlgState(() => isSending = false);
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text('Failed: $e'),
@@ -578,10 +835,12 @@ class AdminDashboardState extends State<AdminDashboard>
                 padding: const EdgeInsets.symmetric(
                     horizontal: 20, vertical: 12),
               ),
-              icon: const Icon(Icons.send_rounded, size: 16),
-              label: const Text(
-                'Send',
-                style: TextStyle(fontWeight: FontWeight.w700),
+              icon: isSending
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.send_rounded, size: 16),
+              label: Text(
+                isSending ? 'Sending...' : 'Send',
+                style: const TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
           ],
@@ -590,6 +849,9 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // PRESENCE & BACKUP DIALOG — force backup blocked in demo mode
+  // ═══════════════════════════════════════════════════════════════
   void _showPresenceDialog(BuildContext context, AdminColors c) {
     showModalBottomSheet(
       context: context,
@@ -629,6 +891,26 @@ class AdminDashboardState extends State<AdminDashboard>
                         color: c.text,
                       ),
                     ),
+                    if (_isDemo) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: c.orange.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'DEMO',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            color: c.orange,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 4),
@@ -646,6 +928,14 @@ class AdminDashboardState extends State<AdminDashboard>
                   color: const Color(0xFF16A34A),
                   onTap: () async {
                     Navigator.pop(ctx);
+
+                    // 🎭 DEMO MODE: do not touch real backup storage
+                    if (_isDemo) {
+                      _showSnack(
+                          '🧪 Demo mode — backup NOT created (sample only).');
+                      return;
+                    }
+
                     _showSnack('💾 Creating backup...');
                     try {
                       final count = await NotificationBackupService
@@ -758,6 +1048,11 @@ class AdminDashboardState extends State<AdminDashboard>
   }
 
   Future<void> _loadEmployees() async {
+    // 🎭 Defensive: never hit Firestore in demo mode
+    if (_isDemo) {
+      _loadDemoData();
+      return;
+    }
     try {
       final emps = await AdminDatabase.getEmployees();
       debugPrint('✅ _loadEmployees: ${emps.length} employees loaded');
@@ -782,9 +1077,13 @@ class AdminDashboardState extends State<AdminDashboard>
   }
 
   void _setupStreams() {
+    // 🎭 Defensive: skip real streams in demo mode
+    if (_isDemo) return;
+
     _empSub = AdminDatabase.streamEmployees().listen(
           (emps) {
         if (mounted) {
+          if (_isDemo) return; // safety in case demo turns on mid-stream
           if (_initialLoadDone && emps.isEmpty) return;
           setState(() {
             _employees = emps;
@@ -808,7 +1107,7 @@ class AdminDashboardState extends State<AdminDashboard>
 
     _attendanceSub = AdminDatabase.streamAttendanceLogs().listen(
           (logs) {
-        if (mounted) {
+        if (mounted && !_isDemo) {
           setState(() {
             _attendanceLogs = logs;
             _loginLogs = logs
@@ -825,7 +1124,7 @@ class AdminDashboardState extends State<AdminDashboard>
 
     _locSub = AdminDatabase.streamLocations().listen(
           (locs) {
-        if (mounted) setState(() => _locations = locs);
+        if (mounted && !_isDemo) setState(() => _locations = locs);
       },
       onError: (e) => debugPrint('Locations stream error: $e'),
     );
@@ -834,6 +1133,7 @@ class AdminDashboardState extends State<AdminDashboard>
   }
 
   Future<void> _fetchActivityLogs() async {
+    if (_isDemo) return;
     try {
       final results = await Future.wait([
         AdminDatabase.getLogs('registration'),
@@ -841,7 +1141,7 @@ class AdminDashboardState extends State<AdminDashboard>
         AdminDatabase.getLogs('logout'),
       ]);
 
-      if (mounted) {
+      if (mounted && !_isDemo) {
         setState(() {
           _regLogs = (results[0] as List).cast<Map<String, dynamic>>();
           _regLogs.addAll(_loginLogs);
@@ -871,16 +1171,19 @@ class AdminDashboardState extends State<AdminDashboard>
     if (!_initialLoadDone) {
       setState(() => _loading = true);
     }
+    // 🎭 Demo mode → reload demo data, never Firestore
+    if (_isDemo) {
+      _loadDemoData();
+      return;
+    }
     await _loadEmployees();
     _fetchActivityLogs();
   }
 
   @override
   Widget build(BuildContext context) {
-    // 🎭 1. DEMO MODE BYPASS
-    // Kung naka-Demo mode, wag na tignan ang Firebase Auth.
-    // Deretso na agad sa Dashboard Shell!
-    if (DemoModeService.instance.isEnabled) {
+    // 🎭 DEMO MODE — auth guard bypassed, real data never loaded
+    if (_isDemo) {
       return AnimatedBuilder(
         animation: ThemeProvider.instance,
         builder: (context, _) {
@@ -892,7 +1195,7 @@ class AdminDashboardState extends State<AdminDashboard>
       );
     }
 
-    // 2. NORMAL AUTH CHECK (Kung hindi Demo Mode)
+    // Normal auth path
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
@@ -1115,15 +1418,45 @@ class AdminDashboardState extends State<AdminDashboard>
         preferredSize: const Size.fromHeight(1),
         child: Container(height: 1, color: c.navBorder),
       ),
-      title: Text(
-        isTiny ? 'R.A.C.O.M.A.' : 'R.A.C.O.M.A. Admin',
-        style: TextStyle(
-          fontSize: isTiny ? 15 : (isNarrow ? 16 : 18),
-          fontWeight: FontWeight.w700,
-          color: c.accent,
-          fontFamily: 'sans-serif',
-        ),
-        overflow: TextOverflow.ellipsis,
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              isTiny ? 'R.A.C.O.M.A.' : 'R.A.C.O.M.A. Admin',
+              style: TextStyle(
+                fontSize: isTiny ? 15 : (isNarrow ? 16 : 18),
+                fontWeight: FontWeight.w700,
+                color: c.accent,
+                fontFamily: 'sans-serif',
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (_isDemo) ...[
+            const SizedBox(width: 8),
+            Tooltip(
+              message:
+              'Demo mode is ON — sample data only. Sign out to disable.',
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: c.orange.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  'DEMO',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    color: c.orange,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
       titleSpacing: wide ? null : 0,
       actions: [
@@ -1169,25 +1502,6 @@ class AdminDashboardState extends State<AdminDashboard>
             icon: Icon(Icons.campaign_rounded, size: 21, color: c.accent),
           ),
           IconButton(
-            tooltip: 'Live Presence Monitor',
-            onPressed: () => _handleNavTap(7),
-            icon: Icon(
-              Icons.radar_rounded,
-              size: 21,
-              color: c.accent,
-            ),
-          ),
-          // 🔑 NEW — Password Change Requests shortcut
-          IconButton(
-            tooltip: 'Password Change Requests',
-            onPressed: () => _handleNavTap(15),
-            icon: Icon(
-              Icons.lock_reset_rounded,
-              size: 21,
-              color: c.accent,
-            ),
-          ),
-          IconButton(
             tooltip: 'Presence & Backup',
             onPressed: () => _showPresenceDialog(context, c),
             icon: Icon(
@@ -1224,10 +1538,6 @@ class AdminDashboardState extends State<AdminDashboard>
             onSelected: (v) {
               if (v == 'send_update') {
                 _openSendUpdateDialog(context, c);
-              } else if (v == 'live_presence') {
-                _handleNavTap(7);
-              } else if (v == 'password_requests') {
-                _handleNavTap(15); // 🔑 NEW
               } else if (v == 'presence') {
                 _showPresenceDialog(context, c);
               } else if (v == 'backups') {
@@ -1245,27 +1555,6 @@ class AdminDashboardState extends State<AdminDashboard>
                       size: 18, color: c.orange),
                   const SizedBox(width: 10),
                   Text('Send Update',
-                      style: TextStyle(color: c.text, fontSize: 13)),
-                ]),
-              ),
-              PopupMenuItem(
-                value: 'live_presence',
-                child: Row(children: [
-                  Icon(Icons.radar_rounded,
-                      size: 18, color: c.orange),
-                  const SizedBox(width: 10),
-                  Text('Live Presence Monitor',
-                      style: TextStyle(color: c.text, fontSize: 13)),
-                ]),
-              ),
-              // 🔑 NEW — Password Requests
-              PopupMenuItem(
-                value: 'password_requests',
-                child: Row(children: [
-                  Icon(Icons.lock_reset_rounded,
-                      size: 18, color: c.orange),
-                  const SizedBox(width: 10),
-                  Text('Password Requests',
                       style: TextStyle(color: c.text, fontSize: 13)),
                 ]),
               ),
@@ -1614,7 +1903,7 @@ class AdminDashboardState extends State<AdminDashboard>
               ListTile(
                 leading: Icon(Icons.logout_rounded, color: c.red, size: 20),
                 title: Text(
-                  'Sign Out',
+                  _isDemo ? 'Exit Demo Mode' : 'Sign Out',
                   style: TextStyle(
                     color: c.red,
                     fontWeight: FontWeight.w600,
@@ -1674,9 +1963,6 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // BUILD PAGE — may Password Requests na
-  // ═══════════════════════════════════════════════════════════════
   Widget buildPage() {
     if (_showCreateLeave) {
       return AdminCreateLeaveRequestPage(
@@ -1734,7 +2020,7 @@ class AdminDashboardState extends State<AdminDashboard>
           userLogs: _userLogs,
           searchQuery: _search,
           onCreateLeaveRequest: _openCreateLeaveRequest,
-          onAssignClientMeeting: () => _handleNavTap(7),
+          onAssignClientMeeting: () => _handleNavTap(8), // 🐛 Fixed: tab 8
         );
       case 5:
         return AdminTrackingPage(

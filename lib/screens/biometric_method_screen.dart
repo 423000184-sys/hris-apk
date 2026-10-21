@@ -1,12 +1,14 @@
 // lib/screens/biometric_method_screen.dart
 // ═══════════════════════════════════════════════════════════════════
-// BIOMETRIC METHOD SCREEN  v1.6
+// BIOMETRIC METHOD SCREEN  v1.7
 //   - 🎭 Demo mode: navigates to the ACTUAL biometric screen (no auto clock-in)
 //   - 🔒 Requires internet connection even in Demo Mode
 //   - 🌐 All UI text in English
 //   - 🐛 FIX: Back button goes to the RECENT screen (LoginScreen),
 //          HINDI diretso sa Dashboard.
-//          (Dati kasi: fallback → LandingScreen → auto-redirect → Dashboard)
+//   - 🐛 FIX v1.7: Back arrow ↔ "Back" text alignment — pantay na sila
+//          (tinanggal ang -5 offset sa _BackArrowPainter, at
+//           explicit na center alignment sa Row).
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:math' as math;
@@ -254,8 +256,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  custom ??
-                      'Internet connection is required to continue.',
+                  custom ?? 'Internet connection is required to continue.',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
@@ -789,8 +790,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
 
     if (!_isOnlineSafely()) {
       _secureLog('🔌 Fingerprint selection BLOCKED — no internet');
-      _showOfflineSnack(
-          'Internet connection is required to continue.');
+      _showOfflineSnack('Internet connection is required to continue.');
       return;
     }
 
@@ -866,8 +866,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
 
     if (!_isOnlineSafely()) {
       _secureLog('🔌 Facial selection BLOCKED — no internet');
-      _showOfflineSnack(
-          'Internet connection is required to continue.');
+      _showOfflineSnack('Internet connection is required to continue.');
       return;
     }
 
@@ -968,22 +967,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🐛 FIXED _goBack — v1.6
-  //
-  //  ANO ANG MALI DATI:
-  //    - Fallback → LandingScreen
-  //    - LandingScreen ay may session auto-redirect logic
-  //    - Kapag may active session (halimbawa galing sa demo login),
-  //      ang LandingScreen ay mag-a-auto-redirect sa MainScreen (Dashboard)
-  //    - Kaya't ang back button ay "parang" dumiretso sa Dashboard
-  //
-  //  ANG FIX:
-  //    - Sa halip na LandingScreen, diretso sa LoginScreen ang fallback
-  //    - Ang LoginScreen ay HINDI nag-a-auto-redirect (walang session
-  //      auto-restore logic doon) kaya safe
-  //    - Kung may active session pa, i-clear muna bago mag-navigate,
-  //      para kung sakaling may auto-restore sa ibang screen, hindi
-  //      mag-o-auto-login
+  // 🐛 _goBack — v1.7
   // ═══════════════════════════════════════════════════════════════
   Future<void> _goBack() async {
     _recordUserActivity();
@@ -1007,7 +991,6 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
 
     // 🐛 WALANG previous route (na-remove ng pushAndRemoveUntil sa LoginScreen).
     //    Fallback: pumunta sa LoginScreen (NOT LandingScreen!).
-    //    Iwasan ang LandingScreen dahil may session auto-redirect siya.
     _secureLog('⬅️ No previous route — fallback to LoginScreen '
         '(demo=$_isDemo)');
 
@@ -1238,6 +1221,9 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
                       behavior: HitTestBehavior.opaque,
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
+                        // ✅ FIX v1.7: explicit vertical centering ng
+                        //           arrow box at "Back" text
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           SizedBox(
                             width: _kBackIconSize * scale,
@@ -1252,6 +1238,9 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
                               color: _white,
                               fontSize: 16 * scale,
                               fontWeight: FontWeight.w500,
+                              // ✅ FIX v1.7: height: 1.0 para walang extra
+                              //           leading — pantay sa arrow box
+                              height: 1.0,
                             ),
                           ),
                         ],
@@ -1742,23 +1731,32 @@ class _MethodButtonState extends State<_MethodButton>
 }
 
 // ═══════════════════════════════════════════════════════════════
-// _BackArrowPainter
+// _BackArrowPainter — v1.7
+//   ✅ FIX: Tinanggal ang `-5` vertical offset. Dati kasi, naka-shift
+//   pataas ang arrow (y = -0.002 → 9.994), kaya hindi siya pantay
+//   sa "Back" text na vertically centered sa Row. Ngayon naka-center
+//   na ang arrow sa 19.99×19.99 box, kaya level na silang dalawa.
 // ═══════════════════════════════════════════════════════════════
 class _BackArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
+    final s = size.width / 19.99;
+
     final paint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.66602 * (size.width / 19.99)
+      ..strokeWidth = 1.66602 * s
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-    final s = size.width / 19.99;
-    Offset p(double x, double y) => Offset(x * s, (y - 5) * s);
+
+    // ✅ FIX: Walang -5 offset — arrow ay centered sa box.
+    Offset p(double x, double y) => Offset(x * s, y * s);
+
     final path = Path()
       ..moveTo(p(12.4951, 14.9941).dx, p(12.4951, 14.9941).dy)
       ..lineTo(p(7.49707, 9.9961).dx, p(7.49707, 9.9961).dy)
       ..lineTo(p(12.4951, 4.99805).dx, p(12.4951, 4.99805).dy);
+
     canvas.drawPath(path, paint);
   }
 

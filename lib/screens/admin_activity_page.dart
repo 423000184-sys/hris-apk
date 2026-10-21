@@ -1,5 +1,5 @@
 // lib/screens/admin_activity_page.dart
-// v2.2: 🎭 Demo Mode Support (Mock Data & Action Blocking)
+// v2.3: 🔗 OneSignal Push Notifications integrated for Leave & Client Meeting Approvals.
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -13,7 +13,8 @@ import 'admin_database.dart';
 import '../services/employee_notification_service.dart';
 import '../services/admin_audit_service.dart';
 import '../services/admin_auth_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/demo_mode_service.dart';
+import '../services/onesignal_sender.dart'; // 🆕 Added for push notifications
 
 class AdminActivityPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
@@ -40,7 +41,6 @@ class AdminActivityPage extends StatefulWidget {
 class _AdminActivityPageState extends State<AdminActivityPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -74,12 +74,10 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     'All Types', 'SL', 'VL', 'EL', 'BL', 'ML', 'Others',
   ];
 
-  // 🎭 DEMO BLOCK HELPER
   void _demoBlock() {
     _toast('Action disabled in Demo Mode.', error: true);
   }
 
-  // 🎭 MOCK DATA
   List<Map<String, dynamic>> _getMockPendingLeaves() {
     final now = DateTime.now();
     return [
@@ -375,6 +373,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   }) async {
     final ctrl = TextEditingController();
     final formKey = GlobalKey<FormState>();
+
     final result = await showDialog<String>(
       context: context,
       barrierDismissible: false,
@@ -417,7 +416,11 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () {
+              // ✅ FIX: Unfocus bago i-pop ang dialog para maiwasan ang assertion error sa Web
+              FocusScope.of(ctx).unfocus();
+              Navigator.pop(ctx);
+            },
             child: Text('Cancel', style: TextStyle(color: tc.muted)),
           ),
           ElevatedButton(
@@ -427,6 +430,8 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             ),
             onPressed: () {
               if (formKey.currentState?.validate() != true) return;
+              // ✅ FIX: Unfocus bago i-pop ang dialog
+              FocusScope.of(ctx).unfocus();
               Navigator.pop(ctx, _sanitize(ctrl.text, maxLen: 300));
             },
             child: const Text('Confirm Reject'),
@@ -922,10 +927,10 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // APPROVE / REJECT CLIENT MEETING
+  // APPROVE CLIENT MEETING (With OneSignal Push)
   // ══════════════════════════════════════════════════════════════
   Future<void> _approveClientMeeting(Map<String, dynamic> meeting) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final id = (meeting['id'] ?? '').toString();
 
@@ -1001,6 +1006,14 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               employeeId: empId,
               priority: 'high',
             );
+
+            // 🆕 ONESIGNAL PUSH NOTIFICATION
+            await OneSignalSender.instance.sendToEmployee(
+              employeeId: empId,
+              title: '✅ Client Meeting Approved',
+              message: 'Approved na ang iyong client meeting sa ${_sanitize(meeting['location_name'] ?? 'N/A', maxLen: 80)}.',
+              type: 'reminder',
+            );
           }
         } catch (e) {
           debugPrint('⚠️ notify approval failed: $e');
@@ -1018,8 +1031,11 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     }
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // REJECT CLIENT MEETING (With OneSignal Push)
+  // ══════════════════════════════════════════════════════════════
   Future<void> _rejectClientMeeting(Map<String, dynamic> meeting) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final id = (meeting['id'] ?? '').toString();
     if (!_isValidDocId(id)) {
@@ -1073,6 +1089,14 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               employeeId: empId,
               priority: 'high',
             );
+
+            // 🆕 ONESIGNAL PUSH NOTIFICATION
+            await OneSignalSender.instance.sendToEmployee(
+              employeeId: empId,
+              title: '❌ Client Meeting Rejected',
+              message: 'Hindi na-approve ang iyong client meeting. Reason: $reason',
+              type: 'reminder',
+            );
           }
         } catch (e) {
           debugPrint('⚠️ notify rejection failed: $e');
@@ -1091,7 +1115,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // LEAVE APPROVE / REJECT
+  // APPROVE LEAVE REQUEST (With OneSignal Push)
   // ══════════════════════════════════════════════════════════════
   Future<void> _approveLeaveRequest(
       BuildContext context,
@@ -1099,7 +1123,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
       Map<String, dynamic> employee,
       bool isFromEmployeeCollection,
       ) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final reqId = (request['id'] ?? '').toString();
     if (!_isValidDocId(reqId)) {
@@ -1221,6 +1245,14 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             employeeId: empId,
             priority: 'high',
           );
+
+          // 🆕 ONESIGNAL PUSH NOTIFICATION
+          await OneSignalSender.instance.sendToEmployee(
+            employeeId: empId,
+            title: '✅ Leave Approved',
+            message: 'Approved na ang iyong $leaveType request ($start – $end).',
+            type: 'reminder',
+          );
         }
       } catch (e) {
         debugPrint('⚠️ Approval notification failed: $e');
@@ -1236,13 +1268,16 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     }
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // REJECT LEAVE REQUEST (With OneSignal Push)
+  // ══════════════════════════════════════════════════════════════
   Future<void> _rejectLeaveRequest(
       BuildContext context,
       Map<String, dynamic> request,
       Map<String, dynamic> employee,
       bool isFromEmployeeCollection,
       ) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final reqId = (request['id'] ?? '').toString();
     if (!_isValidDocId(reqId)) {
@@ -1335,6 +1370,14 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             'Hindi na-approve ang iyong $leaveType request ($start – $end). Reason: $reason',
             employeeId: empId,
             priority: 'high',
+          );
+
+          // 🆕 ONESIGNAL PUSH NOTIFICATION
+          await OneSignalSender.instance.sendToEmployee(
+            employeeId: empId,
+            title: '❌ Leave Rejected',
+            message: 'Hindi na-approve ang iyong $leaveType request ($start – $end). Reason: $reason',
+            type: 'reminder',
           );
         }
       } catch (e) {
@@ -1637,7 +1680,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   Widget build(BuildContext context) {
     final now = DateTime.now();
 
-    // 🎭 INTERCEPT DATA (MOCK VS ACTUAL)
     List<Map<String, dynamic>> allPendingRequests = [];
 
     if (_isDemo) {
@@ -1700,7 +1742,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
 
     final actualPendingLeaveCount = allPendingRequests.length;
 
-    // Metrics Override
     int actualOnLeaveTodayCount = 0;
     int totalEmployees = _isDemo ? 26 : widget.employees.length;
     int actualAttendanceCount = 0;
@@ -1741,12 +1782,10 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
           : 0.0;
     }
 
-    // Client Meetings Intercept
     final List<Map<String, dynamic>> displayPendingMeetings = _isDemo
         ? _getMockClientMeetings()
         : _pendingClientMeetings;
 
-    // Timeline Intercept
     final List<Map<String, dynamic>> allTimelineLogs = [];
     if (_isDemo) {
       allTimelineLogs.addAll(_getMockClientMeetings());
@@ -1793,7 +1832,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // 🎭 DEMO BANNER
                 if (_isDemo) ...[
                   _buildDemoBanner(),
                   const SizedBox(height: 24),
@@ -1834,9 +1872,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🎭 DEMO BANNER
-  // ══════════════════════════════════════════════════════════════
   Widget _buildDemoBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1878,9 +1913,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ACTIVE FILTER CHIPS
-  // ══════════════════════════════════════════════════════════════
   Widget _buildActiveFilterChips() {
     return Container(
       padding: const EdgeInsets.all(12),

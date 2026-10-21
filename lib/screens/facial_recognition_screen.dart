@@ -1,9 +1,11 @@
 // lib/screens/facial_recognition_screen.dart
-// v2.5: ⏰ Auto-schedule overtime reminders pagkatapos ng clock-in
-//       🚫 Auto-cancel kapag nag-clock out
-//       🚨 Trusted time check (anti-tamper)
-//       🌐 All UI strings in English
-//       🔒 Demo mode requires internet connection
+// v2.7: ⏱️ FIRST ATTEMPT TIME + CONSISTENT RECORDS
+//       • _effectiveAttendanceTime — single source of truth
+//       • attendance_logs / activity_logs / attendance_receipts
+//         lahat gumagamit ng FIRST ATTEMPT time (7:30), hindi success time (8:00)
+//       • _proceedToNext() → ipinapasa sa ClockInSuccessScreen
+// v2.5: ⏰ Auto-schedule overtime reminders, 🚫 Auto-cancel sa clock-out
+//       🚨 Trusted time check, 🌐 English UI, 🔒 Demo mode requires internet
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -82,7 +84,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   bool get _isChallenge => widget.challenge != null;
 
-  // 🎭 DEMO MODE
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
   _FaceState _faceState = _FaceState.idle;
@@ -177,6 +178,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   bool _cancelRecorded = false;
 
+  // ⏱️ FIRST ATTEMPT TIMESTAMP — naka-save kapag unang pindot ng scan.
+  //    Ginagamit sa attendance log kapag nag-success (kahit nag-retry).
+  DateTime? _firstAttemptTime;
+
   _NetState _networkState = _NetState.online;
   String _networkErrorMessage = 'No internet connection.';
   bool _showOfflineOverlay = false;
@@ -218,7 +223,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   static const _warning = Color(0xFFFFCC00);
   static const _verifiedGreen = Color(0xFF51FF00);
 
-  // 🎨 DEMO — ORANGE (matches app theme)
   static const _demoAccent = Color(0xFFFF8A00);
   static const _demoAccentMid = Color(0xFFFA6A00);
   static const _demoAccentDark = Color(0xFFF54900);
@@ -288,15 +292,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _ringCtrl.repeat();
     _fadeCtrl.forward();
 
-    // 🎭 DEMO MODE — skip security bootstrap at listeners
     if (_isDemo) {
-      _secureLog('═══════════════════════════════════════════');
-      _secureLog('🎭 [DemoMode] FacialRecognitionScreen');
-      _secureLog('   • Skipping security bootstrap');
-      _secureLog('   • Real camera + liveness (always pass)');
-      _secureLog('   • 🔒 Requires internet connection');
-      _secureLog('═══════════════════════════════════════════');
-
+      _secureLog('🎭 [DemoMode] FacialRecognitionScreen — internet required');
       _authMode = _AuthMode.verify;
       _preAuthValid = true;
       _networkState = _NetState.online;
@@ -313,7 +310,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         _secureLog('⚠️ connectivity listen error: $e');
       }
 
-      // Sync initial connectivity state
       try {
         final online = ConnectivityService.instance.isOnline;
         _networkState = online ? _NetState.online : _NetState.offline;
@@ -326,7 +322,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return;
     }
 
-    // NORMAL MODE
     _loadDeviceModel();
     _bootstrapSecurity();
     _subscribePendingCount();
@@ -339,8 +334,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             if (!online) {
               setState(() {
                 _networkState = _NetState.offline;
-                _networkErrorMessage =
-                'No internet connection.\n\n'
+                _networkErrorMessage = 'No internet connection.\n\n'
                     'You can still clock in — records will be saved locally '
                     'and synced automatically when you\'re back online.';
                 _showOfflineOverlay = false;
@@ -366,6 +360,32 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   // ══════════════════════════════════════════════════════════
+  // ⏱️ FIRST ATTEMPT HELPERS
+  // ══════════════════════════════════════════════════════════
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  void _resetFirstAttempt() {
+    _firstAttemptTime = null;
+  }
+
+  /// ⏱️ ISANG SOURCE OF TRUTH para sa effective attendance time.
+  ///    Ginagamit ito sa:
+  ///    • attendance_logs (timestamp, date, time)
+  ///    • activity_logs (timestamp, first_attempt_at, success_at)
+  ///    • attendance_receipts (arrivalTime, receiptHash)
+  ///    • ClockInSuccessScreen (arrivalTime)
+  ///    • PresenceChallengeService.scheduleForToday (clockInAt)
+  DateTime get _effectiveAttendanceTime {
+    final now = DateTime.now();
+    if (_firstAttemptTime != null && _isSameDay(_firstAttemptTime!, now)) {
+      return _firstAttemptTime!;
+    }
+    return now;
+  }
+
+  // ══════════════════════════════════════════════════════════
   // 🔌 OFFLINE HELPERS
   // ══════════════════════════════════════════════════════════
   void _showOfflineSnack([String? custom]) {
@@ -381,8 +401,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  custom ??
-                      'Internet connection is required for Demo Mode.',
+                  custom ?? 'Internet connection is required for Demo Mode.',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
@@ -524,8 +543,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!hasNet) {
       setState(() {
         _networkState = _NetState.offline;
-        _networkErrorMessage =
-        'No internet connection.\n\n'
+        _networkErrorMessage = 'No internet connection.\n\n'
             'You can still clock in — records will be saved locally '
             'and synced automatically when you\'re back online.';
         _showOfflineOverlay = false;
@@ -897,28 +915,23 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   // ══════════════════════════════════════════════════════════
-  // 🎭 START SCAN — DEMO: real camera + liveness, requires internet
+  // START SCAN
   // ══════════════════════════════════════════════════════════
   Future<void> _startScan() async {
     if (!mounted || _isScanning || _isCheckingTemplate) return;
     if (_authMode == _AuthMode.unknown) return;
 
+    // ⏱️ FIRST ATTEMPT TIME — naka-lock sa unang pindot, hindi na magbabago
+    //    kahit mag-retry (para ang 7:30 attempt ay 7:30 pa rin kahit 8:00 success).
+    _firstAttemptTime ??= DateTime.now();
+    _secureLog('⏱️ [Attempt] First attempt recorded: $_firstAttemptTime');
+
     if (_isDemo) {
-      _secureLog('═══════════════════════════════════════════');
-      _secureLog('🎭 [DemoMode] _startScan() STARTED');
-      _secureLog('═══════════════════════════════════════════');
-
       final online = _isOnlineSafely();
-      _secureLog('🎭 [DemoMode] online check = $online');
-
       if (!online) {
-        _secureLog('🎭 [DemoMode] ⛔ BLOCKED — no internet connection');
-        _showOfflineSnack(
-            'Internet connection is required for Demo Mode.');
+        _showOfflineSnack('Internet connection is required for Demo Mode.');
         return;
       }
-
-      _secureLog('🎭 [DemoMode] Real camera + liveness — always pass');
 
       _isScanning = true;
       _blinkDone = false;
@@ -947,7 +960,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       }
 
       if (!cameraOk) {
-        _secureLog('🎭 [DemoMode] No camera — auto-succeed fallback');
         await Future.delayed(const Duration(milliseconds: 1500));
         if (!mounted) return;
 
@@ -988,7 +1000,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return;
     }
 
-    // NORMAL MODE
     if (!_preAuthValid) {
       _onFailure('Security check failed. Please log in again.');
       return;
@@ -1042,7 +1053,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!mounted) return;
 
     if (_isDemo && !_isOnlineSafely()) {
-      _secureLog('🎭 [DemoMode] _demoAutoSucceed — offline, blocking');
       _isScanning = false;
       _scanLineCtrl.stop();
       setState(() {
@@ -1077,7 +1087,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!mounted) return;
 
     if (_isDemo && !_isOnlineSafely()) {
-      _secureLog('🎭 [DemoMode] Lost internet before navigation');
       setState(() {
         _faceState = _FaceState.idle;
         _errorMessage = null;
@@ -1114,12 +1123,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       if (!hasTemplate) {
         final hasPhoto = status['hasPhotoUrl'] == true;
         if (hasPhoto && NetworkGuard.instance.isOnline) {
-          _secureLog('🔧 Attempting self-heal from photoUrl...');
           final healed =
           await FaceMatcher.autoUpgradeFromExistingPhoto(widget.employee.id);
           if (healed) _selfHealTriggered = true;
-        } else if (hasPhoto) {
-          _secureLog('📴 Offline — skipping self-heal');
         }
       }
     } catch (e) {
@@ -1132,7 +1138,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   Future<void> _runMockScan() async {
     if (_isDemo) return;
 
-    _secureLog('🌐 [Web] Starting mock scan');
     while (mounted && _isScanning) {
       await Future.delayed(const Duration(milliseconds: _webDetectIntervalMs));
       if (!mounted || !_isScanning) return;
@@ -1225,7 +1230,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     try {
       final width = image.width;
       final height = image.height;
-
       if (width <= 0 || height <= 0) return null;
 
       if (image.planes.length == 1) {
@@ -1251,17 +1255,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         final uPlane = image.planes[1];
         final vPlane = image.planes[2];
 
-        if (yPlane.bytes.length < width * height) {
-          return null;
-        }
-        if (uPlane.bytes.isEmpty || vPlane.bytes.isEmpty) {
-          return null;
-        }
+        if (yPlane.bytes.length < width * height) return null;
+        if (uPlane.bytes.isEmpty || vPlane.bytes.isEmpty) return null;
 
         final int yRowStride = yPlane.bytesPerRow;
         final int uvRowStride = uPlane.bytesPerRow;
         final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
-
         if (uvPixelStride == 0) return null;
 
         final nv21 = Uint8List(width * height * 3 ~/ 2);
@@ -1405,11 +1404,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             if (mounted) {
               setState(() {
                 _faceWarning = _FaceWarning.none;
-                _enrollHint =
-                'Good! Hold steady — capturing 3 samples.';
+                _enrollHint = 'Good! Hold steady — capturing 3 samples.';
               });
             }
-            _secureLog('✅ [Enroll] Blink detected — auto-capture 3 samples');
           }
         }
       } else {
@@ -1453,7 +1450,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _isSavingEnroll = false;
 
       if (!result.success) {
-        _secureLog('❌ [Enroll] Save failed: ${result.error}');
         if (mounted) {
           setState(() {
             _enrollHint = 'Capture failed. Try again — look at the camera.';
@@ -1468,8 +1464,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       if (!mounted) return;
 
       if (_enrollCaptureCount >= _requiredEnrollCaptures) {
-        _secureLog('🎉 [Enroll] Complete — $_enrollCaptureCount samples');
-
         await _camCtrl!.stopImageStream();
         _isScanning = false;
         _scanLineCtrl.stop();
@@ -1562,7 +1556,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             _closedFrames = 0;
             _openFramesAfterClose = 0;
             _livenessStep = _LivenessStep.smile;
-            _secureLog('✅ [Verify] Blink detected — now smile');
           }
         }
       } else {
@@ -1574,7 +1567,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     } else if (_livenessStep == _LivenessStep.smile && !_smileDone) {
       if (smile > _smileThreshold) {
         _smileDone = true;
-        _secureLog('✅ [Verify] Smile detected — verifying...');
         await _camCtrl!.stopImageStream();
         _isScanning = false;
         _scanLineCtrl.stop();
@@ -1612,7 +1604,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
 
     _verifyAttempts++;
-    _secureLog('🔁 [Verify] Failed attempt $_verifyAttempts/$_maxVerifyAttempts');
 
     if (_verifyAttempts < _maxVerifyAttempts) {
       if (!mounted) return;
@@ -1670,12 +1661,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final rightEye = face.landmarks[FaceLandmarkType.rightEye];
     final nose = face.landmarks[FaceLandmarkType.noseBase];
 
-    if (leftEye == null || rightEye == null) {
-      return _FaceWarning.occluded;
-    }
-    if (nose == null) {
-      return _FaceWarning.occluded;
-    }
+    if (leftEye == null || rightEye == null) return _FaceWarning.occluded;
+    if (nose == null) return _FaceWarning.occluded;
 
     if (!kIsWeb && image.planes.isNotEmpty) {
       final brightness = _estimateBrightness(image);
@@ -1713,9 +1700,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     if (!kIsWeb && image.planes.isNotEmpty) {
       final sharp = _estimateSharpness(image);
-      if (sharp < _verifyMinSharpness) {
-        return _FaceWarning.blurry;
-      }
+      if (sharp < _verifyMinSharpness) return _FaceWarning.blurry;
 
       final brightness = _estimateBrightness(image);
       if (brightness < 25) return _FaceWarning.tooDark;
@@ -1799,7 +1784,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   Future<bool> _verifyFaceMatch() async {
     if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping FaceMatcher — auto PASS');
       _matchScore = 1.0;
       _matchPercent = 100.0;
       _faceMatched = true;
@@ -1812,9 +1796,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       if (_deviceCompromised) return false;
 
       final threshold = _effectiveThreshold();
-      _secureLog('🔍 [Verify] Effective threshold: '
-          '${threshold.toStringAsFixed(3)}');
-
       final List<double> scores = [];
       final List<Uint8List> frames = [];
 
@@ -1836,10 +1817,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         }
       }
 
-      if (frames.isEmpty) {
-        _secureLog('❌ [Verify] No frames captured');
-        return false;
-      }
+      if (frames.isEmpty) return false;
 
       double bestScore = 0.0;
       for (final bytes in frames) {
@@ -1871,13 +1849,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _matchPercent = blended * 100.0;
       _faceMatched = blended >= threshold;
 
-      _secureLog('🔍 [Verify] samples=${scores.length} '
-          'avg=${avg.toStringAsFixed(3)} '
-          'best=${bestScore.toStringAsFixed(3)} '
-          'blended=${blended.toStringAsFixed(3)} '
-          'threshold=${threshold.toStringAsFixed(3)} '
-          'matched=$_faceMatched');
-
       return _faceMatched;
     } catch (e) {
       _secureLog('⚠️ verify error: $e');
@@ -1904,7 +1875,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         details: 'Challenge ${widget.challenge!.id} FAILED — '
             'face mismatch (${_matchPercent.toStringAsFixed(1)}%)',
       ));
-
       _cancelRecorded = true;
     }
 
@@ -1934,6 +1904,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return;
     }
 
+    // ⏱️ HINDI nire-reset ang _firstAttemptTime — mananatili para sa retry.
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted && _faceState == _FaceState.error) {
         setState(() {
@@ -1948,7 +1919,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   Future<bool> _checkRoleAndGeofence() async {
     if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Bypassing geofence check');
       if (mounted) setState(() => _isCheckingGeofence = false);
       return true;
     }
@@ -1976,7 +1946,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       }
 
       if (_isOffline && geoResult == null) {
-        _secureLog('📴 [Face] Offline — allowing with pending geofence');
         _geofenceVerifiedOffline = true;
         if (mounted) setState(() => _isCheckingGeofence = false);
         return true;
@@ -2058,35 +2027,24 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     return 'inside';
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // ⏰ OVERTIME REMINDERS + 🚨 TRUSTED TIME
-  //    • Clock IN → schedule reminders + tamper check
-  //    • Clock OUT → cancel reminders
-  // ═══════════════════════════════════════════════════════════
   Future<void> _onAttendanceTypeDetermined({
     required bool isClockIn,
     required String employeeId,
     required String employeeName,
   }) async {
-    if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping OT reminders + time check');
-      return;
-    }
+    if (_isDemo) return;
 
     try {
       if (isClockIn) {
-        // ⏰ Auto-schedule OT reminders (per-employee shift end from Firestore)
         try {
           await OvertimeReminderService.instance.scheduleForEmployee(
             employeeId: employeeId,
             maxOvertimeHours: 6,
           );
-          _secureLog('⏰ [Face] OT reminders scheduled for $employeeId');
         } catch (e) {
           _secureLog('⚠️ [Face] OT schedule failed: $e');
         }
 
-        // 🚨 Anti-tamper: check device time vs server time
         try {
           await TrustedTimeService.instance.syncWithServer(force: true);
           if (TrustedTimeService.instance.isTampered) {
@@ -2095,16 +2053,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               employeeName: employeeName,
               context: 'clock_in_facial',
             );
-            _secureLog('🚨 [Face] Time tampering detected on clock-in');
           }
         } catch (e) {
           _secureLog('⚠️ [Face] Time check failed: $e');
         }
       } else {
-        // 🚫 Nag-clock out na → cancel lahat ng OT reminders
         try {
           await OvertimeReminderService.instance.cancelAll();
-          _secureLog('🚫 [Face] OT reminders cancelled');
         } catch (e) {
           _secureLog('⚠️ [Face] OT cancel failed: $e');
         }
@@ -2114,11 +2069,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // ⏱️ ATTENDANCE LOG — gumagamit ng _effectiveAttendanceTime
+  //    (first attempt kung same day, else now)
+  // ═══════════════════════════════════════════════════════════
   Future<void> _writeAttendanceLog() async {
-    if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping attendance log write');
-      return;
-    }
+    if (_isDemo) return;
 
     try {
       final employeeId = _employeeIdForAttendance;
@@ -2129,25 +2085,33 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final attendanceType = alreadyClockedIn ? 'OUT' : 'IN';
       final isClockIn = attendanceType == 'IN';
 
+      // ⏱️ SINGLE SOURCE OF TRUTH — first attempt (7:30), hindi success (8:00)
       final now = DateTime.now();
-      final todayStr = now.toIso8601String().substring(0, 10);
-      final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
-          '${now.minute.toString().padLeft(2, '0')}:'
-          '${now.second.toString().padLeft(2, '0')}';
+      final effectiveTime = _effectiveAttendanceTime;
+
+      final todayStr = effectiveTime.toIso8601String().substring(0, 10);
+      final timeStr = '${effectiveTime.hour.toString().padLeft(2, '0')}:'
+          '${effectiveTime.minute.toString().padLeft(2, '0')}:'
+          '${effectiveTime.second.toString().padLeft(2, '0')}';
+
+      final delayMinutes = now.difference(effectiveTime).inMinutes;
+
+      _secureLog('⏱️ [Attendance] effectiveTime=$effectiveTime '
+          '(firstAttempt=$_firstAttemptTime, successAt=$now, '
+          'delay=${delayMinutes}m)');
 
       final employeeName = widget.employee.fullName;
       final employeeEmail = widget.employee.email;
       final deviceName = _deviceModel;
       final zoneType = _computeZoneType();
 
-      final remarks = _geofenceVerifiedOffline
+      final baseRemarks = _geofenceVerifiedOffline
           ? 'face_match:${_matchPercent.toStringAsFixed(0)}|pending_geofence_verification'
           : 'face_match:${_matchPercent.toStringAsFixed(0)}';
+      final remarks = delayMinutes >= 1
+          ? '$baseRemarks|first_attempt_delay:${delayMinutes}m'
+          : baseRemarks;
 
-      // ═══════════════════════════════════════════════════════════
-      // ⏰ Schedule / Cancel OT reminders + Trusted time check
-      //    Tawagin bago mag-log para hindi ma-block ng anumang error
-      // ═══════════════════════════════════════════════════════════
       await _onAttendanceTypeDetermined(
         isClockIn: isClockIn,
         employeeId: employeeId,
@@ -2162,13 +2126,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           employeeName: employeeName,
           employeeEmail: employeeEmail,
           type: attendanceType,
-          timestamp: now,
+          timestamp: effectiveTime, // ⏱️ FIRST ATTEMPT
           device: deviceName,
           remarks: remarks,
           zoneType: zoneType,
         );
-        _secureLog(
-            '💾 [Face] Local save: queued=${offlineResult.queued} id=${offlineResult.localId}');
       } catch (e) {
         _secureLog('❌ [Face] OfflineAttendanceService failed: $e');
         await _logSecurityEvent(
@@ -2183,7 +2145,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           NetworkGuard.instance.isOnline;
 
       if (!needsDirectWrite) {
-        _secureLog('📥 [Face] Attendance queued — skipping Firestore');
         await _emitPendingCount();
         return;
       }
@@ -2196,6 +2157,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         'date': todayStr,
         'time': timeStr,
         'timestamp': FieldValue.serverTimestamp(),
+        // ⏱️ Audit fields — first attempt vs success
+        'first_attempt_at': Timestamp.fromDate(effectiveTime),
+        'success_at': Timestamp.fromDate(now),
+        'attempt_delay_minutes': delayMinutes,
         'device': deviceName,
         'device_binding': _deviceBinding,
         'zone_type': zoneType,
@@ -2228,6 +2193,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         'zone_type': zoneType,
         'time': timeStr,
         'date': todayStr,
+        'first_attempt_at': Timestamp.fromDate(effectiveTime),
+        'success_at': Timestamp.fromDate(now),
+        'attempt_delay_minutes': delayMinutes,
         'device': deviceName,
         'device_binding': _deviceBinding,
         'device_compromised': _deviceCompromised,
@@ -2242,7 +2210,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             .collection('activity_logs')
             .add(activityPayload);
       } catch (e) {
-        _secureLog('⚠️ activity_logs FAILED: $e');
         try {
           await OfflineAttendanceService.instance.enqueue(
             collection: 'activity_logs',
@@ -2255,7 +2222,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         try {
           unawaited(PresenceChallengeService.instance.scheduleForToday(
             employeeId: employeeId,
-            clockInAt: now,
+            clockInAt: effectiveTime, // ⏱️ First attempt time
             employeeName: employeeName,
           ));
         } catch (e) {
@@ -2319,7 +2286,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!mounted) return;
 
     if (_isDemo && !_isOnlineSafely()) {
-      _secureLog('🎭 [DemoMode] Lost internet before navigation');
       _showOfflineSnack(
           'No internet connection. Internet is required to continue.');
       setState(() {
@@ -2337,44 +2303,34 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   Future<void> _finishChallenge() async {
     if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping challenge finish — pop true');
       await Future.delayed(const Duration(milliseconds: 800));
       if (!mounted) return;
-
       if (!_isOnlineSafely()) {
         _showOfflineSnack(
             'No internet connection. Internet is required to continue.');
         return;
       }
-
       Navigator.of(context).pop(true);
       return;
     }
 
     if (!mounted) return;
     final ch = widget.challenge!;
-
     _cancelRecorded = true;
-
-    _secureLog('🎯 [Challenge] Verifying geofence...');
 
     final canProceed = await _checkRoleAndGeofence();
     if (!canProceed) {
-      _secureLog('⚠️ [Challenge] Geofence failed — recording FAILED');
-
       unawaited(PresenceChallengeService.instance.recordFailedAttempt(
         ch,
         faceScore: _matchPercent,
         reason: 'geofence_failed_at_verify',
       ));
-
       await _logSecurityEvent(
         type: 'challenge_failed_geofence',
         severity: 'high',
         details:
         'Challenge ${ch.id} FAILED — outside work zone at verification',
       );
-
       await Future.delayed(const Duration(seconds: 2));
       if (!mounted) return;
       Navigator.of(context).pop(false);
@@ -2399,10 +2355,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             'verificationMode': 'offline',
           },
         );
-        _secureLog('📥 [Challenge] Queued passed (offline)');
-      } catch (e) {
-        _secureLog('⚠️ [Challenge] Queue failed: $e');
-      }
+      } catch (_) {}
     } else {
       try {
         await PresenceChallengeService.instance.submitPassed(
@@ -2411,13 +2364,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           zone: zone,
           deviceBinding: _deviceBinding,
         );
-      } catch (e) {
-        _secureLog('⚠️ [Challenge] submitPassed failed: $e');
-      }
+      } catch (_) {}
     }
-
-    _secureLog('✅ [Challenge] PASSED for ${widget.employee.id} '
-        '(score=${_matchPercent.toStringAsFixed(1)}%, zone=$zone)');
 
     await _logSecurityEvent(
       type: 'challenge_passed',
@@ -2431,6 +2379,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     Navigator.of(context).pop(true);
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // ⏱️ PROCEED TO NEXT — ipinapasa ang _effectiveAttendanceTime
+  //    sa ClockInSuccessScreen (hindi widget.arrivalTime) para
+  //    consistent ang lahat ng records (attendance + receipt + hash)
+  // ═══════════════════════════════════════════════════════════
   void _proceedToNext() {
     if (!mounted) return;
     final navigator = Navigator.of(context);
@@ -2439,7 +2392,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       MaterialPageRoute(
         builder: (_) => ClockInSuccessScreen(
           employee: widget.employee,
-          arrivalTime: widget.arrivalTime,
+          // ✅ First attempt time (hindi widget.arrivalTime) → pareho sa
+          //    attendance_logs.timestamp at attendance_receipts.arrivalTime
+          arrivalTime: _effectiveAttendanceTime,
           faceMatchPercent: _matchPercent,
           verificationMethod:
           _authMode == _AuthMode.enroll ? 'face_enrolled' : 'face_match',
@@ -2471,6 +2426,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       details: msg,
     ));
 
+    // ⏱️ HINDI nire-reset ang _firstAttemptTime — para sa retry.
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted && _faceState == _FaceState.error) {
         setState(() {
@@ -2502,9 +2458,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     await _stopAllCameraOperations();
 
     if (_isChallenge && !_cancelRecorded && !_isDemo) {
-      _secureLog('🚪 [Challenge] User tapped Back — recording cancellation');
       await _recordChallengeFailure('user_tapped_back');
     }
+
+    // ⏱️ Bagong session — i-reset ang first attempt.
+    _resetFirstAttempt();
 
     if (!mounted) return;
 
@@ -2523,9 +2481,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     await _stopAllCameraOperations();
 
     if (_isChallenge && !_cancelRecorded && !_isDemo) {
-      _secureLog('🚪 [Challenge] User tapped Cancel — recording cancellation');
       await _recordChallengeFailure('user_tapped_cancel');
     }
+
+    // ⏱️ Bagong session — i-reset ang first attempt.
+    _resetFirstAttempt();
 
     if (!mounted) return;
     setState(() => _cancelPressed = true);
@@ -2621,13 +2581,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           decoration: BoxDecoration(
             color: Colors.orange.shade700,
             borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.25),
-                blurRadius: 6,
-                offset: const Offset(0, 2),
-              ),
-            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -3812,9 +3765,8 @@ class _VerifiedBadgePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final s = size.width / 112;
-    Offset p(double x, double y) => Offset(x * s, y * s);
-    final frameRect = Rect.fromLTRB(p(1.5, 1.5).dx, p(1.5, 1.5).dy,
-        p(110.496, 110.496).dx, p(110.496, 110.496).dy);
+    final frameRect = Rect.fromLTRB(
+        1.5 * s, 1.5 * s, 110.496 * s, 110.496 * s);
     final rrect = RRect.fromRectAndRadius(frameRect, Radius.circular(14.5 * s));
     canvas.drawRRect(rrect, Paint()..color = Colors.white);
     canvas.drawRRect(

@@ -1,5 +1,5 @@
 // lib/screens/admin_payroll_management_page.dart
-// v2.3: 🎭 Demo Mode Support (Mock Breakdown & Action Blocking)
+// v2.4: 🔓 Added "Unlock Payslip" button to allow manual download for employees.
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
@@ -18,6 +18,7 @@ import '../services/employee_notification_service.dart';
 import '../services/attendance_hours_service.dart';
 import '../services/admin_auth_service.dart';
 import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/onesignal_sender.dart'; // 🆕 Added for push
 
 class AdminPayrollManagementPage extends StatefulWidget {
   final Map<String, dynamic> employeeData;
@@ -52,6 +53,7 @@ class _AdminPayrollManagementPageState
   bool _loading = true;
   bool _printing = false;
   bool _downloading = false;
+  bool _unlockingPayslip = false; // 🆕 For unlocking state
 
   // ─── SECURITY GUARDS ────────────────────────────────────────
   final _SecurityGuard _guard = _SecurityGuard();
@@ -305,8 +307,6 @@ class _AdminPayrollManagementPageState
       setState(() {
         _isAdminVerified = true;
         _b = _getMockBreakdown();
-        // ✅ FIXED: totalRawMinutes provided (net 9312 + lunch 1056 = 10368)
-        //           and dailyBreakdown provided so the constructor is complete.
         _hours = const EmployeeHoursSummary(
           totalRawMinutes: 10368,
           totalLunchDeductedMinutes: 1056,
@@ -399,6 +399,71 @@ class _AdminPayrollManagementPageState
   }
 
   // ══════════════════════════════════════════════════════════════
+  // 🔓 UNLOCK PAYSLIP (Allow employee to download)
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _handleUnlockPayslip() async {
+    if (_isDemo) return _demoBlock();
+    if (_unlockingPayslip) return;
+
+    final ok = await _ensureAdmin();
+    if (!ok) {
+      _toast('No permission.', error: true);
+      return;
+    }
+
+    if (!_guard.tryAcquire('unlock_payslip')) {
+      _toast('Please wait a moment.', error: true);
+      return;
+    }
+
+    setState(() => _unlockingPayslip = true);
+
+    try {
+      final docId = widget.employeeData['id']?.toString() ?? _employeeId;
+      if (docId.isEmpty || docId == '—') throw Exception('Invalid employee ID');
+
+      // Update Firestore to unlock the payslip
+      await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(docId)
+          .update({
+        'payslipUnlocked': true,
+        'payslipUnlockedAt': FieldValue.serverTimestamp(),
+        'payslipUnlockedBy': FirebaseAuth.instance.currentUser?.uid,
+        'payslipUnlockedPeriod': _periodLabel,
+      }).timeout(const Duration(seconds: 10));
+
+      unawaited(_audit(
+        action: 'unlock_payslip',
+        targetId: docId,
+        targetType: 'employee_payslip',
+        metadata: {'employee_name': _name, 'period': _periodLabel},
+      ));
+
+      if (!mounted) return;
+      _toast('✅ Payslip unlocked for $_name.', success: true);
+
+      // Send push notification to employee
+      try {
+        await OneSignalSender.instance.sendToEmployee(
+          employeeId: docId, // or employeeId depending on your logic
+          title: '🔓 Payslip Unlocked',
+          message: 'Your payslip for $_periodLabel is now available for download.',
+          type: 'payroll',
+        );
+      } catch (e) {
+        debugPrint('⚠️ Push failed: $e');
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('❌ [UnlockPayslip] error: $e');
+      if (!mounted) return;
+      _toast('Failed to unlock: ${_safeError(e)}', error: true);
+    } finally {
+      if (mounted) setState(() => _unlockingPayslip = false);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
   // 📄 PDF GENERATION
   // ══════════════════════════════════════════════════════════════
   Future<Uint8List> _generatePdf() async {
@@ -448,7 +513,6 @@ class _AdminPayrollManagementPageState
           pw.SizedBox(height: 12),
           pw.Container(height: 2, color: PdfColors.orange800),
           pw.SizedBox(height: 16),
-
           pw.Container(
             padding: const pw.EdgeInsets.all(12),
             decoration: pw.BoxDecoration(
@@ -502,7 +566,6 @@ class _AdminPayrollManagementPageState
             ),
           ),
           pw.SizedBox(height: 20),
-
           _pdfSection('WORK HOURS', [
             _pdfRow('Total Raw Hours', _hours.rawDisplay),
             if (_hours.totalLunchDeductedMinutes > 0)
@@ -512,7 +575,6 @@ class _AdminPayrollManagementPageState
               _pdfRow('Overtime', '+${_hours.overtimeDisplay}'),
           ]),
           pw.SizedBox(height: 14),
-
           _pdfSection('EARNINGS', [
             _pdfRow('Basic Salary', PayrollCalculator.peso(_b.basicSalary)),
             _pdfRow('Allowances',
@@ -524,7 +586,6 @@ class _AdminPayrollManagementPageState
                 bold: true),
           ]),
           pw.SizedBox(height: 14),
-
           _pdfSection('DEDUCTIONS', [
             if (_b.absentDays > 0)
               _pdfRow('Absences (${_b.absentDays} day/s)',
@@ -537,7 +598,6 @@ class _AdminPayrollManagementPageState
                 bold: true),
           ]),
           pw.SizedBox(height: 24),
-
           pw.Container(
             padding: const pw.EdgeInsets.all(16),
             decoration: pw.BoxDecoration(
@@ -617,7 +677,7 @@ class _AdminPayrollManagementPageState
   // 🖨️ PRINT
   // ══════════════════════════════════════════════════════════════
   Future<void> _handlePrint() async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
     if (_printing) return;
 
     final ok = await _ensureAdmin();
@@ -671,7 +731,7 @@ class _AdminPayrollManagementPageState
   // 💾 DOWNLOAD
   // ══════════════════════════════════════════════════════════════
   Future<void> _handleDownload() async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
     if (_downloading) return;
 
     final ok = await _ensureAdmin();
@@ -734,9 +794,6 @@ class _AdminPayrollManagementPageState
     final now = DateTime.now();
     if (_lastNotifyAt != null &&
         now.difference(_lastNotifyAt!) < _notifyCooldown) {
-      if (kDebugMode) {
-        debugPrint('🚫 [PayrollMgmt] Notify cooldown active — skipping');
-      }
       return;
     }
 
@@ -758,14 +815,8 @@ class _AdminPayrollManagementPageState
           'period': _periodLabel,
         },
       ));
-
-      if (kDebugMode) {
-        debugPrint('✅ [PayrollMgmt] Employee notified');
-      }
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint('⚠️ [PayrollMgmt] Employee notification failed: $e');
-      }
+      if (kDebugMode) debugPrint('⚠️ [PayrollMgmt] Employee notification failed: $e');
     }
   }
 
@@ -856,7 +907,6 @@ class _AdminPayrollManagementPageState
     );
   }
 
-  // 🎭 DEMO BANNER
   Widget _buildDemoBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1024,6 +1074,31 @@ class _AdminPayrollManagementPageState
             spacing: 10,
             runSpacing: 8,
             children: [
+              // 🆕 UNLOCK PAYSLIP BUTTON
+              OutlinedButton.icon(
+                onPressed: (_unlockingPayslip || _isDemo) ? null : _handleUnlockPayslip,
+                icon: _unlockingPayslip
+                    ? SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: tc.blue),
+                )
+                    : Icon(Icons.lock_open_rounded, size: 16,
+                    color: _isDemo ? tc.muted : tc.blue),
+                label: Text(_unlockingPayslip ? 'Unlocking...' : 'Unlock Payslip',
+                    style: TextStyle(
+                        color: _isDemo ? tc.muted : tc.blue,
+                        fontWeight: FontWeight.w600)),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: tc.blue),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+              ),
+
               OutlinedButton.icon(
                 onPressed: (_printing || _isDemo) ? null : _handlePrint,
                 icon: _printing
@@ -1537,9 +1612,6 @@ class _AdminPayrollManagementPageState
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// 🆕 RATE LIMITER
-// ═══════════════════════════════════════════════════════════════════
 class _SecurityGuard {
   final Map<String, DateTime> _lastCall = {};
   static const Duration _minInterval = Duration(seconds: 3);

@@ -1,13 +1,12 @@
 // lib/screens/employee_notifications_screen.dart
-// ═══════════════════════════════════════════════════════════════════
-// EMPLOYEE NOTIFICATIONS SCREEN  v1.4
-//   - 🎭 DEMO MODE now shows the SAME skeleton loading screen as normal mode.
-//   - Added 'support_reply' and 'support_resolved' types
-//   - 🎭 DEMO MODE: fake notifications, no Firestore stream, no writes
-//   - FIX: local _withRead() helper replaces missing copyWith()
-// ═══════════════════════════════════════════════════════════════════
+// v1.5: 🗑️ DELETE support — individual, multi-select, and delete-all
+//       • Long-press to enter selection mode
+//       • "Select all" + "Delete selected" in AppBar
+//       • Popup menu with "Mark all read" + "Delete all"
+//       • PopScope: back button exits selection mode (hindi nagsasara ng screen)
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../models/employee_notification.dart';
@@ -19,6 +18,9 @@ import '../widgets/skeleton_screens.dart';
 // HAND WATERMARK
 // ═══════════════════════════════════════════════════════════════
 const String _kLogoAsset = 'assets/images/logo.png';
+
+// ⚠️ CHANGE THIS kung iba ang collection name sa Firestore
+const String _kNotificationsCollection = 'notifications';
 
 double _degToRad(double deg) => deg * 3.1415926535 / 180;
 
@@ -77,10 +79,12 @@ class _EmployeeNotificationsScreenState
   bool _isInitialLoading = true;
   StreamSubscription<bool>? _networkSub;
 
-  // 🆕 Demo skeleton display duration
+  // 🆕 Selection state
+  final Set<String> _selectedIds = <String>{};
+  bool get _isSelectionMode => _selectedIds.isNotEmpty;
+
   static const Duration _demoSkeletonDuration = Duration(milliseconds: 900);
 
-  // 🎭 DEMO state
   late List<EmployeeNotification> _demoItems;
 
   bool get _isDemo => DemoModeService.instance.isEnabled;
@@ -91,10 +95,6 @@ class _EmployeeNotificationsScreenState
   void initState() {
     super.initState();
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — skip network listener, seed demo notifications
-    //             pero IPAKITA ANG SKELETON sa simula
-    // ═══════════════════════════════════════════════════════════
     if (_isDemo) {
       debugPrint('═══════════════════════════════════════════');
       debugPrint('🎭 [DemoMode] EmployeeNotifications — DEMO PATH');
@@ -103,11 +103,8 @@ class _EmployeeNotificationsScreenState
 
       _demoItems = _buildDemoNotifications();
       _networkState = _NetworkState.online;
-
-      // 🆕 Keep skeleton visible at start
       _isInitialLoading = true;
 
-      // 🆕 Hide skeleton after short delay
       Future.delayed(_demoSkeletonDuration, () {
         if (!mounted) return;
         setState(() => _isInitialLoading = false);
@@ -166,8 +163,7 @@ class _EmployeeNotificationsScreenState
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // ✅ LOCAL HELPER — replaces missing copyWith() sa model
-  //    Manual construction para iwas modify ang model file
+  // HELPER — replaces missing copyWith() sa model
   // ═══════════════════════════════════════════════════════════════
   EmployeeNotification _withRead(EmployeeNotification n) {
     return EmployeeNotification(
@@ -264,7 +260,6 @@ class _EmployeeNotificationsScreenState
   }
 
   Future<void> _checkNetworkOnEntry() async {
-    // 🎭 DEMO MODE — always online
     if (_isDemo) {
       if (mounted) setState(() => _networkState = _NetworkState.online);
       return;
@@ -303,7 +298,7 @@ class _EmployeeNotificationsScreenState
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🎭 MARK AS READ (demo-safe, no copyWith)
+  // 🎭 MARK AS READ
   // ═══════════════════════════════════════════════════════════════
   void _markOneRead(String id) {
     if (_isDemo) {
@@ -333,6 +328,199 @@ class _EmployeeNotificationsScreenState
         .markAllAsRead(widget.employeeId);
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🗑️ DELETE — single, selected, all
+  // ═══════════════════════════════════════════════════════════════
+  Future<void> _deleteOne(String id) async {
+    if (_isDemo) {
+      setState(() {
+        _demoItems.removeWhere((n) => n.id == id);
+        _selectedIds.remove(id);
+      });
+      return;
+    }
+    try {
+      await FirebaseFirestore.instance
+          .collection(_kNotificationsCollection)
+          .doc(id)
+          .delete();
+    } catch (e) {
+      debugPrint('❌ [Delete] Single failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to delete notification.'),
+            backgroundColor: Color(0xFFEF4444),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_selectedIds.isEmpty) return;
+    final ids = List<String>.from(_selectedIds);
+    final ok = await _confirmDialog(
+      'Delete ${ids.length} notification${ids.length == 1 ? '' : 's'}?',
+    );
+    if (ok != true) return;
+
+    for (final id in ids) {
+      await _deleteOne(id);
+    }
+    if (mounted) setState(() => _selectedIds.clear());
+  }
+
+  Future<void> _deleteAll() async {
+    final ok = await _confirmDialog(
+      'Delete ALL notifications? This cannot be undone.',
+    );
+    if (ok != true) return;
+
+    if (_isDemo) {
+      setState(() => _demoItems.clear());
+      debugPrint('🎭 [DemoMode] Deleted all notifications locally');
+      return;
+    }
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection(_kNotificationsCollection)
+          .where('employeeId', isEqualTo: widget.employeeId)
+          .get();
+
+      // Fallback for snake_case field name
+      QuerySnapshot<Map<String, dynamic>>? snap2;
+      if (snap.docs.isEmpty) {
+        try {
+          snap2 = await FirebaseFirestore.instance
+              .collection(_kNotificationsCollection)
+              .where('employee_id', isEqualTo: widget.employeeId)
+              .get();
+        } catch (_) {}
+      }
+
+      final refs = <DocumentReference>{
+        ...snap.docs.map((d) => d.reference),
+        if (snap2 != null) ...snap2.docs.map((d) => d.reference),
+      };
+
+      for (final ref in refs) {
+        await ref.delete();
+      }
+      debugPrint('🗑️ [Delete] Deleted ${refs.length} notifications');
+    } catch (e) {
+      debugPrint('❌ [Delete] All failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to delete all notifications.'),
+            backgroundColor: Color(0xFFEF4444),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<bool?> _confirmDialog(String message) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor:
+          isDark ? const Color(0xFF18181B) : Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.delete_outline_rounded,
+                  color: Color(0xFFEF4444), size: 22),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Confirm Delete',
+                  style: TextStyle(
+                      fontWeight: FontWeight.w700, fontSize: 16),
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            message,
+            style: TextStyle(
+              color: isDark
+                  ? const Color(0xFFB0B0B0)
+                  : const Color(0xFF52525B),
+              fontSize: 13,
+              height: 1.4,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(
+                'Cancel',
+                style: TextStyle(
+                    color: isDark
+                        ? const Color(0xFFB0B0B0)
+                        : const Color(0xFF71717A),
+                    fontWeight: FontWeight.w600),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFEF4444),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+                elevation: 0,
+              ),
+              child: const Text(
+                'Delete',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SELECTION HANDLERS
+  // ═══════════════════════════════════════════════════════════════
+  void _toggleSelection(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+  }
+
+  void _enterSelectionMode(String id) {
+    setState(() => _selectedIds.add(id));
+  }
+
+  void _exitSelectionMode() {
+    setState(() => _selectedIds.clear());
+  }
+
+  void _selectAll(List<EmployeeNotification> items) {
+    setState(() {
+      _selectedIds
+        ..clear()
+        ..addAll(items.map((n) => n.id));
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // BUILD
+  // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -347,9 +535,7 @@ class _EmployeeNotificationsScreenState
     final isOffline = _networkState == _NetworkState.offline;
     final isChecking = _networkState == _NetworkState.checking;
 
-    // ═══════════════════════════════════════════════════════════
-    // 🆕 SKELETON LOADING STATE (works for demo + normal)
-    // ═══════════════════════════════════════════════════════════
+    // Skeleton loading state
     if (isOffline || isChecking || _isInitialLoading) {
       return Scaffold(
         backgroundColor: bg,
@@ -385,90 +571,193 @@ class _EmployeeNotificationsScreenState
       );
     }
 
-    return Scaffold(
-      backgroundColor: bg,
-      appBar: AppBar(
-        backgroundColor: card,
-        foregroundColor: text,
-        elevation: 0,
-        title: Row(
+    return PopScope(
+      canPop: !_isSelectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_isSelectionMode) {
+          _exitSelectionMode();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: bg,
+        appBar: _buildAppBar(card, text, isDark),
+        body: Stack(
+          clipBehavior: Clip.hardEdge,
           children: [
-            const Text('Notifications',
-                style: TextStyle(fontWeight: FontWeight.w700)),
-            // 🎭 DEMO badge
-            if (_isDemo) ...[
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF54900),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.4),
-                      width: 1),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: const [
-                    Icon(Icons.science_rounded,
-                        color: Colors.white, size: 10),
-                    SizedBox(width: 3),
-                    Text('DEMO',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.6)),
-                  ],
-                ),
+            _buildHandWatermark(opacity: _watermarkOpacity(isDark)),
+
+            if (_isDemo)
+              _buildList(_demoItems, text, muted, border, isDark)
+            else
+              StreamBuilder<List<EmployeeNotification>>(
+                stream: EmployeeNotificationService.instance
+                    .streamForEmployee(widget.employeeId),
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(
+                          color: Color(0xFFFF8A00)),
+                    );
+                  }
+
+                  final items = snap.data ?? <EmployeeNotification>[];
+
+                  // Cleanup: remove stale selections kung nawala na ang item
+                  // (e.g., na-delete sa ibang device)
+                  final ids = items.map((n) => n.id).toSet();
+                  _selectedIds.removeWhere((id) => !ids.contains(id));
+
+                  return _buildList(items, text, muted, border, isDark);
+                },
               ),
-            ],
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: _markAllRead,
-            child: const Text(
-              'Mark all read',
-              style: TextStyle(
-                  color: Color(0xFFFF8A00), fontWeight: FontWeight.w600),
-            ),
-          ),
-        ],
-      ),
-      body: Stack(
-        clipBehavior: Clip.hardEdge,
-        children: [
-          _buildHandWatermark(opacity: _watermarkOpacity(isDark)),
-
-          // 🎭 DEMO MODE — list locally
-          if (_isDemo)
-            _buildList(_demoItems, text, muted, border, isDark)
-          // Normal mode — stream from service
-          else
-            StreamBuilder<List<EmployeeNotification>>(
-              stream: EmployeeNotificationService.instance
-                  .streamForEmployee(widget.employeeId),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(
-                        color: Color(0xFFFF8A00)),
-                  );
-                }
-
-                final items = snap.data ?? <EmployeeNotification>[];
-                return _buildList(items, text, muted, border, isDark);
-              },
-            ),
-        ],
       ),
     );
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SHARED LIST BUILDER (demo + normal)
+  // APPBAR — normal mode vs selection mode
+  // ═══════════════════════════════════════════════════════════════
+  PreferredSizeWidget _buildAppBar(Color card, Color text, bool isDark) {
+    if (_isSelectionMode) {
+      return AppBar(
+        backgroundColor: card,
+        foregroundColor: text,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          onPressed: _exitSelectionMode,
+          tooltip: 'Cancel selection',
+        ),
+        title: Text(
+          '${_selectedIds.length} selected',
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.select_all_rounded),
+            tooltip: 'Select all',
+            onPressed: () {
+              if (_isDemo) {
+                _selectAll(_demoItems);
+              } else {
+                // Select all from current stream — handled in build
+                // For simplicity, fetch current items via stream snapshot.
+                // Here, we add the visible IDs one by one.
+                // Better: pass the current items via state.
+                // Simpler approach: use the stream's last value.
+                _selectAllFromCurrent();
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline_rounded,
+                color: Color(0xFFEF4444)),
+            tooltip: 'Delete selected',
+            onPressed: _deleteSelected,
+          ),
+        ],
+      );
+    }
+
+    return AppBar(
+      backgroundColor: card,
+      foregroundColor: text,
+      elevation: 0,
+      title: Row(
+        children: [
+          const Text('Notifications',
+              style: TextStyle(fontWeight: FontWeight.w700)),
+          if (_isDemo) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF54900),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.4),
+                    width: 1),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Icon(Icons.science_rounded,
+                      color: Colors.white, size: 10),
+                  SizedBox(width: 3),
+                  Text('DEMO',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.6)),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        PopupMenuButton<String>(
+          icon: Icon(Icons.more_vert_rounded, color: text),
+          color: card,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          onSelected: (v) {
+            if (v == 'mark_all_read') {
+              _markAllRead();
+            } else if (v == 'delete_all') {
+              _deleteAll();
+            }
+          },
+          itemBuilder: (_) => [
+            PopupMenuItem(
+              value: 'mark_all_read',
+              child: Row(
+                children: [
+                  const Icon(Icons.done_all_rounded,
+                      color: Color(0xFFFF8A00), size: 18),
+                  const SizedBox(width: 10),
+                  Text('Mark all as read',
+                      style: TextStyle(color: text, fontSize: 13)),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              value: 'delete_all',
+              child: Row(
+                children: [
+                  const Icon(Icons.delete_sweep_rounded,
+                      color: Color(0xFFEF4444), size: 18),
+                  const SizedBox(width: 10),
+                  Text('Delete all',
+                      style: TextStyle(color: text, fontSize: 13)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // Need to track last stream items for "select all" in normal mode
+  List<EmployeeNotification> _lastStreamItems = const [];
+
+  void _selectAllFromCurrent() {
+    setState(() {
+      _selectedIds
+        ..clear()
+        ..addAll(_lastStreamItems.map((n) => n.id));
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SHARED LIST BUILDER
   // ═══════════════════════════════════════════════════════════════
   Widget _buildList(
       List<EmployeeNotification> items,
@@ -477,6 +766,9 @@ class _EmployeeNotificationsScreenState
       Color border,
       bool isDark,
       ) {
+    // Track for select-all
+    _lastStreamItems = items;
+
     if (items.isEmpty) {
       return Center(
         child: Column(
@@ -627,6 +919,9 @@ class _EmployeeNotificationsScreenState
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // TILE — supports long-press to select
+  // ═══════════════════════════════════════════════════════════════
   Widget _tile(
       BuildContext context,
       EmployeeNotification n,
@@ -636,22 +931,52 @@ class _EmployeeNotificationsScreenState
       bool isDark,
       ) {
     final style = _styleFor(n.type);
+    final isSelected = _selectedIds.contains(n.id);
+    final inSelectionMode = _isSelectionMode;
+
+    final bgColor = isSelected
+        ? const Color(0xFFFF8A00).withValues(alpha: 0.14)
+        : (n.read
+        ? Colors.transparent
+        : const Color(0xFFFF8A00).withValues(alpha: 0.05));
 
     return InkWell(
       onTap: () {
-        if (!n.read) {
-          _markOneRead(n.id);
+        if (inSelectionMode) {
+          _toggleSelection(n.id);
+        } else {
+          if (!n.read) _markOneRead(n.id);
+        }
+      },
+      onLongPress: () {
+        if (!inSelectionMode) {
+          _enterSelectionMode(n.id);
+        } else {
+          _toggleSelection(n.id);
         }
       },
       child: Container(
-        color: n.read
-            ? Colors.transparent
-            : const Color(0xFFFF8A00).withValues(alpha: 0.05),
+        color: bgColor,
         padding:
         const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 🆕 Checkbox when in selection mode
+            if (inSelectionMode)
+              Padding(
+                padding: const EdgeInsets.only(right: 10, top: 8),
+                child: Icon(
+                  isSelected
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  color: isSelected
+                      ? const Color(0xFFFF8A00)
+                      : muted.withValues(alpha: 0.6),
+                  size: 22,
+                ),
+              ),
+
             Container(
               width: 42,
               height: 42,
@@ -680,7 +1005,7 @@ class _EmployeeNotificationsScreenState
                           ),
                         ),
                       ),
-                      if (!n.read)
+                      if (!n.read && !inSelectionMode)
                         Container(
                           width: 8,
                           height: 8,
@@ -696,6 +1021,8 @@ class _EmployeeNotificationsScreenState
                     n.message,
                     style: TextStyle(
                         fontSize: 12, color: muted, height: 1.4),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 6),
                   Row(
@@ -703,9 +1030,14 @@ class _EmployeeNotificationsScreenState
                       Icon(Icons.person_outline_rounded,
                           size: 11, color: muted),
                       const SizedBox(width: 3),
-                      Text(n.senderName,
+                      Expanded(
+                        child: Text(
+                          n.senderName,
                           style:
-                          TextStyle(fontSize: 10, color: muted)),
+                          TextStyle(fontSize: 10, color: muted),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         n.timestamp != null
@@ -725,7 +1057,6 @@ class _EmployeeNotificationsScreenState
     );
   }
 
-  // ✅ Added: support_reply & support_resolved cases
   _NStyle _styleFor(String type) {
     switch (type) {
       case 'announcement':

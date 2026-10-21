@@ -1,17 +1,5 @@
 // lib/screens/reports_screen.dart
-// ═══════════════════════════════════════════════════════════════════
-// REPORTS / PAYSLIP SCREEN  v2.5
-// Updates:
-//   - 🎭 DEMO MODE skeleton duration now matches other screens (900ms).
-//   - Deterministic PDF password (no more versioning/reset).
-//   - "View My PDF Password" always shows the same password.
-//   - All user-facing text in English.
-//   - SECURED badge removed from header.
-//   - Payslip covers the FULL MONTH (1st to end of month).
-//   - DOWNLOAD ENFORCED AT END-OF-MONTH ONLY.
-//   - 🎭 DEMO MODE: fake payslip data, no DB writes.
-//   - 🎨 v2.4: Demo mode now uses the SAME ORANGE theme (no violet).
-// ═══════════════════════════════════════════════════════════════════
+// v2.6: 🔓 Admin can manually unlock payslips (bypasses end-of-month rule).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
@@ -31,7 +19,7 @@ import '../services/security_hardening_service.dart';
 import '../services/payroll_calculator.dart';
 import '../services/payroll_pdf_service.dart';
 import '../services/support_request_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 NEW
+import '../services/demo_mode_service.dart';
 import '../models/employee.dart';
 import '../widgets/skeleton_screens.dart';
 import 'login_screen.dart';
@@ -91,7 +79,6 @@ Future<void> _logSecurityEventGlobal({
   String? sessionNonce,
   bool sensitive = false,
 }) async {
-  // 🎭 DEMO — skip DB write
   if (DemoModeService.instance.isEnabled) return;
 
   try {
@@ -126,13 +113,7 @@ String _maskString(String input, {int showStart = 2, int showEnd = 2}) {
 }
 
 const int kWorkingDaysPerMonth = 22;
-
-// ══════════════════════════════════════════════════════════════
-// ✅ DOWNLOAD WINDOW CONFIG
-// ══════════════════════════════════════════════════════════════
 const int _kDownloadWindowDays = 1;
-
-// 🆕 Demo skeleton display duration (matches other screens)
 const Duration _kDemoSkeletonDuration = Duration(milliseconds: 900);
 
 enum _NetworkState { online, offline, checking }
@@ -142,7 +123,6 @@ class _Mock {
   static const Color lime = Color(0xFFC4FF0A);
   static const Color paidBg = Color(0x1AC4FF0A);
   static const Color paidBorder = Color(0x33C4FF0A);
-  // 🎨 Demo now uses the SAME orange color as the rest of the app.
   static const Color demoAccent = orange;
 }
 
@@ -181,6 +161,9 @@ class _ReportsScreenState extends State<ReportsScreen>
   bool _downloading = false;
   bool _sendingSupport = false;
   bool _loadingPassword = false;
+
+  // 🆕 Payslip Unlock State
+  bool _isPayslipUnlocked = false;
 
   String _bankName = '—';
   String _accountNumber = '—';
@@ -223,11 +206,10 @@ class _ReportsScreenState extends State<ReportsScreen>
   bool? _cachedSessionValid;
   DateTime? _cachedSessionTime;
 
-  // 🎭 DEMO MODE
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
   // ═══════════════════════════════════════════════════════════════
-  // PAYSLIP PERIOD — FULL MONTH (1st day → end of month)
+  // PAYSLIP PERIOD
   // ═══════════════════════════════════════════════════════════════
   DateTime get _periodStart {
     final n = DateTime.now();
@@ -246,7 +228,7 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // DOWNLOAD WINDOW — end-of-month enforcement
+  // DOWNLOAD WINDOW
   // ═══════════════════════════════════════════════════════════════
   int get _lastDayOfMonth {
     final n = DateTime.now();
@@ -259,8 +241,7 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   bool get _isDownloadWindowOpen {
-    // 🎭 DEMO — always open
-    if (_isDemo) return true;
+    if (_isDemo || _isPayslipUnlocked) return true; // 🆕 Allow if unlocked
 
     final now = DateTime.now();
     return now.day >= _firstAllowedDay;
@@ -291,35 +272,17 @@ class _ReportsScreenState extends State<ReportsScreen>
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — skip security + listeners
-    //             IPAKITA ANG SKELETON for 900ms (consistent sa iba)
-    // ═══════════════════════════════════════════════════════════
     if (_isDemo) {
-      debugPrint('═══════════════════════════════════════════');
       debugPrint('🎭 [DemoMode] ReportsScreen in DEMO MODE');
-      debugPrint('   • Skipping security monitoring');
-      debugPrint('   • Skipping session validation');
-      debugPrint('   • Skipping network listener');
-      debugPrint('   • Using fake payslip breakdown');
-      debugPrint('   • Skeleton shown for ${_kDemoSkeletonDuration.inMilliseconds}ms');
-      debugPrint('═══════════════════════════════════════════');
-
       _sessionValidated = true;
       _networkState = _NetworkState.online;
-
-      // 🆕 Keep skeleton visible at start (default is already true)
       _isInitialLoading = true;
-
       _loadData();
 
-      // 🆕 Hide skeleton after 900ms (matches other screens)
       Future.delayed(_kDemoSkeletonDuration, () {
         if (!mounted) return;
         setState(() => _isInitialLoading = false);
-        debugPrint('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
       });
-
       return;
     }
 
@@ -328,7 +291,6 @@ class _ReportsScreenState extends State<ReportsScreen>
       _networkSub =
           ConnectivityService.instance.onStatusChange.listen((online) {
             if (!mounted) return;
-            debugPrint('🌐 [Reports] connectivity → online=$online');
 
             if (!online) {
               _overlayDelayTimer?.cancel();
@@ -369,7 +331,6 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<bool> _validateSession({bool forceRefresh = false}) async {
-    // 🎭 DEMO — always valid
     if (_isDemo) return true;
 
     if (!forceRefresh &&
@@ -408,8 +369,6 @@ class _ReportsScreenState extends State<ReportsScreen>
           (empId != null && empId.isNotEmpty && sessionEmpId == empId);
 
       if (!matches) {
-        debugPrint('🚨 [Reports] Cross-employee attempt: '
-            'session=$sessionEmpId docId=$docId empId=$empId');
         await _logSecurityEventGlobal(
           type: 'reports_cross_access',
           severity: 'critical',
@@ -426,7 +385,6 @@ class _ReportsScreenState extends State<ReportsScreen>
       _cachedSessionTime = DateTime.now();
       return true;
     } catch (e) {
-      debugPrint('⚠️ [Reports] Session validation error: $e');
       _cachedSessionValid = false;
       _cachedSessionTime = DateTime.now();
       return false;
@@ -439,7 +397,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     required String details,
     bool sensitive = false,
   }) async {
-    // 🎭 DEMO — skip
     if (_isDemo) return;
 
     await _logSecurityEventGlobal(
@@ -457,7 +414,6 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   void _startSecurityMonitoring() {
-    // 🎭 DEMO — skip
     if (_isDemo) return;
 
     final empDocId = widget.initialEmployee?.id;
@@ -527,13 +483,9 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<void> _forceLogout(String reason) async {
-    // 🎭 DEMO — skip
     if (_isDemo) return;
-
     if (_loggedOut || !mounted) return;
     _loggedOut = true;
-
-    debugPrint('🚨 [Reports] Force logout: $reason');
 
     _heartbeatTimer?.cancel();
     _inactivityTimer?.cancel();
@@ -581,7 +533,6 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<bool> _checkPdfRateLimit() async {
-    // 🎭 DEMO — no rate limit
     if (_isDemo) {
       _totalPdfGenerated++;
       return true;
@@ -592,7 +543,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (_lastPdfGeneratedAt != null) {
       final elapsed = now.difference(_lastPdfGeneratedAt!).inMilliseconds;
       if (elapsed < _pdfCooldown.inMilliseconds) {
-        debugPrint('🚦 [Reports] PDF rate-limited ($elapsed ms)');
         _showSnack('Export not allowed yet. Please wait a few seconds.',
             error: true);
         return false;
@@ -649,7 +599,6 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   Future<void> _checkNetworkOnEntry() async {
-    // 🎭 DEMO — assume online
     if (_isDemo) {
       if (mounted) setState(() => _networkState = _NetworkState.online);
       return;
@@ -718,7 +667,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (_isDemo) return null;
 
     final fs = FirebaseFirestore.instance;
-    debugPrint('🔍 [_fetchByRawId] rawId masked: ${_maskString(rawId)}');
 
     try {
       final doc = await fs
@@ -743,24 +691,9 @@ class _ReportsScreenState extends State<ReportsScreen>
       debugPrint('⚠️ [raw-2] failed: $e');
     }
 
-    try {
-      final snap = await fs
-          .collection('employees')
-          .where('id', isEqualTo: rawId)
-          .limit(1)
-          .get()
-          .timeout(const Duration(seconds: 8));
-      if (snap.docs.isNotEmpty) return snap.docs.first.data();
-    } catch (e) {
-      debugPrint('⚠️ [raw-3] failed: $e');
-    }
-
     return null;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🎭 BUILD FAKE BREAKDOWN — for demo mode
-  // ══════════════════════════════════════════════════════════════
   PayrollBreakdown _buildDemoBreakdown() {
     final demo = DemoModeService.instance.demoPayslipBreakdown;
 
@@ -817,11 +750,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (!mounted) return;
     _recordActivity();
 
-    // ═══════════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — fake breakdown, no Firestore
-    // ═══════════════════════════════════════════════════════════════
     if (_isDemo) {
-      debugPrint('🎭 [DemoMode] Loading fake payslip breakdown');
       setState(() => _loading = true);
 
       final fakeBreakdown = _buildDemoBreakdown();
@@ -843,6 +772,7 @@ class _ReportsScreenState extends State<ReportsScreen>
         _workingDaysPerMonth = 22;
         _salarySource = 'demo';
         _role = 'Demo';
+        _isPayslipUnlocked = true; // Always unlocked in demo
 
         _displayName = DemoModeService.demoEmployee.fullName;
         _displayEmpId = DemoModeService.demoEmployee.employeeId;
@@ -920,6 +850,9 @@ class _ReportsScreenState extends State<ReportsScreen>
       final salarySource = (data?['salarySource'] as String?) ?? 'manual';
       final roleFromData = (data?['role'] as String?) ?? '';
 
+      // 🆕 READ UNLOCK STATUS
+      final isUnlocked = data?['payslipUnlocked'] == true;
+
       final effectiveDaily = dailyFromData > 0
           ? dailyFromData
           : (basicFromData > 0 && workingDays > 0
@@ -960,6 +893,7 @@ class _ReportsScreenState extends State<ReportsScreen>
         _workingDaysPerMonth = workingDays > 0 ? workingDays : 22;
         _salarySource = salarySource;
         _role = roleFromData;
+        _isPayslipUnlocked = isUnlocked; // 🆕 Set state
 
         _displayName = displayName.isNotEmpty ? displayName : '—';
         _displayEmpId = displayId.isNotEmpty ? displayId : '—';
@@ -975,7 +909,6 @@ class _ReportsScreenState extends State<ReportsScreen>
       );
     } catch (e, stack) {
       debugPrint('❌ _loadData ERROR: $e');
-      debugPrint('$stack');
       if (mounted) setState(() => _loading = false);
 
       await _logSecurityEvent(
@@ -986,29 +919,17 @@ class _ReportsScreenState extends State<ReportsScreen>
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 📥 DOWNLOAD FLOW
-  // ══════════════════════════════════════════════════════════════
   Future<void> _onDownloadPressed() async {
     _recordActivity();
 
-    if (_exporting || _downloading) {
-      debugPrint('🚫 [Reports] Download already in progress — ignored.');
-      return;
-    }
+    if (_exporting || _downloading) return;
 
-    // ✅ END-OF-MONTH ENFORCEMENT (skip in demo)
     if (!_isDownloadWindowOpen) {
-      debugPrint('🚫 [Reports] Download blocked — outside end-of-month window');
-      _showSnack(
-        '🗓️ $_downloadBlockedReason',
-        error: true,
-      );
+      _showSnack('🗓️ $_downloadBlockedReason', error: true);
       await _logSecurityEvent(
         type: 'reports_download_blocked_too_early',
         severity: 'info',
-        details: 'Attempted download before end-of-month window '
-            '(today=${DateTime.now().day}, window=$_downloadWindowLabel)',
+        details: 'Attempted download before end-of-month window',
       );
       return;
     }
@@ -1018,7 +939,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     try {
       if (!await _checkPdfRateLimit()) return;
 
-      // 🎭 DEMO — skip session validation
       if (!_isDemo) {
         final valid = await _validateSession(forceRefresh: true);
         if (!valid) {
@@ -1029,23 +949,13 @@ class _ReportsScreenState extends State<ReportsScreen>
       }
 
       if (!_isDemo && _networkState != _NetworkState.online) {
-        _showSnack(
-          '⚠️ No internet. Please check your connection.',
-          error: true,
-          action: SnackBarAction(
-            label: 'Report',
-            textColor: Colors.white,
-            onPressed: () =>
-                _showContactHrSheet(prefillCategory: 'pdf_download'),
-          ),
-        );
+        _showSnack('⚠️ No internet. Please check your connection.', error: true);
         return;
       }
 
       final emp = _employee ?? widget.initialEmployee;
       Employee effectiveEmp;
 
-      // 🎭 DEMO — use demo employee
       if (_isDemo) {
         effectiveEmp = DemoModeService.demoEmployee;
       } else if (emp != null) {
@@ -1069,16 +979,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       }
 
       if (_basicSalary <= 0 && _breakdown.basicSalary <= 0) {
-        _showSnack(
-          'No salary configured. Please contact HR.',
-          error: true,
-          action: SnackBarAction(
-            label: 'Contact HR',
-            textColor: Colors.white,
-            onPressed: () =>
-                _showContactHrSheet(prefillCategory: 'salary_question'),
-          ),
-        );
+        _showSnack('No salary configured. Please contact HR.', error: true);
         return;
       }
 
@@ -1099,13 +1000,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (!mounted) return;
     setState(() => _exporting = true);
     _lastPdfGeneratedAt = DateTime.now();
-
-    await _logSecurityEvent(
-      type: 'reports_pdf_requested',
-      severity: 'info',
-      details: 'PDF generation requested • period: $_periodRangeLabel',
-      sensitive: true,
-    );
 
     try {
       final result = await PayrollPdfService.generate(
@@ -1146,26 +1040,11 @@ class _ReportsScreenState extends State<ReportsScreen>
 
       if (!result.success) {
         if (mounted) {
-          _showSnack(
-            result.errorMessage ?? 'Export failed.',
-            error: true,
-            action: SnackBarAction(
-              label: 'Report',
-              textColor: Colors.white,
-              onPressed: () =>
-                  _showContactHrSheet(prefillCategory: 'pdf_download'),
-            ),
-          );
+          _showSnack(result.errorMessage ?? 'Export failed.', error: true);
         }
-        await _logSecurityEvent(
-          type: 'reports_pdf_error',
-          severity: 'medium',
-          details: result.errorMessage ?? 'Unknown',
-        );
         return;
       }
 
-      // 🎭 DEMO — skip pdf_exports DB write
       if (!_isDemo) {
         try {
           await FirebaseFirestore.instance.collection('pdf_exports').add({
@@ -1188,49 +1067,17 @@ class _ReportsScreenState extends State<ReportsScreen>
         }
       }
 
-      await _logSecurityEvent(
-        type: 'reports_pdf_generated',
-        severity: 'info',
-        details: 'PDF successfully generated (#$_totalPdfGenerated) • '
-            'period: $_periodRangeLabel',
-        sensitive: true,
-      );
-
       if (mounted) {
-        if (result.filePath != null && result.filePath!.isNotEmpty) {
-          final fname =
-              result.filePath!.split(Platform.pathSeparator).last;
-          _showSnack(
-            _isDemo
-                ? '🎭 DEMO PDF saved: $fname'
-                : '✓ Saved to: Download/RACOMA_Payslips/$fname',
-          );
-        } else {
-          _showSnack(
-            _isDemo
-                ? '🎭 DEMO PDF payslip generated ✓'
-                : 'PDF payslip generated ✓',
-          );
-        }
+        _showSnack(
+          _isDemo
+              ? '🎭 DEMO PDF payslip generated ✓'
+              : 'PDF payslip generated ✓',
+        );
       }
     } catch (e) {
       if (mounted) {
-        _showSnack(
-          'Export failed. Please try again.',
-          error: true,
-          action: SnackBarAction(
-            label: 'Report',
-            textColor: Colors.white,
-            onPressed: () =>
-                _showContactHrSheet(prefillCategory: 'pdf_download'),
-          ),
-        );
+        _showSnack('Export failed. Please try again.', error: true);
       }
-      await _logSecurityEvent(
-        type: 'reports_pdf_error',
-        severity: 'medium',
-        details: 'PDF generation failed',
-      );
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
@@ -1241,7 +1088,6 @@ class _ReportsScreenState extends State<ReportsScreen>
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
-    // 🎨 Same accent color for both demo and normal mode.
     final accent = _Mock.orange;
 
     await showDialog<void>(
@@ -1254,9 +1100,6 @@ class _ReportsScreenState extends State<ReportsScreen>
             borderRadius: BorderRadius.circular(16),
             side: BorderSide(color: tc.cardBorder),
           ),
-          titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-          contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
           title: Row(
             children: [
               Container(
@@ -1266,9 +1109,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(
-                  _isDemo
-                      ? Icons.science_rounded
-                      : Icons.lock_outline_rounded,
+                  _isDemo ? Icons.science_rounded : Icons.lock_outline_rounded,
                   color: accent,
                   size: 20,
                 ),
@@ -1299,14 +1140,11 @@ class _ReportsScreenState extends State<ReportsScreen>
                 const SizedBox(height: 16),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 14),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
                     color: accent.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color: accent.withValues(alpha: 0.35),
-                        width: 1.5),
+                    border: Border.all(color: accent.withValues(alpha: 0.35), width: 1.5),
                   ),
                   child: Row(
                     children: [
@@ -1325,12 +1163,9 @@ class _ReportsScreenState extends State<ReportsScreen>
                         ),
                       ),
                       IconButton(
-                        tooltip: 'Copy',
-                        icon: Icon(Icons.copy_rounded,
-                            color: tc.textGrayDark, size: 20),
+                        icon: Icon(Icons.copy_rounded, color: tc.textGrayDark, size: 20),
                         onPressed: () async {
-                          await Clipboard.setData(
-                              ClipboardData(text: password));
+                          await Clipboard.setData(ClipboardData(text: password));
                           if (ctx.mounted) {
                             ScaffoldMessenger.of(ctx).showSnackBar(
                               const SnackBar(
@@ -1349,8 +1184,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.info_outline_rounded,
-                        color: Color(0xFFFF4D6D), size: 16),
+                    const Icon(Icons.info_outline_rounded, color: Color(0xFFFF4D6D), size: 16),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -1375,8 +1209,7 @@ class _ReportsScreenState extends State<ReportsScreen>
               onPressed: () => Navigator.of(ctx).pop(),
               style: TextButton.styleFrom(
                 foregroundColor: accent,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 20, vertical: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               ),
               child: const Text(
                 'OK — Download Now',
@@ -1389,14 +1222,10 @@ class _ReportsScreenState extends State<ReportsScreen>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🔑 VIEW MY PDF PASSWORD
-  // ══════════════════════════════════════════════════════════════
   Future<void> _showCurrentPdfPassword() async {
     _recordActivity();
     if (_loadingPassword) return;
 
-    // 🎭 DEMO — use demo employee ID
     String empId;
     if (_isDemo) {
       empId = DemoModeService.demoEmployee.employeeId;
@@ -1406,9 +1235,7 @@ class _ReportsScreenState extends State<ReportsScreen>
         _showSnack('Employee data not loaded.', error: true);
         return;
       }
-
-      empId = emp?.employeeId ??
-          (_rawData?['employeeId'] ?? _displayEmpId).toString();
+      empId = emp?.employeeId ?? (_rawData?['employeeId'] ?? _displayEmpId).toString();
     }
 
     if (empId.isEmpty || empId == '—') {
@@ -1428,7 +1255,6 @@ class _ReportsScreenState extends State<ReportsScreen>
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
-    // 🎨 Same accent color for both demo and normal mode.
     final accent = _Mock.orange;
 
     await showDialog<void>(
@@ -1439,9 +1265,6 @@ class _ReportsScreenState extends State<ReportsScreen>
           borderRadius: BorderRadius.circular(16),
           side: BorderSide(color: tc.cardBorder),
         ),
-        titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-        contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         title: Row(
           children: [
             Container(
@@ -1451,9 +1274,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(
-                _isDemo
-                    ? Icons.science_rounded
-                    : Icons.vpn_key_rounded,
+                _isDemo ? Icons.science_rounded : Icons.vpn_key_rounded,
                 color: accent,
                 size: 20,
               ),
@@ -1481,22 +1302,16 @@ class _ReportsScreenState extends State<ReportsScreen>
                     ? 'This is a FAKE password for demo mode. The PDF will still open with it.'
                     : 'Use this password to open ANY payslip PDF you download. '
                     'This is the SAME password forever — save it somewhere safe.',
-                style: TextStyle(
-                    color: tc.textGrayDark,
-                    fontSize: 13,
-                    height: 1.4),
+                style: TextStyle(color: tc.textGrayDark, fontSize: 13, height: 1.4),
               ),
               const SizedBox(height: 16),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 14),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 decoration: BoxDecoration(
                   color: accent.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                      color: accent.withValues(alpha: 0.35),
-                      width: 1.5),
+                  border: Border.all(color: accent.withValues(alpha: 0.35), width: 1.5),
                 ),
                 child: Row(
                   children: [
@@ -1515,12 +1330,9 @@ class _ReportsScreenState extends State<ReportsScreen>
                       ),
                     ),
                     IconButton(
-                      tooltip: 'Copy',
-                      icon: Icon(Icons.copy_rounded,
-                          color: tc.textGrayDark, size: 20),
+                      icon: Icon(Icons.copy_rounded, color: tc.textGrayDark, size: 20),
                       onPressed: () async {
-                        await Clipboard.setData(
-                            ClipboardData(text: pwd));
+                        await Clipboard.setData(ClipboardData(text: pwd));
                         if (ctx.mounted) {
                           ScaffoldMessenger.of(ctx).showSnackBar(
                             const SnackBar(
@@ -1535,29 +1347,6 @@ class _ReportsScreenState extends State<ReportsScreen>
                   ],
                 ),
               ),
-              const SizedBox(height: 14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(Icons.lightbulb_outline_rounded,
-                      color: Color(0xFFFF4D6D), size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _isDemo
-                          ? '🎭 Demo mode — this password will not be used outside the demo session.'
-                          : 'Tip: Copy this now and save it somewhere safe. '
-                          'It won\'t change — even after future downloads.',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFFFF4D6D),
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
             ],
           ),
         ),
@@ -1566,8 +1355,7 @@ class _ReportsScreenState extends State<ReportsScreen>
             onPressed: () => Navigator.pop(ctx),
             style: TextButton.styleFrom(
               foregroundColor: accent,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 20, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             ),
             child: const Text(
               'Close',
@@ -1579,21 +1367,13 @@ class _ReportsScreenState extends State<ReportsScreen>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🆘 CONTACT HR / REPORT ISSUE
-  // ══════════════════════════════════════════════════════════════
   Future<void> _showContactHrSheet({String? prefillCategory}) async {
     if (!mounted) return;
     if (_sendingSupport) return;
-
     _recordActivity();
 
-    // 🎭 DEMO — skip, no DB write
     if (_isDemo) {
-      _showSnack(
-        '🎭 Demo mode: support requests are not sent.',
-        error: true,
-      );
+      _showSnack('🎭 Demo mode: support requests are not sent.', error: true);
       return;
     }
 
@@ -1602,8 +1382,7 @@ class _ReportsScreenState extends State<ReportsScreen>
 
     final emp = _employee ?? widget.initialEmployee;
     if (emp == null && _rawData == null) {
-      _showSnack('Employee data not loaded. Please reload the screen.',
-          error: true);
+      _showSnack('Employee data not loaded. Please reload the screen.', error: true);
       return;
     }
 
@@ -1614,8 +1393,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       final now = DateTime.now();
       effectiveEmp = Employee(
         id: (_rawData!['id'] ?? _displayEmpId).toString(),
-        employeeId:
-        (_rawData!['employeeId'] ?? _displayEmpId).toString(),
+        employeeId: (_rawData!['employeeId'] ?? _displayEmpId).toString(),
         firstName: (_rawData!['firstName'] ?? '').toString(),
         lastName: (_rawData!['lastName'] ?? '').toString(),
         email: (_rawData!['email'] ?? '').toString(),
@@ -1626,8 +1404,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       );
     }
 
-    String selectedCategory =
-        prefillCategory ?? SupportRequestService.categories.first.value;
+    String selectedCategory = prefillCategory ?? SupportRequestService.categories.first.value;
     final TextEditingController descCtrl = TextEditingController();
 
     final submitted = await showModalBottomSheet<bool>(
@@ -1671,8 +1448,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                             color: _Mock.orange.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          child: const Icon(Icons.support_agent_rounded,
-                              color: _Mock.orange, size: 20),
+                          child: const Icon(Icons.support_agent_rounded, color: _Mock.orange, size: 20),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -1690,8 +1466,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                               const SizedBox(height: 2),
                               Text(
                                 'We will forward your concern to the admin/HR.',
-                                style: TextStyle(
-                                    color: tc.textGrayDark, fontSize: 12),
+                                style: TextStyle(color: tc.textGrayDark, fontSize: 12),
                               ),
                             ],
                           ),
@@ -1699,37 +1474,20 @@ class _ReportsScreenState extends State<ReportsScreen>
                       ],
                     ),
                     const SizedBox(height: 20),
-                    Text(
-                      'What seems to be the problem?',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: tc.textGrayDark,
-                        letterSpacing: 0.3,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
                     ...SupportRequestService.categories.map((c) {
                       final selected = selectedCategory == c.value;
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 6),
                         child: InkWell(
-                          onTap: () {
-                            setSheet(() => selectedCategory = c.value);
-                          },
+                          onTap: () => setSheet(() => selectedCategory = c.value),
                           borderRadius: BorderRadius.circular(12),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                             decoration: BoxDecoration(
-                              color: selected
-                                  ? _Mock.orange.withValues(alpha: 0.10)
-                                  : Colors.transparent,
+                              color: selected ? _Mock.orange.withValues(alpha: 0.10) : Colors.transparent,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: selected
-                                    ? _Mock.orange.withValues(alpha: 0.5)
-                                    : tc.cardBorder,
+                                color: selected ? _Mock.orange.withValues(alpha: 0.5) : tc.cardBorder,
                                 width: selected ? 1.5 : 1,
                               ),
                             ),
@@ -1741,9 +1499,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
                                     border: Border.all(
-                                      color: selected
-                                          ? _Mock.orange
-                                          : tc.textGrayDark,
+                                      color: selected ? _Mock.orange : tc.textGrayDark,
                                       width: 2,
                                     ),
                                   ),
@@ -1763,25 +1519,17 @@ class _ReportsScreenState extends State<ReportsScreen>
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment:
-                                    CrossAxisAlignment.start,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         c.label,
                                         style: TextStyle(
                                           fontSize: 13,
-                                          fontWeight: selected
-                                              ? FontWeight.w700
-                                              : FontWeight.w600,
+                                          fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
                                           color: tc.textPrimary,
                                         ),
                                       ),
-                                      Text(
-                                        c.hint,
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: tc.textGrayDark),
-                                      ),
+                                      Text(c.hint, style: TextStyle(fontSize: 11, color: tc.textGrayDark)),
                                     ],
                                   ),
                                 ),
@@ -1792,16 +1540,6 @@ class _ReportsScreenState extends State<ReportsScreen>
                       );
                     }),
                     const SizedBox(height: 16),
-                    Text(
-                      'Additional details (optional)',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: tc.textGrayDark,
-                        letterSpacing: 0.3,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
                     TextField(
                       controller: descCtrl,
                       maxLines: 3,
@@ -1809,29 +1547,18 @@ class _ReportsScreenState extends State<ReportsScreen>
                       style: TextStyle(color: tc.textPrimary, fontSize: 13),
                       cursorColor: _Mock.orange,
                       decoration: InputDecoration(
-                        hintText:
-                        'Describe what happened (e.g., "Download failed even after tapping OK")...',
-                        hintStyle: TextStyle(
-                            color: tc.textGrayDark, fontSize: 12),
+                        hintText: 'Describe what happened...',
+                        hintStyle: TextStyle(color: tc.textGrayDark, fontSize: 12),
                         filled: true,
-                        fillColor: isDark
-                            ? Colors.white.withValues(alpha: 0.04)
-                            : const Color(0xFFF4F4F5),
+                        fillColor: isDark ? Colors.white.withValues(alpha: 0.04) : const Color(0xFFF4F4F5),
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: tc.cardBorder),
-                        ),
-                        enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                           borderSide: BorderSide(color: tc.cardBorder),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide:
-                          const BorderSide(color: _Mock.orange, width: 1.5),
+                          borderSide: const BorderSide(color: _Mock.orange, width: 1.5),
                         ),
-                        counterStyle: TextStyle(
-                            color: tc.textGrayDark, fontSize: 10),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -1840,46 +1567,19 @@ class _ReportsScreenState extends State<ReportsScreen>
                         Expanded(
                           child: OutlinedButton(
                             onPressed: () => Navigator.pop(ctx, false),
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide(color: tc.cardBorder),
-                              padding:
-                              const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: Text(
-                              'Cancel',
-                              style: TextStyle(
-                                  color: tc.textGrayDark,
-                                  fontWeight: FontWeight.w700),
-                            ),
+                            child: Text('Cancel', style: TextStyle(color: tc.textGrayDark)),
                           ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           flex: 2,
                           child: ElevatedButton.icon(
-                            onPressed: _sendingSupport
-                                ? null
-                                : () =>
-                                Navigator.pop(ctx, true),
-                            icon: const Icon(Icons.send_rounded,
-                                color: Colors.white, size: 16),
-                            label: const Text(
-                              'Send to HR',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700),
-                            ),
+                            onPressed: _sendingSupport ? null : () => Navigator.pop(ctx, true),
+                            icon: const Icon(Icons.send_rounded, color: Colors.white, size: 16),
+                            label: const Text('Send to HR', style: TextStyle(color: Colors.white)),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: _Mock.orange,
-                              padding:
-                              const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
                             ),
                           ),
                         ),
@@ -1910,17 +1610,9 @@ class _ReportsScreenState extends State<ReportsScreen>
       if (!mounted) return;
 
       if (ok) {
-        await _logSecurityEvent(
-          type: 'reports_support_sent',
-          severity: 'info',
-          details: 'Support request sent: $selectedCategory',
-          sensitive: true,
-        );
         _showSnack('✓ Sent to HR. Please wait for their response.');
       } else {
-        _showSnack(
-            'Failed to send. Please check your internet and try again.',
-            error: true);
+        _showSnack('Failed to send. Please check your internet.', error: true);
       }
     } finally {
       if (mounted) setState(() => _sendingSupport = false);
@@ -1932,21 +1624,15 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
-      // 🎨 Same color for demo & normal (no more violet).
-      backgroundColor:
-      error ? const Color(0xFFFF4D6D) : const Color(0xFF00E5A0),
+      backgroundColor: error ? const Color(0xFFFF4D6D) : const Color(0xFF00E5A0),
       behavior: SnackBarBehavior.floating,
-      shape:
-      RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       margin: const EdgeInsets.all(16),
       duration: const Duration(seconds: 4),
       action: action,
     ));
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BUILD
-  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1956,7 +1642,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     final isOffline = _networkState == _NetworkState.offline && !_isDemo;
     final isChecking = _networkState == _NetworkState.checking && !_isDemo;
 
-    // 🆕 Skeleton shows for BOTH demo & normal during initial load
     if (isOffline || isChecking || _isInitialLoading) {
       return Scaffold(
         backgroundColor: tc.bg,
@@ -1969,7 +1654,6 @@ class _ReportsScreenState extends State<ReportsScreen>
                   child: AnimatedOpacity(
                     opacity: _showOfflineOverlay ? 1.0 : 0.0,
                     duration: const Duration(milliseconds: 350),
-                    curve: Curves.easeInOut,
                     child: IgnorePointer(
                       ignoring: !_showOfflineOverlay,
                       child: _buildNetworkErrorOverlay(),
@@ -1995,7 +1679,6 @@ class _ReportsScreenState extends State<ReportsScreen>
                 Expanded(
                   child: RefreshIndicator(
                     onRefresh: _loadData,
-                    // 🎨 Same orange accent for demo & normal.
                     color: _Mock.orange,
                     child: SingleChildScrollView(
                       physics: const AlwaysScrollableScrollPhysics(),
@@ -2003,7 +1686,6 @@ class _ReportsScreenState extends State<ReportsScreen>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          // 🎭 DEMO badge
                           if (_isDemo) ...[
                             _buildDemoBadge(),
                             const SizedBox(height: 14),
@@ -2011,7 +1693,7 @@ class _ReportsScreenState extends State<ReportsScreen>
 
                           _buildPayslipCard(tc, thisMonth),
 
-                          // ✅ Show download window info when locked
+                          // Show download window info ONLY if locked
                           if (!_isDownloadWindowOpen && !_isDemo) ...[
                             const SizedBox(height: 14),
                             _buildDownloadLockedBanner(tc),
@@ -2036,22 +1718,12 @@ class _ReportsScreenState extends State<ReportsScreen>
     );
   }
 
-  // 🎭 DEMO MODE badge — now ORANGE (same theme)
   Widget _buildDemoBadge() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [_Mock.orange, Color(0xFFF54900)],
-        ),
+        gradient: const LinearGradient(colors: [_Mock.orange, Color(0xFFF54900)]),
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: _Mock.orange.withValues(alpha: 0.3),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
       ),
       child: Row(
         children: const [
@@ -2060,12 +1732,7 @@ class _ReportsScreenState extends State<ReportsScreen>
           Expanded(
             child: Text(
               'DEMO MODE — Fake payslip, no data is saved',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.3,
-              ),
+              style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800),
             ),
           ),
         ],
@@ -2079,10 +1746,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       decoration: BoxDecoration(
         color: _Mock.orange.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: _Mock.orange.withValues(alpha: 0.35),
-          width: 1.2,
-        ),
+        border: Border.all(color: _Mock.orange.withValues(alpha: 0.35), width: 1.2),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2093,11 +1757,7 @@ class _ReportsScreenState extends State<ReportsScreen>
               color: _Mock.orange.withValues(alpha: 0.18),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(
-              Icons.lock_clock_rounded,
-              color: _Mock.orange,
-              size: 18,
-            ),
+            child: const Icon(Icons.lock_clock_rounded, color: _Mock.orange, size: 18),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -2106,22 +1766,12 @@ class _ReportsScreenState extends State<ReportsScreen>
               children: [
                 const Text(
                   'Download Available at End of Month',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    color: _Mock.orange,
-                  ),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: _Mock.orange),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Payslip for $_periodRangeLabel will be downloadable on '
-                      '$_downloadWindowLabel.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.4,
-                    color: tc.textGrayDark,
-                    fontWeight: FontWeight.w500,
-                  ),
+                  'Payslip for $_periodRangeLabel will be downloadable on $_downloadWindowLabel.',
+                  style: TextStyle(fontSize: 12, height: 1.4, color: tc.textGrayDark, fontWeight: FontWeight.w500),
                 ),
               ],
             ),
@@ -2144,91 +1794,24 @@ class _ReportsScreenState extends State<ReportsScreen>
               gradient: const LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xFFFF8A00),
-                  Color(0xFFFA6A00),
-                  Color(0xFFF54900),
-                ],
+                colors: [Color(0xFFFF8A00), Color(0xFFFA6A00), Color(0xFFF54900)],
               ),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white, width: 1.15),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  blurRadius: 20,
-                  offset: const Offset(0, 12),
-                ),
-              ],
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.2),
-                    border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.4),
-                        width: 1.5),
-                  ),
-                  child: const Icon(Icons.wifi_off_rounded,
-                      color: Colors.white, size: 40),
-                ),
+                const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 40),
                 const SizedBox(height: 20),
-                const Text(
-                  'No Connection',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+                const Text('No Connection', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 10),
-                Text(
-                  _networkErrorMessage,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.92),
-                    fontSize: 13,
-                    height: 1.5,
-                  ),
-                ),
+                Text(_networkErrorMessage, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 13)),
                 const SizedBox(height: 24),
-                SizedBox(
-                  width: 180,
-                  child: ElevatedButton.icon(
-                    onPressed: _retryNetworkCheck,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: _Mock.orange,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    icon: const Icon(Icons.refresh_rounded, size: 18),
-                    label: const Text(
-                      'Try Again',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  'Automatically retries when network returns.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.7),
-                    fontSize: 11,
-                    fontStyle: FontStyle.italic,
-                  ),
+                ElevatedButton.icon(
+                  onPressed: _retryNetworkCheck,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Try Again'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: _Mock.orange),
                 ),
               ],
             ),
@@ -2243,29 +1826,19 @@ class _ReportsScreenState extends State<ReportsScreen>
     final busy = _exporting || _downloading;
     final printDisabled = busy || !canDownload;
 
-    // 🎨 Same orange gradient for both demo & normal.
     const gradient = LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
-      colors: [
-        Color(0xFFFF8A00),
-        Color(0xFFFA6A00),
-        Color(0xFFF54900),
-      ],
-      stops: [0.0, 0.5, 1.0],
+      colors: [Color(0xFFFF8A00), Color(0xFFFA6A00), Color(0xFFF54900)],
     );
 
-    // 🎨 Same accent color for both demo & normal.
     const accent = _Mock.orange;
 
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
         gradient: gradient,
-        borderRadius: BorderRadius.only(
-          bottomLeft: Radius.circular(16),
-          bottomRight: Radius.circular(16),
-        ),
+        borderRadius: BorderRadius.only(bottomLeft: Radius.circular(16), bottomRight: Radius.circular(16)),
       ),
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
       child: Column(
@@ -2274,51 +1847,25 @@ class _ReportsScreenState extends State<ReportsScreen>
           Row(
             children: [
               GestureDetector(
-                onTap: () {
-                  _recordActivity();
-                  Navigator.maybePop(context);
-                },
-                behavior: HitTestBehavior.opaque,
+                onTap: () { _recordActivity(); Navigator.maybePop(context); },
                 child: const Row(
                   children: [
-                    Icon(Icons.chevron_left_rounded,
-                        color: Colors.white, size: 20),
+                    Icon(Icons.chevron_left_rounded, color: Colors.white, size: 20),
                     SizedBox(width: 2),
-                    Text(
-                      'Back',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
+                    Text('Back', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
                   ],
                 ),
               ),
               const Spacer(),
-              // 🎭 DEMO badge in header (same orange theme)
               if (_isDemo) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.22),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.22), borderRadius: BorderRadius.circular(12)),
                   child: const Row(
-                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.science_rounded,
-                          color: Colors.white, size: 11),
+                      Icon(Icons.science_rounded, color: Colors.white, size: 11),
                       SizedBox(width: 5),
-                      Text(
-                        'DEMO',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.5),
-                      ),
+                      Text('DEMO', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800)),
                     ],
                   ),
                 ),
@@ -2329,64 +1876,32 @@ class _ReportsScreenState extends State<ReportsScreen>
                 child: Opacity(
                   opacity: printDisabled && !busy ? 0.55 : 1.0,
                   child: Container(
-                    width: 38,
-                    height: 38,
+                    width: 38, height: 38,
                     decoration: BoxDecoration(
                       color: tc.printButtonBg,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: tc.printButtonBorder),
                     ),
                     child: busy
-                        ? const Padding(
-                      padding: EdgeInsets.all(9),
-                      child: CircularProgressIndicator(
-                          color: accent, strokeWidth: 2),
-                    )
-                        : Icon(
-                      canDownload
-                          ? Icons.print_rounded
-                          : Icons.lock_outline_rounded,
-                      color: accent,
-                      size: 20,
-                    ),
+                        ? const Padding(padding: EdgeInsets.all(9), child: CircularProgressIndicator(color: accent, strokeWidth: 2))
+                        : Icon(canDownload ? Icons.print_rounded : Icons.lock_outline_rounded, color: accent, size: 20),
                   ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 40),
-          Text(
-            _isDemo ? 'Demo Payslip' : 'Payslip Details',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 30,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          Text(_isDemo ? 'Demo Payslip' : 'Payslip Details', style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w500)),
           const SizedBox(height: 6),
-          Text(
-            'Salary slip for $thisMonth',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-            ),
-          ),
+          Text('Salary slip for $thisMonth', style: const TextStyle(color: Colors.white, fontSize: 14)),
           const SizedBox(height: 4),
-          Text(
-            'Period: $_periodRangeLabel',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.85),
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          Text('Period: $_periodRangeLabel', style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
         ],
       ),
     );
   }
 
   Widget _buildPayslipCard(_ThemeColors tc, String thisMonth) {
-    // 🎨 Same accent color for both demo & normal.
     const accent = _Mock.orange;
 
     return Container(
@@ -2394,15 +1909,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       decoration: BoxDecoration(
         color: tc.cardBg,
         borderRadius: BorderRadius.circular(16),
-        // 🎨 Use normal card border (not violet) even in demo mode.
         border: Border.all(color: tc.cardBorder, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 20,
-            offset: const Offset(0, 12),
-          ),
-        ],
       ),
       padding: const EdgeInsets.all(24),
       child: Row(
@@ -2412,34 +1919,11 @@ class _ReportsScreenState extends State<ReportsScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'R.A.C.O.M.A',
-                  style: TextStyle(
-                    color: accent,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+                const Text('R.A.C.O.M.A', style: TextStyle(color: accent, fontSize: 20, fontWeight: FontWeight.w500)),
                 const SizedBox(height: 8),
-                Text(
-                  _isDemo
-                      ? 'DEMO Payslip — no data saved'
-                      : 'Smart HR Information System',
-                  style: TextStyle(
-                    color: tc.textPrimary,
-                    fontSize: 12,
-                  ),
-                ),
+                Text(_isDemo ? 'DEMO Payslip — no data saved' : 'Smart HR Information System', style: TextStyle(color: tc.textPrimary, fontSize: 12)),
                 const SizedBox(height: 12),
-                Text(
-                  _isDemo
-                      ? 'Demo Company HQ, Philippines'
-                      : 'Jumbo HQ, Manila, Philippines',
-                  style: TextStyle(
-                    color: tc.textGrayDark,
-                    fontSize: 10,
-                  ),
-                ),
+                Text(_isDemo ? 'Demo Company HQ, Philippines' : 'Jumbo HQ, Manila, Philippines', style: TextStyle(color: tc.textGrayDark, fontSize: 10)),
               ],
             ),
           ),
@@ -2448,55 +1932,23 @@ class _ReportsScreenState extends State<ReportsScreen>
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  // 🎨 Demo uses the same PAID-style background (orange tint)
-                  //   instead of violet.
-                  color: _isDemo
-                      ? _Mock.orange.withValues(alpha: 0.12)
-                      : _Mock.paidBg,
+                  color: _isDemo ? _Mock.orange.withValues(alpha: 0.12) : _Mock.paidBg,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: _isDemo
-                        ? _Mock.orange.withValues(alpha: 0.45)
-                        : _Mock.paidBorder,
-                  ),
+                  border: Border.all(color: _isDemo ? _Mock.orange.withValues(alpha: 0.45) : _Mock.paidBorder),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      _isDemo
-                          ? Icons.science_rounded
-                          : Icons.check_circle_rounded,
-                      // 🎨 Both modes use orange.
-                      color: accent,
-                      size: 14,
-                    ),
+                    Icon(_isDemo ? Icons.science_rounded : Icons.check_circle_rounded, color: accent, size: 14),
                     const SizedBox(width: 6),
-                    Text(
-                      _isDemo ? 'DEMO' : 'Paid',
-                      style: TextStyle(
-                        color: accent,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
+                    Text(_isDemo ? 'DEMO' : 'Paid', style: TextStyle(color: accent, fontSize: 12, fontWeight: FontWeight.w500)),
                   ],
                 ),
               ),
               const SizedBox(height: 12),
-              Text(
-                'Payslip for\n$thisMonth',
-                textAlign: TextAlign.right,
-                style: TextStyle(
-                  color: tc.textPrimary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  height: 1.3,
-                ),
-              ),
+              Text('Payslip for\n$thisMonth', textAlign: TextAlign.right, style: TextStyle(color: tc.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
             ],
           ),
         ],
@@ -2509,16 +1961,10 @@ class _ReportsScreenState extends State<ReportsScreen>
     final busy = _exporting || _downloading;
     final disabled = busy || !canDownload;
 
-    // 🎨 Same orange gradient for both demo & normal.
     const gradient = LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
-      colors: [
-        Color(0xFFFF8A00),
-        Color(0xFFFA6A00),
-        Color(0xFFF54900),
-      ],
-      stops: [0.0, 0.5, 1.0],
+      colors: [Color(0xFFFF8A00), Color(0xFFFA6A00), Color(0xFFF54900)],
     );
 
     return GestureDetector(
@@ -2530,46 +1976,20 @@ class _ReportsScreenState extends State<ReportsScreen>
           gradient: canDownload ? gradient : null,
           color: canDownload ? null : const Color(0xFF9CA3AF),
           borderRadius: BorderRadius.circular(12),
-          boxShadow: canDownload
-              ? [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 3,
-              offset: const Offset(0, 2),
-            ),
-          ]
-              : null,
         ),
         child: Center(
           child: busy
-              ? const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(
-                color: Colors.white, strokeWidth: 2.5),
-          )
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
               : Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                canDownload
-                    ? Icons.download_rounded
-                    : Icons.lock_clock_rounded,
-                color: Colors.white,
-                size: 20,
-              ),
+              Icon(canDownload ? Icons.download_rounded : Icons.lock_clock_rounded, color: Colors.white, size: 20),
               const SizedBox(width: 10),
               Text(
                 canDownload
-                    ? (_isDemo
-                    ? 'Download DEMO PDF'
-                    : 'Download as PDF / Print')
+                    ? (_isDemo ? 'Download DEMO PDF' : 'Download as PDF / Print')
                     : 'Available on $_downloadWindowLabel',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
+                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
               ),
             ],
           ),
@@ -2580,7 +2000,6 @@ class _ReportsScreenState extends State<ReportsScreen>
 
   Widget _buildViewPasswordButton(_ThemeColors tc) {
     final disabled = _loadingPassword;
-    // 🎨 Same accent color for both demo & normal.
     final accent = _isDemo ? _Mock.orange : tc.textGrayDark;
 
     return GestureDetector(
@@ -2591,34 +2010,19 @@ class _ReportsScreenState extends State<ReportsScreen>
         decoration: BoxDecoration(
           color: tc.cardBg,
           borderRadius: BorderRadius.circular(12),
-          // 🎨 Demo & normal both use cardBorder (no more violet border).
-          border: Border.all(
-            color: tc.cardBorder,
-            width: 1,
-          ),
+          border: Border.all(color: tc.cardBorder, width: 1),
         ),
         child: Center(
           child: disabled
-              ? const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(
-                color: _Mock.orange, strokeWidth: 2),
-          )
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: _Mock.orange, strokeWidth: 2))
               : Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.vpn_key_rounded, color: accent, size: 16),
               const SizedBox(width: 8),
               Text(
-                _isDemo
-                    ? 'View Demo PDF Password'
-                    : 'View My PDF Password',
-                style: TextStyle(
-                  color: accent,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
+                _isDemo ? 'View Demo PDF Password' : 'View My PDF Password',
+                style: TextStyle(color: accent, fontSize: 13, fontWeight: FontWeight.w600),
               ),
             ],
           ),
@@ -2640,34 +2044,19 @@ class _ReportsScreenState extends State<ReportsScreen>
           decoration: BoxDecoration(
             color: tc.cardBg,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: _Mock.orange.withValues(alpha: 0.45),
-              width: 1.5,
-            ),
+            border: Border.all(color: _Mock.orange.withValues(alpha: 0.45), width: 1.5),
           ),
           child: Center(
             child: disabled && !_isDemo
-                ? const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(
-                  color: _Mock.orange, strokeWidth: 2),
-            )
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: _Mock.orange, strokeWidth: 2))
                 : Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.support_agent_rounded,
-                    color: _Mock.orange, size: 18),
+                const Icon(Icons.support_agent_rounded, color: _Mock.orange, size: 18),
                 const SizedBox(width: 8),
                 Text(
-                  _isDemo
-                      ? 'Contact HR (disabled in demo)'
-                      : 'Contact HR / Report Issue',
-                  style: TextStyle(
-                    color: tc.textPrimary,
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  _isDemo ? 'Contact HR (disabled in demo)' : 'Contact HR / Report Issue',
+                  style: TextStyle(color: tc.textPrimary, fontSize: 13.5, fontWeight: FontWeight.w700),
                 ),
               ],
             ),

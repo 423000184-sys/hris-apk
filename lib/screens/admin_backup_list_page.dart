@@ -1,21 +1,26 @@
-// lib/screens/notification_backup_list_page.dart
+// lib/screens/admin_backup_list_page.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import '../services/notification_backup_service.dart';
 import 'admin_theme.dart';
 
-class NotificationBackupListPage extends StatefulWidget {
-  const NotificationBackupListPage({super.key});
+class AdminBackupListPage extends StatefulWidget {
+  final String? employeeId; // ✅ Tinatanggap ang employeeId galing sa presence page
+  final dynamic args;
+
+  const AdminBackupListPage({
+    super.key,
+    this.employeeId,
+    this.args,
+  });
 
   @override
-  State<NotificationBackupListPage> createState() =>
-      _NotificationBackupListPageState();
+  State<AdminBackupListPage> createState() => _AdminBackupListPageState();
 }
 
-class _NotificationBackupListPageState
-    extends State<NotificationBackupListPage> {
-  List<BackupEntry> _entries = [];
+class _AdminBackupListPageState extends State<AdminBackupListPage> {
+  List<NotificationBackupInfo> _entries = [];
   bool _loading = true;
   int _totalSizeBytes = 0;
   String _storageLocation = '';
@@ -29,12 +34,9 @@ class _NotificationBackupListPageState
   Future<void> _loadBackups() async {
     setState(() => _loading = true);
     try {
-      final entries =
-      await NotificationBackupService.instance.listBackups();
-      final size =
-      await NotificationBackupService.instance.getTotalSizeBytes();
-      final loc =
-      await NotificationBackupService.instance.getStorageLocation();
+      final entries = await NotificationBackupService.instance.listBackups();
+      final size = await NotificationBackupService.instance.getTotalSize();
+      final loc = await NotificationBackupService.instance.getBackupDirectory();
 
       if (mounted) {
         setState(() {
@@ -45,7 +47,7 @@ class _NotificationBackupListPageState
         });
       }
     } catch (e) {
-      debugPrint('❌ [NotifBackupList] load error: $e');
+      debugPrint('❌ [AdminBackupList] load error: $e');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -53,9 +55,11 @@ class _NotificationBackupListPageState
   @override
   Widget build(BuildContext context) {
     final tc = AdminTheme.getColors(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF18181B) : tc.background;
 
     return Scaffold(
-      backgroundColor: tc.background,
+      backgroundColor: bgColor,
       appBar: AppBar(
         backgroundColor: tc.topBarBg,
         foregroundColor: tc.text,
@@ -73,15 +77,13 @@ class _NotificationBackupListPageState
         actions: [
           IconButton(
             tooltip: 'Refresh',
-            icon: Icon(Icons.refresh_rounded,
-                color: tc.textMuted, size: 20),
+            icon: Icon(Icons.refresh_rounded, color: tc.textMuted, size: 20),
             onPressed: _loadBackups,
           ),
           if (_entries.isNotEmpty)
             IconButton(
               tooltip: 'Delete all',
-              icon: Icon(Icons.delete_sweep_rounded,
-                  color: tc.red, size: 20),
+              icon: Icon(Icons.delete_sweep_rounded, color: tc.red, size: 20),
               onPressed: () => _confirmDeleteAll(tc),
             ),
           const SizedBox(width: 8),
@@ -103,16 +105,14 @@ class _NotificationBackupListPageState
               color: tc.orange,
               onRefresh: _loadBackups,
               child: ListView.separated(
-                padding:
-                const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: 8),
                 itemCount: _entries.length,
                 separatorBuilder: (_, __) => Divider(
                   height: 1,
                   color: tc.border,
                   indent: 16,
                 ),
-                itemBuilder: (_, i) =>
-                    _tile(tc, _entries[i]),
+                itemBuilder: (_, i) => _tile(tc, _entries[i]),
               ),
             ),
           ),
@@ -138,8 +138,7 @@ class _NotificationBackupListPageState
               Icon(Icons.folder_rounded, color: tc.orange, size: 18),
               const SizedBox(width: 8),
               Text(
-                '${_entries.length} backup '
-                    '${_entries.length == 1 ? "file" : "files"}',
+                '${_entries.length} backup ${_entries.length == 1 ? "file" : "files"}',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
@@ -160,8 +159,7 @@ class _NotificationBackupListPageState
           const SizedBox(height: 8),
           Row(
             children: [
-              Icon(Icons.storage_rounded,
-                  size: 11, color: tc.muted),
+              Icon(Icons.storage_rounded, size: 11, color: tc.muted),
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
@@ -178,9 +176,8 @@ class _NotificationBackupListPageState
             ],
           ),
           const SizedBox(height: 4),
-          // ⭐ ENGLISH — was "Naka-save sa browser localStorage"
           Text(
-            '💡 Saved to browser localStorage',
+            '💡 Saved to ${kIsWeb ? "browser localStorage" : "local device"}',
             style: TextStyle(
               fontSize: 10,
               color: tc.muted,
@@ -192,7 +189,7 @@ class _NotificationBackupListPageState
     );
   }
 
-  Widget _tile(AdminColors tc, BackupEntry entry) {
+  Widget _tile(AdminColors tc, NotificationBackupInfo entry) {
     return InkWell(
       onTap: () => _viewFile(tc, entry),
       onLongPress: () => _showQuickActions(tc, entry),
@@ -207,11 +204,7 @@ class _NotificationBackupListPageState
                 color: tc.orange.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(
-                Icons.description_rounded,
-                color: tc.orange,
-                size: 20,
-              ),
+              child: Icon(Icons.description_rounded, color: tc.orange, size: 20),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -232,46 +225,33 @@ class _NotificationBackupListPageState
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      Icon(Icons.schedule_rounded,
-                          size: 11, color: tc.muted),
+                      Icon(Icons.schedule_rounded, size: 11, color: tc.muted),
                       const SizedBox(width: 4),
                       Text(
                         _fmtTime(entry.savedAt),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: tc.textMuted,
-                        ),
+                        style: TextStyle(fontSize: 11, color: tc.textMuted),
                       ),
                       const SizedBox(width: 10),
-                      Icon(Icons.data_usage_rounded,
-                          size: 11, color: tc.muted),
+                      Icon(Icons.data_usage_rounded, size: 11, color: tc.muted),
                       const SizedBox(width: 4),
                       Text(
                         _formatSize(entry.sizeBytes),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: tc.textMuted,
-                        ),
+                        style: TextStyle(fontSize: 11, color: tc.textMuted),
                       ),
                     ],
                   ),
                 ],
               ),
             ),
-            Icon(
-              Icons.chevron_right_rounded,
-              color: tc.muted,
-              size: 20,
-            ),
+            Icon(Icons.chevron_right_rounded, color: tc.muted, size: 20),
           ],
         ),
       ),
     );
   }
 
-  void _viewFile(AdminColors tc, BackupEntry entry) async {
-    final content = await NotificationBackupService.instance
-        .readBackup(entry.filename);
+  void _viewFile(AdminColors tc, NotificationBackupInfo entry) async {
+    final content = await NotificationBackupService.instance.readBackup(entry.path);
 
     if (!mounted) return;
 
@@ -312,8 +292,7 @@ class _NotificationBackupListPageState
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  Icon(Icons.description_rounded,
-                      color: tc.orange, size: 20),
+                  Icon(Icons.description_rounded, color: tc.orange, size: 20),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -336,9 +315,7 @@ class _NotificationBackupListPageState
             Expanded(
               child: Container(
                 width: double.infinity,
-                color: tc.isDark
-                    ? const Color(0xFF121212)
-                    : const Color(0xFFF5F4F0),
+                color: tc.isDark ? const Color(0xFF121212) : const Color(0xFFF5F4F0),
                 child: SingleChildScrollView(
                   controller: scrollCtrl,
                   padding: const EdgeInsets.all(16),
@@ -365,19 +342,14 @@ class _NotificationBackupListPageState
                           Navigator.pop(context);
                           _confirmDelete(tc, entry);
                         },
-                        icon: Icon(Icons.delete_outline_rounded,
-                            size: 16, color: tc.red),
+                        icon: Icon(Icons.delete_outline_rounded, size: 16, color: tc.red),
                         label: Text(
                           'Delete',
-                          style: TextStyle(
-                            color: tc.red,
-                            fontWeight: FontWeight.w700,
-                          ),
+                          style: TextStyle(color: tc.red, fontWeight: FontWeight.w700),
                         ),
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(color: tc.border),
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 12),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
@@ -387,14 +359,9 @@ class _NotificationBackupListPageState
                         onPressed: () => Navigator.pop(context),
                         style: FilledButton.styleFrom(
                           backgroundColor: tc.orange,
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 12),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
-                        child: const Text(
-                          'Close',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w700),
-                        ),
+                        child: const Text('Close', style: TextStyle(fontWeight: FontWeight.w700)),
                       ),
                     ),
                   ],
@@ -407,7 +374,7 @@ class _NotificationBackupListPageState
     );
   }
 
-  void _showQuickActions(AdminColors tc, BackupEntry entry) {
+  void _showQuickActions(AdminColors tc, NotificationBackupInfo entry) {
     showModalBottomSheet(
       context: context,
       backgroundColor: tc.card,
@@ -420,20 +387,16 @@ class _NotificationBackupListPageState
           children: [
             const SizedBox(height: 8),
             ListTile(
-              leading: Icon(Icons.visibility_rounded,
-                  color: tc.orange),
-              title: Text('View content',
-                  style: TextStyle(color: tc.text)),
+              leading: Icon(Icons.visibility_rounded, color: tc.orange),
+              title: Text('View content', style: TextStyle(color: tc.text)),
               onTap: () {
                 Navigator.pop(context);
                 _viewFile(tc, entry);
               },
             ),
             ListTile(
-              leading: Icon(Icons.delete_outline_rounded,
-                  color: tc.red),
-              title:
-              Text('Delete', style: TextStyle(color: tc.text)),
+              leading: Icon(Icons.delete_outline_rounded, color: tc.red),
+              title: Text('Delete', style: TextStyle(color: tc.text)),
               onTap: () {
                 Navigator.pop(context);
                 _confirmDelete(tc, entry);
@@ -445,48 +408,33 @@ class _NotificationBackupListPageState
     );
   }
 
-  Future<void> _confirmDelete(
-      AdminColors tc, BackupEntry entry) async {
+  Future<void> _confirmDelete(AdminColors tc, NotificationBackupInfo entry) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: tc.card,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
-        title: Text('Delete this file?',
-            style: TextStyle(
-                color: tc.text, fontWeight: FontWeight.w800)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Delete this file?', style: TextStyle(color: tc.text, fontWeight: FontWeight.w800)),
         content: Text(
           entry.filename,
-          style: TextStyle(
-            color: tc.textMuted,
-            fontSize: 12,
-            fontFamily: 'monospace',
-          ),
+          style: TextStyle(color: tc.textMuted, fontSize: 12, fontFamily: 'monospace'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancel',
-                style: TextStyle(
-                    color: tc.textMuted,
-                    fontWeight: FontWeight.w700)),
+            child: Text('Cancel', style: TextStyle(color: tc.textMuted, fontWeight: FontWeight.w700)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style:
-            FilledButton.styleFrom(backgroundColor: tc.red),
-            child: const Text('Delete',
-                style:
-                TextStyle(fontWeight: FontWeight.w700)),
+            style: FilledButton.styleFrom(backgroundColor: tc.red),
+            child: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
         ],
       ),
     );
 
     if (ok == true) {
-      await NotificationBackupService.instance
-          .deleteBackup(entry.filename);
+      await NotificationBackupService.instance.deleteBackup(entry.path);
       _loadBackups();
     }
   }
@@ -496,11 +444,8 @@ class _NotificationBackupListPageState
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: tc.card,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
-        title: Text('Delete ALL backups?',
-            style: TextStyle(
-                color: tc.text, fontWeight: FontWeight.w800)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Delete ALL backups?', style: TextStyle(color: tc.text, fontWeight: FontWeight.w800)),
         content: Text(
           'Delete all ${_entries.length} files? This cannot be undone.',
           style: TextStyle(color: tc.textMuted, fontSize: 13),
@@ -508,25 +453,19 @@ class _NotificationBackupListPageState
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancel',
-                style: TextStyle(
-                    color: tc.textMuted,
-                    fontWeight: FontWeight.w700)),
+            child: Text('Cancel', style: TextStyle(color: tc.textMuted, fontWeight: FontWeight.w700)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style:
-            FilledButton.styleFrom(backgroundColor: tc.red),
-            child: const Text('Delete all',
-                style:
-                TextStyle(fontWeight: FontWeight.w700)),
+            style: FilledButton.styleFrom(backgroundColor: tc.red),
+            child: const Text('Delete all', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
         ],
       ),
     );
 
     if (ok == true) {
-      await NotificationBackupService.instance.deleteAllBackups();
+      await NotificationBackupService.instance.deleteAll();
       _loadBackups();
     }
   }
@@ -541,24 +480,13 @@ class _NotificationBackupListPageState
             Container(
               width: 72,
               height: 72,
-              decoration: BoxDecoration(
-                color: tc.orangeLight,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.folder_off_rounded,
-                size: 32,
-                color: tc.orange,
-              ),
+              decoration: BoxDecoration(color: tc.orangeLight, shape: BoxShape.circle),
+              child: Icon(Icons.folder_off_rounded, size: 32, color: tc.orange),
             ),
             const SizedBox(height: 16),
             Text(
               'No notification backups',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: tc.text,
-              ),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: tc.text),
             ),
             const SizedBox(height: 6),
             Text(
@@ -566,11 +494,7 @@ class _NotificationBackupListPageState
                   ? 'Backups are stored in browser localStorage.\nThey will persist across page reloads.'
                   : 'Backups are saved locally on this device.\nTap "Force Backup Now" to create one.',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                color: tc.textMuted,
-                height: 1.5,
-              ),
+              style: TextStyle(fontSize: 13, color: tc.textMuted, height: 1.5),
             ),
           ],
         ),
@@ -578,13 +502,9 @@ class _NotificationBackupListPageState
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // HELPERS
-  // ═══════════════════════════════════════════════════════════════
   String _fmtTime(DateTime d) {
     final now = DateTime.now();
     final diff = now.difference(d);
-    // ⭐ ENGLISH — was "Ngayon lang"
     if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';

@@ -18,9 +18,8 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <!-- ═══ MICROPHONE ═══
-         👆 Kailangan ng `noise_meter` para sa finger-snap
-         detection. Ang audio ay HINDI nare-record o nase-save —
-         amplitude analysis lang (dB levels). -->
+         Ginagamit ng `noise_meter` para sa finger-snap detection.
+         Walang audio recording — amplitude analysis lang (dB levels). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
@@ -30,13 +29,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
-    <!-- ═══ NOTIFICATIONS ═══ -->
+    <!-- ═══ NOTIFICATIONS (ONE SIGNAL + LOCAL) ═══ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- 🔋 KRITIKAL: Kailangan ito para hindi patayin ng Android OS ang app
+         kapag naka-background (para makarating pa rin ang notification). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- ═══ NETWORK ═══ -->
@@ -75,13 +77,19 @@
             android:name="com.google.android.geo.API_KEY"
             android:value="YOUR_GOOGLE_MAPS_API_KEY" />
 
-        <!-- ═══ NOTIFICATION DEFAULTS ═══ -->
+        <!-- ═══ NOTIFICATION DEFAULTS ═══
+             Gagamitin ng FCM at OneSignal kapag may push na dumating.
+             Kung gusto mo ng PUTING icon sa status bar, palitan ang
+             @mipmap/ic_launcher ng custom na @drawable/ic_notification
+             (pure white, transparent background). -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@mipmap/ic_launcher" />
+
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="work_reminder_channel" />
+
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/notification_color" />
@@ -95,9 +103,7 @@
             android:name="org.apache.http.legacy"
             android:required="false" />
 
-        <!-- ═══════════════════════════════════════════════════════
-             flutter_local_notifications RECEIVERS
-        ════════════════════════════════════════════════════════ -->
+        <!-- ═══ flutter_local_notifications RECEIVERS ═══ -->
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
             android:exported="false" />
@@ -117,7 +123,9 @@
             android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
             android:exported="false" />
 
-        <!-- ═══ MAIN ACTIVITY ═══ -->
+        <!-- ═══ MAIN ACTIVITY ═══
+             `singleTop` = kapag clinick ang notification, hindi magbubukas
+             ng bagong instance kundi ibabalik lang sa existing app. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

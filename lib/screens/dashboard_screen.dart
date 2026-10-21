@@ -1,6 +1,7 @@
 // lib/screens/dashboard_screen.dart
-// ✅ v3.2: DEMO MODE now shows the SAME skeleton loading screen as normal mode.
-//         (Skeleton appears briefly, then fades into the demo dashboard.)
+// ✅ v3.5: Fixed time display sync issue. Removed strict 'date' Firestore query
+//          which was failing when dates were saved as Timestamps or different formats.
+//          Now filters in memory and listens to all ID variations.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -23,7 +24,7 @@ import '../services/database_service.dart';
 import '../services/geofence_service.dart';
 import '../services/security_service.dart';
 import '../services/security_hardening_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭
+import '../services/demo_mode_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_loader.dart';
 import '../widgets/skeleton_screens.dart';
@@ -68,7 +69,6 @@ class _T {
   static const Color greenDeep = Color(0xFF166534);
   static const Color red = Color(0xFFEF4444);
 
-  // 🎭 DEMO — kini KAPAREHO na ng brand orange (dating purple)
   static const Color demoPurple = Color(0xFFFF8A00);
   static const Color demoAccent = Color(0xFFF54900);
 
@@ -83,7 +83,6 @@ class _T {
     stops: [0.0, 0.5, 1.0],
   );
 
-  // 🎭 DEMO — pareho rin ng brand gradient
   static const LinearGradient demoGradient = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
@@ -163,8 +162,11 @@ class DashboardScreenState extends State<DashboardScreen>
   String? _photoUrl;
 
   StreamSubscription<QuerySnapshot>? _attendanceSub;
+  StreamSubscription<QuerySnapshot>? _attendanceSubCamel;
+  StreamSubscription<QuerySnapshot>? _attendanceSubDocId; // 🆕 3rd stream
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
   StreamSubscription<bool>? _connectivitySub;
+  Timer? _attendancePollTimer;
 
   String? _initError;
 
@@ -191,8 +193,8 @@ class DashboardScreenState extends State<DashboardScreen>
   static const Duration _clockActionCooldown = Duration(seconds: 3);
   static const Duration _sessionCacheTTL = Duration(seconds: 5);
   static const Duration _sessionCheckTimeout = Duration(seconds: 15);
+  static const Duration _attendancePollInterval = Duration(seconds: 30);
 
-  // 🆕 Demo skeleton display time
   static const Duration _demoSkeletonDuration = Duration(milliseconds: 900);
 
   static const int _maxClockActionsPerSession = 20;
@@ -230,7 +232,6 @@ class DashboardScreenState extends State<DashboardScreen>
 
   final Map<String, DateTime> _recentSecurityLogs = {};
 
-  // 🎭 DEMO MODE
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
   bool get _canClock => _isDemo || _isInRange || _wfhAccess || _isDriver;
@@ -238,9 +239,6 @@ class DashboardScreenState extends State<DashboardScreen>
   bool get _isDriverMode => _isDriver && !_isInRange && !_wfhAccess;
   bool get _isOnline => _networkState == _NetworkState.online;
 
-  // ═════════════════════════════════════════════════════════════════
-  // 💰 PAYSLIP STATE
-  // ═════════════════════════════════════════════════════════════════
   final DateTime _payslipMonth =
   DateTime(DateTime.now().year, DateTime.now().month - 1);
   double? _payslipAmount;
@@ -264,7 +262,6 @@ class DashboardScreenState extends State<DashboardScreen>
 
   String? get _employeeId {
     if (_isDemo) return DemoModeService.demoEmployee.employeeId;
-
     final id = _employee?.employeeId ?? widget.initialEmployee?.employeeId;
     if (id != null && id.isNotEmpty) return id;
     final fallback = _employee?.id ?? widget.initialEmployee?.id;
@@ -274,7 +271,6 @@ class DashboardScreenState extends State<DashboardScreen>
 
   String? get _employeeDocId {
     if (_isDemo) return DemoModeService.demoEmployee.id;
-
     final id = _employee?.id ?? widget.initialEmployee?.id;
     if (id != null && id.isNotEmpty) return id;
     return null;
@@ -283,10 +279,7 @@ class DashboardScreenState extends State<DashboardScreen>
   double _degToRad(double deg) => deg * 3.1415926535 / 180;
 
   void _safeSwitchTab(int index) {
-    if (index < 0 || index > _kMaxTabIndex) {
-      _secureLog('⚠️ [Nav] Invalid tab index: $index — ignoring');
-      return;
-    }
+    if (index < 0 || index > _kMaxTabIndex) return;
     widget.onTabSwitch?.call(index);
   }
 
@@ -300,9 +293,7 @@ class DashboardScreenState extends State<DashboardScreen>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        precacheImage(_logoProvider, context).catchError((e) {
-          _secureLog('⚠️ Logo precache failed: $e');
-        });
+        precacheImage(_logoProvider, context).catchError((e) {});
       }
     });
 
@@ -322,38 +313,28 @@ class DashboardScreenState extends State<DashboardScreen>
                 _overlayDelayTimer?.cancel();
                 setState(() {
                   _networkState = _NetworkState.offline;
-                  _networkErrorMessage =
-                  'No internet connection.\nPlease check your network.';
+                  _networkErrorMessage = 'No internet connection.\nPlease check your network.';
                   _isLoadingAttendance = _isDemo ? false : true;
                   _checkingLocation = _isDemo ? false : true;
                   _showOfflineOverlay = false;
                 });
-                _overlayDelayTimer =
-                    Timer(const Duration(milliseconds: 1200), () {
-                      if (mounted && _networkState == _NetworkState.offline) {
-                        setState(() => _showOfflineOverlay = true);
-                      }
-                    });
+                _overlayDelayTimer = Timer(const Duration(milliseconds: 1200), () {
+                  if (mounted && _networkState == _NetworkState.offline) {
+                    setState(() => _showOfflineOverlay = true);
+                  }
+                });
               } else if (_networkState == _NetworkState.offline) {
                 _overlayDelayTimer?.cancel();
                 _showOfflineOverlay = false;
                 _retryNetworkCheck();
               }
             });
-      } catch (e) {
-        _secureLog('⚠️ connectivity listen failed: $e');
-      }
+      } catch (e) {}
 
-      // ═══════════════════════════════════════════════════════════════
-      // 🎭 DEMO MODE — bypass lahat pero IPAKITA ANG SKELETON sa simula
-      // ═══════════════════════════════════════════════════════════════
       if (_isDemo) {
-        _secureLog('🎭 [DemoMode] Dashboard in DEMO MODE (orange theme)');
         _sessionValidated = true;
         _isInRange = true;
         _networkState = _NetworkState.online;
-
-        // 🆕 Panatilihing TRUE ang loading flags para mag-show ang skeleton
         _isLoadingAttendance = true;
         _checkingLocation = true;
 
@@ -361,22 +342,18 @@ class DashboardScreenState extends State<DashboardScreen>
           _loadPayslipAmount();
         });
 
-        // 🆕 Itago ang skeleton pagkatapos ng maikling delay
         Future.delayed(_demoSkeletonDuration, () {
           if (!mounted) return;
           setState(() {
             _isLoadingAttendance = false;
             _checkingLocation = false;
           });
-          _secureLog('🎭 [DemoMode] Skeleton hidden — demo UI revealed');
         });
-
         return;
       }
 
       _bootstrapSecurity();
-    } catch (e, st) {
-      _secureLog('❌ initState error: $e\n$st');
+    } catch (e) {
       _initError = e.toString();
       _isLoadingAttendance = false;
       _checkingLocation = false;
@@ -385,21 +362,16 @@ class DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _bootstrapSecurity() async {
     if (_isDemo) return;
-
     try {
       await SecurityHardeningService.instance.enableSecureScreen();
     } catch (_) {}
-
     try {
-      final ok =
-      await SecurityHardeningService.instance.checkDeviceIntegrity();
+      final ok = await SecurityHardeningService.instance.checkDeviceIntegrity();
       _deviceCompromised = !ok;
       _integrityChecked = true;
     } catch (_) {}
-
     try {
-      _deviceBinding =
-      await SecurityHardeningService.instance.getDeviceBindingToken();
+      _deviceBinding = await SecurityHardeningService.instance.getDeviceBindingToken();
     } catch (_) {}
 
     final valid = await _validateSession(forceRefresh: true);
@@ -420,8 +392,7 @@ class DashboardScreenState extends State<DashboardScreen>
       _employeeDataHash = _hashEmployeeData(_employee!);
       try {
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(
-            '${_kEmployeeHashKey}_${_employee!.id}', _employeeDataHash!);
+        await prefs.setString('${_kEmployeeHashKey}_${_employee!.id}', _employeeDataHash!);
       } catch (_) {}
     }
 
@@ -447,8 +418,7 @@ class DashboardScreenState extends State<DashboardScreen>
     if (_employee == null) return false;
     try {
       final prefs = await SharedPreferences.getInstance();
-      final storedHash =
-      prefs.getString('${_kEmployeeHashKey}_${_employee!.id}');
+      final storedHash = prefs.getString('${_kEmployeeHashKey}_${_employee!.id}');
       if (storedHash == null) return false;
       final currentHash = _hashEmployeeData(_employee!);
       if (storedHash != currentHash) return true;
@@ -464,18 +434,15 @@ class DashboardScreenState extends State<DashboardScreen>
     required String details,
   }) async {
     if (_isDemo) return;
-
     try {
       if (!_isOnline) return;
       if (_employee?.id == null) return;
-
       final key = '$type|$details';
       final now = DateTime.now();
       final lastLog = _recentSecurityLogs[key];
       if (lastLog != null && now.difference(lastLog).inSeconds < 60) return;
 
-      _recentSecurityLogs
-          .removeWhere((_, v) => now.difference(v).inMinutes > 1);
+      _recentSecurityLogs.removeWhere((_, v) => now.difference(v).inMinutes > 1);
       if (_recentSecurityLogs.length >= _maxSecurityLogsPerMinute) return;
 
       _recentSecurityLogs[key] = now;
@@ -540,8 +507,7 @@ class DashboardScreenState extends State<DashboardScreen>
         legacyValid = await SecurityService.instance
             .isSessionValid()
             .timeout(_sessionCheckTimeout);
-        legacyEmpId =
-        await SecurityService.instance.getCurrentEmployeeId();
+        legacyEmpId = await SecurityService.instance.getCurrentEmployeeId();
       } on TimeoutException {
         legacyTimeout = true;
       } catch (_) {}
@@ -620,14 +586,16 @@ class DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _handleForcedLogout(String reason) async {
     if (_isDemo) return;
-
     if (_loggedOut || !mounted) return;
     _loggedOut = true;
 
     _heartbeatTimer?.cancel();
     _sessionWatchdog?.cancel();
     _durationTimer?.cancel();
+    _attendancePollTimer?.cancel();
     _attendanceSub?.cancel();
+    _attendanceSubCamel?.cancel();
+    _attendanceSubDocId?.cancel();
     _employeeSub?.cancel();
 
     try {
@@ -678,6 +646,8 @@ class DashboardScreenState extends State<DashboardScreen>
       _validateSession(forceRefresh: true).then((valid) {
         if (!valid && mounted && !_loggedOut) {
           _handleForcedLogout('Session invalid on resume');
+        } else if (mounted && !_loggedOut) {
+          _loadTodayAttendance().catchError((e) {});
         }
       });
     }
@@ -696,7 +666,6 @@ class DashboardScreenState extends State<DashboardScreen>
       if (mounted) setState(() => _networkState = _NetworkState.online);
       return;
     }
-
     if (!mounted) return;
     setState(() => _networkState = _NetworkState.checking);
 
@@ -706,8 +675,7 @@ class DashboardScreenState extends State<DashboardScreen>
     if (!hasNet) {
       setState(() {
         _networkState = _NetworkState.offline;
-        _networkErrorMessage =
-        'No internet connection.\nPlease check your network and try again.';
+        _networkErrorMessage = 'No internet connection.\nPlease check your network and try again.';
       });
       return;
     }
@@ -780,6 +748,13 @@ class DashboardScreenState extends State<DashboardScreen>
     await _refreshLocation();
     if (!mounted) return;
 
+    _attendancePollTimer?.cancel();
+    _attendancePollTimer = Timer.periodic(_attendancePollInterval, (_) {
+      if (!mounted || _loggedOut || _isDemo) return;
+      if (_networkState != _NetworkState.online) return;
+      _loadTodayAttendance().catchError((e) {});
+    });
+
     try {
       await _loadPayslipAmount();
     } catch (_) {}
@@ -800,8 +775,7 @@ class DashboardScreenState extends State<DashboardScreen>
 
     final elapsed = DateTime.now().difference(startTime);
     if (elapsed.inMilliseconds < 800) {
-      await Future.delayed(
-          Duration(milliseconds: 800 - elapsed.inMilliseconds));
+      await Future.delayed(Duration(milliseconds: 800 - elapsed.inMilliseconds));
     }
 
     if (!mounted) return;
@@ -813,7 +787,6 @@ class DashboardScreenState extends State<DashboardScreen>
 
   void _startEmployeeListener() {
     if (_isDemo) return;
-
     final docId = _employeeDocId;
     if (docId == null || docId.isEmpty) return;
 
@@ -833,8 +806,7 @@ class DashboardScreenState extends State<DashboardScreen>
             ? rawWfh
             : (rawWfh?.toString().toLowerCase() == 'true');
 
-        final newRole =
-        (data['role'] ?? data['position'] ?? _role).toString();
+        final newRole = (data['role'] ?? data['position'] ?? _role).toString();
         final newDept = (data['department'] ?? _department).toString();
         final newIsDriver = _isDriverRole(newRole, newDept);
 
@@ -874,7 +846,6 @@ class DashboardScreenState extends State<DashboardScreen>
       }
       return;
     }
-
     if (!mounted) return;
     setState(() => _checkingLocation = true);
     GeofenceService.instance.invalidateCache();
@@ -893,10 +864,7 @@ class DashboardScreenState extends State<DashboardScreen>
         } catch (_) {}
       }
 
-      if (result == null &&
-          empId != null &&
-          empId.isNotEmpty &&
-          empId != docId) {
+      if (result == null && empId != null && empId.isNotEmpty && empId != docId) {
         try {
           result = await GeofenceService.instance
               .checkGeofenceForEmployee(employeeId: empId)
@@ -943,26 +911,79 @@ class DashboardScreenState extends State<DashboardScreen>
     }
   }
 
+  // 🆕 3-way Stream Listener
   void _startAttendanceStream() {
     if (_isDemo) return;
 
-    final employeeId = _employeeId;
-    if (employeeId == null) return;
-    final todayStr = DateTime.now().toIso8601String().substring(0, 10);
+    final empId = _employeeId;
+    final docId = _employeeDocId;
+    if (empId == null) return;
 
+    // Stream 1: snake_case employee_id
     _attendanceSub?.cancel();
     _attendanceSub = FirebaseFirestore.instance
         .collection('attendance_logs')
-        .where('employee_id', isEqualTo: employeeId)
-        .where('date', isEqualTo: todayStr)
+        .where('employee_id', isEqualTo: empId)
         .snapshots()
-        .listen(
-          (snapshot) {
+        .listen((snapshot) {
+      if (!mounted) return;
+      _filterAndProcess(snapshot.docs, empId, docId);
+    }, onError: (_) {});
+
+    // Stream 2: camelCase employeeId
+    _attendanceSubCamel?.cancel();
+    _attendanceSubCamel = FirebaseFirestore.instance
+        .collection('attendance_logs')
+        .where('employeeId', isEqualTo: empId)
+        .snapshots()
+        .listen((snapshot) {
+      if (!mounted) return;
+      _filterAndProcess(snapshot.docs, empId, docId);
+    }, onError: (_) {});
+
+    // Stream 3: camelCase employeeId with docId
+    if (docId != null && docId != empId) {
+      _attendanceSubDocId?.cancel();
+      _attendanceSubDocId = FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .where('employeeId', isEqualTo: docId)
+          .snapshots()
+          .listen((snapshot) {
         if (!mounted) return;
-        _processAttendanceDocs(snapshot.docs);
-      },
-      onError: (_) {},
-    );
+        _filterAndProcess(snapshot.docs, empId, docId);
+      }, onError: (_) {});
+    }
+  }
+
+  // 🆕 Filter logs in-memory by TODAY'S date to avoid strict Firestore query issues
+  void _filterAndProcess(Iterable<QueryDocumentSnapshot> docs, String empId, String? docId) {
+    final now = DateTime.now();
+    final todayStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+    final filtered = docs.where((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+
+      final dateStr = data['date']?.toString() ?? '';
+      if (dateStr.startsWith(todayStr)) return true;
+
+      final ts = data['timestamp'];
+      if (ts is Timestamp) {
+        final dt = ts.toDate();
+        if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+          return true;
+        }
+      }
+
+      final timeStr = data['time']?.toString() ?? '';
+      if (timeStr.contains(todayStr)) return true;
+
+      // If no date info at all, assume it's recent and include it
+      if (dateStr.isEmpty && ts == null) return true;
+
+      return false;
+    }).toList();
+
+    _processAttendanceDocs(filtered);
   }
 
   String? _extractTimeString(Map<String, dynamic> data) {
@@ -1016,6 +1037,9 @@ class DashboardScreenState extends State<DashboardScreen>
   void _processAttendanceDocs(List<QueryDocumentSnapshot> docs) {
     if (!mounted) return;
 
+    final prevIn = _clockInTime;
+    final prevOut = _clockOutTime;
+
     String? latestInTime;
     String? latestOutTime;
     bool clockedInState = false;
@@ -1062,13 +1086,27 @@ class DashboardScreenState extends State<DashboardScreen>
       }
     }
 
+    final newIn = latestInTime ?? '--:--';
+    final newOut = latestOutTime ?? '--:--';
+
+    if (prevIn == newIn && prevOut == newOut) return; // No change
+
     setState(() {
       _isClockedIn = clockedInState;
-      _clockInTime = latestInTime ?? '--:--';
-      _clockOutTime = latestOutTime ?? '--:--';
+      _clockInTime = newIn;
+      _clockOutTime = newOut;
       _rawClockInDateTime = parsedInDateTime;
       _isLoadingAttendance = false;
     });
+
+    // Snackbar for admin updates
+    if (prevIn != '--:--' || prevOut != '--:--') {
+      if (prevOut == '--:--' && newOut != '--:--') {
+        _showSnack('📝 Admin recorded your clock OUT at $newOut');
+      } else if (prevOut != '--:--' && newOut != '--:--' && prevOut != newOut) {
+        _showSnack('📝 Admin updated your clock OUT to $newOut');
+      }
+    }
 
     if (_isClockedIn) {
       if (_durationTimer == null || !_durationTimer!.isActive) {
@@ -1085,11 +1123,14 @@ class DashboardScreenState extends State<DashboardScreen>
     WidgetsBinding.instance.removeObserver(this);
     _durationTimer?.cancel();
     _attendanceSub?.cancel();
+    _attendanceSubCamel?.cancel();
+    _attendanceSubDocId?.cancel();
     _employeeSub?.cancel();
     _connectivitySub?.cancel();
     _overlayDelayTimer?.cancel();
     _heartbeatTimer?.cancel();
     _sessionWatchdog?.cancel();
+    _attendancePollTimer?.cancel();
 
     SecurityHardeningService.instance.disableSecureScreen();
     super.dispose();
@@ -1097,7 +1138,6 @@ class DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _loadEmployeePhoto() async {
     if (_isDemo) return;
-
     try {
       final empId = _employee?.id ?? widget.initialEmployee?.id;
       if (empId == null || empId.isEmpty) return;
@@ -1145,7 +1185,6 @@ class DashboardScreenState extends State<DashboardScreen>
   Future<void> refreshAll() async {
     _recordUserActivity();
     if (_isDemo) {
-      // 🆕 Show skeleton briefly on demo refresh too
       setState(() {
         _isLoadingAttendance = true;
         _checkingLocation = true;
@@ -1164,30 +1203,70 @@ class DashboardScreenState extends State<DashboardScreen>
     await _refreshLocation();
   }
 
+  // 🆕 Updated multi-query logic (removed strict 'date' filter)
   Future<void> _loadTodayAttendance() async {
     if (_isDemo) return;
-
     if (!mounted) return;
-    final employeeId = _employeeId;
-    if (employeeId == null) return;
 
-    final todayStr = DateTime.now().toIso8601String().substring(0, 10);
+    final empId = _employeeId;
+    final docId = _employeeDocId;
+    if (empId == null) return;
 
     for (int attempt = 0; attempt < _maxAttendanceRetries; attempt++) {
       try {
-        final snapshot = await FirebaseFirestore.instance
-            .collection('attendance_logs')
-            .where('employee_id', isEqualTo: employeeId)
-            .where('date', isEqualTo: todayStr)
-            .get()
-            .timeout(const Duration(seconds: 10));
+        final allDocs = <QueryDocumentSnapshot>[];
+        final seenIds = <String>{};
 
-        _processAttendanceDocs(snapshot.docs);
+        // Q1: snake_case employee_id
+        try {
+          final snap1 = await FirebaseFirestore.instance
+              .collection('attendance_logs')
+              .where('employee_id', isEqualTo: empId)
+              .get()
+              .timeout(const Duration(seconds: 10));
+          for (final d in snap1.docs) {
+            if (seenIds.add(d.id)) allDocs.add(d);
+          }
+        } catch (e) {
+          _secureLog('⚠️ Q1 failed: $e');
+        }
+
+        // Q2: camelCase employeeId (badge ID)
+        try {
+          final snap2 = await FirebaseFirestore.instance
+              .collection('attendance_logs')
+              .where('employeeId', isEqualTo: empId)
+              .get()
+              .timeout(const Duration(seconds: 10));
+          for (final d in snap2.docs) {
+            if (seenIds.add(d.id)) allDocs.add(d);
+          }
+        } catch (e) {
+          _secureLog('⚠️ Q2 failed: $e');
+        }
+
+        // Q3: camelCase employeeId (doc ID)
+        if (docId != null && docId != empId) {
+          try {
+            final snap3 = await FirebaseFirestore.instance
+                .collection('attendance_logs')
+                .where('employeeId', isEqualTo: docId)
+                .get()
+                .timeout(const Duration(seconds: 10));
+            for (final d in snap3.docs) {
+              if (seenIds.add(d.id)) allDocs.add(d);
+            }
+          } catch (e) {
+            _secureLog('⚠️ Q3 failed: $e');
+          }
+        }
+
+        if (!mounted) return;
+        _filterAndProcess(allDocs, empId, docId);
         return;
       } catch (_) {
         if (attempt < _maxAttendanceRetries - 1) {
-          await Future.delayed(
-              Duration(milliseconds: 500 * (attempt + 1)));
+          await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
         }
       }
     }
@@ -1209,15 +1288,10 @@ class DashboardScreenState extends State<DashboardScreen>
     }
   }
 
-  // ═════════════════════════════════════════════════════════════════
-  // 💰 PAYSLIP — 🎭 DEMO: fake data, no DB
-  // ═════════════════════════════════════════════════════════════════
   Future<void> _loadPayslipAmount() async {
     if (!mounted) return;
 
-    // 🎭 DEMO MODE — use fake data, no DB query
     if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Loading fake payslip — NO DB query');
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
       setState(() {
@@ -1255,9 +1329,7 @@ class DashboardScreenState extends State<DashboardScreen>
 
       await _checkLocalPayslipCache(employeeId);
 
-      if (_isPayslipVisible &&
-          _payslipData != null &&
-          !_payslipAlreadyDownloaded) {
+      if (_isPayslipVisible && _payslipData != null && !_payslipAlreadyDownloaded) {
         unawaited(_autoDownloadPayslip(employeeId));
       }
     } catch (e) {
@@ -1271,8 +1343,7 @@ class DashboardScreenState extends State<DashboardScreen>
     }
   }
 
-  Future<Map<String, dynamic>?> _fetchPayslipFromBackend(
-      String employeeId, DateTime month) async {
+  Future<Map<String, dynamic>?> _fetchPayslipFromBackend(String employeeId, DateTime month) async {
     if (_isDemo) return null;
     if (!_isOnline) return null;
 
@@ -1297,9 +1368,7 @@ class DashboardScreenState extends State<DashboardScreen>
   }
 
   double? _extractNetPay(Map<String, dynamic> data) {
-    final candidates = [
-      'netPay', 'net_pay', 'netAmount', 'amount', 'totalPay',
-    ];
+    final candidates = ['netPay', 'net_pay', 'netAmount', 'amount', 'totalPay'];
     for (final key in candidates) {
       final v = data[key];
       if (v is num) return v.toDouble();
@@ -1313,7 +1382,6 @@ class DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _checkLocalPayslipCache(String employeeId) async {
     if (_isDemo) return;
-
     try {
       final dir = await getApplicationDocumentsDirectory();
       final fileName = _payslipFileName(employeeId, _payslipMonth);
@@ -1354,26 +1422,21 @@ class DashboardScreenState extends State<DashboardScreen>
       return;
     }
 
-    // 🎭 DEMO — generate PDF from fake data (local save only)
     if (_isDemo) {
       if (showUI) setState(() => _payslipDownloading = true);
-
       try {
         final fakeData = Map<String, dynamic>.from(
           DemoModeService.instance.demoPayslipBreakdown,
         );
         final pdfBytes = await _generatePayslipPDF(fakeData);
-
         final dir = await getApplicationDocumentsDirectory();
         final payslipDir = Directory('${dir.path}/payslips');
         if (!await payslipDir.exists()) {
           await payslipDir.create(recursive: true);
         }
-
         final fileName = _payslipFileName(employeeId, _payslipMonth);
         final file = File('${payslipDir.path}/$fileName');
         await file.writeAsBytes(pdfBytes, flush: true);
-
         if (mounted) {
           setState(() {
             _payslipDownloading = false;
@@ -1382,7 +1445,6 @@ class DashboardScreenState extends State<DashboardScreen>
             _payslipDownloadedAt = DateTime.now();
           });
         }
-
         if (showUI) {
           _showSnack('🎭 Demo payslip saved ✅');
           unawaited(_previewLocalPayslip());
@@ -1403,13 +1465,11 @@ class DashboardScreenState extends State<DashboardScreen>
 
     try {
       final pdfBytes = await _generatePayslipPDF(_payslipData!);
-
       final dir = await getApplicationDocumentsDirectory();
       final payslipDir = Directory('${dir.path}/payslips');
       if (!await payslipDir.exists()) {
         await payslipDir.create(recursive: true);
       }
-
       final fileName = _payslipFileName(employeeId, _payslipMonth);
       final file = File('${payslipDir.path}/$fileName');
       await file.writeAsBytes(pdfBytes, flush: true);
@@ -1426,8 +1486,7 @@ class DashboardScreenState extends State<DashboardScreen>
       unawaited(_logSecurityEvent(
         type: 'payslip_downloaded',
         severity: 'info',
-        details: 'Payslip ${_payslipMonthLabel} downloaded '
-            '(${pdfBytes.length} bytes)',
+        details: 'Payslip ${_payslipMonthLabel} downloaded (${pdfBytes.length} bytes)',
       ));
 
       if (showUI) {
@@ -1486,35 +1545,17 @@ class DashboardScreenState extends State<DashboardScreen>
     return 'payslip_${employeeId}_${month.year}_$mm.pdf';
   }
 
-  Future<Uint8List> _generatePayslipPDF(
-      Map<String, dynamic> data) async {
+  Future<Uint8List> _generatePayslipPDF(Map<String, dynamic> data) async {
     final pdf = pw.Document();
-
-    final employeeName = _isDemo
-        ? DemoModeService.demoEmployee.fullName
-        : (_employee?.fullName ?? 'Employee');
+    final employeeName = _isDemo ? DemoModeService.demoEmployee.fullName : (_employee?.fullName ?? 'Employee');
     final employeeIdStr = _employeeId ?? '—';
     final period = _payslipMonthLabel;
-    final netPay = _extractNetPay(data) ??
-        (_isDemo ? DemoModeService.instance.demoPayslipAmount : null);
-
+    final netPay = _extractNetPay(data) ?? (_isDemo ? DemoModeService.instance.demoPayslipAmount : null);
     final grossPay = _numOr(data['grossPay'] ?? data['gross_pay'], 0);
-    final deductions = _numOr(
-        data['totalDeductions'] ??
-            data['total_deductions'] ??
-            data['deductions_total'],
-        0);
-    final allowances = _numOr(
-        data['totalAllowances'] ??
-            data['total_allowances'] ??
-            data['allowances_total'],
-        0);
+    final deductions = _numOr(data['totalDeductions'] ?? data['total_deductions'] ?? data['deductions_total'], 0);
+    final allowances = _numOr(data['totalAllowances'] ?? data['total_allowances'] ?? data['allowances_total'], 0);
+    final generatedAt = data['generatedAt'] is Timestamp ? (data['generatedAt'] as Timestamp).toDate() : DateTime.now();
 
-    final generatedAt = data['generatedAt'] is Timestamp
-        ? (data['generatedAt'] as Timestamp).toDate()
-        : DateTime.now();
-
-    // 🎭 Demo payslip — now uses SAME orange as main
     final headerColor = PdfColors.orange;
     final headerSoft = PdfColors.orange50;
     final headerAccent = PdfColors.orange;
@@ -1526,37 +1567,19 @@ class DashboardScreenState extends State<DashboardScreen>
         build: (context) => [
           pw.Container(
             padding: const pw.EdgeInsets.all(16),
-            decoration: pw.BoxDecoration(
-              color: headerColor,
-              borderRadius: pw.BorderRadius.circular(8),
-            ),
+            decoration: pw.BoxDecoration(color: headerColor, borderRadius: pw.BorderRadius.circular(8)),
             child: pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
                 pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    pw.Text('R.A.C.O.M.A.',
-                        style: pw.TextStyle(
-                          color: PdfColors.white,
-                          fontSize: 20,
-                          fontWeight: pw.FontWeight.bold,
-                        )),
+                    pw.Text('R.A.C.O.M.A.', style: pw.TextStyle(color: PdfColors.white, fontSize: 20, fontWeight: pw.FontWeight.bold)),
                     pw.SizedBox(height: 4),
-                    pw.Text(
-                        _isDemo
-                            ? 'DEMO Payslip (no data saved)'
-                            : 'Employee Payslip',
-                        style: const pw.TextStyle(
-                            color: PdfColors.white, fontSize: 11)),
+                    pw.Text(_isDemo ? 'DEMO Payslip (no data saved)' : 'Employee Payslip', style: const pw.TextStyle(color: PdfColors.white, fontSize: 11)),
                   ],
                 ),
-                pw.Text(period,
-                    style: pw.TextStyle(
-                      color: PdfColors.white,
-                      fontSize: 14,
-                      fontWeight: pw.FontWeight.bold,
-                    )),
+                pw.Text(period, style: pw.TextStyle(color: PdfColors.white, fontSize: 14, fontWeight: pw.FontWeight.bold)),
               ],
             ),
           ),
@@ -1565,18 +1588,11 @@ class DashboardScreenState extends State<DashboardScreen>
             ['Employee Name', employeeName],
             ['Employee ID', employeeIdStr],
             ['Pay Period', period],
-            ['Status',
-              _isDemo
-                  ? 'DEMO (not saved)'
-                  : (data['status'] ?? 'released')
-                  .toString()
-                  .toUpperCase()],
+            ['Status', _isDemo ? 'DEMO (not saved)' : (data['status'] ?? 'released').toString().toUpperCase()],
             ['Generated', _formatTimestamp(generatedAt)],
           ]),
           pw.SizedBox(height: 20),
-          pw.Text('Earnings Summary',
-              style: pw.TextStyle(
-                  fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          pw.Text('Earnings Summary', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 8),
           _pdfInfoTable([
             ['Gross Pay', 'PHP ${_formatPesoNum(grossPay)}'],
@@ -1586,51 +1602,24 @@ class DashboardScreenState extends State<DashboardScreen>
           pw.SizedBox(height: 16),
           pw.Container(
             padding: const pw.EdgeInsets.all(16),
-            decoration: pw.BoxDecoration(
-              color: headerSoft,
-              border: pw.Border.all(
-                  color: headerAccent, width: 2),
-              borderRadius: pw.BorderRadius.circular(8),
-            ),
+            decoration: pw.BoxDecoration(color: headerSoft, border: pw.Border.all(color: headerAccent, width: 2), borderRadius: pw.BorderRadius.circular(8)),
             child: pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
-                pw.Text('NET PAY',
-                    style: pw.TextStyle(
-                      fontSize: 14,
-                      fontWeight: pw.FontWeight.bold,
-                    )),
-                pw.Text(
-                  netPay != null ? 'PHP ${_formatPesoNum(netPay)}' : '—',
-                  style: pw.TextStyle(
-                    fontSize: 22,
-                    fontWeight: pw.FontWeight.bold,
-                    color: headerAccent,
-                  ),
-                ),
+                pw.Text('NET PAY', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                pw.Text(netPay != null ? 'PHP ${_formatPesoNum(netPay)}' : '—', style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold, color: headerAccent)),
               ],
             ),
           ),
           pw.SizedBox(height: 20),
           pw.Divider(),
           pw.SizedBox(height: 8),
-          pw.Text(
-            _isDemo
-                ? 'DEMO MODE — this payslip is NOT saved to the database.'
-                : 'This is a system-generated payslip. No signature required.',
-            style: const pw.TextStyle(
-                fontSize: 9, color: PdfColors.grey700),
-          ),
+          pw.Text(_isDemo ? 'DEMO MODE — this payslip is NOT saved to the database.' : 'This is a system-generated payslip. No signature required.', style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
           pw.SizedBox(height: 4),
-          pw.Text(
-            'Generated on ${_formatTimestamp(DateTime.now())}',
-            style: const pw.TextStyle(
-                fontSize: 9, color: PdfColors.grey700),
-          ),
+          pw.Text('Generated on ${_formatTimestamp(DateTime.now())}', style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
         ],
       ),
     );
-
     return pdf.save();
   }
 
@@ -1643,30 +1632,13 @@ class DashboardScreenState extends State<DashboardScreen>
   pw.Widget _pdfInfoTable(List<List<String>> rows) {
     return pw.Table(
       border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
-      columnWidths: const {
-        0: pw.FlexColumnWidth(2),
-        1: pw.FlexColumnWidth(3),
-      },
-      children: rows
-          .map((r) => pw.TableRow(
+      columnWidths: const { 0: pw.FlexColumnWidth(2), 1: pw.FlexColumnWidth(3) },
+      children: rows.map((r) => pw.TableRow(
         children: [
-          pw.Padding(
-            padding: const pw.EdgeInsets.all(6),
-            child: pw.Text(r[0],
-                style: pw.TextStyle(
-                  fontSize: 10,
-                  fontWeight: pw.FontWeight.bold,
-                  color: PdfColors.grey800,
-                )),
-          ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.all(6),
-            child: pw.Text(r[1],
-                style: const pw.TextStyle(fontSize: 10)),
-          ),
+          pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(r[0], style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.grey800))),
+          pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(r[1], style: const pw.TextStyle(fontSize: 10))),
         ],
-      ))
-          .toList(),
+      )).toList(),
     );
   }
 
@@ -1675,7 +1647,6 @@ class DashboardScreenState extends State<DashboardScreen>
     final parts = wholeStr.split('.');
     final whole = parts[0];
     final cents = parts.length > 1 ? parts[1] : '00';
-
     final buf = StringBuffer();
     for (int i = 0; i < whole.length; i++) {
       final posFromEnd = whole.length - i;
@@ -1726,8 +1697,7 @@ class DashboardScreenState extends State<DashboardScreen>
     'July', 'August', 'September', 'October', 'November', 'December',
   ];
 
-  String get _payslipMonthLabel =>
-      '${_monthNames[_payslipMonth.month - 1]} ${_payslipMonth.year}';
+  String get _payslipMonthLabel => '${_monthNames[_payslipMonth.month - 1]} ${_payslipMonth.year}';
 
   void _handleClockAction() {
     _recordUserActivity();
@@ -1788,8 +1758,6 @@ class DashboardScreenState extends State<DashboardScreen>
 
     final isOffline = _networkState == _NetworkState.offline && !_isDemo;
     final isChecking = _networkState == _NetworkState.checking && !_isDemo;
-
-    // 🆕 Removed `&& !_isDemo` — demo now shows skeleton during initial load
     final isInitialLoad = _isLoadingAttendance && _checkingLocation;
 
     if (isOffline || isChecking || isInitialLoad) {
@@ -1826,17 +1794,11 @@ class DashboardScreenState extends State<DashboardScreen>
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(Icons.error_outline,
-                    color: Colors.red, size: 48),
+                const Icon(Icons.error_outline, color: Colors.red, size: 48),
                 const SizedBox(height: 16),
-                const Text('Dashboard Error',
-                    style: TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold)),
+                const Text('Dashboard Error', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
-                Text(_initError!,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        fontSize: 12, color: Colors.grey)),
+                Text(_initError!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: Colors.grey)),
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: () {
@@ -1880,26 +1842,14 @@ class DashboardScreenState extends State<DashboardScreen>
                             _buildDemoBadge(),
                             const SizedBox(height: 8),
                           ],
-
-                          if ((_deviceCompromised ||
-                              _mockLocationDetected) &&
-                              !_isDemo) ...[
+                          if ((_deviceCompromised || _mockLocationDetected) && !_isDemo) ...[
                             Row(
                               mainAxisAlignment: MainAxisAlignment.end,
                               children: [
                                 if (_deviceCompromised)
-                                  _buildBadge(
-                                    'UNSAFE DEVICE',
-                                    Icons.warning_amber_rounded,
-                                    _T.red,
-                                  ),
-                                if (_mockLocationDetected &&
-                                    !_deviceCompromised)
-                                  _buildBadge(
-                                    'FAKE GPS',
-                                    Icons.location_off_rounded,
-                                    _T.red,
-                                  ),
+                                  _buildBadge('UNSAFE DEVICE', Icons.warning_amber_rounded, _T.red),
+                                if (_mockLocationDetected && !_deviceCompromised)
+                                  _buildBadge('FAKE GPS', Icons.location_off_rounded, _T.red),
                               ],
                             ),
                             const SizedBox(height: 8),
@@ -1910,11 +1860,7 @@ class DashboardScreenState extends State<DashboardScreen>
                           const SizedBox(height: 24),
                           _buildToggle(tc),
                           const SizedBox(height: 24),
-                          _buildSectionTitle(
-                            'Location Status',
-                            tc: tc,
-                            trailing: _buildGpsTag(tc),
-                          ),
+                          _buildSectionTitle('Location Status', tc: tc, trailing: _buildGpsTag(tc)),
                           const SizedBox(height: 12),
                           _buildLocationCard(tc),
                           const SizedBox(height: 24),
@@ -1923,13 +1869,7 @@ class DashboardScreenState extends State<DashboardScreen>
                           _buildShortcutsGrid(tc),
                           if (_isPayslipVisible) ...[
                             const SizedBox(height: 24),
-                            _buildSectionTitle(
-                              'Recent Payslip',
-                              tc: tc,
-                              viewAll: true,
-                              onViewAllTap: () =>
-                                  _safeSwitchTab(_kTabLogs),
-                            ),
+                            _buildSectionTitle('Recent Payslip', tc: tc, viewAll: true, onViewAllTap: () => _safeSwitchTab(_kTabLogs)),
                             const SizedBox(height: 12),
                             _buildPayslipCard(tc),
                           ],
@@ -1953,7 +1893,6 @@ class DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  // 🎭 DEMO MODE badge — ORANGE na (dating purple)
   Widget _buildDemoBadge() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -2033,21 +1972,12 @@ class DashboardScreenState extends State<DashboardScreen>
                   borderRadius: BorderRadius.circular(20),
                 ),
                 alignment: Alignment.center,
-                child: const Icon(Icons.lock_outline_rounded,
-                    color: Colors.black, size: 32),
+                child: const Icon(Icons.lock_outline_rounded, color: Colors.black, size: 32),
               ),
               const SizedBox(height: 16),
-              const Text('R.A.C.O.M.A.',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 18,
-                      letterSpacing: 1.2)),
+              const Text('R.A.C.O.M.A.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18, letterSpacing: 1.2)),
               const SizedBox(height: 6),
-              Text('Session hidden for your privacy',
-                  style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.55),
-                      fontSize: 12)),
+              Text('Session hidden for your privacy', style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12)),
             ],
           ),
         ),
@@ -2068,20 +1998,12 @@ class DashboardScreenState extends State<DashboardScreen>
               gradient: const LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xFFFF8A00),
-                  Color(0xFFFA6A00),
-                  Color(0xFFF54900),
-                ],
+                colors: [Color(0xFFFF8A00), Color(0xFFFA6A00), Color(0xFFF54900)],
               ),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: Colors.white, width: 1.15),
               boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  blurRadius: 20,
-                  offset: const Offset(0, 12),
-                ),
+                BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 20, offset: const Offset(0, 12)),
               ],
             ),
             child: Column(
@@ -2093,28 +2015,14 @@ class DashboardScreenState extends State<DashboardScreen>
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: Colors.white.withValues(alpha: 0.2),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.4),
-                      width: 1.5,
-                    ),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.4), width: 1.5),
                   ),
-                  child: const Icon(Icons.wifi_off_rounded,
-                      color: Colors.white, size: 40),
+                  child: const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 40),
                 ),
                 const SizedBox(height: 20),
-                const Text('No Connection',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700)),
+                const Text('No Connection', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 10),
-                Text(_networkErrorMessage,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.92),
-                        fontSize: 13,
-                        height: 1.5)),
+                Text(_networkErrorMessage, textAlign: TextAlign.center, style: TextStyle(color: Colors.white.withValues(alpha: 0.92), fontSize: 13, height: 1.5)),
                 const SizedBox(height: 24),
                 SizedBox(
                   width: 180,
@@ -2125,15 +2033,10 @@ class DashboardScreenState extends State<DashboardScreen>
                       foregroundColor: _T.orange,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     icon: const Icon(Icons.refresh_rounded, size: 18),
-                    label: const Text('Try Again',
-                        style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700)),
+                    label: const Text('Try Again', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                   ),
                 ),
               ],
@@ -2145,13 +2048,9 @@ class DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildHeader(_ThemeColors tc) {
-    final name = _employee?.firstName ??
-        widget.initialEmployee?.firstName ??
-        'Employee';
-    final lastName =
-        _employee?.lastName ?? widget.initialEmployee?.lastName ?? '';
-    final photo =
-        _photoUrl ?? _employee?.photoUrl ?? widget.initialEmployee?.photoUrl;
+    final name = _employee?.firstName ?? widget.initialEmployee?.firstName ?? 'Employee';
+    final lastName = _employee?.lastName ?? widget.initialEmployee?.lastName ?? '';
+    final photo = _photoUrl ?? _employee?.photoUrl ?? widget.initialEmployee?.photoUrl;
 
     void goToProfile() {
       _recordUserActivity();
@@ -2168,10 +2067,7 @@ class DashboardScreenState extends State<DashboardScreen>
             height: 45,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(
-                color: tc.darkBorder,
-                width: 1.15,
-              ),
+              border: Border.all(color: tc.darkBorder, width: 1.15),
             ),
             child: ClipOval(child: _buildAvatarContent(photo, name)),
           ),
@@ -2183,31 +2079,18 @@ class DashboardScreenState extends State<DashboardScreen>
             children: [
               Text(
                 'HI, ${name.toUpperCase()} ${lastName.toUpperCase()}',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: tc.textGray,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.5,
-                ),
+                style: TextStyle(fontSize: 10, color: tc.textGray, fontWeight: FontWeight.w700, letterSpacing: 0.5),
                 overflow: TextOverflow.ellipsis,
                 maxLines: 1,
               ),
               const SizedBox(height: 2),
               Row(
                 children: [
-                  Text(
-                      _isDemo
-                          ? 'Demo Dashboard'
-                          : 'Employee Dashboard',
-                      style: TextStyle(
-                          fontSize: 14,
-                          color: tc.textBlack,
-                          fontWeight: FontWeight.w500)),
+                  Text(_isDemo ? 'Demo Dashboard' : 'Employee Dashboard', style: TextStyle(fontSize: 14, color: tc.textBlack, fontWeight: FontWeight.w500)),
                   if (_isDemo) ...[
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: _T.orange.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(999),
@@ -2216,15 +2099,9 @@ class DashboardScreenState extends State<DashboardScreen>
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.science_rounded,
-                              size: 10, color: _T.orange),
+                          Icon(Icons.science_rounded, size: 10, color: _T.orange),
                           SizedBox(width: 4),
-                          Text('DEMO',
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  color: _T.orange,
-                                  letterSpacing: 0.4)),
+                          Text('DEMO', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: _T.orange, letterSpacing: 0.4)),
                         ],
                       ),
                     ),
@@ -2232,8 +2109,7 @@ class DashboardScreenState extends State<DashboardScreen>
                   if (_wfhAccess && !_isDemo) ...[
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: const Color(0xFFDCFCE7),
                         borderRadius: BorderRadius.circular(999),
@@ -2242,15 +2118,9 @@ class DashboardScreenState extends State<DashboardScreen>
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.home_work_rounded,
-                              size: 10, color: _T.greenDeep),
+                          Icon(Icons.home_work_rounded, size: 10, color: _T.greenDeep),
                           SizedBox(width: 4),
-                          Text('WFH',
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  color: _T.greenDeep,
-                                  letterSpacing: 0.4)),
+                          Text('WFH', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: _T.greenDeep, letterSpacing: 0.4)),
                         ],
                       ),
                     ),
@@ -2258,8 +2128,7 @@ class DashboardScreenState extends State<DashboardScreen>
                   if (_isDriver && !_wfhAccess && !_isDemo) ...[
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: const Color(0xFFDBEAFE),
                         borderRadius: BorderRadius.circular(999),
@@ -2268,15 +2137,9 @@ class DashboardScreenState extends State<DashboardScreen>
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.local_shipping_rounded,
-                              size: 10, color: Color(0xFF1E40AF)),
+                          Icon(Icons.local_shipping_rounded, size: 10, color: Color(0xFF1E40AF)),
                           SizedBox(width: 4),
-                          Text('DRIVER',
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFF1E40AF),
-                                  letterSpacing: 0.4)),
+                          Text('DRIVER', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF1E40AF), letterSpacing: 0.4)),
                         ],
                       ),
                     ),
@@ -2284,8 +2147,7 @@ class DashboardScreenState extends State<DashboardScreen>
                   if (_networkState == _NetworkState.offline && !_isDemo) ...[
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: const Color(0xFFFEE2E2),
                         borderRadius: BorderRadius.circular(999),
@@ -2294,15 +2156,9 @@ class DashboardScreenState extends State<DashboardScreen>
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.cloud_off_rounded,
-                              size: 10, color: Color(0xFF991B1B)),
+                          Icon(Icons.cloud_off_rounded, size: 10, color: Color(0xFF991B1B)),
                           SizedBox(width: 4),
-                          Text('OFFLINE',
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFF991B1B),
-                                  letterSpacing: 0.4)),
+                          Text('OFFLINE', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF991B1B), letterSpacing: 0.4)),
                         ],
                       ),
                     ),
@@ -2317,13 +2173,11 @@ class DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildAvatarContent(String? photo, String name) {
-    // 🎭 Demo avatar — ORANGE na (dating purple)
     if (_isDemo) {
       return Container(
         color: _T.orange,
         alignment: Alignment.center,
-        child: const Icon(Icons.science_rounded,
-            color: Colors.white, size: 22),
+        child: const Icon(Icons.science_rounded, color: Colors.white, size: 22),
       );
     }
 
@@ -2334,30 +2188,13 @@ class DashboardScreenState extends State<DashboardScreen>
       try {
         final b64 = photo.split(',').last;
         final bytes = base64Decode(b64);
-        return Image.memory(
-          bytes,
-          width: 45,
-          height: 45,
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.low,
-          errorBuilder: (_, __, ___) => _avatarFallback(name),
-        );
+        return Image.memory(bytes, width: 45, height: 45, fit: BoxFit.cover, gaplessPlayback: true, filterQuality: FilterQuality.low, errorBuilder: (_, __, ___) => _avatarFallback(name));
       } catch (_) {
         return _avatarFallback(name);
       }
     }
-
     if (photo.startsWith('http')) {
-      return Image.network(
-        photo,
-        width: 45,
-        height: 45,
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        filterQuality: FilterQuality.low,
-        errorBuilder: (_, __, ___) => _avatarFallback(name),
-      );
+      return Image.network(photo, width: 45, height: 45, fit: BoxFit.cover, gaplessPlayback: true, filterQuality: FilterQuality.low, errorBuilder: (_, __, ___) => _avatarFallback(name));
     }
     return _avatarFallback(name);
   }
@@ -2366,13 +2203,7 @@ class DashboardScreenState extends State<DashboardScreen>
     return Container(
       color: _T.orange,
       alignment: Alignment.center,
-      child: Text(
-        name.isNotEmpty ? name[0].toUpperCase() : 'U',
-        style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
-            fontSize: 16),
-      ),
+      child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'U', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
     );
   }
 
@@ -2415,8 +2246,7 @@ class DashboardScreenState extends State<DashboardScreen>
       accentColor = _T.orange;
     } else {
       statusText = 'out of range.';
-      subtitle =
-      'Clock in from the authorized zone or ask admin for WFH access.';
+      subtitle = 'Clock in from the authorized zone or ask admin for WFH access.';
       accentColor = _T.red;
     }
 
@@ -2425,17 +2255,9 @@ class DashboardScreenState extends State<DashboardScreen>
       height: 200,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: const Color(0xFFFFA500),
-          width: 1.15,
-        ),
+        border: Border.all(color: const Color(0xFFFFA500), width: 1.15),
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.25),
-            offset: const Offset(0, 25),
-            blurRadius: 50,
-            spreadRadius: -12,
-          ),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.25), offset: const Offset(0, 25), blurRadius: 50, spreadRadius: -12),
         ],
       ),
       clipBehavior: Clip.antiAlias,
@@ -2444,12 +2266,7 @@ class DashboardScreenState extends State<DashboardScreen>
           Positioned.fill(
             child: Opacity(
               opacity: 0.6,
-              child: Image.asset(
-                'assets/images/imagewithfallback.png',
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) =>
-                    Container(color: const Color(0xFF1A1A1A)),
-              ),
+              child: Image.asset('assets/images/imagewithfallback.png', fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: const Color(0xFF1A1A1A))),
             ),
           ),
           Positioned.fill(
@@ -2476,28 +2293,15 @@ class DashboardScreenState extends State<DashboardScreen>
                 RichText(
                   softWrap: true,
                   text: TextSpan(
-                    style: const TextStyle(
-                        fontSize: 34,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white,
-                        height: 1.15),
+                    style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w500, color: Colors.white, height: 1.15),
                     children: [
                       const TextSpan(text: 'You are currently\n'),
-                      TextSpan(
-                          text: statusText,
-                          style: TextStyle(
-                              color: accentColor,
-                              fontWeight: FontWeight.w700)),
+                      TextSpan(text: statusText, style: TextStyle(color: accentColor, fontWeight: FontWeight.w700)),
                     ],
                   ),
                 ),
                 const Spacer(),
-                Text(subtitle,
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w400,
-                        color: Color(0xFFA1A1AA),
-                        height: 1.4)),
+                Text(subtitle, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w400, color: Color(0xFFA1A1AA), height: 1.4)),
               ],
             ),
           ),
@@ -2510,17 +2314,12 @@ class DashboardScreenState extends State<DashboardScreen>
     final clocked = _isClockedIn;
     final canAction = _canClock && _isOnline && !_deviceCompromised;
 
-    final gradient = _T.brandGradient;
-
     return Container(
       padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(_T.r18),
-        gradient: gradient,
-        border: Border.all(
-          color: _T.orange,
-          width: 1.15,
-        ),
+        gradient: _T.brandGradient,
+        border: Border.all(color: _T.orange, width: 1.15),
       ),
       child: Row(
         children: [
@@ -2575,24 +2374,17 @@ class DashboardScreenState extends State<DashboardScreen>
         decoration: BoxDecoration(
           color: active ? tc.toggleActiveBg : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
-          border:
-          active ? Border.all(color: _T.orangeBorder, width: 1) : null,
+          border: active ? Border.all(color: _T.orangeBorder, width: 1) : null,
         ),
         child: Column(
           children: [
-            Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: active ? tc.textBlack : inactiveLabelColor)),
+            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: active ? tc.textBlack : inactiveLabelColor)),
             const SizedBox(height: 2),
             Text(
               locked ? 'Locked' : time,
               style: TextStyle(
                 fontSize: 11,
-                color: locked
-                    ? _T.red
-                    : (active ? tc.textMuted : inactiveTimeColor),
+                color: locked ? _T.red : (active ? tc.textMuted : inactiveTimeColor),
                 fontWeight: locked ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
@@ -2612,11 +2404,7 @@ class DashboardScreenState extends State<DashboardScreen>
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(title,
-            style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: tc.textBlack)),
+        Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: tc.textBlack)),
         if (trailing != null) trailing,
         if (viewAll)
           GestureDetector(
@@ -2627,11 +2415,7 @@ class DashboardScreenState extends State<DashboardScreen>
             behavior: HitTestBehavior.opaque,
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-              child: Text('View All',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: _T.orange,
-                      fontWeight: FontWeight.w500)),
+              child: Text('View All', style: TextStyle(fontSize: 12, color: _T.orange, fontWeight: FontWeight.w500)),
             ),
           ),
       ],
@@ -2644,11 +2428,7 @@ class DashboardScreenState extends State<DashboardScreen>
         children: [
           const Icon(Icons.science_rounded, size: 12, color: _T.orange),
           const SizedBox(width: 4),
-          Text('Demo Mode',
-              style: TextStyle(
-                  fontSize: 12,
-                  color: _T.orange,
-                  fontWeight: FontWeight.w500)),
+          Text('Demo Mode', style: TextStyle(fontSize: 12, color: _T.orange, fontWeight: FontWeight.w500)),
         ],
       );
     }
@@ -2666,21 +2446,14 @@ class DashboardScreenState extends State<DashboardScreen>
         ? Icons.gps_fixed_rounded
         : (_isWfhMode
         ? Icons.home_work_rounded
-        : (_isDriverMode
-        ? Icons.local_shipping_rounded
-        : Icons.near_me_rounded)));
-    final color =
-    _networkState == _NetworkState.offline ? _T.red : tc.textBlack;
+        : (_isDriverMode ? Icons.local_shipping_rounded : Icons.near_me_rounded)));
+    final color = _networkState == _NetworkState.offline ? _T.red : tc.textBlack;
 
     return Row(
       children: [
         Icon(icon, size: 12, color: color),
         const SizedBox(width: 4),
-        Text(label,
-            style: TextStyle(
-                fontSize: 12,
-                color: color,
-                fontWeight: FontWeight.w400)),
+        Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w400)),
       ],
     );
   }
@@ -2765,9 +2538,7 @@ class DashboardScreenState extends State<DashboardScreen>
       gradientEnd = const Color(0xFFB91C1C);
       leadingIcon = Icons.location_off_rounded;
       title = 'Outside Authorized Zone';
-      subtitle = _distanceMeters != null
-          ? '${_distanceMeters!.toStringAsFixed(0)}m from office'
-          : 'You are not in the work zone';
+      subtitle = _distanceMeters != null ? '${_distanceMeters!.toStringAsFixed(0)}m from office' : 'You are not in the work zone';
       subtitleColor = _T.red;
     }
 
@@ -2786,26 +2557,17 @@ class DashboardScreenState extends State<DashboardScreen>
                 width: 45,
                 height: 45,
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [gradientStart, gradientEnd],
-                  ),
+                  gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [gradientStart, gradientEnd]),
                   shape: BoxShape.circle,
                 ),
-                child: _checkingLocation &&
-                    _networkState != _NetworkState.offline &&
-                    !_isDemo
+                child: _checkingLocation && _networkState != _NetworkState.offline && !_isDemo
                     ? const Padding(
                   padding: EdgeInsets.all(14),
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2),
+                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                 )
                     : Icon(leadingIcon, color: Colors.white, size: 22),
               ),
-              if ((!_checkingLocation ||
-                  _networkState == _NetworkState.offline ||
-                  _isDemo))
+              if ((!_checkingLocation || _networkState == _NetworkState.offline || _isDemo))
                 Positioned(
                   top: 2,
                   right: 2,
@@ -2815,8 +2577,7 @@ class DashboardScreenState extends State<DashboardScreen>
                     decoration: BoxDecoration(
                       color: dotColor,
                       shape: BoxShape.circle,
-                      border:
-                      Border.all(color: Colors.white, width: 1.5),
+                      border: Border.all(color: Colors.white, width: 1.5),
                     ),
                   ),
                 ),
@@ -2827,21 +2588,9 @@ class DashboardScreenState extends State<DashboardScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: TextStyle(
-                        fontSize: 14,
-                        color: tc.textBlack,
-                        fontWeight: FontWeight.w500),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1),
+                Text(title, style: TextStyle(fontSize: 14, color: tc.textBlack, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis, maxLines: 1),
                 const SizedBox(height: 2),
-                Text(subtitle,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: subtitleColor,
-                        fontWeight: FontWeight.w500),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 2),
+                Text(subtitle, style: TextStyle(fontSize: 12, color: subtitleColor, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis, maxLines: 2),
               ],
             ),
           ),
@@ -2876,15 +2625,11 @@ class DashboardScreenState extends State<DashboardScreen>
               onTap: item.$4,
               behavior: HitTestBehavior.opaque,
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                    vertical: 16, horizontal: 10),
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
                 decoration: BoxDecoration(
                   color: tc.cardFill,
                   borderRadius: BorderRadius.circular(_T.r20),
-                  border: Border.all(
-                    color: _T.orangeBorder,
-                    width: 1.15,
-                  ),
+                  border: Border.all(color: _T.orangeBorder, width: 1.15),
                 ),
                 child: Column(
                   children: [
@@ -2894,19 +2639,12 @@ class DashboardScreenState extends State<DashboardScreen>
                       decoration: BoxDecoration(
                         gradient: _T.brandGradient,
                         shape: BoxShape.circle,
-                        border: Border.all(
-                            color: _T.orange,
-                            width: 1.15),
+                        border: Border.all(color: _T.orange, width: 1.15),
                       ),
-                      child:
-                      Icon(item.$1, color: Colors.white, size: 20),
+                      child: Icon(item.$1, color: Colors.white, size: 20),
                     ),
                     const SizedBox(height: 10),
-                    Text(item.$2,
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: item.$3)),
+                    Text(item.$2, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: item.$3)),
                   ],
                 ),
               ),
@@ -2927,10 +2665,7 @@ class DashboardScreenState extends State<DashboardScreen>
       decoration: BoxDecoration(
         color: tc.cardFill,
         borderRadius: BorderRadius.circular(_T.r20),
-        border: Border.all(
-          color: _T.orange,
-          width: 1.15,
-        ),
+        border: Border.all(color: _T.orange, width: 1.15),
       ),
       child: Column(
         children: [
@@ -2942,40 +2677,23 @@ class DashboardScreenState extends State<DashboardScreen>
                 decoration: BoxDecoration(
                   gradient: _T.brandGradient,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                      color: _T.orange.withValues(alpha: 0.2),
-                      width: 1.15),
+                  border: Border.all(color: _T.orange.withValues(alpha: 0.2), width: 1.15),
                 ),
-                child: const Icon(
-                  Icons.receipt_long_rounded,
-                  color: Colors.white,
-                  size: 22,
-                ),
+                child: const Icon(Icons.receipt_long_rounded, color: Colors.white, size: 22),
               ),
               const SizedBox(width: 15),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      _isDemo
-                          ? 'Demo Payslip'
-                          : _payslipMonthLabel,
-                      style: TextStyle(
-                          fontSize: 14,
-                          color: tc.textBlack,
-                          fontWeight: FontWeight.w500),
-                    ),
+                    Text(_isDemo ? 'Demo Payslip' : _payslipMonthLabel, style: TextStyle(fontSize: 14, color: tc.textBlack, fontWeight: FontWeight.w500)),
                     const SizedBox(height: 2),
                     _buildPayslipAmountText(tc),
                     if (isDownloaded && _payslipDownloadedAt != null) ...[
                       const SizedBox(height: 2),
                       Text(
                         'Downloaded ${_formatTimestamp(_payslipDownloadedAt!)}',
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: tc.textMuted,
-                            fontStyle: FontStyle.italic),
+                        style: TextStyle(fontSize: 10, color: tc.textMuted, fontStyle: FontStyle.italic),
                       ),
                     ],
                   ],
@@ -2990,25 +2708,12 @@ class DashboardScreenState extends State<DashboardScreen>
                   behavior: HitTestBehavior.opaque,
                   child: Container(
                     padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: _T.orange.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.download_rounded,
-                        color: _T.orange,
-                        size: 20),
+                    decoration: BoxDecoration(color: _T.orange.withValues(alpha: 0.15), shape: BoxShape.circle),
+                    child: const Icon(Icons.download_rounded, color: _T.orange, size: 20),
                   ),
                 )
               else if (isDownloading)
-                const SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: Padding(
-                    padding: EdgeInsets.all(4),
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2.5, color: _T.orange),
-                  ),
-                )
+                const SizedBox(width: 32, height: 32, child: Padding(padding: EdgeInsets.all(4), child: CircularProgressIndicator(strokeWidth: 2.5, color: _T.orange)))
               else if (isDownloaded)
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -3021,13 +2726,8 @@ class DashboardScreenState extends State<DashboardScreen>
                         behavior: HitTestBehavior.opaque,
                         child: Container(
                           padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: _T.orange.withValues(alpha: 0.1),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.share_rounded,
-                              color: _T.orange,
-                              size: 18),
+                          decoration: BoxDecoration(color: _T.orange.withValues(alpha: 0.1), shape: BoxShape.circle),
+                          child: const Icon(Icons.share_rounded, color: _T.orange, size: 18),
                         ),
                       ),
                       const SizedBox(width: 6),
@@ -3039,14 +2739,8 @@ class DashboardScreenState extends State<DashboardScreen>
                         behavior: HitTestBehavior.opaque,
                         child: Container(
                           padding: const EdgeInsets.all(8),
-                          decoration: const BoxDecoration(
-                            color: _T.orange,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                              Icons.picture_as_pdf_rounded,
-                              color: Colors.white,
-                              size: 18),
+                          decoration: const BoxDecoration(color: _T.orange, shape: BoxShape.circle),
+                          child: const Icon(Icons.picture_as_pdf_rounded, color: Colors.white, size: 18),
                         ),
                       ),
                     ],
@@ -3058,33 +2752,23 @@ class DashboardScreenState extends State<DashboardScreen>
                         _loadPayslipAmount();
                       },
                       behavior: HitTestBehavior.opaque,
-                      child: const Icon(Icons.refresh_rounded,
-                          color: _T.orange, size: 20),
+                      child: const Icon(Icons.refresh_rounded, color: _T.orange, size: 20),
                     ),
             ],
           ),
           if (!hasPayslip && !_payslipLoading && !_payslipError) ...[
             const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: tc.textMuted.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(8),
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(color: tc.textMuted.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
               child: Row(
                 children: [
-                  Icon(Icons.info_outline_rounded,
-                      size: 14, color: tc.textMuted),
+                  Icon(Icons.info_outline_rounded, size: 14, color: tc.textMuted),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'No payslip yet for $_payslipMonthLabel. '
-                          'It will be available on the 1st day of next month.',
-                      style: TextStyle(
-                          fontSize: 11,
-                          color: tc.textMuted,
-                          height: 1.3),
+                      'No payslip yet for $_payslipMonthLabel. It will be available on the 1st day of next month.',
+                      style: TextStyle(fontSize: 11, color: tc.textMuted, height: 1.3),
                     ),
                   ),
                 ],
@@ -3098,25 +2782,16 @@ class DashboardScreenState extends State<DashboardScreen>
 
   Widget _buildPayslipAmountText(_ThemeColors tc) {
     if (_payslipLoading) {
-      return const SizedBox(
-        width: 14,
-        height: 14,
-        child: CircularProgressIndicator(
-            strokeWidth: 2, color: _T.orange),
-      );
+      return const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _T.orange));
     }
     if (_payslipError) {
-      return const Text('Unable to load payslip right now',
-          style: TextStyle(fontSize: 12, color: Colors.redAccent));
+      return const Text('Unable to load payslip right now', style: TextStyle(fontSize: 12, color: Colors.redAccent));
     }
     if (_payslipAmount == null) {
-      return Text('No payslip available yet',
-          style: TextStyle(fontSize: 12, color: tc.textGray));
+      return Text('No payslip available yet', style: TextStyle(fontSize: 12, color: tc.textGray));
     }
     return Text(
-      _isDemo
-          ? 'Amount: ${_formatPeso(_payslipAmount!)} (DEMO)'
-          : 'Amount: ${_formatPeso(_payslipAmount!)}',
+      _isDemo ? 'Amount: ${_formatPeso(_payslipAmount!)} (DEMO)' : 'Amount: ${_formatPeso(_payslipAmount!)}',
       style: TextStyle(
         fontSize: 12,
         color: _isDemo ? _T.orange : tc.textGray,
@@ -3133,17 +2808,12 @@ class DashboardScreenState extends State<DashboardScreen>
         onTap: _handleClockAction,
         behavior: HitTestBehavior.opaque,
         child: Container(
-          padding:
-          const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(_T.r18),
             gradient: _T.brandGradient,
             boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFFF8A00).withValues(alpha: 0.15),
-                blurRadius: 40,
-                offset: const Offset(0, 10),
-              ),
+              BoxShadow(color: const Color(0xFFFF8A00).withValues(alpha: 0.15), blurRadius: 40, offset: const Offset(0, 10)),
             ],
           ),
           child: Row(
@@ -3152,25 +2822,13 @@ class DashboardScreenState extends State<DashboardScreen>
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                      _isDemo
-                          ? 'Clock Out (DEMO)'
-                          : 'Clock Out (Tap to proceed)',
-                      style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.white)),
+                  Text(_isDemo ? 'Clock Out (DEMO)' : 'Clock Out (Tap to proceed)', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: Colors.white)),
                   const SizedBox(height: 2),
                   Row(
                     children: [
-                      const Icon(Icons.timer_rounded,
-                          size: 13, color: Colors.white70),
+                      const Icon(Icons.timer_rounded, size: 13, color: Colors.white70),
                       const SizedBox(width: 4),
-                      Text('Duty Time: $_elapsedDuration',
-                          style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white70,
-                              fontWeight: FontWeight.w500)),
+                      Text('Duty Time: $_elapsedDuration', style: const TextStyle(fontSize: 12, color: Colors.white70, fontWeight: FontWeight.w500)),
                     ],
                   ),
                 ],
@@ -3178,12 +2836,8 @@ class DashboardScreenState extends State<DashboardScreen>
               Container(
                 width: 32,
                 height: 32,
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.arrow_forward_rounded,
-                    color: Colors.white, size: 16),
+                decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.1), shape: BoxShape.circle),
+                child: const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 16),
               ),
             ],
           ),
@@ -3216,8 +2870,7 @@ class _SilkPainter extends CustomPainter {
     final glowPaint = Paint()
       ..color = const Color(0xFFFF8A00).withValues(alpha: 0.06)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 40);
-    canvas.drawCircle(
-        Offset(size.width * 0.85, size.height * 1.1), 90, glowPaint);
+    canvas.drawCircle(Offset(size.width * 0.85, size.height * 1.1), 90, glowPaint);
   }
 
   @override

@@ -1,5 +1,5 @@
 // lib/screens/admin_password_change_requests_page.dart
-// v1.1: 🎭 Demo Mode Support (Mock Requests & Action Blocking)
+// v1.2: 🔗 OneSignal Push Notifications integrated for Approve, Regenerate, and Reject.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' show Random;
@@ -14,7 +14,8 @@ import 'package:intl/intl.dart';
 import '../models/admin_notification.dart';
 import '../services/admin_notification_service.dart';
 import '../services/security_hardening_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/demo_mode_service.dart';
+import '../services/onesignal_sender.dart'; // 🆕 Added
 import 'admin_theme.dart';
 
 void _secureLog(String msg) {
@@ -43,7 +44,6 @@ class _PasswordChangeRequestsPageState
   static const int _maxDestructive = 5;
   static const Duration _rateWindow = Duration(seconds: 30);
 
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -67,7 +67,6 @@ class _PasswordChangeRequestsPageState
     );
   }
 
-  // 🎭 MOCK REQUESTS
   List<AdminNotification> _getMockRequests() {
     final now = DateTime.now();
     return [
@@ -226,6 +225,9 @@ class _PasswordChangeRequestsPageState
     return sha256.convert(bytes).toString();
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // APPROVE REQUEST (With OneSignal Push)
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _approveRequest(AdminNotification n) async {
     if (_isDemo) {
       _demoBlock();
@@ -293,14 +295,14 @@ class _PasswordChangeRequestsPageState
         'metadata.pinGeneratedAt': FieldValue.serverTimestamp(),
       });
 
+      // 1. Save to In-App Database
       try {
         await FirebaseFirestore.instance
             .collection('employee_notifications')
             .add({
           'employeeId': empDocId,
           'title': '🔐 Password Reset — Your New PIN',
-          'message':
-          'Your PIN has been reset by admin.\n\nYOUR NEW PIN: $newPin\n\nUse this PIN on your next login.',
+          'message': 'Your PIN has been reset by admin.\n\nYOUR NEW PIN: $newPin\n\nUse this PIN on your next login.',
           'type': 'password_change_approved',
           'newPin': newPin,
           'requestId': n.id,
@@ -310,6 +312,18 @@ class _PasswordChangeRequestsPageState
         });
       } catch (e) {
         _secureLog('⚠️ Employee notification failed: $e');
+      }
+
+      // 2. Send OneSignal Push Notification
+      try {
+        await OneSignalSender.instance.sendToEmployee(
+          employeeId: empDocId,
+          title: '🔐 Password Reset',
+          message: 'Your PIN has been reset. New PIN: $newPin',
+          type: 'password_change_approved',
+        );
+      } catch (e) {
+        _secureLog('⚠️ OneSignal push failed: $e');
       }
 
       try {
@@ -343,6 +357,9 @@ class _PasswordChangeRequestsPageState
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // REGENERATE PIN (With OneSignal Push)
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _regeneratePinForApproved(AdminNotification n) async {
     if (_isDemo) {
       _demoBlock();
@@ -401,14 +418,14 @@ class _PasswordChangeRequestsPageState
         'metadata.pinRegeneratedBy': adminId,
       });
 
+      // 1. Save to In-App Database
       try {
         await FirebaseFirestore.instance
             .collection('employee_notifications')
             .add({
           'employeeId': empDocId,
           'title': '🔐 New PIN Generated',
-          'message':
-          'Admin generated a new PIN for you.\n\nYOUR NEW PIN: $newPin\n\nUse this on your next login.',
+          'message': 'Admin generated a new PIN for you.\n\nYOUR NEW PIN: $newPin\n\nUse this on your next login.',
           'type': 'password_change_approved',
           'newPin': newPin,
           'requestId': n.id,
@@ -417,6 +434,18 @@ class _PasswordChangeRequestsPageState
           'timestamp': FieldValue.serverTimestamp(),
         });
       } catch (_) {}
+
+      // 2. Send OneSignal Push Notification
+      try {
+        await OneSignalSender.instance.sendToEmployee(
+          employeeId: empDocId,
+          title: '🔐 New PIN Generated',
+          message: 'Admin generated a new PIN for you: $newPin',
+          type: 'password_change_approved',
+        );
+      } catch (e) {
+        _secureLog('⚠️ OneSignal push failed: $e');
+      }
 
       await _logAudit(
         'password_pin_regenerated',
@@ -565,6 +594,9 @@ class _PasswordChangeRequestsPageState
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // REJECT REQUEST (With OneSignal Push)
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _rejectRequest(AdminNotification n, String reason) async {
     if (_isDemo) {
       _demoBlock();
@@ -610,6 +642,7 @@ class _PasswordChangeRequestsPageState
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
 
+          // 1. Save to In-App Database
           await FirebaseFirestore.instance
               .collection('employee_notifications')
               .add({
@@ -625,6 +658,20 @@ class _PasswordChangeRequestsPageState
             'read': false,
             'timestamp': FieldValue.serverTimestamp(),
           });
+
+          // 2. Send OneSignal Push Notification
+          try {
+            await OneSignalSender.instance.sendToEmployee(
+              employeeId: empDocId,
+              title: '❌ Password Change Rejected',
+              message: reason.isEmpty
+                  ? 'Your password change request was rejected.'
+                  : 'Your password change request was rejected: $reason',
+              type: 'password_change_rejected',
+            );
+          } catch (e) {
+            _secureLog('⚠️ OneSignal push failed: $e');
+          }
 
           await FirebaseFirestore.instance
               .collection('activity_logs')
@@ -827,7 +874,6 @@ class _PasswordChangeRequestsPageState
     );
   }
 
-  // 🎭 DEMO BODY
   Widget _buildDemoBody(AdminColors tc) {
     final all = _getMockRequests();
     final filtered = _applyFilter(all);

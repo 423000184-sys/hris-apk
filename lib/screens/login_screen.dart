@@ -1,4 +1,6 @@
 // lib/screens/login_screen.dart
+// v3.1: 🔗 OneSignal Integration (OneSignal.login) para makatanggap ng push
+//       notifications ang employee kahit nasa background ang app.
 // v3.0: 🔒 Demo mode now REQUIRES internet connection
 //       🌐 All UI text converted to English
 import 'dart:async';
@@ -16,6 +18,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:onesignal_flutter/onesignal_flutter.dart'; // 🆕 OneSignal
 import '../data/local/dao/connectivity_service.dart';
 import '../models/client_meeting_assignment.dart';
 import '../services/client_location_service.dart';
@@ -446,6 +449,14 @@ class _LoginScreenState extends State<LoginScreen>
 
     await DemoModeService.instance.startDemoSession();
 
+    // 🔗 ONESIGNAL LOGIN FOR DEMO
+    try {
+      OneSignal.login(DemoModeService.demoEmployee.id);
+      _secureLog('✅ [OneSignal] Linked DEMO employee: ${DemoModeService.demoEmployee.id}');
+    } catch (e) {
+      _secureLog('⚠️ [OneSignal] Demo login link failed: $e');
+    }
+
     if (!mounted) return;
 
     // 🔌 Re-check internet before navigation
@@ -593,7 +604,7 @@ class _LoginScreenState extends State<LoginScreen>
       onTapUp: (_) => _handleAdminHoldEnd(),
       onTapCancel: _handleAdminHoldEnd,
       onLongPressStart: (_) => _handleAdminHoldStart(),
-      onLongPressEnd: (_) => _handleAdminHoldEnd(),
+      onLongPressEnd: (_) => _handleAdminHoldEnd,
       onLongPressCancel: _handleAdminHoldEnd,
       child: child,
     );
@@ -2000,6 +2011,9 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🔥 OPEN SESSION (Pagkatapos ng Successful Login)
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _openSession(Employee employee) async {
     try {
       if (_sessionNonce.length < 16) {
@@ -2021,6 +2035,16 @@ class _LoginScreenState extends State<LoginScreen>
         _secureLog('✅ [FCM] Token associated with ${employee.id}');
       } catch (e) {
         _secureLog('⚠️ [FCM] Associate failed: $e');
+      }
+
+      // 🆕 ONESIGNAL LOGIN
+      // Dito natin nili-link ang device sa employeeId para makatanggap ng
+      // push notifications kahit naka-background ang app.
+      try {
+        OneSignal.login(employee.id);
+        _secureLog('✅ [OneSignal] Linked employee: ${employee.id}');
+      } catch (e) {
+        _secureLog('⚠️ [OneSignal] Link failed: $e');
       }
 
       try {
@@ -5467,17 +5491,22 @@ class _WebOptionCardState extends State<_WebOptionCard> {
 class _BackArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
+    final s = size.width / 19.99;
+
     final paint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.8
+      ..strokeWidth = 1.66602 * s
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
+    // ✅ Same coordinates as biometric — arrow centered sa 19.99 box
+    Offset p(double x, double y) => Offset(x * s, y * s);
+
     final path = Path()
-      ..moveTo(size.width * 0.68, size.height * 0.72)
-      ..lineTo(size.width * 0.32, size.height * 0.50)
-      ..lineTo(size.width * 0.68, size.height * 0.28);
+      ..moveTo(p(12.4951, 14.9941).dx, p(12.4951, 14.9941).dy)
+      ..lineTo(p(7.49707, 9.9961).dx, p(7.49707, 9.9961).dy)
+      ..lineTo(p(12.4951, 4.99805).dx, p(12.4951, 4.99805).dy);
 
     canvas.drawPath(path, paint);
   }

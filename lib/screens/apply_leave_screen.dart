@@ -1,4 +1,6 @@
 // lib/screens/apply_leave_screen.dart
+// ✅ v1.2: Fixed missing parenthesis sa "Approver Information" Container
+//         (TextStyle → Text → Center → Container = 4 closing parens)
 // ✅ v1.1: DEMO MODE now shows the SAME skeleton loading screen as normal mode.
 //         - Skeleton appears briefly (900ms), then fades into demo UI.
 //         - All 3 screens (LeaveForm, History, ApplicationForm) updated.
@@ -56,7 +58,6 @@ Widget _buildHandWatermark({required double opacity}) {
 // LEAVE FETCH
 // ═══════════════════════════════════════════════════════════════
 Future<List<Map<String, dynamic>>> _fetchEmployeeLeaves(String empKey) async {
-  // 🎭 DEMO MODE — return fake data, walang Firestore read
   if (DemoModeService.instance.isEnabled) {
     return DemoModeService.instance.demoLeaveHistory
         .map((e) => Map<String, dynamic>.from(e))
@@ -86,7 +87,6 @@ Future<List<Map<String, dynamic>>> _fetchEmployeeLeaves(String empKey) async {
 // GENDER FETCH
 // ═══════════════════════════════════════════════════════════════
 Future<String> _fetchEmployeeGender(String empKey) async {
-  // 🎭 DEMO MODE — fixed gender
   if (DemoModeService.instance.isEnabled) return 'male';
   final key = empKey.trim();
   if (key.isEmpty) return 'unknown';
@@ -176,7 +176,6 @@ Future<void> _logSecurityEvent({
   String? employeeId,
   String? sessionNonce,
 }) async {
-  // 🎭 DEMO MODE — skip Firestore write
   if (DemoModeService.instance.isEnabled) {
     debugPrint('🎭 [DemoMode] Security event (skipped): $type — $details');
     return;
@@ -760,10 +759,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — skip network listener, security monitoring
-    //             pero IPAKITA ANG SKELETON sa simula
-    // ═══════════════════════════════════════════════════════════
     if (DemoModeService.instance.isEnabled) {
       debugPrint('═══════════════════════════════════════════');
       debugPrint('🎭 [DemoMode] Leave Application Form — DEMO PATH');
@@ -774,12 +769,10 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
       _sessionValidated = true;
       _verifiedEmployeeId = widget.employeeId;
 
-      // 🆕 Keep skeleton visible at start
       _isInitialLoading = true;
 
       _fetchLeaveData();
 
-      // 🆕 Hide skeleton after short delay
       Future.delayed(_kDemoSkeletonDuration, () {
         if (!mounted) return;
         setState(() => _isInitialLoading = false);
@@ -827,7 +820,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   }
 
   Future<bool> _validateSession({bool forceRefresh = false}) async {
-    // 🎭 DEMO MODE — always valid
     if (DemoModeService.instance.isEnabled) return true;
     if (_loggedOut) return false;
     if (!forceRefresh && _cachedSessionValid != null && _cachedSessionTime != null &&
@@ -869,7 +861,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   }
 
   Future<void> _forceLogout(String reason) async {
-    // 🎭 DEMO MODE — ignore logout
     if (DemoModeService.instance.isEnabled) {
       debugPrint('🎭 [DemoMode] Force logout ignored: $reason');
       return;
@@ -894,7 +885,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   }
 
   void _startSecurityMonitoring() {
-    // 🎭 DEMO MODE — skip
     if (DemoModeService.instance.isEnabled) return;
     if (widget.employeeId.isNotEmpty) {
       _sessionSub?.cancel();
@@ -956,7 +946,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   }
 
   Future<void> _checkNetworkOnEntry() async {
-    // 🎭 DEMO MODE — always online
     if (DemoModeService.instance.isEnabled) {
       if (mounted) setState(() => _networkState = _NetworkState.online);
       return;
@@ -992,7 +981,6 @@ class _LeaveApplicationFormScreenState extends State<LeaveApplicationFormScreen>
   Future<void> _fetchLeaveData() async {
     if (!mounted || _loggedOut) return;
 
-    // 🎭 DEMO MODE — load fake data
     if (DemoModeService.instance.isEnabled) {
       setState(() { _loading = true; _error = null; });
       await Future.delayed(const Duration(milliseconds: 250));
@@ -1312,9 +1300,6 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
     _sessionNonce = _generateSessionNonce();
     _lastUserActivityAt = DateTime.now();
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — ipakita ang skeleton sa simula
-    // ═══════════════════════════════════════════════════════════
     if (DemoModeService.instance.isEnabled) {
       debugPrint('═══════════════════════════════════════════');
       debugPrint('🎭 [DemoMode] Leave History — DEMO PATH');
@@ -1325,12 +1310,10 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
       _sessionValidated = true;
       _verifiedEmployeeId = widget.employeeId;
 
-      // 🆕 Keep skeleton visible at start
       _isInitialLoading = true;
 
       _fetchLeaveData();
 
-      // 🆕 Hide skeleton after short delay
       Future.delayed(_kDemoSkeletonDuration, () {
         if (!mounted) return;
         setState(() => _isInitialLoading = false);
@@ -1378,7 +1361,7 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
   }
 
   Future<bool> _validateSession({bool forceRefresh = false}) async {
-    if (DemoModeService.instance.isEnabled) return true; // 🎭 DEMO
+    if (DemoModeService.instance.isEnabled) return true;
     if (_loggedOut) return false;
     if (!forceRefresh && _cachedSessionValid != null && _cachedSessionTime != null &&
         DateTime.now().difference(_cachedSessionTime!) < _sessionCacheTTL) {
@@ -1429,7 +1412,7 @@ class _LeaveHistoryScreenState extends State<LeaveHistoryScreen>
   }
 
   void _startSecurityMonitoring() {
-    if (DemoModeService.instance.isEnabled) return; // 🎭 DEMO
+    if (DemoModeService.instance.isEnabled) return;
     if (widget.employeeId.isNotEmpty) {
       _sessionSub?.cancel();
       _sessionSub = FirebaseFirestore.instance.collection('sessions')
@@ -1851,9 +1834,6 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
     _lastUserActivityAt = DateTime.now();
     _reasonCtrl.addListener(_onReasonChanged);
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — ipakita ang skeleton sa simula
-    // ═══════════════════════════════════════════════════════════
     if (DemoModeService.instance.isEnabled) {
       debugPrint('═══════════════════════════════════════════');
       debugPrint('🎭 [DemoMode] Leave Form — DEMO PATH');
@@ -1864,13 +1844,11 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
       _sessionValidated = true;
       _verifiedEmployeeId = widget.employeeId;
 
-      // 🆕 Keep skeleton visible at start
       _isInitialLoading = true;
 
       _loadHistoryPreview();
       _loadEmployeeGender();
 
-      // 🆕 Hide skeleton after short delay
       Future.delayed(_kDemoSkeletonDuration, () {
         if (!mounted) return;
         setState(() => _isInitialLoading = false);
@@ -1919,7 +1897,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   Future<bool> _validateSession({bool forceRefresh = false}) async {
-    if (DemoModeService.instance.isEnabled) return true; // 🎭 DEMO
+    if (DemoModeService.instance.isEnabled) return true;
     if (_loggedOut) return false;
     if (!forceRefresh && _cachedSessionValid != null && _cachedSessionTime != null &&
         DateTime.now().difference(_cachedSessionTime!) < _sessionCacheTTL) {
@@ -1989,7 +1967,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   void _startSecurityMonitoring() {
-    if (DemoModeService.instance.isEnabled) return; // 🎭 DEMO
+    if (DemoModeService.instance.isEnabled) return;
     if (widget.employeeId.isNotEmpty) {
       _sessionSub?.cancel();
       _sessionSub = FirebaseFirestore.instance.collection('sessions')
@@ -2037,7 +2015,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   bool _checkSubmitCooldown() {
-    if (DemoModeService.instance.isEnabled) return true; // 🎭 DEMO — no cooldown
+    if (DemoModeService.instance.isEnabled) return true;
     final now = DateTime.now();
     if (_lastSubmitAt != null) {
       final elapsed = now.difference(_lastSubmitAt!).inMilliseconds;
@@ -2051,7 +2029,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   Future<bool> _checkHourlySubmitLimit() async {
-    if (DemoModeService.instance.isEnabled) return true; // 🎭 DEMO
+    if (DemoModeService.instance.isEnabled) return true;
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_kSubmitCountPrefsKey);
@@ -2155,7 +2133,6 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   Future<void> _loadHistoryPreview() async {
     if (_loggedOut) return;
 
-    // 🎭 DEMO MODE
     if (DemoModeService.instance.isEnabled) {
       await Future.delayed(const Duration(milliseconds: 250));
       if (!mounted) return;
@@ -2358,7 +2335,6 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
   }
 
   Future<bool> _hasEnoughBalance() async {
-    // 🎭 DEMO MODE — always enough
     if (DemoModeService.instance.isEnabled) return true;
     if (_selectedLeaveType == null || _leaveDays <= 0) return true;
     try {
@@ -2432,9 +2408,6 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
     setState(() => _isSubmitting = true);
     _lastUserActivityAt = DateTime.now();
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — skip lahat ng security + Firestore write
-    // ═══════════════════════════════════════════════════════════
     if (DemoModeService.instance.isEnabled ||
         DemoModeService.instance.shouldSkipDbWrite) {
       await Future.delayed(const Duration(milliseconds: 700));
@@ -3040,6 +3013,7 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
     ]);
   }
 
+  // ✅ FIXED: Approver Information — 4 closing parens (TextStyle → Text → Center → Container)
   Widget _buildStep3(_ThemeColors tc) {
     return Column(children: [
       _buildWhiteCard(tc: tc, title: 'Leave Information', editButton: true,
@@ -3060,16 +3034,21 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
             Container(width: 56, height: 56,
                 decoration: BoxDecoration(
                     shape: BoxShape.circle, color: tc.cardFill,
-                    border: Border.all(color: tc.darkBorder.withValues(alpha: 0.2), width: 2)),
+                    border: Border.all(
+                        color: tc.darkBorder.withValues(alpha: 0.2), width: 2)),
+                // ✅ FIX: 4 parens — TextStyle), Text), Center), Container)
                 child: Center(child: Text('HR', style: TextStyle(
-                    color: tc.textGray, fontSize: 16, fontWeight: FontWeight.w800)))),
+                    color: tc.textGray, fontSize: 16,
+                    fontWeight: FontWeight.w800)))),
             const SizedBox(width: 16),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('HR', style: TextStyle(color: tc.textBlack,
-                  fontSize: 16, fontWeight: FontWeight.w700)),
-              Text('Human Resources', style: TextStyle(color: tc.textGray,
-                  fontSize: 12, fontWeight: FontWeight.w600)),
-            ])),
+            Expanded(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('HR', style: TextStyle(color: tc.textBlack,
+                      fontSize: 16, fontWeight: FontWeight.w700)),
+                  Text('Human Resources', style: TextStyle(color: tc.textGray,
+                      fontSize: 12, fontWeight: FontWeight.w600)),
+                ])),
             Icon(Icons.chevron_right_rounded, color: tc.textMuted),
           ])),
       const SizedBox(height: 16),
@@ -3087,8 +3066,10 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           GestureDetector(
-            onTap: () { _lastUserActivityAt = DateTime.now();
-            setState(() => _isCertified = !_isCertified); },
+            onTap: () {
+              _lastUserActivityAt = DateTime.now();
+              setState(() => _isCertified = !_isCertified);
+            },
             behavior: HitTestBehavior.opaque,
             child: Container(
                 width: 24, height: 24, margin: const EdgeInsets.only(top: 2),
@@ -3096,10 +3077,13 @@ class _LeaveFormScreenState extends State<LeaveFormScreen>
                     color: _isCertified ? _T.orange : tc.bg,
                     borderRadius: BorderRadius.circular(4),
                     border: Border.all(
-                        color: _isCertified ? _T.orange : tc.darkBorder.withValues(alpha: 0.3),
+                        color: _isCertified
+                            ? _T.orange
+                            : tc.darkBorder.withValues(alpha: 0.3),
                         width: 1.5)),
-                child: _isCertified ? const Icon(Icons.check,
-                    color: Colors.white, size: 16) : null),
+                child: _isCertified
+                    ? const Icon(Icons.check, color: Colors.white, size: 16)
+                    : null),
           ),
           const SizedBox(width: 12),
           Expanded(child: Text(
