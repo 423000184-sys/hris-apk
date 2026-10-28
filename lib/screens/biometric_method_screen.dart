@@ -22,14 +22,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../models/employee.dart';
 import '../services/geofence_service.dart';
-import '../services/network_guard.dart';
 import '../services/security_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/demo_mode_service.dart';
 import 'fingerprint_screen.dart';
 import 'facial_recognition_screen.dart';
-import 'clock_in_success_screen.dart';
-import 'main_screen.dart';
 import 'login_screen.dart';
 
 void _secureLog(String message) {

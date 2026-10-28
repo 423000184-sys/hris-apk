@@ -615,7 +615,7 @@ class AdminDashboardState extends State<AdminDashboard>
                           color: c.muted)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
-                    value: selectedType,
+                    initialValue: selectedType,
                     dropdownColor: c.card,
                     iconEnabledColor: c.text,
                     style: itemStyle(),
@@ -645,7 +645,7 @@ class AdminDashboardState extends State<AdminDashboard>
                           color: c.muted)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
-                    value: selectedRecipient,
+                    initialValue: selectedRecipient,
                     dropdownColor: c.card,
                     isExpanded: true,
                     iconEnabledColor: c.text,
@@ -673,7 +673,7 @@ class AdminDashboardState extends State<AdminDashboard>
                             style: itemStyle(),
                           ),
                         );
-                      }).toList(),
+                      }),
                     ],
                     onChanged: isSending ? null : (v) => setDlgState(
                             () => selectedRecipient = v ?? 'ALL'),
@@ -686,7 +686,7 @@ class AdminDashboardState extends State<AdminDashboard>
                           color: c.muted)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
-                    value: selectedPriority,
+                    initialValue: selectedPriority,
                     dropdownColor: c.card,
                     iconEnabledColor: c.text,
                     style: itemStyle(),

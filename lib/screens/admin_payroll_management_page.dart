@@ -53,6 +53,7 @@ class _AdminPayrollManagementPageState
   bool _printing = false;
   bool _downloading = false;
   bool _unlockingPayslip = false;
+  bool _isPayslipUnlocked = false; // 🆕 Flag para malaman kung naka-lock o hindi
 
   final _SecurityGuard _guard = _SecurityGuard();
   bool _isAdminVerified = false;
@@ -334,9 +335,19 @@ class _AdminPayrollManagementPageState
       ]);
 
       if (!mounted) return;
+
+      // 🆕 Basahin kung naka-unlock ba currently
+      final docId = widget.employeeData['id']?.toString();
+      bool isUnlocked = false;
+      if (docId != null && docId.isNotEmpty) {
+        final empDoc = await FirebaseFirestore.instance.collection('employees').doc(docId).get();
+        isUnlocked = empDoc.data()?['payslipUnlocked'] == true;
+      }
+
       setState(() {
         _b = results[0] as PayrollBreakdown;
         _hours = results[1] as EmployeeHoursSummary;
+        _isPayslipUnlocked = isUnlocked;
         _loading = false;
       });
     } catch (e) {
@@ -422,6 +433,7 @@ class _AdminPayrollManagementPageState
       ));
 
       if (!mounted) return;
+      setState(() => _isPayslipUnlocked = true); // 🆕 I-update ang UI button
       _toast('✅ Payslip unlocked for $_name.', success: true);
 
       try {
@@ -438,6 +450,67 @@ class _AdminPayrollManagementPageState
       if (kDebugMode) debugPrint('❌ [UnlockPayslip] error: $e');
       if (!mounted) return;
       _toast('Failed to unlock: ${_safeError(e)}', error: true);
+    } finally {
+      if (mounted) setState(() => _unlockingPayslip = false);
+    }
+  }
+
+  // 🆕 METHOD PARA I-LOCK ANG PAYSLIP
+  Future<void> _handleLockPayslip() async {
+    if (_isDemo) return _demoBlock();
+    if (_unlockingPayslip) return;
+
+    final ok = await _ensureAdmin();
+    if (!ok) {
+      _toast('No permission.', error: true);
+      return;
+    }
+
+    if (!_guard.tryAcquire('lock_payslip')) {
+      _toast('Please wait a moment.', error: true);
+      return;
+    }
+
+    setState(() => _unlockingPayslip = true);
+
+    try {
+      final docId = widget.employeeData['id']?.toString() ?? _employeeId;
+      if (docId.isEmpty || docId == '—') throw Exception('Invalid employee ID');
+
+      await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(docId)
+          .update({
+        'payslipUnlocked': false,
+        'payslipLockedAt': FieldValue.serverTimestamp(),
+        'payslipLockedBy': FirebaseAuth.instance.currentUser?.uid,
+      }).timeout(const Duration(seconds: 10));
+
+      unawaited(_audit(
+        action: 'lock_payslip',
+        targetId: docId,
+        targetType: 'employee_payslip',
+        metadata: {'employee_name': _name, 'period': _periodLabel},
+      ));
+
+      if (!mounted) return;
+      setState(() => _isPayslipUnlocked = false);
+      _toast('🔒 Payslip locked for $_name.', success: true);
+
+      try {
+        await OneSignalSender.instance.sendToEmployee(
+          employeeId: docId,
+          title: '🔒 Payslip Locked',
+          message: 'Your payslip for $_periodLabel has been locked by Admin.',
+          type: 'payroll',
+        );
+      } catch (e) {
+        debugPrint('⚠️ Push failed: $e');
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('❌ [LockPayslip] error: $e');
+      if (!mounted) return;
+      _toast('Failed to lock: ${_safeError(e)}', error: true);
     } finally {
       if (mounted) setState(() => _unlockingPayslip = false);
     }
@@ -879,9 +952,9 @@ class _AdminPayrollManagementPageState
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         // Ginamit ang withOpacity para sa compatibility
-        color: tc.orange.withOpacity(0.10),
+        color: tc.orange.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: tc.orange.withOpacity(0.45)),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
       ),
       child: Row(
         children: [
@@ -1043,26 +1116,33 @@ class _AdminPayrollManagementPageState
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: (_unlockingPayslip || _isDemo) ? null : _handleUnlockPayslip,
+                onPressed: (_unlockingPayslip || _isDemo)
+                    ? null
+                    : (_isPayslipUnlocked ? _handleLockPayslip : _handleUnlockPayslip),
                 icon: _unlockingPayslip
                     ? SizedBox(
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2, color: tc.blue),
+                      strokeWidth: 2, color: _isPayslipUnlocked ? tc.red : tc.blue),
                 )
-                    : Icon(Icons.lock_open_rounded, size: 16,
-                    color: _isDemo ? tc.muted : tc.blue),
-                label: Text(_unlockingPayslip ? 'Unlocking...' : 'Unlock Payslip',
+                    : Icon(
+                  _isPayslipUnlocked ? Icons.lock_rounded : Icons.lock_open_rounded,
+                  size: 16,
+                  color: _isDemo ? tc.muted : (_isPayslipUnlocked ? tc.red : tc.blue),
+                ),
+                label: Text(
+                    _unlockingPayslip
+                        ? 'Processing...'
+                        : (_isPayslipUnlocked ? 'Lock Payslip' : 'Unlock Payslip'),
                     style: TextStyle(
-                        color: _isDemo ? tc.muted : tc.blue,
+                        color: _isDemo ? tc.muted : (_isPayslipUnlocked ? tc.red : tc.blue),
                         fontWeight: FontWeight.w600)),
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: tc.blue),
+                  side: BorderSide(color: _isDemo ? tc.border : (_isPayslipUnlocked ? tc.red : tc.blue)),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 ),
               ),
               OutlinedButton.icon(
@@ -1107,7 +1187,7 @@ class _AdminPayrollManagementPageState
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _isDemo ? tc.border : tc.orange,
                   disabledBackgroundColor:
-                  tc.orange.withOpacity(0.5),
+                  tc.orange.withValues(alpha: 0.5),
                   elevation: 0,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
@@ -1271,7 +1351,7 @@ class _AdminPayrollManagementPageState
     return _panel(
       title: 'Earnings Breakdown',
       badge: PayrollCalculator.peso(_autoGrossPay),
-      badgeColor: tc.orange.withOpacity(0.15),
+      badgeColor: tc.orange.withValues(alpha: 0.15),
       badgeTextColor: tc.orangeText,
       children: [
         _item('Basic Salary', 'Regular monthly pay',

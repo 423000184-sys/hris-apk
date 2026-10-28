@@ -1,4 +1,9 @@
 // lib/screens/facial_recognition_screen.dart
+// v2.8: 📨 CONTACT ADMIN — report face scan issues to Admin
+//       • New "Contact Admin" link on the facial scan screen
+//       • Sends support_request notification (category: face_auth_issue)
+//       • Auto-includes diagnostics: stage, mode, match %, device, network
+//       • Works offline — queued via OfflineAttendanceService
 // v2.7: ⏱️ FIRST ATTEMPT TIME + CONSISTENT RECORDS
 //       • _effectiveAttendanceTime — single source of truth
 //       • attendance_logs / activity_logs / attendance_receipts
@@ -33,6 +38,7 @@ import '../services/presence_challenge_service.dart';
 import '../services/demo_mode_service.dart';
 import '../services/overtime_reminder_service.dart';
 import '../services/trusted_time_service.dart';
+import '../services/face_support_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_screens.dart';
 import 'main_screen.dart';
@@ -177,6 +183,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   late final String _sessionNonce;
 
   bool _cancelRecorded = false;
+
+  // 📨 CONTACT ADMIN — in-flight guard so user cannot double-tap send.
+  bool _sendingAdminReport = false;
+
+  // ⏳ RATE LIMITER PARA SA CONTACT ADMIN
+  static const String _kLastReportKey = 'last_face_report_time';
+  static const Duration _reportCooldown = Duration(minutes: 3);
 
   // ⏱️ FIRST ATTEMPT TIMESTAMP — naka-save kapag unang pindot ng scan.
   //    Ginagamit sa attendance log kapag nag-success (kahit nag-retry).
@@ -418,6 +431,434 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       );
   }
 
+  // ══════════════════════════════════════════════════════════
+  // 📨 CONTACT ADMIN — report face scan issues
+  // ══════════════════════════════════════════════════════════
+  static const List<({String key, String label})> _reportCategories = [
+    (key: 'face_not_recognized', label: 'Face not recognized'),
+    (key: 'camera_error',        label: 'Camera problem'),
+    (key: 'liveness_failed',     label: 'Liveness failed'),
+    (key: 'no_enrollment',       label: 'No face registered'),
+    (key: 'geofence_issue',      label: 'Location issue'),
+    (key: 'security_issue',      label: 'Security error'),
+    (key: 'other',               label: 'Other'),
+  ];
+
+  void _showInfoSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(msg,
+              style: const TextStyle(fontWeight: FontWeight.w600)),
+          backgroundColor: const Color(0xFF27272A),
+          behavior: SnackBarBehavior.floating,
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+  }
+
+  String _defaultReportCategory() {
+    if (_authMode == _AuthMode.enroll) return 'no_enrollment';
+    final err = (_errorMessage ?? '').toLowerCase();
+    if (err.contains('camera')) return 'camera_error';
+    if (err.contains('liveness')) return 'liveness_failed';
+    if (err.contains('match') || err.contains('recognized')) {
+      return 'face_not_recognized';
+    }
+    if (err.contains('compromised') || err.contains('security')) {
+      return 'security_issue';
+    }
+    if (err.contains('geofence') || err.contains('location')) {
+      return 'geofence_issue';
+    }
+    return 'other';
+  }
+
+  String _labelForReportCategory(String c) {
+    return _reportCategories
+        .firstWhere((e) => e.key == c, orElse: () => (key: c, label: c))
+        .label;
+  }
+
+  String _buildReportMessage({
+    required String category,
+    required String notes,
+  }) {
+    final buf = StringBuffer();
+    buf.writeln('Employee reported a facial recognition issue: '
+        '${_labelForReportCategory(category)}.');
+    if (_errorMessage != null && _errorMessage!.isNotEmpty) {
+      buf.writeln('Error shown: ${_errorMessage!.replaceAll('\n', ' ')}');
+    }
+    buf.writeln('Stage: ${_faceState.name} • Mode: ${_authMode.name}');
+    if (_matchPercent > 0) {
+      buf.writeln('Last match: ${_matchPercent.toStringAsFixed(1)}%');
+    }
+    buf.writeln('Device: $_deviceModel • Network: ${_networkState.name}');
+    if (notes.isNotEmpty) buf.writeln('\nNotes from employee: $notes');
+    return buf.toString().trim();
+  }
+
+  Future<bool> _checkReportCooldown() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastMs = prefs.getInt(_kLastReportKey) ?? 0;
+      if (lastMs > 0) {
+        final last = DateTime.fromMillisecondsSinceEpoch(lastMs);
+        final diff = DateTime.now().difference(last);
+        if (diff < _reportCooldown) {
+          final remaining = _reportCooldown - diff;
+          final mins = remaining.inMinutes;
+          final secs = remaining.inSeconds % 60;
+          final timeStr = mins > 0 ? '${mins}m ${secs}s' : '${secs}s';
+          _showInfoSnack('⚠️ Mag-antay muna ng $timeStr bago mag-send muli.');
+          return false;
+        }
+      }
+      return true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<void> _markReportSent() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_kLastReportKey, DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {}
+  }
+
+  Future<bool> _sendAdminReport({
+    required String category,
+    required String notes,
+  }) async {
+    if (_isDemo) return false;
+    if (_sendingAdminReport) return false;
+
+    // ⏳ CHECK RATE LIMIT
+    final canSend = await _checkReportCooldown();
+    if (!canSend) return false;
+
+    setState(() => _sendingAdminReport = true);
+
+    try {
+      final result = await FaceSupportService.instance.reportIssue(
+        employeeId: _employeeIdForAttendance,
+        employeeName: widget.employee.fullName,
+        employeeEmail: widget.employee.email,
+        employeeDocId: widget.employee.id,
+        subCategory: category,
+        issueMessage: _buildReportMessage(category: category, notes: notes),
+        additionalNotes: notes.isEmpty ? null : notes,
+        faceMatchPercent: _matchPercent > 0 ? _matchPercent : null,
+        deviceModel: _deviceModel,
+        zoneType: _computeZoneType(),
+        authMode: _authMode.name,
+        stage: _faceState.name,
+        errorDetail: _errorMessage,
+      );
+
+      if (!mounted) return result.ok;
+
+      if (result.ok && result.queuedOffline) {
+        _showInfoSnack(
+            '📥 Saved. Your report will reach Admin once you\'re back online.');
+      } else if (result.ok) {
+        _showInfoSnack('📨 Report sent. Admin will contact you shortly.');
+        // ⏳ I-SAVE ANG TIMESTAMP PARA SA RATE LIMITER
+        await _markReportSent();
+      } else {
+        _showInfoSnack('⚠️ Could not send report. Please try again.');
+      }
+      return result.ok;
+    } catch (e) {
+      _secureLog('⚠️ _sendAdminReport failed: $e');
+      if (mounted) {
+        _showInfoSnack('⚠️ Could not send report. Please try again.');
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _sendingAdminReport = false);
+    }
+  }
+
+  Future<void> _openContactAdminSheet() async {
+    if (_isDemo) {
+      _showInfoSnack('Contact Admin is disabled in Demo Mode.');
+      return;
+    }
+    if (_sendingAdminReport) return;
+
+    final notesCtrl = TextEditingController();
+    String category = _defaultReportCategory();
+    bool sending = false;
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final sheetBg = isDark ? const Color(0xFF1C1C1F) : Colors.white;
+    final textCol = isDark ? Colors.white : const Color(0xFF111111);
+    final mutedCol = isDark ? const Color(0xFFA1A1AA) : const Color(0xFF6B7280);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          Future<void> doSend() async {
+            if (sending) return;
+            setSheet(() => sending = true);
+            final ok = await _sendAdminReport(
+              category: category,
+              notes: notesCtrl.text.trim(),
+            );
+            if (!ctx.mounted) return;
+            setSheet(() => sending = false);
+            if (ok) Navigator.pop(ctx);
+          }
+
+          Widget chip(({String key, String label}) c) {
+            final active = category == c.key;
+            return GestureDetector(
+              onTap: sending ? null : () => setSheet(() => category = c.key),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: active
+                      ? _orange
+                      : (isDark
+                      ? Colors.white.withValues(alpha: 0.06)
+                      : const Color(0xFFF4F4F5)),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: active
+                        ? _orange
+                        : mutedCol.withValues(alpha: 0.25),
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  c.label,
+                  style: TextStyle(
+                    color: active ? Colors.white : textCol,
+                    fontSize: 11.5,
+                    fontWeight:
+                    active ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ),
+            );
+          }
+
+          Widget ctxRow(String k, String v) => Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                    width: 62,
+                    child: Text(k,
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: mutedCol,
+                            fontWeight: FontWeight.w700))),
+                Expanded(
+                    child: Text(v,
+                        style: TextStyle(
+                            fontSize: 10.5,
+                            color: textCol,
+                            fontWeight: FontWeight.w600))),
+              ],
+            ),
+          );
+
+          return Padding(
+            padding:
+            EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+            child: Container(
+              decoration: BoxDecoration(
+                color: sheetBg,
+                borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                            color: mutedCol.withValues(alpha: 0.3),
+                            borderRadius: BorderRadius.circular(4)),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                            color: _orange.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(10)),
+                        child: const Icon(Icons.support_agent_rounded,
+                            color: _orange, size: 20),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Contact Admin',
+                                  style: TextStyle(
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w800,
+                                      color: textCol)),
+                              Text(
+                                  'Tell us what went wrong with your face scan.',
+                                  style: TextStyle(
+                                      fontSize: 11.5, color: mutedCol)),
+                            ]),
+                      ),
+                    ]),
+                    const SizedBox(height: 16),
+                    Text('What went wrong?',
+                        style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                            color: mutedCol,
+                            letterSpacing: 0.5)),
+                    const SizedBox(height: 8),
+                    Wrap(spacing: 8, runSpacing: 8, children: [
+                      for (final c in _reportCategories) chip(c),
+                    ]),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: notesCtrl,
+                      maxLines: 4,
+                      maxLength: 500,
+                      enabled: !sending,
+                      style:
+                      TextStyle(color: textCol, fontSize: 13, height: 1.4),
+                      decoration: InputDecoration(
+                        hintText: 'Add details (optional)...',
+                        hintStyle:
+                        TextStyle(color: mutedCol, fontSize: 13),
+                        filled: true,
+                        fillColor: isDark
+                            ? Colors.white.withValues(alpha: 0.04)
+                            : const Color(0xFFF4F4F5),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(
+                              color: mutedCol.withValues(alpha: 0.3)),
+                        ),
+                        focusedBorder: const OutlineInputBorder(
+                          borderRadius: BorderRadius.all(Radius.circular(10)),
+                          borderSide:
+                          BorderSide(color: _orange, width: 1.5),
+                        ),
+                        counterStyle:
+                        TextStyle(color: mutedCol, fontSize: 10),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.03)
+                            : const Color(0xFFF9F9FB),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color: mutedCol.withValues(alpha: 0.15)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('INCLUDED AUTOMATICALLY',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                  color: mutedCol,
+                                  letterSpacing: 0.6)),
+                          const SizedBox(height: 6),
+                          ctxRow('Stage', _faceState.name),
+                          ctxRow('Mode', _authMode.name),
+                          if (_matchPercent > 0)
+                            ctxRow('Match',
+                                '${_matchPercent.toStringAsFixed(1)}%'),
+                          if (_errorMessage != null &&
+                              _errorMessage!.isNotEmpty)
+                            ctxRow('Error',
+                                _errorMessage!.replaceAll('\n', ' ')),
+                          ctxRow('Device', _deviceModel),
+                          ctxRow('Network', _networkState.name),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed:
+                          sending ? null : () => Navigator.pop(ctx),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(
+                                color: mutedCol.withValues(alpha: 0.4)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: Text('Cancel',
+                              style: TextStyle(
+                                  color: textCol,
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton.icon(
+                          onPressed: sending ? null : doSend,
+                          icon: sending
+                              ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white))
+                              : const Icon(Icons.send_rounded, size: 16),
+                          label: Text(sending ? 'Sending...' : 'Send to Admin',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w700)),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _orange,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      ),
+                    ]),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   bool _isOnlineSafely() {
     try {
       return ConnectivityService.instance.isOnline;
@@ -463,7 +904,27 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     try {
       _secureLog('🔍 Detecting mode for ${widget.employee.id}...');
-      final hasFace = await FaceMatcher.hasRegisteredFace(widget.employee.id);
+      bool hasFace = await FaceMatcher.hasRegisteredFace(widget.employee.id);
+
+      // 🆕 I-FORCE ANG PAG-GAMIT SA PROFILE PICTURE KUNG WALANG BIOMETRICS
+      if (!hasFace && !kIsWeb) {
+        try {
+          final status = await FaceMatcher.debugTemplateStatus(widget.employee.id);
+          final hasPhoto = status['hasPhotoUrl'] == true;
+          if (hasPhoto && NetworkGuard.instance.isOnline) {
+            _secureLog('🔄 Generating face template from admin profile picture...');
+            // Gagamitin ang litrato sa admin panel para gawing face template
+            final healed = await FaceMatcher.autoUpgradeFromExistingPhoto(widget.employee.id);
+            if (healed) {
+              hasFace = true;
+              _selfHealTriggered = true;
+              _secureLog('✅ Template successfully generated from profile picture!');
+            }
+          }
+        } catch (e) {
+          _secureLog('⚠️ Photo to template failed: $e');
+        }
+      }
 
       if (!mounted) return;
 
@@ -571,6 +1032,30 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final rand = math.Random.secure();
     final bytes = List<int>.generate(16, (_) => rand.nextInt(256));
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  // ⚖️ LOAD BALANCER — Jitter & Exponential Backoff for Firestore
+  Future<T> _executeWithLoadBalancer<T>(Future<T> Function() operation) async {
+    int retries = 0;
+    const maxRetries = 3;
+
+    // 1. Jitter: Random delay (100ms - 900ms) para hindi sabay-sabay pumasok sa DB
+    final jitter = math.Random().nextInt(800) + 100;
+    await Future.delayed(Duration(milliseconds: jitter));
+
+    while (true) {
+      try {
+        return await operation();
+      } catch (e) {
+        if (retries >= maxRetries) rethrow;
+        retries++;
+
+        // 2. Exponential Backoff: 1s, 2s, 4s + random jitter
+        final backoff = (math.pow(2, retries) * 1000).toInt() + math.Random().nextInt(500);
+        _secureLog('⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
+        await Future.delayed(Duration(milliseconds: backoff));
+      }
+    }
   }
 
   Future<void> _bootstrapSecurity() async {
@@ -2027,6 +2512,37 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     return 'inside';
   }
 
+  // 🆕 RATE LIMITER: Check kung naka-clock in na ngayong araw
+  Future<bool> _hasClockedInToday(String employeeId) async {
+    try {
+      final now = DateTime.now();
+      final todayStr = now.toIso8601String().substring(0, 10);
+      final prefs = await SharedPreferences.getInstance();
+      final lastClockIn = prefs.getString('last_clock_in_date_$employeeId');
+
+      if (lastClockIn == todayStr) return true;
+      if (!NetworkGuard.instance.isOnline) return false;
+
+      final q = await FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .where('employee_id', isEqualTo: employeeId)
+          .where('date', isEqualTo: todayStr)
+          .where('type', isEqualTo: 'IN')
+          .limit(1)
+          .get()
+          .timeout(const Duration(seconds: 5));
+
+      if (q.docs.isNotEmpty) {
+        await prefs.setString('last_clock_in_date_$employeeId', todayStr);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      _secureLog('⚠️ _hasClockedInToday error: $e');
+      return false;
+    }
+  }
+
   Future<void> _onAttendanceTypeDetermined({
     required bool isClockIn,
     required String employeeId,
@@ -2095,6 +2611,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           '${effectiveTime.second.toString().padLeft(2, '0')}';
 
       final delayMinutes = now.difference(effectiveTime).inMinutes;
+
+      // 🆕 I-SAVE SA LOCAL CACHE PARA MABILIS ANG CHECK BUKAS
+      if (attendanceType == 'IN') {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('last_clock_in_date_$employeeId', todayStr);
+        } catch (_) {}
+      }
 
       _secureLog('⏱️ [Attendance] effectiveTime=$effectiveTime '
           '(firstAttempt=$_firstAttemptTime, successAt=$now, '
@@ -2174,9 +2698,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       };
 
       try {
-        await FirebaseFirestore.instance
-            .collection('attendance_logs')
-            .add(attendancePayload);
+        await _executeWithLoadBalancer(() =>
+            FirebaseFirestore.instance.collection('attendance_logs').add(attendancePayload)
+        );
       } catch (e) {
         _secureLog('❌ attendance_logs write FAILED: $e');
       }
@@ -2206,9 +2730,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       };
 
       try {
-        await FirebaseFirestore.instance
-            .collection('activity_logs')
-            .add(activityPayload);
+        await _executeWithLoadBalancer(() =>
+            FirebaseFirestore.instance.collection('activity_logs').add(activityPayload)
+        );
       } catch (e) {
         try {
           await OfflineAttendanceService.instance.enqueue(
@@ -2279,6 +2803,27 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     final canProceed = await _checkRoleAndGeofence();
     if (!canProceed) return;
+
+    // 🆕 RATE LIMITER: Check kung naka-IN na ngayong araw
+    final employeeId = _employeeIdForAttendance;
+    final alreadyClockedIn = await ClockStatusService.instance.isCurrentlyClockedIn(employeeId);
+
+    if (!alreadyClockedIn) {
+      final hasClockedInToday = await _hasClockedInToday(employeeId);
+      if (hasClockedInToday) {
+        if (mounted) {
+          setState(() {
+            _faceState = _FaceState.error;
+            _errorMessage = 'You have already clocked in today.\nOnly one clock-in is allowed per day.';
+          });
+          _shakeCtrl.forward(from: 0);
+          _successCtrl.reset();
+          _pulseCtrl.repeat(reverse: true);
+          _ringCtrl.repeat();
+        }
+        return; // 🛑 I-BLOCK ANG PANGALAWANG CLOCK-IN
+      }
+    }
 
     await _writeAttendanceLog();
 
@@ -3027,7 +3572,52 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           ],
           const SizedBox(height: 20),
           _buildCancelButton(tc),
+          if (!_isDemo) ...[
+            const SizedBox(height: 8),
+            _buildContactAdminLink(),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildContactAdminLink() {
+    final isError = _faceState == _FaceState.error;
+    return GestureDetector(
+      onTap: _sendingAdminReport ? null : _openContactAdminSheet,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: isError ? _white.withValues(alpha: 0.15) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: isError
+              ? Border.all(color: _white.withValues(alpha: 0.4), width: 1)
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.support_agent_rounded,
+              color: isError ? _white : _white.withValues(alpha: 0.72),
+              size: 15,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              isError
+                  ? 'Face scan issue? Contact Admin'
+                  : 'Having trouble? Contact Admin',
+              style: TextStyle(
+                color: isError ? _white : _white.withValues(alpha: 0.72),
+                fontSize: 12,
+                fontWeight: isError ? FontWeight.w700 : FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -3167,16 +3757,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               fit: StackFit.expand,
               children: [
                 if (hasRealCamera)
-                  FittedBox(
-                    fit: BoxFit.cover,
-                    child: Transform.scale(
-                      scaleX: -1,
-                      child: SizedBox(
-                        width: _camCtrl!.value.previewSize!.height,
-                        height: _camCtrl!.value.previewSize!.width,
-                        child: CameraPreview(_camCtrl!),
-                      ),
-                    ),
+            FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: _camCtrl!.value.previewSize!.height,
+              height: _camCtrl!.value.previewSize!.width,
+              child: CameraPreview(_camCtrl!),
+            ),
                   )
                 else if (kIsWeb)
                   Container(color: Colors.black)

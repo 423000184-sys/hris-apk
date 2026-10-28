@@ -275,7 +275,7 @@ class AdminEmployeeService {
     for (var i = 0; i < _pinIterations; i++) {
       digest = Hmac(sha256, key).convert(digest).bytes;
     }
-    return 'v2\$${_pinIterations}\$${base64Encode(digest)}';
+    return 'v2\$$_pinIterations\$${base64Encode(digest)}';
   }
 
   /// 🆕 Verify PIN laban sa stored hash (constant-time compare).

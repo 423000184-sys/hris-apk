@@ -5,12 +5,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_theme.dart';
-import '../widgets/bootstrap_grid.dart';
 import '../services/demo_mode_service.dart';
 
 void _secureLog(String m) {

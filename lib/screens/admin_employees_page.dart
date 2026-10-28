@@ -183,7 +183,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
   Map<String, dynamic>? _selectedProfileEmp;
   final Set<String> _selectedEmpIds = {};
-  bool _bulkTerminating = false;
+  final bool _bulkTerminating = false;
   bool _bulkSelectMode = false;
 
   @override
@@ -552,14 +552,18 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
   List<String> get _allPositionOptions {
     final set = <String>{};
-    for (final r in _departmentPositionsMap.values) set.addAll(r);
+    for (final r in _departmentPositionsMap.values) {
+      set.addAll(r);
+    }
     return set.toList()..sort();
   }
 
   List<String> get _positions {
     if (_department == 'All Departments') {
       final all = <String>{};
-      for (final r in _departmentPositionsMap.values) all.addAll(r);
+      for (final r in _departmentPositionsMap.values) {
+        all.addAll(r);
+      }
       return ['All Positions', ...(all.toList()..sort())];
     }
     final d = _departmentPositionsMap[_department] ?? const [];
@@ -1726,7 +1730,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           child: Switch(
             value: enabled,
             onChanged: _isDemo ? null : onChanged, // 🎭 Disable toggle in Demo
-            activeColor: const Color(0xFF22C55E),
+            activeThumbColor: const Color(0xFF22C55E),
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
         ),
@@ -2013,7 +2017,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         ),
         const SizedBox(height: 8),
         Text(
-          'This is just a display photo. FACE ENROLLMENT will be done by the employee in the mobile app on their first login.',
+          'This photo will be converted into a facial template. Kapag nag-scan ang employee sa mobile app, ito ang paghahambingan ng kanilang mukha.',
           style: TextStyle(fontSize: 13, color: tc.muted, height: 1.5),
         ),
       ],
@@ -2437,6 +2441,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       VoidCallback onToggle,
       VoidCallback onRegen,
       ) {
+    // 🆕 Para malaman kung may laman ba ang PIN bago i-enable ang 👁 at 📋
+    final hasPin = controller.text.trim().isNotEmpty;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Expanded(
@@ -2526,25 +2532,38 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             suffixIcon: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // 👁 EYE ICON — toggles show/hide.
+                //   Disabled (gray) kapag walang PIN.
                 IconButton(
-                  onPressed: onToggle,
+                  onPressed: hasPin ? onToggle : null,
+                  tooltip: hasPin
+                      ? (visible ? 'Hide PIN' : 'Show PIN')
+                      : 'No PIN saved — tap Regenerate',
                   icon: Icon(
                     visible
                         ? Icons.visibility_rounded
                         : Icons.visibility_off_rounded,
                     size: 18,
-                    color: tc.muted,
+                    color: hasPin ? tc.orange : tc.muted,
                   ),
                   splashRadius: 18,
                 ),
+                // 📋 COPY ICON — disabled kapag walang PIN.
                 IconButton(
-                  onPressed: () {
+                  onPressed: hasPin
+                      ? () {
                     final p = controller.text.trim();
                     if (p.isEmpty) return;
                     Clipboard.setData(ClipboardData(text: p));
                     _snack('📋 PIN copied to clipboard.');
-                  },
-                  icon: Icon(Icons.copy_rounded, size: 16, color: tc.muted),
+                  }
+                      : null,
+                  tooltip: hasPin ? 'Copy PIN' : 'No PIN to copy',
+                  icon: Icon(
+                    Icons.copy_rounded,
+                    size: 16,
+                    color: hasPin ? tc.orange : tc.muted,
+                  ),
                   splashRadius: 18,
                 ),
                 const SizedBox(width: 4),
@@ -2555,16 +2574,22 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       ),
       const SizedBox(height: 4),
       Row(children: [
-        Icon(Icons.auto_awesome_rounded, size: 10, color: tc.orange),
+        Icon(
+          hasPin ? Icons.auto_awesome_rounded : Icons.info_outline_rounded,
+          size: 10,
+          color: hasPin ? tc.orange : tc.muted,
+        ),
         const SizedBox(width: 4),
         Expanded(
           child: Text(
-            justGenerated
-                ? 'Auto-generated • will save as hash on submit'
-                : 'Auto-generated PIN — stored as salted hash',
+            hasPin
+                ? (justGenerated
+                ? 'Bagong PIN — i-tap ang 👁 para makita'
+                : 'Naka-save na PIN — i-tap ang 👁 para makita')
+                : 'Walang naka-save na PIN — i-tap ang Regenerate',
             style: TextStyle(
               fontSize: 10,
-              color: tc.orange,
+              color: hasPin ? tc.orange : tc.muted,
               fontStyle: FontStyle.italic,
               height: 1.3,
             ),
@@ -2768,7 +2793,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _editRoleCtrl.text = _s(emp['role'], '');
     _editDeptCtrl.text = _s(emp['department'], '');
     _editKeyfobCtrl.text = _s(emp['nfcTagId'], _s(emp['nfcId'], ''));
-    _editPinCtrl.text = '';
+    final savedPin = _s(emp['pin'], '').trim();
+    final hasSavedPin = savedPin.isNotEmpty && savedPin != '—';
+    _editPinCtrl.text = hasSavedPin ? savedPin : '';
     _editPinJustGenerated = false;
     _editPinVisible = false;
     _editPinSaving = false;
@@ -2947,7 +2974,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               )
                   : hasUrl
                   ? _buildPhoto(
-                displayUrl!,
+                displayUrl,
                 null,
                 null,
                 BoxFit.cover,
@@ -2984,7 +3011,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Display-only photo — not used for facial recognition.',
+            'Profile photo — ginagamit bilang reference para sa facial recognition ng employee.',
             style: TextStyle(fontSize: 14, color: tc.muted, height: 1.5),
           ),
           const SizedBox(height: 16),
@@ -3849,7 +3876,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 Switch(
                   value: _editWfhAccess,
                   onChanged: (v) => setState(() => _editWfhAccess = v),
-                  activeColor: const Color(0xFF22C55E),
+                  activeThumbColor: const Color(0xFF22C55E),
                 ),
               ]),
             ),
@@ -5168,7 +5195,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     Switch(
                       value: wfh,
                       onChanged: _isDemo ? null : (v) => _setWfh(emp, v), // 🎭 Block in Demo
-                      activeColor: const Color(0xFF22C55E),
+                      activeThumbColor: const Color(0xFF22C55E),
                     ),
                   ]),
                   const SizedBox(height: 4),
@@ -7456,9 +7483,7 @@ class _DashedBorderPainter extends CustomPainter {
   _DashedBorderPainter({
     required this.color,
     this.radius = 12,
-    this.dashWidth = 6,
-    this.dashSpace = 4,
-  });
+  }) : dashWidth = 6, dashSpace = 4;
 
   @override
   void paint(Canvas canvas, Size size) {

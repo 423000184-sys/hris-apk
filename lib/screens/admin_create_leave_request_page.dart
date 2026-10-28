@@ -700,8 +700,9 @@ class _AdminCreateLeaveRequestPageState
     if (month == null || day == null || year == null) return null;
     try {
       final date = DateTime(year, month, day);
-      if (date.year != year || date.month != month || date.day != day)
+      if (date.year != year || date.month != month || date.day != day) {
         return null;
+      }
       return date;
     } catch (_) {
       return null;

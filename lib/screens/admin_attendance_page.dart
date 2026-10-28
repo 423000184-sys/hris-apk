@@ -1419,7 +1419,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     required ValueChanged<T?> onChanged,
   }) {
     return DropdownButtonFormField<T>(
-      value: value,
+      initialValue: value,
       isExpanded: true,
       dropdownColor: tc.card,
       iconEnabledColor: tc.text,

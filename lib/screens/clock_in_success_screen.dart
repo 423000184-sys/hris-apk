@@ -31,7 +31,7 @@ class _ThemeColors {
   Color get scaffoldBg => isDark ? const Color(0xFF0A0A0A) : Colors.white;
   Color get bgLayer => isDark ? const Color(0xFF0F0D0B) : Colors.white;
   Color get scrim =>
-      isDark ? Colors.black.withOpacity(0.55) : const Color(0xFF09090B).withOpacity(0.44);
+      isDark ? Colors.black.withValues(alpha: 0.55) : const Color(0xFF09090B).withValues(alpha: 0.44);
 
   // Cards
   Color get cardBg => isDark ? const Color(0xFF18181B) : Colors.white;
@@ -358,10 +358,10 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         color: const Color(0xFFF54900),
         borderRadius: BorderRadius.circular(20),
         border:
-        Border.all(color: Colors.white.withOpacity(0.55), width: 1.3),
+        Border.all(color: Colors.white.withValues(alpha: 0.55), width: 1.3),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.35),
+            color: Colors.black.withValues(alpha: 0.35),
             blurRadius: 14,
             offset: const Offset(0, 4),
           ),
@@ -519,7 +519,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         border: Border.all(color: _authOrangeBorder, width: 1.11),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(tc.isDark ? 0.25 : 0.05),
+              color: Colors.black.withValues(alpha: tc.isDark ? 0.25 : 0.05),
               blurRadius: 3,
               offset: const Offset(0, 2)),
         ],
@@ -626,7 +626,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         border: Border.all(color: _cardBorder, width: _designBorderWidth),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 10,
               offset: const Offset(0, 12.5)),
         ],
@@ -677,7 +677,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.25),
+                color: Colors.black.withValues(alpha: 0.25),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Row(
@@ -687,14 +687,14 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
                     _isDemo
                         ? Icons.science_rounded
                         : Icons.verified_rounded,
-                    color: Colors.white.withOpacity(0.7),
+                    color: Colors.white.withValues(alpha: 0.7),
                     size: 9,
                   ),
                   const SizedBox(width: 3),
                   Text(
                     _isDemo ? 'DEMO' : 'VERIFIED',
                     style: TextStyle(
-                        color: Colors.white.withOpacity(0.7),
+                        color: Colors.white.withValues(alpha: 0.7),
                         fontSize: 7,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 0.5),
@@ -719,9 +719,9 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.45),
+          color: Colors.black.withValues(alpha: 0.45),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: _neonGreen.withOpacity(0.7), width: 1.2),
+          border: Border.all(color: _neonGreen.withValues(alpha: 0.7), width: 1.2),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -732,7 +732,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
             Text(
               'Demo — no DB write',
               style: TextStyle(
-                  color: Colors.white.withOpacity(0.95),
+                  color: Colors.white.withValues(alpha: 0.95),
                   fontSize: 9,
                   fontWeight: FontWeight.w700),
             ),
@@ -745,21 +745,21 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.35),
+          color: Colors.black.withValues(alpha: 0.35),
           borderRadius: BorderRadius.circular(20),
           border:
-          Border.all(color: Colors.white.withOpacity(0.35), width: 1),
+          Border.all(color: Colors.white.withValues(alpha: 0.35), width: 1),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.cloud_off_rounded,
-                color: Colors.white.withOpacity(0.9), size: 11),
+                color: Colors.white.withValues(alpha: 0.9), size: 11),
             const SizedBox(width: 5),
             Text(
               'Saved offline — will sync later',
               style: TextStyle(
-                  color: Colors.white.withOpacity(0.9),
+                  color: Colors.white.withValues(alpha: 0.9),
                   fontSize: 9,
                   fontWeight: FontWeight.w600),
             ),

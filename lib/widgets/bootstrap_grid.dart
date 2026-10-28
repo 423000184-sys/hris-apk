@@ -201,8 +201,9 @@ class BsGrid extends StatelessWidget {
         double aspect = childAspectRatio ?? 1.0;
         if (childAspectRatio == null) {
           // Wide screens get wider cards
-          if (cols >= 4) aspect = 1.9;
-          else if (cols == 3) aspect = 1.6;
+          if (cols >= 4) {
+            aspect = 1.9;
+          } else if (cols == 3) aspect = 1.6;
           else if (cols == 2) aspect = 1.5;
           else aspect = 1.2;
         }

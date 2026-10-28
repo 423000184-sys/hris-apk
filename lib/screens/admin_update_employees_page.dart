@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 class AdminUpdateEmployeesPage extends StatefulWidget {
-  const AdminUpdateEmployeesPage({Key? key}) : super(key: key);
+  const AdminUpdateEmployeesPage({super.key});
 
   @override
   State<AdminUpdateEmployeesPage> createState() =>

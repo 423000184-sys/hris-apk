@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/security_service.dart';
 import '../services/demo_mode_service.dart';
 import '../data/local/dao/connectivity_service.dart';

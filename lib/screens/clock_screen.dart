@@ -277,6 +277,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     _startEmployeeListener();
     _startSessionRevocationListener();
     _loadDeviceModel();
+    _loadCachedTimes(); // 🆕 I-load agad ang saved time pagka-open ng screen
     _startSecurityMonitoring();
     _syncServerTime();
 
@@ -405,6 +406,28 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     final rand = math.Random.secure();
     final bytes = List<int>.generate(16, (_) => rand.nextInt(256));
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  // ⚖️ LOAD BALANCER — Jitter & Exponential Backoff for Firestore
+  Future<T> _executeWithLoadBalancer<T>(Future<T> Function() operation) async {
+    int retries = 0;
+    const maxRetries = 3;
+
+    final jitter = math.Random().nextInt(800) + 100;
+    await Future.delayed(Duration(milliseconds: jitter));
+
+    while (true) {
+      try {
+        return await operation();
+      } catch (e) {
+        if (retries >= maxRetries) rethrow;
+        retries++;
+
+        final backoff = (math.pow(2, retries) * 1000).toInt() + math.Random().nextInt(500);
+        debugPrint('⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
+        await Future.delayed(Duration(milliseconds: backoff));
+      }
+    }
   }
 
   String _generateTransactionId(String type) {
@@ -829,6 +852,43 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     }
   }
 
+  // 🆕 BABASahin ang naka-save na oras sa device para instant lumabas
+  Future<void> _loadCachedTimes() async {
+    if (_isDemo) return;
+    final empId = _employeeId;
+    if (empId == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final inStr = prefs.getString('last_clock_in_$empId');
+      final outStr = prefs.getString('last_clock_out_$empId');
+      if (!mounted) return;
+
+      final now = DateTime.now();
+      DateTime? inTime;
+      DateTime? outTime;
+
+      if (inStr != null) {
+        final dt = DateTime.tryParse(inStr);
+        if (dt != null && dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+          inTime = dt;
+        }
+      }
+      if (outStr != null) {
+        final dt = DateTime.tryParse(outStr);
+        if (dt != null && dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+          outTime = dt;
+        }
+      }
+
+      if (inTime != null || outTime != null) {
+        setState(() {
+          _clockInTime = inTime;
+          _clockOutTime = outTime;
+        });
+      }
+    } catch (_) {}
+  }
+
   Future<void> _loadDeviceModel() async {
     if (_isDemo) {
       if (mounted) setState(() => _deviceModel = 'Demo Device');
@@ -904,6 +964,41 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       if (Platform.isLinux) return 'Linux App';
     } catch (_) {}
     return defaultTargetPlatform.name;
+  }
+
+  // 🆕 RATE LIMITER: Check kung naka-clock in na ngayong araw
+  Future<bool> _hasClockedInToday() async {
+    if (_isDemo) return false;
+    final empId = _employeeId;
+    if (empId == null || empId.isEmpty) return false;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastClockIn = prefs.getString('last_clock_in_date_$empId');
+
+      // Mabilis na local check
+      if (lastClockIn == _todayStr) return true;
+      if (!_isOnline) return false;
+
+      // Fallback check sa Firestore
+      final q = await FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .where('employee_id', isEqualTo: empId)
+          .where('date', isEqualTo: _todayStr)
+          .where('type', isEqualTo: 'IN')
+          .limit(1)
+          .get()
+          .timeout(const Duration(seconds: 5));
+
+      if (q.docs.isNotEmpty) {
+        await prefs.setString('last_clock_in_date_$empId', _todayStr);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('⚠️ _hasClockedInToday error: $e');
+      return false;
+    }
   }
 
   String _computeZoneType() {
@@ -1412,19 +1507,19 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     if (adminAddedOut) {
       _showSnack(
-        '📝 Admin recorded your clock OUT at ${_formatTime(outTime!)}',
+        '📝 Admin recorded your clock OUT at ${_formatTime(outTime)}',
       );
     } else if (adminAddedIn) {
       _showSnack(
-        '📝 Admin recorded your clock IN at ${_formatTime(inTime!)}',
+        '📝 Admin recorded your clock IN at ${_formatTime(inTime)}',
       );
     } else if (adminChangedOut) {
       _showSnack(
-        '📝 Admin updated your clock OUT to ${_formatTime(outTime!)}',
+        '📝 Admin updated your clock OUT to ${_formatTime(outTime)}',
       );
     } else if (adminChangedIn) {
       _showSnack(
-        '📝 Admin updated your clock IN to ${_formatTime(inTime!)}',
+        '📝 Admin updated your clock IN to ${_formatTime(inTime)}',
       );
     } else {
       _showSnack('📝 Admin updated your attendance.');
@@ -1510,6 +1605,25 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     if (result.queued) {
       _showSnack('💾 Saved offline. Will auto-sync once internet returns.');
+    }
+
+    // 🆕 I-SAVE SA LOCAL CACHE PARA INSTANT ANG UPDATE SA SUSUNOD
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (isClockIn) {
+        await prefs.setString('last_clock_in_$empId', time.toIso8601String());
+        await prefs.remove('last_clock_out_$empId');
+      } else {
+        await prefs.setString('last_clock_out_$empId', time.toIso8601String());
+      }
+    } catch (_) {}
+
+    // 🆕 I-SAVE SA LOCAL CACHE PARA MABILIS ANG CHECK BUKAS
+    if (isClockIn && !_isDemo) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('last_clock_in_date_$empId', _todayStr);
+      } catch (_) {}
     }
 
     await _logSecurityEvent(
@@ -1601,15 +1715,14 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       'timestamp': FieldValue.serverTimestamp(),
     };
 
-    FirebaseFirestore.instance
-        .collection('activity logs')
-        .add(activityLogPayload)
-        .catchError((e) => debugPrint('⚠️ activity logs FAILED: $e'));
+    // ⚖️ Naka-load balance para hindi mag-crash ang app sa dami ng sabay-sabay na writes
+    unawaited(_executeWithLoadBalancer(() =>
+        FirebaseFirestore.instance.collection('activity logs').add(activityLogPayload)
+    ).catchError((e) => debugPrint('⚠️ activity logs FAILED: $e')));
 
-    FirebaseFirestore.instance
-        .collection('activity_logs')
-        .add(historyLogPayload)
-        .catchError((e) => debugPrint('⚠️ activity_logs FAILED: $e'));
+    unawaited(_executeWithLoadBalancer(() =>
+        FirebaseFirestore.instance.collection('activity_logs').add(historyLogPayload)
+    ).catchError((e) => debugPrint('⚠️ activity_logs FAILED: $e')));
 
     try {
       if (isClockIn) {
@@ -1855,6 +1968,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
       if (_clockInTime != null) {
         _showSnack('You already clocked in at ${_formatTime(_clockInTime!)}.');
+        return;
+      }
+
+      // 🆕 RATE LIMITER: Check kung naka-IN na ngayong araw
+      final alreadyClockedInToday = await _hasClockedInToday();
+      if (alreadyClockedInToday) {
+        _showSnack('⚠️ You have already clocked in today. Only one clock-in is allowed per day.');
         return;
       }
 

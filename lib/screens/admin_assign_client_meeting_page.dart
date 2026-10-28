@@ -1150,7 +1150,7 @@ class _AdminAssignClientMeetingPageState
 
   Widget _buildEmployeeDropdown() {
     return DropdownButtonFormField<Map<String, dynamic>>(
-      value: _selectedEmployee,
+      initialValue: _selectedEmployee,
       isExpanded: true,
       dropdownColor: tc.card,
       decoration: InputDecoration(
@@ -1246,7 +1246,7 @@ class _AdminAssignClientMeetingPageState
     }
 
     return DropdownButtonFormField<Map<String, dynamic>>(
-      value: _selectedClient,
+      initialValue: _selectedClient,
       isExpanded: true,
       dropdownColor: tc.card,
       decoration: InputDecoration(
@@ -2199,7 +2199,7 @@ class _EditAssignmentDialogState extends State<_EditAssignmentDialog> {
 
   Widget _buildEmployeeDropdown() {
     return DropdownButtonFormField<Map<String, dynamic>>(
-      value: _selectedEmployee,
+      initialValue: _selectedEmployee,
       isExpanded: true,
       dropdownColor: tc.card,
       decoration: InputDecoration(
@@ -2262,7 +2262,7 @@ class _EditAssignmentDialogState extends State<_EditAssignmentDialog> {
     }
 
     return DropdownButtonFormField<Map<String, dynamic>>(
-      value: _selectedClient,
+      initialValue: _selectedClient,
       isExpanded: true,
       dropdownColor: tc.card,
       decoration: InputDecoration(

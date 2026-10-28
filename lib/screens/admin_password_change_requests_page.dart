@@ -1,5 +1,7 @@
 // lib/screens/admin_password_change_requests_page.dart
-// v1.2: 🔗 OneSignal Push Notifications integrated for Approve, Regenerate, and Reject.
+// v1.3: 🔧 Fixed — resolve tamang Firestore doc ID bago mag-save ng PIN.
+//       I-set ang PendingEditRestore para awtomatikong lumabas ang
+//       bagong PIN sa admin employees edit view.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' show Random;
@@ -15,7 +17,8 @@ import '../models/admin_notification.dart';
 import '../services/admin_notification_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/demo_mode_service.dart';
-import '../services/onesignal_sender.dart'; // 🆕 Added
+import '../services/onesignal_sender.dart';
+import 'admin_employees_page.dart' show PendingEditRestore; // 🆕
 import 'admin_theme.dart';
 
 void _secureLog(String msg) {
@@ -188,11 +191,11 @@ class _PasswordChangeRequestsPageState
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content:
-        Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
+        content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10)),
+          borderRadius: BorderRadius.circular(10),
+        ),
         margin: const EdgeInsets.all(16),
         duration: const Duration(seconds: 3),
       ),
@@ -226,6 +229,68 @@ class _PasswordChangeRequestsPageState
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // 🆕 RESOLVE TOTOONG FIRESTORE DOC ID NG EMPLOYEE
+  // ═══════════════════════════════════════════════════════════════
+  /// Hinahanap ang tamang document ID sa `employees` collection.
+  /// Order ng paghahanap:
+  ///   1. metadata.employeeDocId (explicit — pinaka-reliable)
+  ///   2. n.employeeId as doc ID (baka sakali na doc ID na ito)
+  ///   3. Query by `employeeId` field gamit:
+  ///        • n.employeeId
+  ///        • n.employeeIdentifier
+  ///        • metadata.employeeId
+  Future<String?> _resolveEmployeeDocId(AdminNotification n) async {
+    final fs = FirebaseFirestore.instance;
+    try {
+      // 1️⃣ Explicit doc ID sa metadata
+      final metaDocId = n.metadata['employeeDocId']?.toString().trim();
+      if (metaDocId != null && metaDocId.isNotEmpty) {
+        final snap = await fs.collection('employees').doc(metaDocId).get();
+        if (snap.exists) {
+          _secureLog('Resolved via metadata.employeeDocId → $metaDocId');
+          return metaDocId;
+        }
+      }
+
+      // 2️⃣ n.employeeId mismo as doc ID
+      final rawId = n.employeeId?.trim();
+      if (rawId != null && rawId.isNotEmpty) {
+        final snap = await fs.collection('employees').doc(rawId).get();
+        if (snap.exists) {
+          _secureLog('Resolved via n.employeeId (doc ID) → $rawId');
+          return rawId;
+        }
+      }
+
+      // 3️⃣ Query by employeeId field (employee code, e.g. "EMP-001")
+      final candidates = <String>{};
+      for (final s in [
+        n.employeeId,
+        n.employeeIdentifier,
+        n.metadata['employeeId']?.toString(),
+      ]) {
+        final t = s?.trim();
+        if (t != null && t.isNotEmpty) candidates.add(t);
+      }
+
+      for (final code in candidates) {
+        final q = await fs
+            .collection('employees')
+            .where('employeeId', isEqualTo: code)
+            .limit(1)
+            .get();
+        if (q.docs.isNotEmpty) {
+          _secureLog('Resolved via query employeeId="$code" → ${q.docs.first.id}');
+          return q.docs.first.id;
+        }
+      }
+    } catch (e) {
+      _secureLog('resolveEmployeeDocId failed: $e');
+    }
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // APPROVE REQUEST (With OneSignal Push)
   // ═══════════════════════════════════════════════════════════════
   Future<void> _approveRequest(AdminNotification n) async {
@@ -249,9 +314,12 @@ class _PasswordChangeRequestsPageState
       final salt = _randomSalt();
       final hash = _saltedHash(newPin, salt);
 
-      final empDocId = n.employeeId ?? n.metadata['employeeId']?.toString();
-      if (empDocId == null || empDocId.isEmpty) {
-        _showSnack('⚠️ Employee ID not found.');
+      // 🔧 FIX: i-resolve ang tamang doc ID
+      final empDocId = await _resolveEmployeeDocId(n);
+      if (empDocId == null) {
+        _showSnack(
+          '⚠️ Employee record not found for ${n.employeeName ?? "this user"}.',
+        );
         return;
       }
 
@@ -260,7 +328,7 @@ class _PasswordChangeRequestsPageState
           .doc(empDocId)
           .get();
       if (!empDoc.exists) {
-        _showSnack('⚠️ Employee not found: $empDocId');
+        _showSnack('⚠️ Employee doc missing: $empDocId');
         return;
       }
 
@@ -292,6 +360,7 @@ class _PasswordChangeRequestsPageState
         'metadata.approvedByEmail': adminEmail,
         'metadata.approvedAt': FieldValue.serverTimestamp(),
         'metadata.newPin': newPin,
+        'metadata.employeeDocId': empDocId, // 🆕 i-save para sa audit
         'metadata.pinGeneratedAt': FieldValue.serverTimestamp(),
       });
 
@@ -302,7 +371,8 @@ class _PasswordChangeRequestsPageState
             .add({
           'employeeId': empDocId,
           'title': '🔐 Password Reset — Your New PIN',
-          'message': 'Your PIN has been reset by admin.\n\nYOUR NEW PIN: $newPin\n\nUse this PIN on your next login.',
+          'message':
+          'Your PIN has been reset by admin.\n\nYOUR NEW PIN: $newPin\n\nUse this PIN on your next login.',
           'type': 'password_change_approved',
           'newPin': newPin,
           'requestId': n.id,
@@ -342,10 +412,18 @@ class _PasswordChangeRequestsPageState
         });
       } catch (_) {}
 
+      // 🆕 Hint sa admin employees page para i-restore ang edit view
+      try {
+        PendingEditRestore.shouldRestore = true;
+        PendingEditRestore.docId = empDocId;
+        PendingEditRestore.newPin = newPin;
+      } catch (_) {}
+
       await _logAudit(
         'password_change_approved',
         'Approved & reset PIN for '
-            '${n.employeeName ?? n.employeeId ?? "unknown"}',
+            '${n.employeeName ?? n.employeeId ?? "unknown"} '
+            '(doc=$empDocId)',
       );
 
       if (!kIsWeb) HapticFeedback.mediumImpact();
@@ -381,9 +459,10 @@ class _PasswordChangeRequestsPageState
       final salt = _randomSalt();
       final hash = _saltedHash(newPin, salt);
 
-      final empDocId = n.employeeId ?? n.metadata['employeeId']?.toString();
-      if (empDocId == null || empDocId.isEmpty) {
-        _showSnack('⚠️ Employee ID not found.');
+      // 🔧 FIX: i-resolve ang tamang doc ID
+      final empDocId = await _resolveEmployeeDocId(n);
+      if (empDocId == null) {
+        _showSnack('⚠️ Employee record not found.');
         return;
       }
 
@@ -392,7 +471,7 @@ class _PasswordChangeRequestsPageState
           .doc(empDocId)
           .get();
       if (!empDoc.exists) {
-        _showSnack('⚠️ Employee not found: $empDocId');
+        _showSnack('⚠️ Employee doc missing: $empDocId');
         return;
       }
 
@@ -414,6 +493,7 @@ class _PasswordChangeRequestsPageState
           .doc(n.id)
           .update({
         'metadata.newPin': newPin,
+        'metadata.employeeDocId': empDocId, // 🆕
         'metadata.pinGeneratedAt': FieldValue.serverTimestamp(),
         'metadata.pinRegeneratedBy': adminId,
       });
@@ -425,7 +505,8 @@ class _PasswordChangeRequestsPageState
             .add({
           'employeeId': empDocId,
           'title': '🔐 New PIN Generated',
-          'message': 'Admin generated a new PIN for you.\n\nYOUR NEW PIN: $newPin\n\nUse this on your next login.',
+          'message':
+          'Admin generated a new PIN for you.\n\nYOUR NEW PIN: $newPin\n\nUse this on your next login.',
           'type': 'password_change_approved',
           'newPin': newPin,
           'requestId': n.id,
@@ -447,9 +528,17 @@ class _PasswordChangeRequestsPageState
         _secureLog('⚠️ OneSignal push failed: $e');
       }
 
+      // 🆕 Hint sa admin employees page
+      try {
+        PendingEditRestore.shouldRestore = true;
+        PendingEditRestore.docId = empDocId;
+        PendingEditRestore.newPin = newPin;
+      } catch (_) {}
+
       await _logAudit(
         'password_pin_regenerated',
-        'Regenerated PIN for ${n.employeeName ?? "unknown"} (notif=${n.id})',
+        'Regenerated PIN for ${n.employeeName ?? "unknown"} '
+            '(notif=${n.id}, doc=$empDocId)',
       );
 
       if (!kIsWeb) HapticFeedback.mediumImpact();
@@ -471,7 +560,8 @@ class _PasswordChangeRequestsPageState
         child: AlertDialog(
           backgroundColor: tc.card,
           shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
+            borderRadius: BorderRadius.circular(16),
+          ),
           contentPadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -501,14 +591,13 @@ class _PasswordChangeRequestsPageState
               const SizedBox(height: 16),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 20, vertical: 20),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
                 decoration: BoxDecoration(
                   color: tc.orange.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                      color: tc.orange.withValues(alpha: 0.4),
-                      width: 1.5),
+                      color: tc.orange.withValues(alpha: 0.4), width: 1.5),
                 ),
                 child: Column(
                   children: [
@@ -528,8 +617,8 @@ class _PasswordChangeRequestsPageState
                         Clipboard.setData(ClipboardData(text: newPin));
                         _showSnack('📋 PIN copied to clipboard');
                       },
-                      icon: Icon(Icons.copy_rounded,
-                          size: 16, color: tc.orange),
+                      icon:
+                      Icon(Icons.copy_rounded, size: 16, color: tc.orange),
                       label: Text(
                         'Copy PIN',
                         style: TextStyle(
@@ -584,8 +673,8 @@ class _PasswordChangeRequestsPageState
                   ),
                 ),
                 child: const Text('Done — Employee Notified',
-                    style: TextStyle(
-                        fontWeight: FontWeight.w700, fontSize: 15)),
+                    style:
+                    TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
               ),
             ),
           ],
@@ -626,8 +715,9 @@ class _PasswordChangeRequestsPageState
         reason.isEmpty ? 'No reason provided' : reason,
       });
 
-      final empDocId = n.employeeId ?? n.metadata['employeeId']?.toString();
-      if (empDocId != null && empDocId.isNotEmpty) {
+      // 🔧 FIX: i-resolve ang tamang doc ID
+      final empDocId = await _resolveEmployeeDocId(n);
+      if (empDocId != null) {
         try {
           await FirebaseFirestore.instance
               .collection('employees')
@@ -730,8 +820,8 @@ class _PasswordChangeRequestsPageState
         'metadata.rejectReason': null,
       });
 
-      final empDocId = n.employeeId ?? n.metadata['employeeId']?.toString();
-      if (empDocId != null && empDocId.isNotEmpty) {
+      final empDocId = await _resolveEmployeeDocId(n);
+      if (empDocId != null) {
         try {
           await FirebaseFirestore.instance
               .collection('employees')
@@ -762,9 +852,8 @@ class _PasswordChangeRequestsPageState
 
     switch (_statusFilter) {
       case _StatusFilter.pending:
-        list = list
-            .where((n) => (n.status ?? 'pending') == 'pending')
-            .toList();
+        list =
+            list.where((n) => (n.status ?? 'pending') == 'pending').toList();
         break;
       case _StatusFilter.approved:
         list = list.where((n) => n.status == 'approved').toList();
@@ -829,8 +918,7 @@ class _PasswordChangeRequestsPageState
       body: _isDemo
           ? _buildDemoBody(tc)
           : StreamBuilder<List<AdminNotification>>(
-        stream:
-        AdminNotificationService.instance.streamAll(limit: 200),
+        stream: AdminNotificationService.instance.streamAll(limit: 200),
         builder: (context, snap) {
           if (snap.hasError) {
             return _errorState(tc, '${snap.error}');
@@ -927,10 +1015,8 @@ class _PasswordChangeRequestsPageState
   Widget _buildToolbar(AdminColors tc, List<AdminNotification> all) {
     final pendingCount =
         all.where((n) => (n.status ?? 'pending') == 'pending').length;
-    final approvedCount =
-        all.where((n) => n.status == 'approved').length;
-    final rejectedCount =
-        all.where((n) => n.status == 'rejected').length;
+    final approvedCount = all.where((n) => n.status == 'approved').length;
+    final rejectedCount = all.where((n) => n.status == 'rejected').length;
 
     return Container(
       decoration: BoxDecoration(
@@ -1205,8 +1291,7 @@ class _PasswordChangeRequestsPageState
                           : const Color(0xFFF9FAFB),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                          color: tc.border.withValues(alpha: 0.6),
-                          width: 1),
+                          color: tc.border.withValues(alpha: 0.6), width: 1),
                     ),
                     child: Text(
                       _sanitize(n.reason!),
@@ -1220,7 +1305,6 @@ class _PasswordChangeRequestsPageState
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-
                 if (status == 'approved') ...[
                   const SizedBox(height: 12),
                   Container(
@@ -1311,7 +1395,6 @@ class _PasswordChangeRequestsPageState
                     ),
                   ),
                 ],
-
                 const SizedBox(height: 12),
                 Row(
                   children: [
@@ -1333,7 +1416,8 @@ class _PasswordChangeRequestsPageState
                         label: 'Reject',
                         icon: Icons.close_rounded,
                         color: _isDemo ? tc.muted : tc.red,
-                        onTap: _isDemo ? _demoBlock : () => _confirmReject(tc, n),
+                        onTap:
+                        _isDemo ? _demoBlock : () => _confirmReject(tc, n),
                       ),
                       const SizedBox(width: 6),
                       _smallButton(
@@ -1342,7 +1426,9 @@ class _PasswordChangeRequestsPageState
                         icon: Icons.check_rounded,
                         color: _isDemo ? tc.muted : Colors.green,
                         filled: !_isDemo,
-                        onTap: _isDemo ? _demoBlock : () => _confirmApprove(tc, n),
+                        onTap: _isDemo
+                            ? _demoBlock
+                            : () => _confirmApprove(tc, n),
                       ),
                     ] else if (status == 'approved' && hasPin) ...[
                       _smallButton(
@@ -1350,7 +1436,9 @@ class _PasswordChangeRequestsPageState
                         label: 'Show PIN',
                         icon: Icons.visibility_rounded,
                         color: _isDemo ? tc.muted : tc.orange,
-                        onTap: _isDemo ? _demoBlock : () => _showNewPinDialog(n, savedPin),
+                        onTap: _isDemo
+                            ? _demoBlock
+                            : () => _showNewPinDialog(n, savedPin),
                       ),
                       const SizedBox(width: 6),
                       _smallButton(
@@ -1359,7 +1447,9 @@ class _PasswordChangeRequestsPageState
                         icon: Icons.refresh_rounded,
                         color: _isDemo ? tc.muted : Colors.green,
                         filled: !_isDemo,
-                        onTap: _isDemo ? _demoBlock : () => _regeneratePinForApproved(n),
+                        onTap: _isDemo
+                            ? _demoBlock
+                            : () => _regeneratePinForApproved(n),
                       ),
                     ] else if (status == 'approved') ...[
                       _smallButton(
@@ -1368,7 +1458,9 @@ class _PasswordChangeRequestsPageState
                         icon: Icons.vpn_key_rounded,
                         color: _isDemo ? tc.muted : Colors.green,
                         filled: !_isDemo,
-                        onTap: _isDemo ? _demoBlock : () => _regeneratePinForApproved(n),
+                        onTap: _isDemo
+                            ? _demoBlock
+                            : () => _regeneratePinForApproved(n),
                       ),
                     ] else
                       _smallButton(
@@ -1477,8 +1569,7 @@ class _PasswordChangeRequestsPageState
                       color: tc.orange.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(11),
                       border: Border.all(
-                          color: tc.orange.withValues(alpha: 0.4),
-                          width: 1),
+                          color: tc.orange.withValues(alpha: 0.4), width: 1),
                     ),
                     child: Icon(Icons.lock_reset_rounded,
                         color: tc.orange, size: 22),
@@ -1513,8 +1604,7 @@ class _PasswordChangeRequestsPageState
                       color: _statusBg(status, tc),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                          color: statusColor.withValues(alpha: 0.4),
-                          width: 1),
+                          color: statusColor.withValues(alpha: 0.4), width: 1),
                     ),
                     child: Text(
                       status.toUpperCase(),
@@ -1536,7 +1626,6 @@ class _PasswordChangeRequestsPageState
                 _kv(tc, 'Email', _sanitize(n.employeeEmail!)),
               _kv(tc, 'Reason',
                   _sanitize(n.reason ?? meta['reason']?.toString() ?? '—')),
-
               if (status == 'approved') ...[
                 const SizedBox(height: 4),
                 _kv(tc, 'Approved By',
@@ -1547,8 +1636,7 @@ class _PasswordChangeRequestsPageState
                   tc,
                   'Approved At',
                   meta['approvedAt'] is Timestamp
-                      ? _fullTime(
-                      (meta['approvedAt'] as Timestamp).toDate())
+                      ? _fullTime((meta['approvedAt'] as Timestamp).toDate())
                       : '—',
                 ),
                 const SizedBox(height: 12),
@@ -1686,22 +1774,18 @@ class _PasswordChangeRequestsPageState
                             Navigator.pop(ctx);
                             _regeneratePinForApproved(n);
                           },
-                          icon: const Icon(Icons.vpn_key_rounded,
-                              size: 16),
+                          icon: const Icon(Icons.vpn_key_rounded, size: 16),
                           label: const Text('Generate New PIN',
-                              style:
-                              TextStyle(fontWeight: FontWeight.w700)),
+                              style: TextStyle(fontWeight: FontWeight.w700)),
                           style: FilledButton.styleFrom(
                             backgroundColor: Colors.orange,
-                            padding:
-                            const EdgeInsets.symmetric(vertical: 10),
+                            padding: const EdgeInsets.symmetric(vertical: 10),
                           ),
                         ),
                       ],
                     ),
                   ),
               ],
-
               if (status == 'rejected') ...[
                 const SizedBox(height: 4),
                 _kv(tc, 'Rejected By',
@@ -1710,14 +1794,12 @@ class _PasswordChangeRequestsPageState
                   tc,
                   'Rejected At',
                   meta['rejectedAt'] is Timestamp
-                      ? _fullTime(
-                      (meta['rejectedAt'] as Timestamp).toDate())
+                      ? _fullTime((meta['rejectedAt'] as Timestamp).toDate())
                       : '—',
                 ),
                 _kv(tc, 'Reject Reason',
                     _sanitize(meta['rejectReason']?.toString() ?? '—')),
               ],
-
               const SizedBox(height: 20),
               Row(
                 children: [
@@ -1737,10 +1819,8 @@ class _PasswordChangeRequestsPageState
                                 color: _isDemo ? tc.muted : tc.red,
                                 fontWeight: FontWeight.w700)),
                         style: OutlinedButton.styleFrom(
-                          side: BorderSide(
-                              color: _isDemo ? tc.border : tc.red),
-                          padding:
-                          const EdgeInsets.symmetric(vertical: 12),
+                          side: BorderSide(color: _isDemo ? tc.border : tc.red),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
@@ -1763,8 +1843,7 @@ class _PasswordChangeRequestsPageState
                         style: FilledButton.styleFrom(
                           backgroundColor:
                           _isDemo ? tc.border : Colors.green,
-                          padding:
-                          const EdgeInsets.symmetric(vertical: 12),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
@@ -1786,8 +1865,7 @@ class _PasswordChangeRequestsPageState
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(
                               color: _isDemo ? tc.border : tc.orange),
-                          padding:
-                          const EdgeInsets.symmetric(vertical: 12),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
@@ -1800,8 +1878,7 @@ class _PasswordChangeRequestsPageState
                   onPressed: () => Navigator.pop(ctx),
                   child: Text('Close',
                       style: TextStyle(
-                          color: tc.textMuted,
-                          fontWeight: FontWeight.w700)),
+                          color: tc.textMuted, fontWeight: FontWeight.w700)),
                 ),
               ),
             ],
@@ -1854,8 +1931,8 @@ class _PasswordChangeRequestsPageState
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: tc.card,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
+        shape:
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
             Container(
@@ -1872,8 +1949,7 @@ class _PasswordChangeRequestsPageState
             const Expanded(
               child: Text(
                 'Approve & Reset PIN?',
-                style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w800),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
               ),
             ),
           ],
@@ -1882,11 +1958,7 @@ class _PasswordChangeRequestsPageState
           'Approve the request of '
               '${n.employeeName ?? "this employee"}?\n\n'
               'A new 4-digit PIN will be generated and AUTO-SENT to their app.',
-          style: TextStyle(
-            fontSize: 13,
-            color: tc.textMuted,
-            height: 1.5,
-          ),
+          style: TextStyle(fontSize: 13, color: tc.textMuted, height: 1.5),
         ),
         actions: [
           TextButton(
@@ -1923,8 +1995,8 @@ class _PasswordChangeRequestsPageState
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: tc.card,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
+        shape:
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
             Container(
@@ -1940,8 +2012,7 @@ class _PasswordChangeRequestsPageState
             const Expanded(
               child: Text(
                 'Reject Request?',
-                style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w800),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
               ),
             ),
           ],
@@ -1953,11 +2024,7 @@ class _PasswordChangeRequestsPageState
             Text(
               'Tell ${n.employeeName ?? "the employee"} why this request '
                   'is being rejected.',
-              style: TextStyle(
-                fontSize: 13,
-                color: tc.textMuted,
-                height: 1.5,
-              ),
+              style: TextStyle(fontSize: 13, color: tc.textMuted, height: 1.5),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -2024,8 +2091,7 @@ class _PasswordChangeRequestsPageState
     return DateFormat('MMM d').format(d);
   }
 
-  String _fullTime(DateTime d) =>
-      DateFormat('MMM d, yyyy · hh:mm a').format(d);
+  String _fullTime(DateTime d) => DateFormat('MMM d, yyyy · hh:mm a').format(d);
 
   Widget _skeletonLoader(AdminColors tc) {
     return ListView(

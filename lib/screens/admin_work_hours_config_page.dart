@@ -561,7 +561,7 @@ class _AdminWorkHoursConfigPageState
           ),
           Switch(
             value: _allowOvertime,
-            activeColor: tc.orange,
+            activeThumbColor: tc.orange,
             onChanged: (v) => setState(() => _allowOvertime = v),
           ),
         ],

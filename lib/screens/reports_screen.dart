@@ -67,6 +67,30 @@ String _generateSessionNonce() {
   return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
+// ⚖️ LOAD BALANCER — Jitter & Exponential Backoff for Firestore
+Future<T> _executeWithLoadBalancer<T>(Future<T> Function() operation) async {
+  int retries = 0;
+  const maxRetries = 3;
+
+  // Jitter: Random delay (100ms - 900ms) para hindi sabay-sabay pumasok sa DB
+  final jitter = math.Random().nextInt(800) + 100;
+  await Future.delayed(Duration(milliseconds: jitter));
+
+  while (true) {
+    try {
+      return await operation();
+    } catch (e) {
+      if (retries >= maxRetries) rethrow;
+      retries++;
+
+      // Exponential Backoff: 1s, 2s, 4s + random jitter
+      final backoff = (math.pow(2, retries) * 1000).toInt() + math.Random().nextInt(500);
+      debugPrint('⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
+      await Future.delayed(Duration(milliseconds: backoff));
+    }
+  }
+}
+
 String _hashEmployeeId(String empId, String nonce) {
   return sha256.convert(utf8.encode('$empId::$nonce')).toString();
 }
@@ -161,6 +185,7 @@ class _ReportsScreenState extends State<ReportsScreen>
   bool _downloading = false;
   bool _sendingSupport = false;
   bool _loadingPassword = false;
+  DateTime? _lastSupportRequestAt; // 🆕 Rate limiter para sa Contact HR
 
   // 🆕 Payslip Unlock State
   bool _isPayslipUnlocked = false;
@@ -201,6 +226,7 @@ class _ReportsScreenState extends State<ReportsScreen>
   Timer? _heartbeatTimer;
   Timer? _inactivityTimer;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sessionSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub; // 🆕 Listener para sa Admin Lock
   bool _sessionValidated = false;
   bool _loggedOut = false;
   bool? _cachedSessionValid;
@@ -318,6 +344,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     }
 
     _startSecurityMonitoring();
+    _startEmployeeListener(); // 🆕 Para mag-lock/unlock agad
 
     _checkNetworkOnEntry().then((_) {
       if (mounted) {
@@ -482,6 +509,35 @@ class _ReportsScreenState extends State<ReportsScreen>
     });
   }
 
+  // 🆕 Listener para mag-lock/unlock agad ang payslip kapag pinindot ni Admin
+  void _startEmployeeListener() {
+    if (_isDemo) return;
+    final docId = widget.initialEmployee?.id;
+    if (docId == null || docId.isEmpty) return;
+
+    _employeeSub?.cancel();
+    _employeeSub = FirebaseFirestore.instance
+        .collection('employees')
+        .doc(docId)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted || _loggedOut) return;
+      final data = snap.data();
+      if (data == null) return;
+
+      final isUnlocked = data['payslipUnlocked'] == true;
+      if (_isPayslipUnlocked != isUnlocked) {
+        setState(() => _isPayslipUnlocked = isUnlocked);
+        _showSnack(
+          isUnlocked
+              ? '🔓 Payslip is now unlocked by Admin.'
+              : '🔒 Payslip is now locked by Admin.',
+          error: !isUnlocked,
+        );
+      }
+    }, onError: (e) => debugPrint('Employee listener error: $e'));
+  }
+
   Future<void> _forceLogout(String reason) async {
     if (_isDemo) return;
     if (_loggedOut || !mounted) return;
@@ -595,6 +651,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     _heartbeatTimer?.cancel();
     _inactivityTimer?.cancel();
     _sessionSub?.cancel();
+    _employeeSub?.cancel(); // 🆕
     super.dispose();
   }
 
@@ -907,7 +964,7 @@ class _ReportsScreenState extends State<ReportsScreen>
         details: 'Payslip loaded ($_salarySource) • period: $_periodRangeLabel',
         sensitive: true,
       );
-    } catch (e, stack) {
+    } catch (e) {
       debugPrint('❌ _loadData ERROR: $e');
       if (mounted) setState(() => _loading = false);
 
@@ -1047,21 +1104,24 @@ class _ReportsScreenState extends State<ReportsScreen>
 
       if (!_isDemo) {
         try {
-          await FirebaseFirestore.instance.collection('pdf_exports').add({
-            'employee_id': effectiveEmp.employeeId,
-            'employee_id_hash':
-            _hashEmployeeId(effectiveEmp.employeeId, _sessionNonce),
-            'report_type': 'Payslip PDF',
-            'month': DateFormat('yyyy-MM').format(DateTime.now()),
-            'period_start': _periodStart.toIso8601String(),
-            'period_end': _periodEnd.toIso8601String(),
-            'period_label': _periodRangeLabel,
-            'net_pay': _breakdown.netPay,
-            'salary_source': _salarySource,
-            'exported_at': FieldValue.serverTimestamp(),
-            'platform': kIsWeb ? 'Web' : 'Mobile',
-            'session_nonce': _sessionNonce,
-          });
+          // ⚖️ Naka-wrap sa Load Balancer para hindi mag-crash sa dami ng sabay-sabay na writes
+          await _executeWithLoadBalancer(() =>
+              FirebaseFirestore.instance.collection('pdf_exports').add({
+                'employee_id': effectiveEmp.employeeId,
+                'employee_id_hash':
+                _hashEmployeeId(effectiveEmp.employeeId, _sessionNonce),
+                'report_type': 'Payslip PDF',
+                'month': DateFormat('yyyy-MM').format(DateTime.now()),
+                'period_start': _periodStart.toIso8601String(),
+                'period_end': _periodEnd.toIso8601String(),
+                'period_label': _periodRangeLabel,
+                'net_pay': _breakdown.netPay,
+                'salary_source': _salarySource,
+                'exported_at': FieldValue.serverTimestamp(),
+                'platform': kIsWeb ? 'Web' : 'Mobile',
+                'session_nonce': _sessionNonce,
+              })
+          );
         } catch (e) {
           debugPrint('⚠️ pdf_exports log warning: $e');
         }
@@ -1377,6 +1437,14 @@ class _ReportsScreenState extends State<ReportsScreen>
       return;
     }
 
+    // ⏳ RATE LIMITER: Check kung naka-send na recently (2 mins cooldown)
+    final now = DateTime.now();
+    if (_lastSupportRequestAt != null && now.difference(_lastSupportRequestAt!).inMinutes < 2) {
+      final remainSec = 120 - now.difference(_lastSupportRequestAt!).inSeconds;
+      _showSnack('⚠️ Nag-send ka na recently. Mag-antay ng ${remainSec}s bago mag-send muli.', error: true);
+      return;
+    }
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final tc = _ThemeColors(isDark);
 
@@ -1611,6 +1679,7 @@ class _ReportsScreenState extends State<ReportsScreen>
 
       if (ok) {
         _showSnack('✓ Sent to HR. Please wait for their response.');
+        _lastSupportRequestAt = DateTime.now(); // 🆕 I-save ang timestamp
       } else {
         _showSnack('Failed to send. Please check your internet.', error: true);
       }

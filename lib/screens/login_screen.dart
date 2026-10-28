@@ -1208,7 +1208,7 @@ class _LoginScreenState extends State<LoginScreen>
 
   String? _extractTagId(NfcTag tag) {
     try {
-      final tagMap = tag.data as Map<String, dynamic>;
+      final tagMap = tag.data;
       List<int>? tryKey(String key) {
         final tech = tagMap[key] as Map<dynamic, dynamic>?;
         if (tech == null) return null;
@@ -1559,7 +1559,7 @@ class _LoginScreenState extends State<LoginScreen>
     // 🎭 DEMO MODE — accept ANY 4-digit PIN (requires internet)
     // ═══════════════════════════════════════════════════════════════
     if (DemoModeService.instance.isEnabled) {
-      _secureLog('🎭 [DemoMode] Accepting PIN "${_pinInput}" (demo)');
+      _secureLog('🎭 [DemoMode] Accepting PIN "$_pinInput" (demo)');
 
       // 🔌 CHECK INTERNET FIRST
       if (!_isOnlineSafely()) {
@@ -2992,6 +2992,14 @@ class _LoginScreenState extends State<LoginScreen>
       await _signIntoFirebaseAuth(employee);
     } catch (e) {
       _secureLog('⚠️ [ClientMeeting] Firebase Auth sign-in failed: $e');
+    }
+
+    // 🆕 ONESIGNAL LOGIN PARA SA CLIENT MEETING
+    try {
+      OneSignal.login(employee.id);
+      _secureLog('✅ [OneSignal] Linked employee (Client Meeting): ${employee.id}');
+    } catch (e) {
+      _secureLog('⚠️ [OneSignal] Link failed: $e');
     }
 
     try {

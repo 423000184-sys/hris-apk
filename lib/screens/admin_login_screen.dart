@@ -15,7 +15,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../services/admin_auth_service.dart';
-import '../services/network_guard.dart';
 import '../services/security_hardening_service.dart';
 import '../services/device_info_service.dart';
 import '../services/demo_mode_service.dart';

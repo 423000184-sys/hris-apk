@@ -12,7 +12,6 @@ import 'package:geolocator/geolocator.dart';
 
 import 'admin_notification_service.dart';
 import 'employee_notification_service.dart';
-import 'geofence_service.dart';
 
 class MotionDetectionService {
   MotionDetectionService._();

@@ -1428,21 +1428,21 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
 
     pinCtrl.text = AdminEmployeeService.generatePin();
 
-    void _recomputeDaily() {
+    void recomputeDaily() {
       final basic = _parseMoneyStr(basicSalaryCtrl.text);
       final daily = basic / kWorkingDaysPerMonth;
       dailyRateCtrl.text = daily.toStringAsFixed(2);
     }
 
-    void _refreshFromRole() {
+    void refreshFromRole() {
       basicSalaryCtrl.text =
           _basicSalaryForRole(_selectedRole).toStringAsFixed(2);
       allowancesCtrl.text =
           _allowancesForRole(_selectedRole).toStringAsFixed(2);
-      _recomputeDaily();
+      recomputeDaily();
     }
 
-    _refreshFromRole();
+    refreshFromRole();
 
     showDialog(
       context: context,
@@ -1518,8 +1518,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                 dailyRateCtrl,
                                 bankNameCtrl,
                                 accountNumberCtrl,
-                                _refreshFromRole,
-                                _recomputeDaily,
+                                refreshFromRole,
+                                recomputeDaily,
                               ),
                             ],
                           );
@@ -1551,8 +1551,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                                 dailyRateCtrl,
                                 bankNameCtrl,
                                 accountNumberCtrl,
-                                _refreshFromRole,
-                                _recomputeDaily,
+                                refreshFromRole,
+                                recomputeDaily,
                               ),
                             ),
                           ],

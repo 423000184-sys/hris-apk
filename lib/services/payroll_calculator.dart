@@ -575,12 +575,11 @@ class PayrollCalculator {
     }
 
     // ─── EARNINGS BREAKDOWN ───
-    // Basic Pay (I-assume natin na ang basic ay para sa lahat ng present days)
     final basicHours = present * 8.0;
     final basicPay = basic; // Fixed monthly basic
 
     final absentHours = absent * 8.0;
-    final absentAmount = -absenceDeduction; // Negative para sa deduction
+    final absentAmount = -absenceDeduction; // Negative para sa deduction list
 
     final lateHours = lateHoursOverride ?? 0.0;
     final lateAmount = -(lateHours * hourlyRate);
@@ -591,8 +590,14 @@ class PayrollCalculator {
     final dayOffOtHours = dayOffOtHoursOverride ?? 0.0;
     final dayOffOtAmount = dayOffOtHours * (hourlyRate * 1.30); // 130% rate
 
-    final overtimeHours = (workHours.overtimeMinutes / 60.0) + (employee['overtimeHours'] ?? 0.0);
-    final overtimeAmount = toDbl(employee['overtimePay']); // Maaari mong i-compute base sa hourlyRate * 1.25
+    // ✅ Safe parsing para hindi mag-crash kung String ang galing sa Firestore
+    final manualOtHours = toDbl(employee['overtimeHours']);
+    final overtimeHours = (workHours.overtimeMinutes / 60.0) + manualOtHours;
+
+    // ✅ AUTO-COMPUTE OT PAY BASE SA LOGGED HOURS
+    final computedOtPay = overtimeHours * hourlyRate;
+    final manualOtPay = toDbl(employee['overtimePay']);
+    final overtimeAmount = computedOtPay > 0 ? computedOtPay : manualOtPay;
 
     final nightDiffHours = nightDiffHoursOverride ?? 0.0;
     final nightDiffAmount = nightDiffHours * (hourlyRate * 0.10); // 10% premium
@@ -601,8 +606,8 @@ class PayrollCalculator {
     final otherIncomeAllowance = otherIncomeAllowanceOverride ?? (basicAllow + housingAllow + transportAllow + specialAllow);
     final totalAdjustmentsMade = totalAdjustmentsMadeOverride ?? 0.0;
 
-    final gross = basicPay + absentAmount + lateAmount + undertimeAmount +
-        dayOffOtAmount + overtimeAmount + nightDiffAmount +
+    // ✅ INALIS NATIN YUNG MGA KALTAS (Absent, Late, Undertime) SA GROSS PARA HINDI MA-DOBLE
+    final gross = basicPay + dayOffOtAmount + overtimeAmount + nightDiffAmount +
         holidayAmount + otherIncomeAllowance + totalAdjustmentsMade;
 
     final regularPay = basicPay + otherIncomeAllowance; // Regular Pay sa taas ng payslip
@@ -619,7 +624,8 @@ class PayrollCalculator {
     final taxWithheld = taxWithheldOverride ?? 0.0;
     final totalLoanDeductions = totalLoanDeductionsOverride ?? 0.0;
 
-    final totalDeductions = absentAmount.abs() + lateAmount.abs() + undertimeAmount.abs() +
+    // ✅ DITO IBINAWAS ANG MGA ABSENCES, LATE, UNDERTIME PARA ISA LANG ANG KALTAS
+    final totalDeductions = absenceDeduction + (lateHours * hourlyRate) + (undertimeHours * hourlyRate) +
         sss + philhealth + pagibig + taxWithheld + totalLoanDeductions;
 
     final netPay = gross - totalDeductions;

@@ -395,7 +395,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                 maxLines: 4,
                 style: TextStyle(color: tc.text),
                 decoration: InputDecoration(
-                  hintText: 'Dahilan ng pag-reject (required)…',
+                  hintText: 'Reason for rejection (required)...',
                   hintStyle: TextStyle(color: tc.muted),
                   filled: true,
                   fillColor: tc.surface,
@@ -406,7 +406,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                 validator: (v) {
                   final t = (v ?? '').trim();
                   if (t.length < 5) {
-                    return 'Minimum 5 characters ang dahilan.';
+                    return 'Reason must be at least 5 characters.';
                   }
                   return null;
                 },
@@ -940,7 +940,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     }
     if (_inFlight.contains(id)) return;
     if (!_guard.tryAcquire('approve_cm')) {
-      _toast('Masyadong mabilis. Please wait a moment.', error: true);
+      _toast('Too fast. Please wait a moment.', error: true);
       return;
     }
 
@@ -959,7 +959,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
           backgroundColor: tc.card,
           title: Text('Approve Client Meeting',
               style: TextStyle(color: tc.text)),
-          content: Text('Approve client meeting ni $empName?',
+          content: Text('Approve client meeting for $empName?',
               style: TextStyle(color: tc.text)),
           actions: [
             TextButton(
@@ -987,7 +987,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
           action: 'approve_client_meeting',
           targetId: id,
           targetType: 'client_meeting',
-          adminUid: admin?.uid,
+          adminUid: admin.uid,
           metadata: {'employee_name': empName},
         ));
 
@@ -1001,8 +1001,8 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               type: 'reminder',
               title: '✅ Client Meeting Approved',
               message:
-              'Approved na ang iyong client meeting sa '
-                  '${_sanitize(meeting['location_name'] ?? 'N/A', maxLen: 80)}.',
+              'Your client meeting at '
+                  '${_sanitize(meeting['location_name'] ?? 'N/A', maxLen: 80)} has been approved.',
               employeeId: empId,
               priority: 'high',
             );
@@ -1011,7 +1011,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             await OneSignalSender.instance.sendToEmployee(
               employeeId: empId,
               title: '✅ Client Meeting Approved',
-              message: 'Approved na ang iyong client meeting sa ${_sanitize(meeting['location_name'] ?? 'N/A', maxLen: 80)}.',
+              message: 'Your client meeting at ${_sanitize(meeting['location_name'] ?? 'N/A', maxLen: 80)} has been approved.',
               type: 'reminder',
             );
           }
@@ -1059,7 +1059,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
       final empName = _resolveDisplayName(meeting);
       final reason = await _promptRejectionReason(
         title: 'Reject Client Meeting',
-        subtitle: 'I-reject ang client meeting ni $empName?',
+        subtitle: 'Reject client meeting for $empName?',
       );
       if (reason == null) return;
 
@@ -1071,7 +1071,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
           action: 'reject_client_meeting',
           targetId: id,
           targetType: 'client_meeting',
-          adminUid: admin?.uid,
+          adminUid: admin.uid,
           metadata: {'employee_name': empName, 'reason': reason},
         ));
 
@@ -1085,7 +1085,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               type: 'reminder',
               title: '❌ Client Meeting Rejected',
               message:
-              'Hindi na-approve ang iyong client meeting. Reason: $reason',
+              'Your client meeting was rejected. Reason: $reason',
               employeeId: empId,
               priority: 'high',
             );
@@ -1094,7 +1094,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             await OneSignalSender.instance.sendToEmployee(
               employeeId: empId,
               title: '❌ Client Meeting Rejected',
-              message: 'Hindi na-approve ang iyong client meeting. Reason: $reason',
+              message: 'Your client meeting was rejected. Reason: $reason',
               type: 'reminder',
             );
           }
@@ -1150,7 +1150,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
           '')
           .toString();
       if (employeeAuthUid.isNotEmpty && employeeAuthUid == admin.uid) {
-        _toast('Hindi mo pwedeng i-approve ang sarili mong request.',
+        _toast('You cannot approve your own request.',
             error: true);
         return;
       }
@@ -1215,7 +1215,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
         action: 'approve_leave',
         targetId: reqId,
         targetType: 'leave_application',
-        adminUid: admin?.uid,
+        adminUid: admin.uid,
         metadata: {
           'employee_name': empName,
           'employee_id':
@@ -1241,7 +1241,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             type: 'reminder',
             title: '✅ Leave Approved',
             message:
-            'Approved na ang iyong $leaveType request ($start – $end).',
+            'Your $leaveType request ($start – $end) has been approved.',
             employeeId: empId,
             priority: 'high',
           );
@@ -1250,7 +1250,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
           await OneSignalSender.instance.sendToEmployee(
             employeeId: empId,
             title: '✅ Leave Approved',
-            message: 'Approved na ang iyong $leaveType request ($start – $end).',
+            message: 'Your $leaveType request ($start – $end) has been approved.',
             type: 'reminder',
           );
         }
@@ -1301,7 +1301,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
       final empName = _empName(employee);
       final reason = await _promptRejectionReason(
         title: 'Reject Leave Request',
-        subtitle: 'I-reject ang leave request ni $empName?',
+        subtitle: 'Reject leave request for $empName?',
       );
       if (reason == null) return;
 
@@ -1343,7 +1343,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
         action: 'reject_leave',
         targetId: reqId,
         targetType: 'leave_application',
-        adminUid: admin?.uid,
+        adminUid: admin.uid,
         metadata: {
           'employee_name': empName,
           'reason': reason,
@@ -1367,7 +1367,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             type: 'reminder',
             title: '❌ Leave Rejected',
             message:
-            'Hindi na-approve ang iyong $leaveType request ($start – $end). Reason: $reason',
+            'Your $leaveType request ($start – $end) was rejected. Reason: $reason',
             employeeId: empId,
             priority: 'high',
           );
@@ -1376,7 +1376,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
           await OneSignalSender.instance.sendToEmployee(
             employeeId: empId,
             title: '❌ Leave Rejected',
-            message: 'Hindi na-approve ang iyong $leaveType request ($start – $end). Reason: $reason',
+            message: 'Your $leaveType request ($start – $end) was rejected. Reason: $reason',
             type: 'reminder',
           );
         }
@@ -2282,7 +2282,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                           size: 32, color: tc.muted),
                       const SizedBox(height: 8),
                       Text(
-                        'Walang pending client meeting approvals.',
+                        'No pending client meeting approvals.',
                         style: TextStyle(color: tc.muted, fontSize: 13),
                       ),
                     ],
@@ -2657,7 +2657,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'No Assignment — nag-improvise employee',
+                      'No Assignment — employee improvised',
                       style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,

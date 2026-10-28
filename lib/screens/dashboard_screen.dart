@@ -1,7 +1,5 @@
 // lib/screens/dashboard_screen.dart
-// ✅ v3.5: Fixed time display sync issue. Removed strict 'date' Firestore query
-//          which was failing when dates were saved as Timestamps or different formats.
-//          Now filters in memory and listens to all ID variations.
+// ✅ v3.9: Removed amount text and asterisks when payslip is locked.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -22,6 +20,8 @@ import 'package:share_plus/share_plus.dart';
 import '../models/employee.dart';
 import '../services/database_service.dart';
 import '../services/geofence_service.dart';
+import '../services/payroll_calculator.dart';
+import '../services/attendance_hours_service.dart';
 import '../services/security_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/demo_mode_service.dart';
@@ -29,6 +29,7 @@ import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_loader.dart';
 import '../widgets/skeleton_screens.dart';
 import 'login_screen.dart';
+import 'reports_screen.dart';
 
 void _secureLog(String message) {
   if (kDebugMode) debugPrint('[Dashboard] $message');
@@ -100,8 +101,7 @@ class _WatermarkLogo extends StatelessWidget {
 
   const _WatermarkLogo({
     required this.isDark,
-    this.rotationDegrees = 425,
-  });
+  }) : rotationDegrees = 425;
 
   @override
   Widget build(BuildContext context) {
@@ -163,7 +163,7 @@ class DashboardScreenState extends State<DashboardScreen>
 
   StreamSubscription<QuerySnapshot>? _attendanceSub;
   StreamSubscription<QuerySnapshot>? _attendanceSubCamel;
-  StreamSubscription<QuerySnapshot>? _attendanceSubDocId; // 🆕 3rd stream
+  StreamSubscription<QuerySnapshot>? _attendanceSubDocId;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
   StreamSubscription<bool>? _connectivitySub;
   Timer? _attendancePollTimer;
@@ -240,24 +240,31 @@ class DashboardScreenState extends State<DashboardScreen>
   bool get _isOnline => _networkState == _NetworkState.online;
 
   final DateTime _payslipMonth =
-  DateTime(DateTime.now().year, DateTime.now().month - 1);
+  DateTime(DateTime.now().year, DateTime.now().month);
   double? _payslipAmount;
   bool _payslipLoading = true;
   bool _payslipError = false;
 
   Map<String, dynamic>? _payslipData;
   bool _payslipDownloading = false;
+  bool _isPayslipUnlocked = false;
   String? _payslipLocalPath;
   bool _payslipAlreadyDownloaded = false;
   DateTime? _payslipDownloadedAt;
 
   static const String _kPayslipCacheKey = 'payslip_cache_meta';
 
-  bool get _isPayslipVisible {
+  // ✅ Laging nakikita yung card
+  bool get _isPayslipVisible => true;
+
+  // ✅ Dito natin chine-check kung pwede na i-open (End of month O unlocked by admin)
+  bool get _canOpenPayslip {
+    if (_isDemo) return true;
+    if (_isPayslipUnlocked) return true;
+
     final now = DateTime.now();
-    final firstDayAfterPayslipMonth =
-    DateTime(_payslipMonth.year, _payslipMonth.month + 1, 1);
-    return !now.isBefore(firstDayAfterPayslipMonth);
+    final lastDayOfMonth = DateTime(now.year, now.month + 1, 0).day;
+    return now.day >= lastDayOfMonth;
   }
 
   String? get _employeeId {
@@ -735,6 +742,8 @@ class DashboardScreenState extends State<DashboardScreen>
     await _checkNetworkOnEntry();
     if (!mounted) return;
 
+    await _loadCachedTimes();
+
     try {
       await _loadTodayAttendance().timeout(
         const Duration(seconds: 15),
@@ -817,10 +826,16 @@ class DashboardScreenState extends State<DashboardScreen>
           return;
         }
 
+        // ✅ Check kung na-lock/naka-unlock ni Admin
+        final isUnlocked = data['payslipUnlocked'] == true;
+        if (_isPayslipUnlocked != isUnlocked) {
+          setState(() => _isPayslipUnlocked = isUnlocked);
+          _loadPayslipAmount(); // I-refresh ang payslip UI
+        }
+
         final changed = wfh != _wfhAccess ||
             newIsDriver != _isDriver ||
             newRole != _role;
-
         if (changed) {
           setState(() {
             _wfhAccess = wfh;
@@ -911,7 +926,6 @@ class DashboardScreenState extends State<DashboardScreen>
     }
   }
 
-  // 🆕 3-way Stream Listener
   void _startAttendanceStream() {
     if (_isDemo) return;
 
@@ -919,7 +933,6 @@ class DashboardScreenState extends State<DashboardScreen>
     final docId = _employeeDocId;
     if (empId == null) return;
 
-    // Stream 1: snake_case employee_id
     _attendanceSub?.cancel();
     _attendanceSub = FirebaseFirestore.instance
         .collection('attendance_logs')
@@ -930,7 +943,6 @@ class DashboardScreenState extends State<DashboardScreen>
       _filterAndProcess(snapshot.docs, empId, docId);
     }, onError: (_) {});
 
-    // Stream 2: camelCase employeeId
     _attendanceSubCamel?.cancel();
     _attendanceSubCamel = FirebaseFirestore.instance
         .collection('attendance_logs')
@@ -941,7 +953,6 @@ class DashboardScreenState extends State<DashboardScreen>
       _filterAndProcess(snapshot.docs, empId, docId);
     }, onError: (_) {});
 
-    // Stream 3: camelCase employeeId with docId
     if (docId != null && docId != empId) {
       _attendanceSubDocId?.cancel();
       _attendanceSubDocId = FirebaseFirestore.instance
@@ -955,7 +966,6 @@ class DashboardScreenState extends State<DashboardScreen>
     }
   }
 
-  // 🆕 Filter logs in-memory by TODAY'S date to avoid strict Firestore query issues
   void _filterAndProcess(Iterable<QueryDocumentSnapshot> docs, String empId, String? docId) {
     final now = DateTime.now();
     final todayStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
@@ -977,7 +987,6 @@ class DashboardScreenState extends State<DashboardScreen>
       final timeStr = data['time']?.toString() ?? '';
       if (timeStr.contains(todayStr)) return true;
 
-      // If no date info at all, assume it's recent and include it
       if (dateStr.isEmpty && ts == null) return true;
 
       return false;
@@ -1089,7 +1098,7 @@ class DashboardScreenState extends State<DashboardScreen>
     final newIn = latestInTime ?? '--:--';
     final newOut = latestOutTime ?? '--:--';
 
-    if (prevIn == newIn && prevOut == newOut) return; // No change
+    if (prevIn == newIn && prevOut == newOut) return;
 
     setState(() {
       _isClockedIn = clockedInState;
@@ -1099,7 +1108,35 @@ class DashboardScreenState extends State<DashboardScreen>
       _isLoadingAttendance = false;
     });
 
-    // Snackbar for admin updates
+    if (!_isDemo) {
+      unawaited(Future(() async {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final empId = _employeeId;
+          if (empId != null) {
+            if (parsedInDateTime != null) {
+              await prefs.setString('last_clock_in_$empId', parsedInDateTime.toIso8601String());
+            }
+            if (latestOutTime != null && latestOutTime != '--:--') {
+              try {
+                final parts = latestOutTime.replaceAll(' AM', '').replaceAll(' PM', '').split(':');
+                if (parts.length >= 2) {
+                  int h = int.parse(parts[0]);
+                  if (latestOutTime.contains('PM') && h < 12) h += 12;
+                  if (latestOutTime.contains('AM') && h == 12) h = 0;
+                  final now = DateTime.now();
+                  final dt = DateTime(now.year, now.month, now.day, h, int.parse(parts[1]), parts.length > 2 ? int.parse(parts[2]) : 0);
+                  await prefs.setString('last_clock_out_$empId', dt.toIso8601String());
+                }
+              } catch (_) {}
+            } else {
+              await prefs.remove('last_clock_out_$empId');
+            }
+          }
+        } catch (_) {}
+      }));
+    }
+
     if (prevIn != '--:--' || prevOut != '--:--') {
       if (prevOut == '--:--' && newOut != '--:--') {
         _showSnack('📝 Admin recorded your clock OUT at $newOut');
@@ -1134,6 +1171,43 @@ class DashboardScreenState extends State<DashboardScreen>
 
     SecurityHardeningService.instance.disableSecureScreen();
     super.dispose();
+  }
+
+  Future<void> _loadCachedTimes() async {
+    if (_isDemo) return;
+    final empId = _employeeId;
+    if (empId == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final inStr = prefs.getString('last_clock_in_$empId');
+      final outStr = prefs.getString('last_clock_out_$empId');
+      if (!mounted) return;
+
+      final now = DateTime.now();
+
+      if (inStr != null) {
+        final dt = DateTime.tryParse(inStr);
+        if (dt != null && dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+          setState(() {
+            _clockInTime = _formatTimeTo12Hour('${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}');
+            _isClockedIn = true;
+            _rawClockInDateTime = dt;
+            _isLoadingAttendance = false;
+          });
+        }
+      }
+      if (outStr != null) {
+        final dt = DateTime.tryParse(outStr);
+        if (dt != null && dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+          setState(() {
+            _clockOutTime = _formatTimeTo12Hour('${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}');
+            _isClockedIn = false;
+            _rawClockInDateTime = null;
+            _isLoadingAttendance = false;
+          });
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadEmployeePhoto() async {
@@ -1203,7 +1277,6 @@ class DashboardScreenState extends State<DashboardScreen>
     await _refreshLocation();
   }
 
-  // 🆕 Updated multi-query logic (removed strict 'date' filter)
   Future<void> _loadTodayAttendance() async {
     if (_isDemo) return;
     if (!mounted) return;
@@ -1217,7 +1290,6 @@ class DashboardScreenState extends State<DashboardScreen>
         final allDocs = <QueryDocumentSnapshot>[];
         final seenIds = <String>{};
 
-        // Q1: snake_case employee_id
         try {
           final snap1 = await FirebaseFirestore.instance
               .collection('attendance_logs')
@@ -1231,7 +1303,6 @@ class DashboardScreenState extends State<DashboardScreen>
           _secureLog('⚠️ Q1 failed: $e');
         }
 
-        // Q2: camelCase employeeId (badge ID)
         try {
           final snap2 = await FirebaseFirestore.instance
               .collection('attendance_logs')
@@ -1245,7 +1316,6 @@ class DashboardScreenState extends State<DashboardScreen>
           _secureLog('⚠️ Q2 failed: $e');
         }
 
-        // Q3: camelCase employeeId (doc ID)
         if (docId != null && docId != empId) {
           try {
             final snap3 = await FirebaseFirestore.instance
@@ -1348,21 +1418,48 @@ class DashboardScreenState extends State<DashboardScreen>
     if (!_isOnline) return null;
 
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('payslips')
-          .where('employeeId', isEqualTo: employeeId)
-          .where('period.year', isEqualTo: month.year)
-          .where('period.month', isEqualTo: month.month)
-          .limit(1)
+      final docId = _employeeDocId;
+      if (docId == null || docId.isEmpty) return null;
+
+      final empDoc = await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(docId)
           .get()
           .timeout(const Duration(seconds: 10));
 
-      if (snap.docs.isEmpty) return null;
-      final doc = snap.docs.first;
-      final data = doc.data();
-      data['id'] = doc.id;
-      return data;
-    } catch (_) {
+      if (!empDoc.exists) return null;
+
+      final rawData = empDoc.data()!;
+
+      final isUnlocked = rawData['payslipUnlocked'] == true;
+      if (mounted && _isPayslipUnlocked != isUnlocked) {
+        setState(() => _isPayslipUnlocked = isUnlocked);
+      }
+
+      final empData = <String, dynamic>{
+        ...rawData,
+        'id': empDoc.id,
+        'employeeId': employeeId,
+      };
+
+      final start = DateTime(month.year, month.month, 1);
+      final end = DateTime(month.year, month.month + 1, 0, 23, 59, 59);
+
+      final breakdown = await PayrollCalculator.compute(
+        employee: empData,
+        periodStart: start,
+        periodEnd: end,
+      );
+
+      return {
+        'netPay': breakdown.netPay,
+        'grossPay': breakdown.grossPay,
+        'totalDeductions': breakdown.totalDeductions,
+        'totalAllowances': breakdown.otherIncomeAllowance,
+        'status': 'computed',
+      };
+    } catch (e) {
+      debugPrint('⚠️ [Dashboard] Payslip compute error: $e');
       return null;
     }
   }
@@ -1416,6 +1513,12 @@ class DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _downloadPayslip({bool showUI = true}) async {
     if (_payslipDownloading) return;
+
+    if (!_canOpenPayslip) {
+      if (showUI) _showSnack('Payslip is locked. Wait for end of month or Admin approval.', isError: true);
+      return;
+    }
+
     final employeeId = _employeeId;
     if (employeeId == null) {
       if (showUI) _showSnack('No employee ID', isError: true);
@@ -1486,7 +1589,7 @@ class DashboardScreenState extends State<DashboardScreen>
       unawaited(_logSecurityEvent(
         type: 'payslip_downloaded',
         severity: 'info',
-        details: 'Payslip ${_payslipMonthLabel} downloaded (${pdfBytes.length} bytes)',
+        details: 'Payslip $_payslipMonthLabel downloaded (${pdfBytes.length} bytes)',
       ));
 
       if (showUI) {
@@ -2184,7 +2287,7 @@ class DashboardScreenState extends State<DashboardScreen>
     final hasPhoto = photo != null && photo.isNotEmpty && photo != '—';
     if (!hasPhoto) return _avatarFallback(name);
 
-    if (photo!.startsWith('data:image')) {
+    if (photo.startsWith('data:image')) {
       try {
         final b64 = photo.split(',').last;
         final bytes = base64Decode(b64);
@@ -2660,6 +2763,9 @@ class DashboardScreenState extends State<DashboardScreen>
     final isDownloading = _payslipDownloading;
     final isDownloaded = _payslipAlreadyDownloaded;
 
+    // ✅ Dito natin gagamitin yung _canOpenPayslip para sa lock icon
+    final isLocked = !_canOpenPayslip;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2688,7 +2794,7 @@ class DashboardScreenState extends State<DashboardScreen>
                   children: [
                     Text(_isDemo ? 'Demo Payslip' : _payslipMonthLabel, style: TextStyle(fontSize: 14, color: tc.textBlack, fontWeight: FontWeight.w500)),
                     const SizedBox(height: 2),
-                    _buildPayslipAmountText(tc),
+                    _buildPayslipAmountText(tc, isLocked),
                     if (isDownloaded && _payslipDownloadedAt != null) ...[
                       const SizedBox(height: 2),
                       Text(
@@ -2703,13 +2809,31 @@ class DashboardScreenState extends State<DashboardScreen>
                 GestureDetector(
                   onTap: () {
                     _recordUserActivity();
-                    _downloadPayslip();
+                    if (isLocked) {
+                      _showSnack('Payslip is locked. Wait for end of month or Admin approval.', isError: true);
+                      return;
+                    }
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ReportsScreen(initialEmployee: _employee),
+                      ),
+                    );
                   },
                   behavior: HitTestBehavior.opaque,
                   child: Container(
                     padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(color: _T.orange.withValues(alpha: 0.15), shape: BoxShape.circle),
-                    child: const Icon(Icons.download_rounded, color: _T.orange, size: 20),
+                    decoration: BoxDecoration(
+                        color: isLocked
+                            ? _T.red.withValues(alpha: 0.15)
+                            : _T.orange.withValues(alpha: 0.15),
+                        shape: BoxShape.circle
+                    ),
+                    child: Icon(
+                        isLocked ? Icons.lock_rounded : Icons.arrow_forward_rounded,
+                        color: isLocked ? _T.red : _T.orange,
+                        size: 20
+                    ),
                   ),
                 )
               else if (isDownloading)
@@ -2734,7 +2858,12 @@ class DashboardScreenState extends State<DashboardScreen>
                       GestureDetector(
                         onTap: () {
                           _recordUserActivity();
-                          _previewLocalPayslip();
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ReportsScreen(initialEmployee: _employee),
+                            ),
+                          );
                         },
                         behavior: HitTestBehavior.opaque,
                         child: Container(
@@ -2756,7 +2885,25 @@ class DashboardScreenState extends State<DashboardScreen>
                     ),
             ],
           ),
-          if (!hasPayslip && !_payslipLoading && !_payslipError) ...[
+          if (isLocked) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(color: _T.red.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
+              child: Row(
+                children: [
+                  Icon(Icons.lock_outline_rounded, size: 14, color: _T.red),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Payslip is locked. Wait for end of month or Admin approval.',
+                      style: TextStyle(fontSize: 11, color: _T.red, height: 1.3),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (!hasPayslip && !_payslipLoading && !_payslipError) ...[
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -2767,7 +2914,7 @@ class DashboardScreenState extends State<DashboardScreen>
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'No payslip yet for $_payslipMonthLabel. It will be available on the 1st day of next month.',
+                      'No payslip yet for $_payslipMonthLabel.',
                       style: TextStyle(fontSize: 11, color: tc.textMuted, height: 1.3),
                     ),
                   ),
@@ -2780,7 +2927,7 @@ class DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _buildPayslipAmountText(_ThemeColors tc) {
+  Widget _buildPayslipAmountText(_ThemeColors tc, bool isLocked) {
     if (_payslipLoading) {
       return const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _T.orange));
     }
@@ -2790,6 +2937,12 @@ class DashboardScreenState extends State<DashboardScreen>
     if (_payslipAmount == null) {
       return Text('No payslip available yet', style: TextStyle(fontSize: 12, color: tc.textGray));
     }
+
+    // ✅ TINANGGAL NA YUNG AMOUNT AT ASTERISKS KAPAG NAKA-LOCK
+    if (isLocked && !_isDemo) {
+      return const SizedBox.shrink();
+    }
+
     return Text(
       _isDemo ? 'Amount: ${_formatPeso(_payslipAmount!)} (DEMO)' : 'Amount: ${_formatPeso(_payslipAmount!)}',
       style: TextStyle(

@@ -152,12 +152,15 @@ class AdminSupportActionsService {
       buf.writeln();
       buf.writeln('💰 EARNINGS');
       buf.writeln('  • Basic Pay:        ₱${_peso(basic)}');
-      if (allowances > 0)
+      if (allowances > 0) {
         buf.writeln('  • Allowances:       ₱${_peso(allowances)}');
-      if (overtime > 0)
+      }
+      if (overtime > 0) {
         buf.writeln('  • Overtime:         ₱${_peso(overtime)}');
-      if (riceAllow > 0)
+      }
+      if (riceAllow > 0) {
         buf.writeln('  • Rice Allowance:   ₱${_peso(riceAllow)}');
+      }
       buf.writeln('  ────────────────────────────');
       buf.writeln('  Gross Pay:          ₱${_peso(gross)}');
       buf.writeln();
@@ -165,8 +168,9 @@ class AdminSupportActionsService {
       buf.writeln('  • SSS:             -₱${_peso(sss)}');
       buf.writeln('  • PhilHealth:      -₱${_peso(philhealth)}');
       buf.writeln('  • Pag-IBIG:        -₱${_peso(pagibig)}');
-      if (absentAmount > 0)
+      if (absentAmount > 0) {
         buf.writeln('  • Absences ($absentDays day${absentDays == 1 ? "" : "s"}): -₱${_peso(absentAmount)}');
+      }
       buf.writeln('  ────────────────────────────');
       buf.writeln('  Total Deductions:  -₱${_peso(totalDed)}');
       buf.writeln();

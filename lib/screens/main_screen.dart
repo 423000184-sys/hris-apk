@@ -1,7 +1,5 @@
 // lib/screens/main_screen.dart
-// v2.1: ⏰ Auto-recover OT reminders sa startup + on resume
-//       🌐 All English strings
-//       🎭 Demo mode — skip lahat ng listeners
+// v2.2: Added AppPermissionService to request Notification, Location, and Background Location
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
@@ -22,8 +20,9 @@ import '../services/geofence_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/presence_challenge_service.dart';
 import '../services/demo_mode_service.dart';
-import '../services/overtime_reminder_service.dart'; // 🆕
-import '../services/trusted_time_service.dart'; // 🆕
+import '../services/overtime_reminder_service.dart';
+import '../services/trusted_time_service.dart';
+import '../services/app_permission_service.dart'; // 🆕 PERMISSIONS
 import 'dashboard_screen.dart';
 import 'clock_screen.dart';
 import 'attendance_history_screen.dart';
@@ -74,10 +73,8 @@ class MainScreenState extends State<MainScreen>
   final GlobalKey<DashboardScreenState> _dashboardKey =
   GlobalKey<DashboardScreenState>();
 
-  // 🎭 DEMO MODE
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
-  /// Ang employee na gagamitin — kapag demo mode, gamitin ang fake employee.
   model.Employee? get _effectiveEmployee =>
       _isDemo ? DemoModeService.demoEmployee : widget.employee;
 
@@ -96,18 +93,8 @@ class MainScreenState extends State<MainScreen>
   static const Color _demoAccent = Color(0xFFFF8A00);
   static const Color _demoAccentDark = Color(0xFFF54900);
 
-  // ══════════════════════════════════════════════════════════════
-  // ⏰ OVERTIME REMINDER RECOVERY
-  //    Kapag nag-restart ang app habang naka-clock in pa,
-  //    i-recover ang scheduled OT reminders.
-  //    Kapag nag-clock out na, i-cancel lahat.
-  // ══════════════════════════════════════════════════════════════
   Future<void> _recoverOvertimeReminders() async {
-    if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping OT reminder recovery');
-      return;
-    }
-
+    if (_isDemo) return;
     final emp = widget.employee;
     if (emp == null) return;
 
@@ -115,16 +102,12 @@ class MainScreenState extends State<MainScreen>
     if (empId.isEmpty) return;
 
     try {
-      _secureLog('🔄 [OT] Recovering overtime reminders for $empId');
       await OvertimeReminderService.instance.recoverIfStillClockedIn(empId);
     } catch (e) {
       _secureLog('⚠️ [OT] Recovery failed: $e');
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🔐 FINGERPRINT HELPERS
-  // ══════════════════════════════════════════════════════════════
   bool _isEnrolledFromData(Map<String, dynamic>? data) {
     if (data == null) return false;
     final v = data['fingerprintEnrolled'];
@@ -135,21 +118,16 @@ class MainScreenState extends State<MainScreen>
 
   void _startFingerprintListener() {
     if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping fingerprint listener');
       _fpStatusLoaded = true;
       _fingerprintEnrolled = true;
       return;
     }
-
     final id = widget.employee?.id;
     if (id == null || id.isEmpty) {
-      _secureLog('⚠️ [FP] No employee ID — fingerprint listener skipped');
       _fpStatusLoaded = true;
       return;
     }
-
     try {
-      _secureLog('🔐 Starting fingerprint status listener for $id');
       _fpStreamSub?.cancel();
       _fpStreamSub = FirebaseFirestore.instance
           .collection('employees')
@@ -160,8 +138,6 @@ class MainScreenState extends State<MainScreen>
           if (!mounted) return;
           final data = snap.data();
           final enrolled = _isEnrolledFromData(data);
-          _secureLog('🔐 [FP] Status update: enrolled=$enrolled');
-
           setState(() {
             _fingerprintEnrolled = enrolled;
             _fpStatusLoaded = true;
@@ -169,12 +145,10 @@ class MainScreenState extends State<MainScreen>
           });
         },
         onError: (e) {
-          _secureLog('❌ [FP] Listener error: $e');
           if (mounted) setState(() => _fpStatusLoaded = true);
         },
       );
     } catch (e) {
-      _secureLog('❌ [FP] Listener setup failed: $e');
       _fpStatusLoaded = true;
     }
   }
@@ -185,22 +159,13 @@ class MainScreenState extends State<MainScreen>
   }
 
   Future<void> _openFingerprintRegistration() async {
-    if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Fingerprint registration not needed');
-      return;
-    }
-
+    if (_isDemo) return;
     final emp = widget.employee;
     if (emp == null) return;
-
     if (!_isOnline) {
-      _showOfflineSnack(
-          '⚠️ Internet is required to register your fingerprint.');
+      _showOfflineSnack('⚠️ Internet is required to register your fingerprint.');
       return;
     }
-
-    _secureLog('🔐 Opening FingerprintScreen (registration flow)');
-
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FingerprintScreen(
@@ -209,48 +174,26 @@ class MainScreenState extends State<MainScreen>
         ),
       ),
     );
-
     if (!mounted) return;
-    _secureLog('🔐 Returned from FingerprintScreen');
-
-    // ⏰ Refresh OT reminders in case nag-register at nag-clock in
     unawaited(_recoverOvertimeReminders());
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PRESENCE CHALLENGE HANDLER
-  // ══════════════════════════════════════════════════════════════
   Future<void> _handlePresenceChallenge(ChallengeDue due) async {
     if (_isDemo) return;
-
     if (!mounted) return;
-    if (_challengeScreenOpen) {
-      _secureLog('⚠️ [Challenge] Screen already open — skipping');
-      return;
-    }
+    if (_challengeScreenOpen) return;
 
     final emp = widget.employee;
-    if (emp == null) {
-      _secureLog('⚠️ [Challenge] No employee — skipping');
-      return;
-    }
+    if (emp == null) return;
 
     final challenge = due.challenge;
-    _secureLog('🎯 [Challenge] Fired: ${challenge.id} '
-        '(inside=${due.isInside}, '
-        'dist=${due.distanceMeters?.toStringAsFixed(0)}m)');
 
     if (!due.isInside) {
       final proceed = await _showOutsideWarningDialog(due);
-      if (proceed != true) {
-        _secureLog('🚪 [Challenge] User dismissed outside warning');
-        return;
-      }
+      if (proceed != true) return;
     }
 
-    _secureLog('🎯 [Challenge] AUTO-OPENING verification for ${challenge.id}');
     _challengeScreenOpen = true;
-
     try {
       final passed = await Navigator.of(context, rootNavigator: true).push<bool>(
         MaterialPageRoute(
@@ -261,21 +204,11 @@ class MainScreenState extends State<MainScreen>
           ),
         ),
       );
-
       if (!mounted) return;
-
       if (passed == true) {
-        _secureLog('✅ [Challenge] PASSED for ${challenge.id}');
-        _showChallengeSnack(
-          '✅ Presence verified. Thank you!',
-          const Color(0xFF16A34A),
-        );
+        _showChallengeSnack('✅ Presence verified. Thank you!', const Color(0xFF16A34A));
       } else {
-        _secureLog('❌ [Challenge] FAILED for ${challenge.id}');
-        _showChallengeSnack(
-          '⚠️ Presence verification failed. Admin has been notified.',
-          const Color(0xFFDC2626),
-        );
+        _showChallengeSnack('⚠️ Presence verification failed. Admin has been notified.', const Color(0xFFDC2626));
       }
     } catch (e) {
       _secureLog('❌ [Challenge] Navigation error: $e');
@@ -286,7 +219,6 @@ class MainScreenState extends State<MainScreen>
 
   Future<bool?> _showOutsideWarningDialog(ChallengeDue due) {
     if (!mounted) return Future.value(false);
-
     final dist = due.distanceMeters;
     final radius = due.radiusUsed;
     final zone = due.zoneName ?? 'Unknown';
@@ -295,89 +227,42 @@ class MainScreenState extends State<MainScreen>
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: const [
-            Icon(Icons.location_off_rounded,
-                color: Color(0xFFDC2626), size: 26),
+            Icon(Icons.location_off_rounded, color: Color(0xFFDC2626), size: 26),
             SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'You Are Outside the Work Zone',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
+            Expanded(child: Text('You Are Outside the Work Zone', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800))),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'A random presence check is required. However, you are '
-                  'currently outside the office perimeter.',
-              style: TextStyle(fontSize: 13, height: 1.5),
-            ),
+            const Text('A random presence check is required. However, you are currently outside the office perimeter.', style: TextStyle(fontSize: 13, height: 1.5)),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEE2E2),
-                borderRadius: BorderRadius.circular(8),
-              ),
+              decoration: BoxDecoration(color: const Color(0xFFFEE2E2), borderRadius: BorderRadius.circular(8)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _kvRow('Nearest zone', zone),
-                  if (dist != null)
-                    _kvRow('Distance', '${dist.toStringAsFixed(0)}m'),
-                  if (radius != null)
-                    _kvRow('Allowed radius', '${radius.toStringAsFixed(0)}m'),
+                  if (dist != null) _kvRow('Distance', '${dist.toStringAsFixed(0)}m'),
+                  if (radius != null) _kvRow('Allowed radius', '${radius.toStringAsFixed(0)}m'),
                 ],
               ),
             ),
             const SizedBox(height: 12),
-            const Text(
-              '⚠️ Please return inside the work zone first so the '
-                  'presence check can be valid.',
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.4,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFFDC2626),
-              ),
-            ),
+            const Text('⚠️ Please return inside the work zone first so the presence check can be valid.', style: TextStyle(fontSize: 12, height: 1.4, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
           ],
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text(
-              'Return Inside',
-              style: TextStyle(
-                color: Color(0xFF16A34A),
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Return Inside', style: TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.w700))),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFF59E0B),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF59E0B), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
-              'Continue Anyway',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
+            child: const Text('Continue Anyway', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -389,27 +274,8 @@ class MainScreenState extends State<MainScreen>
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
-          SizedBox(
-            width: 110,
-            child: Text(
-              k,
-              style: const TextStyle(
-                fontSize: 11,
-                color: Color(0xFF6B7280),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              v,
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF1F2937),
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
+          SizedBox(width: 110, child: Text(k, style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280), fontWeight: FontWeight.w600))),
+          Expanded(child: Text(v, style: const TextStyle(fontSize: 12, color: Color(0xFF1F2937), fontWeight: FontWeight.w700))),
         ],
       ),
     );
@@ -417,15 +283,9 @@ class MainScreenState extends State<MainScreen>
 
   void _handleMissedSummary(int missedCount) {
     if (_isDemo) return;
-
     if (!mounted) return;
-    if (_missedSummaryShown) {
-      _secureLog('ℹ️ [Challenge] Missed summary already shown — skip');
-      return;
-    }
+    if (_missedSummaryShown) return;
     _missedSummaryShown = true;
-
-    _secureLog('⚠️ [Challenge] $missedCount missed challenge(s) flagged');
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -433,48 +293,23 @@ class MainScreenState extends State<MainScreen>
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Row(
             children: const [
-              Icon(Icons.warning_amber_rounded,
-                  color: Color(0xFFDC2626), size: 24),
+              Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 24),
               SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Missed Presence Check',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
+              Expanded(child: Text('Missed Presence Check', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
             ],
           ),
           content: Text(
-            'You have missed $missedCount presence check'
-                '${missedCount > 1 ? "s" : ""}.\n\n'
-                'These have been flagged on your attendance record and '
-                'the admin has been notified.\n\n'
-                'Please do not exit the app while clocked in so this '
-                'does not happen again.',
+            'You have missed $missedCount presence check${missedCount > 1 ? "s" : ""}.\n\nThese have been flagged on your attendance record and the admin has been notified.\n\nPlease do not exit the app while clocked in so this does not happen again.',
             style: const TextStyle(fontSize: 13, height: 1.5),
           ),
           actions: [
             ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFDC2626),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
               onPressed: () => Navigator.pop(ctx),
-              child: const Text(
-                'I Understand',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
+              child: const Text('I Understand', style: TextStyle(fontWeight: FontWeight.w700)),
             ),
           ],
         ),
@@ -486,74 +321,49 @@ class MainScreenState extends State<MainScreen>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          msg,
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
+        content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
         backgroundColor: bg,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(16),
         duration: const Duration(seconds: 4),
       ),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PRESENCE HELPERS
-  // ══════════════════════════════════════════════════════════════
   String? get _presenceDocId {
     if (_isDemo) return null;
-
     final id = widget.employee?.id;
     if (id == null || id.isEmpty) return null;
     return id;
   }
 
   Future<void> _markOnline() async {
-    if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping _markOnline DB write');
-      return;
-    }
-
+    if (_isDemo) return;
     final id = _presenceDocId;
     if (id == null) return;
     try {
-      await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(id)
-          .update({
+      await FirebaseFirestore.instance.collection('employees').doc(id).update({
         'isOnline': true,
         'isLoggedIn': true,
         'status': 'online',
         'lastActive': FieldValue.serverTimestamp(),
       });
-      _secureLog('✅ [Presence] Online heartbeat sent: $id');
     } catch (e) {
       _secureLog('⚠️ [Presence] Online update failed: $e');
     }
   }
 
   Future<void> _markOffline() async {
-    if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping _markOffline DB write');
-      return;
-    }
-
+    if (_isDemo) return;
     final id = _presenceDocId;
     if (id == null) return;
     try {
-      await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(id)
-          .update({
+      await FirebaseFirestore.instance.collection('employees').doc(id).update({
         'isOnline': false,
         'isLoggedIn': false,
         'status': 'inactive',
       });
-      _secureLog('✅ [Presence] Marked OFFLINE: $id');
     } catch (e) {
       _secureLog('⚠️ [Presence] Offline update failed: $e');
     }
@@ -561,34 +371,17 @@ class MainScreenState extends State<MainScreen>
 
   void _startPresenceHeartbeat() {
     if (_isDemo) return;
-
     _presenceHeartbeat?.cancel();
-    _presenceHeartbeat = Timer.periodic(
-      const Duration(minutes: 5),
-          (_) => _markOnline(),
-    );
+    _presenceHeartbeat = Timer.periodic(const Duration(minutes: 5), (_) => _markOnline());
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // GEOFENCE LISTENER
-  // ══════════════════════════════════════════════════════════════
   void _startGeofenceListener() {
-    if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping geofence listener');
-      return;
-    }
-
-    if (_geofenceListenerStarted) {
-      _secureLog('⚠️ [Geofence] Listener already started — skip');
-      return;
-    }
-
+    if (_isDemo) return;
+    if (_geofenceListenerStarted) return;
     try {
-      _secureLog('🚀 Starting Geofence real-time listener...');
       GeofenceService.instance.startZonesListener();
       GeofenceService.instance.forceReload();
       _geofenceListenerStarted = true;
-      _secureLog('✅ Geofence listener ACTIVE');
     } catch (e) {
       _secureLog('❌ Geofence listener failed: $e');
     }
@@ -600,72 +393,35 @@ class MainScreenState extends State<MainScreen>
       _geofenceZonesSub?.cancel();
       _geofenceZonesSub = null;
       _geofenceListenerStarted = false;
-      _secureLog('🛑 Geofence listener stopped');
     } catch (e) {
       _secureLog('⚠️ Geofence stop failed: $e');
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // LOGOUT
-  // ══════════════════════════════════════════════════════════════
   Future<void> _handleLogout() async {
     if (_isDemo) {
       final confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Row(children: const [
             Icon(Icons.science_rounded, color: _demoAccent, size: 22),
             SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Exit Demo Mode?',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-              ),
-            ),
+            Expanded(child: Text('Exit Demo Mode?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
           ]),
-          content: const Text(
-            'You will return to the login screen. Demo data will NOT be saved.',
-            style: TextStyle(fontSize: 13, height: 1.5),
-          ),
+          content: const Text('You will return to the login screen. Demo data will NOT be saved.', style: TextStyle(fontSize: 13, height: 1.5)),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _demoAccent,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Exit Demo'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: _demoAccent, foregroundColor: Colors.white), onPressed: () => Navigator.pop(ctx, true), child: const Text('Exit Demo')),
           ],
         ),
       );
-
       if (confirm != true) return;
-
       DemoModeService.instance.disable();
-
-      // 🚫 Cancel any OT reminders that might have been scheduled
-      try {
-        await OvertimeReminderService.instance.cancelAll();
-      } catch (_) {}
-
+      try { await OvertimeReminderService.instance.cancelAll(); } catch (_) {}
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (_) => const LandingScreen(),
-          settings: const RouteSettings(
-            name: '/landing-after-demo-exit',
-            arguments: {'skipSessionRestore': true},
-          ),
-        ),
+        MaterialPageRoute(builder: (_) => const LandingScreen(), settings: const RouteSettings(name: '/landing-after-demo-exit', arguments: {'skipSessionRestore': true})),
             (route) => false,
       );
       return;
@@ -674,42 +430,19 @@ class MainScreenState extends State<MainScreen>
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Logout?'),
-        content: const Text(
-          'Are you sure you want to logout? Your status will be set to Inactive.',
-        ),
+        content: const Text('Are you sure you want to logout? Your status will be set to Inactive.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFDC2626),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Logout'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626), foregroundColor: Colors.white), onPressed: () => Navigator.pop(ctx, true), child: const Text('Logout')),
         ],
       ),
     );
-
     if (confirm != true) return;
 
-    // 🚫 Cancel OT reminders kapag nag-logout
-    try {
-      await OvertimeReminderService.instance.cancelAll();
-      _secureLog('🚫 [OT] Reminders cancelled on logout');
-    } catch (_) {}
-
-    try {
-      await _markOffline();
-    } catch (_) {}
-
+    try { await OvertimeReminderService.instance.cancelAll(); } catch (_) {}
+    try { await _markOffline(); } catch (_) {}
     try {
       await FirebaseFirestore.instance.collection('activity_logs').add({
         'type': 'logout',
@@ -720,38 +453,19 @@ class MainScreenState extends State<MainScreen>
         'device': kIsWeb ? 'Web Browser' : 'Mobile App',
       });
     } catch (_) {}
-
-    try {
-      await SecurityHardeningService.instance.clearSession();
-    } catch (_) {}
-
-    try {
-      await FirebaseAuth.instance.signOut();
-    } catch (_) {}
-
-    try {
-      OneSignal.logout();
-      debugPrint('🔔 [OneSignal] Logged out');
-    } catch (_) {}
+    try { await SecurityHardeningService.instance.clearSession(); } catch (_) {}
+    try { await FirebaseAuth.instance.signOut(); } catch (_) {}
+    try { OneSignal.logout(); } catch (_) {}
 
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('force_show_landing', true);
-      await prefs.setInt(
-        'force_show_landing_at',
-        DateTime.now().millisecondsSinceEpoch,
-      );
+      await prefs.setInt('force_show_landing_at', DateTime.now().millisecondsSinceEpoch);
     } catch (_) {}
 
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (_) => const LandingScreen(),
-        settings: const RouteSettings(
-          name: '/landing-after-manual-logout',
-          arguments: {'skipSessionRestore': true},
-        ),
-      ),
+      MaterialPageRoute(builder: (_) => const LandingScreen(), settings: const RouteSettings(name: '/landing-after-manual-logout', arguments: {'skipSessionRestore': true})),
           (route) => false,
     );
   }
@@ -776,50 +490,31 @@ class MainScreenState extends State<MainScreen>
 
   void goBackToPrevious() {
     if (!mounted) return;
-    _secureLog('🔙 Returning to previous tab: $_previousIndex');
     setState(() {
       _selectedIndex = _previousIndex;
       _showClockOverlay = false;
     });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // OPEN CLOCK SCREEN
-  // ══════════════════════════════════════════════════════════════
   void _openClockOverlay() {
     if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Opening clock overlay (bypassing all checks)');
       setState(() => _showClockOverlay = true);
       return;
     }
-
     if (!_isOnline) {
       _showOfflineSnack('⚠️ No internet. Please check your connection.');
       return;
     }
-
     if (!_fingerprintEnrolled) {
-      _secureLog(
-          '🔐 Fingerprint not enrolled — redirecting to registration first');
       _showFingerprintRequiredDialog();
       return;
     }
-
-    _secureLog('🟢 Opening ClockScreen overlay');
-
-    try {
-      GeofenceService.instance.invalidateCache();
-      _secureLog('🔄 Geofence cache invalidated before clock action');
-    } catch (e) {
-      _secureLog('⚠️ Geofence refresh failed: $e');
-    }
-
+    try { GeofenceService.instance.invalidateCache(); } catch (e) {}
     setState(() => _showClockOverlay = true);
   }
 
   void _toggleClockOverlay() {
     if (_showClockOverlay) {
-      _secureLog('🔽 Closing ClockScreen overlay (FAB tap)');
       setState(() => _showClockOverlay = false);
     } else {
       _openClockOverlay();
@@ -831,49 +526,20 @@ class MainScreenState extends State<MainScreen>
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(children: const [
-          Icon(Icons.fingerprint_rounded,
-              color: Color(0xFFFF8A00), size: 24),
+          Icon(Icons.fingerprint_rounded, color: Color(0xFFFF8A00), size: 24),
           SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Fingerprint Required',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-          ),
+          Expanded(child: Text('Fingerprint Required', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
         ]),
-        content: const Text(
-          'You need to register your fingerprint first before you '
-              'can clock in/out.\n\n'
-              'This is a one-time setup. After that, your fingerprint '
-              'will be used for every clock action.',
-          style: TextStyle(fontSize: 13, height: 1.5),
-        ),
+        content: const Text('You need to register your fingerprint first before you can clock in/out.\n\nThis is a one-time setup. After that, your fingerprint will be used for every clock action.', style: TextStyle(fontSize: 13, height: 1.5)),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Later'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Later')),
           ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF8A00),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF8A00), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
             icon: const Icon(Icons.app_registration_rounded, size: 16),
-            label: const Text(
-              'Register Now',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _openFingerprintRegistration();
-            },
+            label: const Text('Register Now', style: TextStyle(fontWeight: FontWeight.w700)),
+            onPressed: () { Navigator.pop(ctx); _openFingerprintRegistration(); },
           ),
         ],
       ),
@@ -881,22 +547,17 @@ class MainScreenState extends State<MainScreen>
   }
 
   void _refreshDashboard() {
-    _secureLog('🔄 Refreshing dashboard data...');
     _dashboardKey.currentState?.loadTodayAttendance();
     _dashboardKey.currentState?.loadPayslipAmount();
   }
 
   void _closeClockOverlayAndRefresh() {
     if (!mounted) return;
-    _secureLog(
-        '✅ Clock action done — closing overlay + refreshing dashboard');
     setState(() {
       _showClockOverlay = false;
       _selectedIndex = 0;
     });
     _refreshDashboard();
-
-    // ⏰ Refresh OT reminders after clock action
     unawaited(_recoverOvertimeReminders());
   }
 
@@ -904,15 +565,10 @@ class MainScreenState extends State<MainScreen>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          msg,
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
+        content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
         backgroundColor: const Color(0xFFDC2626),
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(16),
         duration: const Duration(seconds: 3),
       ),
@@ -920,144 +576,79 @@ class MainScreenState extends State<MainScreen>
   }
 
   Future<void> _bootstrapChallengeService(model.Employee emp) async {
-    if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping challenge bootstrap');
-      return;
-    }
-
-    final challengeEmpId =
-    emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
-
-    if (challengeEmpId.isEmpty) {
-      _secureLog('⚠️ [Challenge] Empty employee ID — skipping start');
-      return;
-    }
-
+    if (_isDemo) return;
+    final challengeEmpId = emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
+    if (challengeEmpId.isEmpty) return;
     try {
-      _secureLog('🚀 [Challenge] Bootstrapping service for $challengeEmpId');
-      await PresenceChallengeService.instance.start(
-        challengeEmpId,
-        employeeName: emp.fullName,
-      );
-      _secureLog('🛰️ [Challenge] Service STARTED');
-
+      await PresenceChallengeService.instance.start(challengeEmpId, employeeName: emp.fullName);
       await PresenceChallengeService.instance.checkNow();
-      _secureLog('⚡ [Challenge] Initial checkNow() done');
     } catch (e) {
       _secureLog('❌ [Challenge] Bootstrap failed: $e');
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // INIT + DISPOSE
-  // ══════════════════════════════════════════════════════════════
   @override
   void initState() {
     super.initState();
 
     WidgetsBinding.instance.addObserver(this);
 
-    // 🎭 DEMO MODE
     if (_isDemo) {
-      _secureLog('═══════════════════════════════════════════');
-      _secureLog('🎭 [DemoMode] MainScreen in DEMO MODE');
-      _secureLog('   • Skipping DB listeners');
-      _secureLog('   • Skipping presence heartbeat');
-      _secureLog('   • Skipping geofence listener');
-      _secureLog('   • Skipping fingerprint listener');
-      _secureLog('   • Skipping challenge service');
-      _secureLog('   • Skipping OT reminder recovery');
-      _secureLog('═══════════════════════════════════════════');
-
       _fpStatusLoaded = true;
       _fingerprintEnrolled = true;
-
+      try { _isOnline = ConnectivityService.instance.isOnline; } catch (_) { _isOnline = true; }
       try {
-        _isOnline = ConnectivityService.instance.isOnline;
-      } catch (_) {
-        _isOnline = true;
-      }
-
-      try {
-        _networkSub =
-            ConnectivityService.instance.onStatusChange.listen((online) {
-              if (!mounted) return;
-              setState(() => _isOnline = online);
-            });
-      } catch (e) {
-        _secureLog('⚠️ connectivity failed: $e');
-      }
-
+        _networkSub = ConnectivityService.instance.onStatusChange.listen((online) {
+          if (!mounted) return;
+          setState(() => _isOnline = online);
+        });
+      } catch (e) {}
       return;
     }
 
     // NORMAL MODE
-    try {
-      SecurityHardeningService.instance.enableSecureScreen();
-    } catch (_) {}
-
+    try { SecurityHardeningService.instance.enableSecureScreen(); } catch (_) {}
     LocalNotificationService.instance.init();
+
+    // 🆕 ITO YUNG TAWAG SA PERMISSIONS (Notification, Location, Background Location)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        AppPermissionService.instance.requestAllPermissions(context);
+      }
+    });
 
     _startGeofenceListener();
     _startFingerprintListener();
 
-    // ⏰ Init OvertimeReminderService + recover
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-
-      try {
-        await OvertimeReminderService.instance.init();
-      } catch (e) {
-        _secureLog('⚠️ [OT] init failed: $e');
-      }
-
-      // Sync server time for anti-tamper check
-      try {
-        await TrustedTimeService.instance.syncWithServer();
-      } catch (e) {
-        _secureLog('⚠️ [TrustedTime] sync failed: $e');
-      }
-
-      // ⏰ Recover OT reminders kung naka-clock in pa
+      try { await OvertimeReminderService.instance.init(); } catch (e) {}
+      try { await TrustedTimeService.instance.syncWithServer(); } catch (e) {}
       await _recoverOvertimeReminders();
     });
 
     final empId = widget.employee?.employeeId ?? '';
     if (empId.isNotEmpty) {
       _notifWatcher = EmployeeNotificationWatcher(empId)..start();
-      _secureLog('🔔 Watcher attached to employee: $empId');
     }
 
     final emp = widget.employee;
     if (emp != null) {
       final bgEmpId = emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
       if (bgEmpId.isNotEmpty) {
-        try {
-          OneSignal.login(bgEmpId);
-          _secureLog('🔔 [OneSignal] Logged in as $bgEmpId');
-        } catch (e) {
-          _secureLog('⚠️ [OneSignal] Login failed: $e');
-        }
+        try { OneSignal.login(bgEmpId); } catch (e) {}
       }
-
       PresenceMonitorService.instance.start(employee: emp);
-      _secureLog('🛰️ Presence monitor started for ${emp.fullName}');
-
       MotionDetectionService.instance.start(
         employeeId: emp.employeeId.isNotEmpty ? emp.employeeId : emp.id,
         employeeDocId: emp.id,
         employeeName: emp.fullName,
       );
-      _secureLog('🚶 Motion detection started for ${emp.fullName}');
-
       _markOnline();
       _startPresenceHeartbeat();
 
       PresenceChallengeService.instance.onDue = _handlePresenceChallenge;
-      _secureLog('🎯 [Challenge] onDue callback hooked (AUTO mode)');
-
       PresenceChallengeService.instance.onMissedSummary = _handleMissedSummary;
-      _secureLog('🎯 [Challenge] onMissedSummary callback hooked');
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -1065,103 +656,60 @@ class MainScreenState extends State<MainScreen>
       });
     }
 
-    try {
-      _isOnline = ConnectivityService.instance.isOnline;
-    } catch (_) {
-      _isOnline = true;
-    }
+    try { _isOnline = ConnectivityService.instance.isOnline; } catch (_) { _isOnline = true; }
 
     try {
-      _networkSub =
-          ConnectivityService.instance.onStatusChange.listen((online) {
-            if (!mounted) return;
-            _secureLog('🌐 connectivity → online=$online');
-            setState(() => _isOnline = online);
-            if (online) {
-              _markOnline();
-              try {
-                GeofenceService.instance.forceReload();
-              } catch (_) {}
-              try {
-                PresenceChallengeService.instance.checkNow();
-              } catch (_) {}
-              // ⏰ Sync trusted time + recover OT reminders kapag bumalik ang net
-              try {
-                TrustedTimeService.instance.syncWithServer(force: true);
-              } catch (_) {}
-              unawaited(_recoverOvertimeReminders());
-            }
-          });
-    } catch (e) {
-      _secureLog('⚠️ connectivity failed: $e');
-    }
+      _networkSub = ConnectivityService.instance.onStatusChange.listen((online) {
+        if (!mounted) return;
+        setState(() => _isOnline = online);
+        if (online) {
+          _markOnline();
+          try { GeofenceService.instance.forceReload(); } catch (_) {}
+          try { PresenceChallengeService.instance.checkNow(); } catch (_) {}
+          try { TrustedTimeService.instance.syncWithServer(force: true); } catch (_) {}
+          unawaited(_recoverOvertimeReminders());
+        }
+      });
+    } catch (e) {}
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-
     _presenceHeartbeat?.cancel();
     _resumeDebounce?.cancel();
     _markOffline();
     _stopGeofenceListener();
-
     _stopFingerprintListener();
-
     _notifWatcher?.stop();
     PresenceMonitorService.instance.stop();
-
     MotionDetectionService.instance.stop();
-
     PresenceChallengeService.instance.onDue = null;
     PresenceChallengeService.instance.onMissedSummary = null;
-
     _networkSub?.cancel();
-
-    try {
-      SecurityHardeningService.instance.disableSecureScreen();
-    } catch (_) {}
-
+    try { SecurityHardeningService.instance.disableSecureScreen(); } catch (_) {}
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-
     if (_isDemo) return;
-
     if (_presenceDocId == null) return;
-
-    _secureLog('📱 Lifecycle → $state');
 
     switch (state) {
       case AppLifecycleState.resumed:
         _markOnline();
         _startPresenceHeartbeat();
-        try {
-          GeofenceService.instance.forceReload();
-          _secureLog('🔄 Geofence zones refreshed');
-        } catch (_) {}
-
-        // ⏰ Recover OT reminders + sync trusted time on resume
-        try {
-          TrustedTimeService.instance.syncWithServer(force: false);
-        } catch (_) {}
+        try { GeofenceService.instance.forceReload(); } catch (_) {}
+        try { TrustedTimeService.instance.syncWithServer(force: false); } catch (_) {}
         unawaited(_recoverOvertimeReminders());
-
         _resumeDebounce?.cancel();
         _resumeDebounce = Timer(const Duration(milliseconds: 600), () {
           if (!mounted) return;
-          try {
-            PresenceChallengeService.instance.checkNow();
-            _secureLog('⚡ [Challenge] checkNow() on resume');
-          } catch (e) {
-            _secureLog('⚠️ [Challenge] checkNow failed: $e');
-          }
+          try { PresenceChallengeService.instance.checkNow(); } catch (e) {}
         });
         break;
-
       case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
@@ -1182,7 +730,6 @@ class MainScreenState extends State<MainScreen>
   @override
   Widget build(BuildContext context) {
     final isWeb = kIsWeb && MediaQuery.of(context).size.width >= 768;
-
     final emp = _effectiveEmployee;
     final empId = emp?.employeeId ?? '';
     final empName = emp?.fullName ?? 'Guest';
@@ -1200,134 +747,43 @@ class MainScreenState extends State<MainScreen>
                   child: IndexedStack(
                     index: _selectedIndex,
                     children: [
-                      DashboardScreen(
-                        key: _dashboardKey,
-                        onTabSwitch: switchTabWithHistory,
-                        onClockAction: _openClockOverlay,
-                        initialEmployee: emp,
-                      ),
-                      AttendanceHistoryScreen(
-                        initialEmployee: emp,
-                        onBack: goBackToPrevious,
-                      ),
-                      LeaveFormScreen(
-                        employeeId: empId,
-                        employeeName: empName,
-                        onGoHome: goBackToPrevious,
-                      ),
+                      DashboardScreen(key: _dashboardKey, onTabSwitch: switchTabWithHistory, onClockAction: _openClockOverlay, initialEmployee: emp),
+                      AttendanceHistoryScreen(initialEmployee: emp, onBack: goBackToPrevious),
+                      LeaveFormScreen(employeeId: empId, employeeName: empName, onGoHome: goBackToPrevious),
                       ProfileScreen(initialEmployee: emp),
                     ],
                   ),
                 ),
-
                 if (_showClockOverlay && emp != null)
                   Positioned.fill(
                     child: ClockScreen(
                       initialEmployee: emp,
-                      onBack: () {
-                        if (mounted) {
-                          setState(() => _showClockOverlay = false);
-                        }
-                      },
+                      onBack: () { if (mounted) setState(() => _showClockOverlay = false); },
                       onClockIn: _closeClockOverlayAndRefresh,
                       onClockOut: _closeClockOverlayAndRefresh,
                       onShortcutHome: _closeClockOverlayAndRefresh,
-                      onShortcutProfile: () {
-                        if (mounted) {
-                          setState(() {
-                            _showClockOverlay = false;
-                            _selectedIndex = 3;
-                          });
-                        }
-                      },
-                      onShortcutLeaves: () {
-                        if (mounted) {
-                          setState(() {
-                            _showClockOverlay = false;
-                            _selectedIndex = 2;
-                          });
-                        }
-                      },
-                      onNavTap: (i) {
-                        if (mounted) {
-                          setState(() {
-                            _showClockOverlay = false;
-                            _selectedIndex = i;
-                          });
-                        }
-                      },
+                      onShortcutProfile: () { if (mounted) setState(() { _showClockOverlay = false; _selectedIndex = 3; }); },
+                      onShortcutLeaves: () { if (mounted) setState(() { _showClockOverlay = false; _selectedIndex = 2; }); },
+                      onNavTap: (i) { if (mounted) setState(() { _showClockOverlay = false; _selectedIndex = i; }); },
                     ),
                   ),
-
                 if (!_isOnline && !_isDemo)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: SafeArea(
-                      bottom: false,
-                      child: _buildOfflineBanner(),
-                    ),
-                  ),
-
+                  Positioned(top: 0, left: 0, right: 0, child: SafeArea(bottom: false, child: _buildOfflineBanner())),
                 if (_isDemo)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: SafeArea(
-                      bottom: false,
-                      child: _buildDemoBadge(),
-                    ),
-                  ),
-
-                if (_fpStatusLoaded &&
-                    !_fingerprintEnrolled &&
-                    !_fpPromptDismissed &&
-                    _isOnline &&
-                    !_isDemo &&
-                    widget.employee != null &&
-                    !_showClockOverlay)
-                  Positioned(
-                    top: !_isOnline ? 60 : 0,
-                    left: 0,
-                    right: 0,
-                    child: SafeArea(
-                      bottom: false,
-                      child: _buildFingerprintBanner(),
-                    ),
-                  ),
-
+                  Positioned(top: 0, left: 0, right: 0, child: SafeArea(bottom: false, child: _buildDemoBadge())),
+                if (_fpStatusLoaded && !_fingerprintEnrolled && !_fpPromptDismissed && _isOnline && !_isDemo && widget.employee != null && !_showClockOverlay)
+                  Positioned(top: !_isOnline ? 60 : 0, left: 0, right: 0, child: SafeArea(bottom: false, child: _buildFingerprintBanner())),
                 if (empId.isNotEmpty && !_isDemo)
-                  Positioned(
-                    top: 12,
-                    right: 12,
-                    child: SafeArea(
-                      child: EmployeeNotificationBell(
-                        employeeId: empId,
-                        iconColor: AppColors.orange,
-                        size: 22,
-                      ),
-                    ),
-                  ),
-
+                  Positioned(top: 12, right: 12, child: SafeArea(child: EmployeeNotificationBell(employeeId: empId, iconColor: AppColors.orange, size: 22))),
                 if (!isWeb)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: _buildMobileBottomNav(context),
-                  ),
+                  Positioned(left: 0, right: 0, bottom: 0, child: _buildMobileBottomNav(context)),
               ],
             ),
           ),
         ],
       ),
-
       floatingActionButton: _buildClockFab(context),
-      floatingActionButtonLocation: isWeb
-          ? FloatingActionButtonLocation.endFloat
-          : FloatingActionButtonLocation.centerDocked,
+      floatingActionButtonLocation: isWeb ? FloatingActionButtonLocation.endFloat : FloatingActionButtonLocation.centerDocked,
     );
   }
 
@@ -1336,56 +792,24 @@ class MainScreenState extends State<MainScreen>
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_demoAccent, _demoAccentDark],
-        ),
+        gradient: const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [_demoAccent, _demoAccentDark]),
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: _demoAccent.withValues(alpha: 0.35),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: _demoAccent.withValues(alpha: 0.35), blurRadius: 16, offset: const Offset(0, 6))],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           const Icon(Icons.science_rounded, color: Colors.white, size: 16),
           const SizedBox(width: 8),
-          const Expanded(
-            child: Text(
-              'DEMO MODE — No data is saved',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.3,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
+          const Expanded(child: Text('DEMO MODE — No data is saved', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.3), overflow: TextOverflow.ellipsis)),
           const SizedBox(width: 8),
           GestureDetector(
             onTap: _handleLogout,
             behavior: HitTestBehavior.opaque,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.25),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: const Text(
-                'EXIT',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.5,
-                ),
-              ),
+              decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.25), borderRadius: BorderRadius.circular(999)),
+              child: const Text('EXIT', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
             ),
           ),
         ],
@@ -1400,39 +824,16 @@ class MainScreenState extends State<MainScreen>
       decoration: BoxDecoration(
         color: const Color(0xFFDC2626),
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 12, offset: const Offset(0, 4))],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 16),
           const SizedBox(width: 8),
-          const Expanded(
-            child: Text(
-              'No internet — offline mode',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
+          const Expanded(child: Text('No internet — offline mode', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
           const SizedBox(width: 8),
-          Container(
-            width: 6,
-            height: 6,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-            ),
-          ),
+          Container(width: 6, height: 6, decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle)),
         ],
       ),
     );
@@ -1443,36 +844,16 @@ class MainScreenState extends State<MainScreen>
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFFF8A00), Color(0xFFF54900)],
-        ),
+        gradient: const LinearGradient(colors: [Color(0xFFFF8A00), Color(0xFFF54900)]),
         borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFF8A00).withValues(alpha: 0.35),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: const Color(0xFFFF8A00).withValues(alpha: 0.35), blurRadius: 16, offset: const Offset(0, 6))],
       ),
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.22),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.4),
-                width: 1.2,
-              ),
-            ),
-            child: const Icon(
-              Icons.fingerprint_rounded,
-              color: Colors.white,
-              size: 22,
-            ),
+            width: 40, height: 40,
+            decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.22), shape: BoxShape.circle, border: Border.all(color: Colors.white.withValues(alpha: 0.4), width: 1.2)),
+            child: const Icon(Icons.fingerprint_rounded, color: Colors.white, size: 22),
           ),
           const SizedBox(width: 12),
           const Expanded(
@@ -1480,57 +861,22 @@ class MainScreenState extends State<MainScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  'Register Your Fingerprint',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.2,
-                  ),
-                ),
+                Text('Register Your Fingerprint', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 0.2)),
                 SizedBox(height: 2),
-                Text(
-                  'Required for clock in/out.',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+                Text('Required for clock in/out.', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500)),
               ],
             ),
           ),
           const SizedBox(width: 6),
           TextButton(
             onPressed: _openFingerprintRegistration,
-            style: TextButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: const Color(0xFFFF8A00),
-              padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              minimumSize: const Size(0, 32),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            child: const Text(
-              'Register',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.2,
-              ),
-            ),
+            style: TextButton.styleFrom(backgroundColor: Colors.white, foregroundColor: const Color(0xFFFF8A00), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), minimumSize: const Size(0, 32), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            child: const Text('Register', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.2)),
           ),
           IconButton(
             onPressed: () => setState(() => _fpPromptDismissed = true),
-            icon: const Icon(Icons.close_rounded,
-                color: Colors.white, size: 18),
-            splashRadius: 18,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            icon: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
+            splashRadius: 18, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
           ),
         ],
       ),
@@ -1545,15 +891,7 @@ class MainScreenState extends State<MainScreen>
         curve: Curves.easeOut,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          boxShadow: !overlayOpen
-              ? [
-            BoxShadow(
-              color: _navActive.withValues(alpha: 0.4),
-              blurRadius: 14,
-              offset: const Offset(0, 6),
-            ),
-          ]
-              : null,
+          boxShadow: !overlayOpen ? [BoxShadow(color: _navActive.withValues(alpha: 0.4), blurRadius: 14, offset: const Offset(0, 6))] : null,
         ),
         child: FloatingActionButton(
           backgroundColor: _navActive,
@@ -1562,18 +900,8 @@ class MainScreenState extends State<MainScreen>
           onPressed: overlayOpen ? _toggleClockOverlay : _openClockOverlay,
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 220),
-            transitionBuilder: (child, animation) {
-              return RotationTransition(
-                turns: Tween<double>(begin: 0.75, end: 1.0).animate(animation),
-                child: FadeTransition(opacity: animation, child: child),
-              );
-            },
-            child: Icon(
-              overlayOpen ? Icons.close_rounded : Icons.fingerprint_rounded,
-              key: ValueKey(overlayOpen ? 'demo-close' : 'demo-fp'),
-              color: Colors.white,
-              size: 26,
-            ),
+            transitionBuilder: (child, animation) => RotationTransition(turns: Tween<double>(begin: 0.75, end: 1.0).animate(animation), child: FadeTransition(opacity: animation, child: child)),
+            child: Icon(overlayOpen ? Icons.close_rounded : Icons.fingerprint_rounded, key: ValueKey(overlayOpen ? 'demo-close' : 'demo-fp'), color: Colors.white, size: 26),
           ),
         ),
       );
@@ -1583,57 +911,29 @@ class MainScreenState extends State<MainScreen>
     final needsRegistration = _fpStatusLoaded && !_fingerprintEnrolled;
     final overlayOpen = _showClockOverlay;
 
-    final Color bg = !enabled
-        ? const Color(0xFF7A7A7A)
-        : (needsRegistration && !overlayOpen
-        ? const Color(0xFFDC2626)
-        : _navActive);
+    final Color bg = !enabled ? const Color(0xFF7A7A7A) : (needsRegistration && !overlayOpen ? const Color(0xFFDC2626) : _navActive);
 
     final String iconKey;
     final IconData icon;
-    if (!enabled) {
-      iconKey = 'offline';
-      icon = Icons.wifi_off_rounded;
-    } else if (overlayOpen) {
-      iconKey = 'close';
-      icon = Icons.close_rounded;
-    } else if (needsRegistration) {
-      iconKey = 'register';
-      icon = Icons.app_registration_rounded;
-    } else {
-      iconKey = 'fingerprint';
-      icon = Icons.fingerprint_rounded;
-    }
+    if (!enabled) { iconKey = 'offline'; icon = Icons.wifi_off_rounded; }
+    else if (overlayOpen) { iconKey = 'close'; icon = Icons.close_rounded; }
+    else if (needsRegistration) { iconKey = 'register'; icon = Icons.app_registration_rounded; }
+    else { iconKey = 'fingerprint'; icon = Icons.fingerprint_rounded; }
 
     final String tooltip;
-    if (!enabled) {
-      tooltip = 'Offline';
-    } else if (overlayOpen) {
-      tooltip = 'Close Clock Screen';
-    } else if (needsRegistration) {
-      tooltip = 'Register Fingerprint';
-    } else {
-      tooltip = 'Clock In / Out';
-    }
+    if (!enabled) { tooltip = 'Offline'; }
+    else if (overlayOpen) { tooltip = 'Close Clock Screen'; }
+    else if (needsRegistration) { tooltip = 'Register Fingerprint'; }
+    else { tooltip = 'Clock In / Out'; }
 
-    final VoidCallback? onPressed = !enabled
-        ? null
-        : (overlayOpen ? _toggleClockOverlay : _openClockOverlay);
+    final VoidCallback? onPressed = !enabled ? null : (overlayOpen ? _toggleClockOverlay : _openClockOverlay);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOut,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        boxShadow: enabled && !overlayOpen
-            ? [
-          BoxShadow(
-            color: bg.withValues(alpha: 0.4),
-            blurRadius: 14,
-            offset: const Offset(0, 6),
-          ),
-        ]
-            : null,
+        boxShadow: enabled && !overlayOpen ? [BoxShadow(color: bg.withValues(alpha: 0.4), blurRadius: 14, offset: const Offset(0, 6))] : null,
       ),
       child: FloatingActionButton(
         backgroundColor: bg,
@@ -1642,18 +942,8 @@ class MainScreenState extends State<MainScreen>
         onPressed: onPressed,
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 220),
-          transitionBuilder: (child, animation) {
-            return RotationTransition(
-              turns: Tween<double>(begin: 0.75, end: 1.0).animate(animation),
-              child: FadeTransition(opacity: animation, child: child),
-            );
-          },
-          child: Icon(
-            icon,
-            key: ValueKey(iconKey),
-            color: Colors.white,
-            size: 26,
-          ),
+          transitionBuilder: (child, animation) => RotationTransition(turns: Tween<double>(begin: 0.75, end: 1.0).animate(animation), child: FadeTransition(opacity: animation, child: child)),
+          child: Icon(icon, key: ValueKey(iconKey), color: Colors.white, size: 26),
         ),
       ),
     );
@@ -1667,10 +957,7 @@ class MainScreenState extends State<MainScreen>
       width: sidebarWidth,
       decoration: BoxDecoration(
         color: AppColors.card,
-        border: Border(
-          right: BorderSide(
-              color: AppColors.orange.withValues(alpha: 0.12), width: 1),
-        ),
+        border: Border(right: BorderSide(color: AppColors.orange.withValues(alpha: 0.12), width: 1)),
       ),
       child: Column(
         children: [
@@ -1683,16 +970,8 @@ class MainScreenState extends State<MainScreen>
                 ..._navItems.map((item) => _webNavItem(item)),
                 const Divider(height: 24),
                 _webQuickLink(
-                  label: _isDemo
-                      ? 'Clock In/Out'
-                      : (_fingerprintEnrolled
-                      ? 'Clock In/Out'
-                      : 'Register Fingerprint'),
-                  icon: _isDemo
-                      ? Icons.fingerprint_rounded
-                      : (_fingerprintEnrolled
-                      ? Icons.fingerprint_rounded
-                      : Icons.app_registration_rounded),
+                  label: _isDemo ? 'Clock In/Out' : (_fingerprintEnrolled ? 'Clock In/Out' : 'Register Fingerprint'),
+                  icon: _isDemo ? Icons.fingerprint_rounded : (_fingerprintEnrolled ? Icons.fingerprint_rounded : Icons.app_registration_rounded),
                   onTap: _openClockOverlay,
                 ),
               ],
@@ -1707,51 +986,20 @@ class MainScreenState extends State<MainScreen>
   Widget _buildWebLogo() {
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(
-              color: AppColors.orange.withValues(alpha: 0.12), width: 1),
-        ),
-      ),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.orange.withValues(alpha: 0.12), width: 1))),
       child: Row(
         children: [
           Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              gradient: AppColors.gradientOrange,
-              borderRadius: BorderRadius.circular(4),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.orange.withValues(alpha: 0.35),
-                  blurRadius: 14,
-                )
-              ],
-            ),
-            child: Icon(
-              _isDemo
-                  ? Icons.science_rounded
-                  : Icons.fingerprint_rounded,
-              color: Colors.white,
-              size: 22,
-            ),
+            width: 38, height: 38,
+            decoration: BoxDecoration(gradient: AppColors.gradientOrange, borderRadius: BorderRadius.circular(4), boxShadow: [BoxShadow(color: AppColors.orange.withValues(alpha: 0.35), blurRadius: 14)]),
+            child: Icon(_isDemo ? Icons.science_rounded : Icons.fingerprint_rounded, color: Colors.white, size: 22),
           ),
           const SizedBox(width: 12),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(_isDemo ? 'DEMO' : 'HRIS',
-                  style: const TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 3)),
-              Text(_isDemo ? 'MODE' : 'BIOMETRICS',
-                  style: const TextStyle(
-                      color: AppColors.orange,
-                      fontSize: 8,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 3)),
+              Text(_isDemo ? 'DEMO' : 'HRIS', style: const TextStyle(color: AppColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w900, letterSpacing: 3)),
+              Text(_isDemo ? 'MODE' : 'BIOMETRICS', style: const TextStyle(color: AppColors.orange, fontSize: 8, fontWeight: FontWeight.w800, letterSpacing: 3)),
             ],
           ),
         ],
@@ -1772,9 +1020,7 @@ class MainScreenState extends State<MainScreen>
         decoration: BoxDecoration(
           color: active ? color.withValues(alpha: 0.1) : Colors.transparent,
           borderRadius: BorderRadius.circular(4),
-          border: Border.all(
-            color: active ? color.withValues(alpha: 0.3) : Colors.transparent,
-          ),
+          border: Border.all(color: active ? color.withValues(alpha: 0.3) : Colors.transparent),
         ),
         child: Row(
           children: [
@@ -1782,23 +1028,11 @@ class MainScreenState extends State<MainScreen>
             const SizedBox(width: 14),
             Text(
               item.label.toUpperCase(),
-              style: TextStyle(
-                color: active ? AppColors.textPrimary : AppColors.textMuted,
-                fontWeight: active ? FontWeight.w800 : FontWeight.w500,
-                fontSize: 11,
-                letterSpacing: 1.5,
-              ),
+              style: TextStyle(color: active ? AppColors.textPrimary : AppColors.textMuted, fontWeight: active ? FontWeight.w800 : FontWeight.w500, fontSize: 11, letterSpacing: 1.5),
             ),
             if (active) ...[
               const Spacer(),
-              Container(
-                width: 4,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: color,
-                  shape: BoxShape.circle,
-                ),
-              ),
+              Container(width: 4, height: 4, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
             ],
           ],
         ),
@@ -1806,11 +1040,7 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
-  Widget _webQuickLink({
-    required String label,
-    required IconData icon,
-    required VoidCallback onTap,
-  }) {
+  Widget _webQuickLink({required String label, required IconData icon, required VoidCallback onTap}) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(4),
@@ -1820,15 +1050,7 @@ class MainScreenState extends State<MainScreen>
           children: [
             Icon(icon, color: AppColors.textMuted, size: 18),
             const SizedBox(width: 14),
-            Text(
-              label.toUpperCase(),
-              style: const TextStyle(
-                color: AppColors.textMuted,
-                fontWeight: FontWeight.w500,
-                fontSize: 11,
-                letterSpacing: 1.5,
-              ),
-            ),
+            Text(label.toUpperCase(), style: const TextStyle(color: AppColors.textMuted, fontWeight: FontWeight.w500, fontSize: 11, letterSpacing: 1.5)),
           ],
         ),
       ),
@@ -1839,54 +1061,23 @@ class MainScreenState extends State<MainScreen>
     final emp = _effectiveEmployee;
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(
-              color: AppColors.orange.withValues(alpha: 0.12), width: 1),
-        ),
-      ),
+      decoration: BoxDecoration(border: Border(top: BorderSide(color: AppColors.orange.withValues(alpha: 0.12), width: 1))),
       child: Row(
         children: [
           Stack(
             children: [
               Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  gradient: AppColors.gradientOrange,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Center(
-                  child: Text(
-                    emp?.initials ?? '?',
-                    style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800),
-                  ),
-                ),
+                width: 36, height: 36,
+                decoration: BoxDecoration(gradient: AppColors.gradientOrange, borderRadius: BorderRadius.circular(4)),
+                child: Center(child: Text(emp?.initials ?? '?', style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w800))),
               ),
               if (_fpStatusLoaded && !_isDemo)
                 Positioned(
-                  right: -2,
-                  bottom: -2,
+                  right: -2, bottom: -2,
                   child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: _fingerprintEnrolled
-                          ? const Color(0xFF22C55E)
-                          : const Color(0xFFDC2626),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: AppColors.card, width: 2),
-                    ),
-                    child: Icon(
-                      _fingerprintEnrolled
-                          ? Icons.check_rounded
-                          : Icons.priority_high_rounded,
-                      size: 8,
-                      color: Colors.white,
-                    ),
+                    width: 14, height: 14,
+                    decoration: BoxDecoration(color: _fingerprintEnrolled ? const Color(0xFF22C55E) : const Color(0xFFDC2626), shape: BoxShape.circle, border: Border.all(color: AppColors.card, width: 2)),
+                    child: Icon(_fingerprintEnrolled ? Icons.check_rounded : Icons.priority_high_rounded, size: 8, color: Colors.white),
                   ),
                 ),
             ],
@@ -1896,81 +1087,33 @@ class MainScreenState extends State<MainScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  emp?.fullName ?? 'Guest',
-                  style: const TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700),
-                ),
+                Text(emp?.fullName ?? 'Guest', style: const TextStyle(color: AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w700)),
                 Row(children: [
-                  Text(
-                    emp?.position ?? 'User',
-                    style: const TextStyle(
-                        color: AppColors.textMuted, fontSize: 11),
-                  ),
+                  Text(emp?.position ?? 'User', style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
                   if (_isDemo) ...[
                     const SizedBox(width: 6),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: _demoAccent.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Text(
-                        'DEMO',
-                        style: TextStyle(
-                          fontSize: 8,
-                          fontWeight: FontWeight.w800,
-                          color: _demoAccent,
-                          letterSpacing: 0.3,
-                        ),
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(color: _demoAccent.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(4)),
+                      child: const Text('DEMO', style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: _demoAccent, letterSpacing: 0.3)),
                     ),
                   ] else if (_fpStatusLoaded) ...[
                     const SizedBox(width: 6),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: _fingerprintEnrolled
-                            ? const Color(0xFFDCFCE7)
-                            : const Color(0xFFFEE2E2),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        _fingerprintEnrolled ? 'FP ✓' : 'No FP',
-                        style: TextStyle(
-                          fontSize: 8,
-                          fontWeight: FontWeight.w800,
-                          color: _fingerprintEnrolled
-                              ? const Color(0xFF166534)
-                              : const Color(0xFF991B1B),
-                          letterSpacing: 0.3,
-                        ),
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(color: _fingerprintEnrolled ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2), borderRadius: BorderRadius.circular(4)),
+                      child: Text(_fingerprintEnrolled ? 'FP ✓' : 'No FP', style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: _fingerprintEnrolled ? const Color(0xFF166534) : const Color(0xFF991B1B), letterSpacing: 0.3)),
                     ),
                   ],
                 ]),
               ],
             ),
           ),
-          if (emp?.employeeId != null &&
-              emp!.employeeId.isNotEmpty &&
-              !_isDemo)
-            EmployeeNotificationBell(
-              employeeId: emp.employeeId,
-              iconColor: AppColors.textMuted,
-              size: 20,
-            ),
+          if (emp?.employeeId != null && emp!.employeeId.isNotEmpty && !_isDemo)
+            EmployeeNotificationBell(employeeId: emp.employeeId, iconColor: AppColors.textMuted, size: 20),
           IconButton(
             onPressed: _handleLogout,
-            icon: Icon(
-              _isDemo ? Icons.science_rounded : Icons.logout_rounded,
-              color: _isDemo ? _demoAccent : AppColors.textMuted,
-              size: 17,
-            ),
+            icon: Icon(_isDemo ? Icons.science_rounded : Icons.logout_rounded, color: _isDemo ? _demoAccent : AppColors.textMuted, size: 17),
           ),
         ],
       ),
@@ -1981,12 +1124,7 @@ class MainScreenState extends State<MainScreen>
     return Container(
       decoration: BoxDecoration(
         color: _navBg(context),
-        border: Border(
-          top: BorderSide(
-            color: _navBorder(context),
-            width: 1.15,
-          ),
-        ),
+        border: Border(top: BorderSide(color: _navBorder(context), width: 1.15)),
       ),
       child: SafeArea(
         top: false,
@@ -2018,15 +1156,7 @@ class MainScreenState extends State<MainScreen>
           children: [
             SvgPicture.string(item.svg(color), width: 24, height: 24),
             const SizedBox(height: 4),
-            Text(
-              item.label,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                color: color,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
+            Text(item.label, style: TextStyle(fontSize: 10, fontWeight: active ? FontWeight.w700 : FontWeight.w500, color: color), overflow: TextOverflow.ellipsis),
           ],
         ),
       ),
@@ -2036,8 +1166,7 @@ class MainScreenState extends State<MainScreen>
   // ══════════════════════════════════════════════════════════════
   // SVG icons
   // ══════════════════════════════════════════════════════════════
-  static String _hex(Color c) =>
-      '#${c.value.toRadixString(16).substring(2)}';
+  static String _hex(Color c) => '#${c.toARGB32().toRadixString(16).substring(2)}';
 
   static String _homeSvg(Color color) {
     final s = _hex(color);

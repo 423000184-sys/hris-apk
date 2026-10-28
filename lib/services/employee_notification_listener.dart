@@ -69,7 +69,6 @@ class EmployeeNotificationListener {
             if (_shownNotifIds.contains(notifId)) continue;
 
             final data = doc.data();
-            if (data == null) continue;
 
             _shownNotifIds.add(notifId);
             _saveShownIds();

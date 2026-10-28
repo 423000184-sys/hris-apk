@@ -158,7 +158,7 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.folder_open_rounded,
-              color: AppColors.textMuted.withOpacity(0.5), size: 64),
+              color: AppColors.textMuted.withValues(alpha: 0.5), size: 64),
           const SizedBox(height: 16),
           const Text('No records saved yet',
               style: TextStyle(fontSize: 16, color: AppColors.textMuted)),
@@ -176,7 +176,7 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
         decoration: BoxDecoration(
           border: Border(
               right: BorderSide(
-                  color: AppColors.orange.withOpacity(0.15), width: 1)),
+                  color: AppColors.orange.withValues(alpha: 0.15), width: 1)),
         ),
         child: ListView.builder(
           itemCount: _dates.length,
@@ -190,12 +190,12 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
                   color: selected
-                      ? AppColors.orange.withOpacity(0.12)
+                      ? AppColors.orange.withValues(alpha: 0.12)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(4),
                   border: Border.all(
                     color: selected
-                        ? AppColors.orange.withOpacity(0.4)
+                        ? AppColors.orange.withValues(alpha: 0.4)
                         : Colors.transparent,
                   ),
                 ),
@@ -274,14 +274,14 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Row(children: [
         Container(
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
+              color: color.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(4)),
           child: Icon(icon, color: color, size: 20),
         ),
@@ -305,7 +305,7 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
                       padding: const EdgeInsets.symmetric(
                           horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
-                          color: AppColors.warning.withOpacity(0.12),
+                          color: AppColors.warning.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(3)),
                       child: const Text('LATE',
                           style: TextStyle(
@@ -380,7 +380,7 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
             padding:
             const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-                color: statusColor.withOpacity(0.1),
+                color: statusColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(3)),
             child: Text(status.toUpperCase(),
                 style: TextStyle(
@@ -407,9 +407,9 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
       child: Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-            color: color.withOpacity(0.07),
+            color: color.withValues(alpha: 0.07),
             borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: color.withOpacity(0.2))),
+            border: Border.all(color: color.withValues(alpha: 0.2))),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label,
               style: const TextStyle(
@@ -444,7 +444,7 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
             padding:
             const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-                color: AppColors.success.withOpacity(0.1),
+                color: AppColors.success.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(3)),
             child: const Text('ACCESSIBLE',
                 style: TextStyle(
@@ -515,13 +515,13 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: ConnectivityService.instance.isOnline
-                ? AppColors.success.withOpacity(0.07)
-                : AppColors.warning.withOpacity(0.07),
+                ? AppColors.success.withValues(alpha: 0.07)
+                : AppColors.warning.withValues(alpha: 0.07),
             borderRadius: BorderRadius.circular(4),
             border: Border.all(
               color: ConnectivityService.instance.isOnline
-                  ? AppColors.success.withOpacity(0.3)
-                  : AppColors.warning.withOpacity(0.3),
+                  ? AppColors.success.withValues(alpha: 0.3)
+                  : AppColors.warning.withValues(alpha: 0.3),
             ),
           ),
           child: Row(children: [
@@ -573,7 +573,7 @@ class _LocalRecordsScreenState extends State<LocalRecordsScreen>
           width: 42,
           height: 42,
           decoration: BoxDecoration(
-              color: iconColor.withOpacity(0.1),
+              color: iconColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(4)),
           child: Icon(icon, color: iconColor, size: 20),
         ),

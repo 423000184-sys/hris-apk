@@ -7,9 +7,6 @@ environment:
   sdk: '>=3.6.0 <4.0.0'
   flutter: '>=3.24.0'
 
-# ═══════════════════════════════════════════════════════════════════════
-#  DEPENDENCIES
-# ═══════════════════════════════════════════════════════════════════════
 dependencies:
   flutter:
     sdk: flutter
@@ -36,6 +33,9 @@ dependencies:
   permission_handler: ^11.3.1
   flutter_map: ^8.3.2
   latlong2: ^0.10.1
+  flutter_map_cache: ^2.1.0
+  http_cache_file_store: ^2.0.0
+  network_info_plus: ^5.0.3
 
   # ─── UI & Animation ───────────────────────────────────────────────
   cupertino_icons: ^1.0.8
@@ -103,7 +103,7 @@ dependencies:
   excel: ^4.0.6
   csv: ^5.0.0
 
-  # ─── Sharing (for payslip PDF share) ──────────────────────────
+  # ─── Sharing ──────────────────────────────────────────────────────
   share_plus: ^10.1.1
 
   # ─── NFC ──────────────────────────────────────────────────────────
@@ -132,9 +132,6 @@ dependencies:
   # ─── 🔔 OneSignal Push Notifications ──────────────────────────────
   onesignal_flutter: ^5.1.2
 
-# ═══════════════════════════════════════════════════════════════════════
-#  DEV DEPENDENCIES
-# ═══════════════════════════════════════════════════════════════════════
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -148,9 +145,6 @@ dev_dependencies:
 
   web: ^1.0.0
 
-# ═══════════════════════════════════════════════════════════════════════
-#  FLUTTER — ASSETS
-# ═══════════════════════════════════════════════════════════════════════
 flutter:
   uses-material-design: true
 

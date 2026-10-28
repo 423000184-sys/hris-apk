@@ -180,8 +180,8 @@ class SecurityHardeningService {
         .toList(growable: false);
 
     for (var i = 0; i < iterations; i++) {
-      final input = <int>[]
-        ..addAll(digest)
+      final input = <int>[...digest]
+        
         ..addAll(saltBytes);
       // ✅ FIX: .toList() para siguradong List<int>, hindi Uint8List
       digest = sha256

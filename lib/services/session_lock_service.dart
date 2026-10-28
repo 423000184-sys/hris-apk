@@ -82,7 +82,7 @@ class SessionLockService {
           .getDeviceBindingToken()
           .timeout(const Duration(seconds: 5));
 
-      if (myDevice == null || myDevice.isEmpty) {
+      if (myDevice.isEmpty) {
         _log('⚠️ No device binding — fail-open');
         return const SessionLockResult(status: SessionLockStatus.unknown);
       }

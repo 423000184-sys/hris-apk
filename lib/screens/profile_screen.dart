@@ -12,6 +12,7 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:onesignal_flutter/onesignal_flutter.dart';
 import 'privacy_policy_screen.dart';
 import '../theme/app_theme.dart';
 import '../theme/theme_notifier.dart';
@@ -383,6 +384,14 @@ class _ProfileScreenState extends State<ProfileScreen>
     _sessionSub?.cancel();
     _employeeSub?.cancel();
     _connectivitySub?.cancel();
+
+    // 🆕 ONESIGNAL LOGOUT
+    try {
+      OneSignal.logout();
+      debugPrint('🔔 [OneSignal] Unlinked device (Force Logout)');
+    } catch (e) {
+      debugPrint('⚠️ [OneSignal] Logout failed: $e');
+    }
 
     try {
       await Clipboard.setData(const ClipboardData(text: ''));
@@ -1142,6 +1151,14 @@ class _ProfileScreenState extends State<ProfileScreen>
       try {
         await DemoModeService.instance.endDemoSession();
       } catch (_) {}
+    }
+
+    // 🆕 ONESIGNAL LOGOUT
+    try {
+      OneSignal.logout();
+      debugPrint('🔔 [OneSignal] Unlinked device (Manual Logout)');
+    } catch (e) {
+      debugPrint('⚠️ [OneSignal] Logout failed: $e');
     }
 
     try {

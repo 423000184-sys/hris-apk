@@ -1398,7 +1398,7 @@ class _AdminAddClientLocationPageState
                   onChanged: _isDemo
                       ? null
                       : (v) => setState(() => _isActive = v),
-                  activeColor: _isDemo ? tc.muted : tc.orange,
+                  activeThumbColor: _isDemo ? tc.muted : tc.orange,
                 ),
                 const SizedBox(width: 8),
                 Text(
@@ -2718,7 +2718,7 @@ class _EditClientDialogState extends State<_EditClientDialog> {
                                 ? null
                                 : (v) =>
                                 setState(() => _isActive = v),
-                            activeColor: _isDemo ? tc.muted : tc.orange,
+                            activeThumbColor: _isDemo ? tc.muted : tc.orange,
                           ),
                           const SizedBox(width: 8),
                           Text(

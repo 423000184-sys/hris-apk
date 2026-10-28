@@ -536,7 +536,9 @@ class GeofenceService {
 
     final permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) return;
+        permission == LocationPermission.deniedForever) {
+      return;
+    }
 
     _positionSub = Geolocator.getPositionStream(
       locationSettings: _buildLocationSettings(distanceFilter: 5),

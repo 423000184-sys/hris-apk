@@ -140,7 +140,7 @@ class PresenceChallengeService {
   Timer? _tick;
   String? _activeEmployeeId;
   String? _activeEmployeeName;
-  bool _debugLog = kDebugMode;
+  final bool _debugLog = kDebugMode;
 
   // 🎯 Auto-enforcement state
   DateTime? _outOfRangeSince;
@@ -765,7 +765,7 @@ class PresenceChallengeService {
         distance = geo.distanceMeters;
         radius = geo.radiusUsed;
         zoneName = geo.matchedLocationName;
-        zoneStatus = geo.status?.toString();
+        zoneStatus = geo.status.toString();
       } catch (e) {
         _log('⚠️ Geofence failed: $e — assume inside');
         isInside = true;

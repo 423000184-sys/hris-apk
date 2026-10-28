@@ -1,9 +1,6 @@
 // lib/services/api_service.dart
-import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:connectivity_plus/connectivity_plus.dart';
-import 'security_service.dart';
 
 class ApiService {
   static ApiService? _instance;

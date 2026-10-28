@@ -1,4 +1,7 @@
 // lib/screens/admin_notification_page.dart
+// v1.1: 📨 FACE AUTH ISSUE — new support category for face scan reports
+//       • New actions: send troubleshooting, ask to re-enroll, ask for selfie
+//       • New icon for face_auth_issue category
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint, kDebugMode;
@@ -180,6 +183,25 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
         employeeName: 'Sarah Lee',
         employeeId: 'DEMO-004',
         metadata: const {},
+      ),
+      // ✅ NEW demo sample for the new face_auth_issue category
+      AdminNotification(
+        id: 'demo_n9',
+        type: 'support_request',
+        title: 'Face Scan Issue — Face not recognized',
+        message:
+        'Employee reported a facial recognition issue: Face not recognized.',
+        timestamp: now.subtract(const Duration(minutes: 42)),
+        read: false,
+        priority: 'high',
+        employeeName: 'Sarah Lee',
+        employeeId: 'DEMO-004',
+        metadata: const {
+          'status': 'pending',
+          'category': 'face_auth_issue',
+          'categoryLabel': 'Face Recognition Issue',
+          'subCategory': 'face_not_recognized',
+        },
       ),
     ];
   }
@@ -1465,6 +1487,73 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
       case 'app_issue':
         actions.add(ListTile(leading: Icon(Icons.restart_alt_rounded, color: tc.orange), title: Text('Send restart steps', style: TextStyle(color: tc.text, fontWeight: FontWeight.w700)), subtitle: Text('Auto-fill troubleshooting steps', style: TextStyle(color: tc.muted, fontSize: 11.5)), onTap: () { Navigator.pop(context); _showReplyDialog(context, tc, n, prefillBody: AdminSupportActionsService.instance.cannedReplyFor(category), dialogTitle: 'Send restart steps'); }));
         break;
+    // ═══════════════════════════════════════════════════════════════
+    // ✅ NEW: Face Recognition Issue — actions for face scan failures
+    // ═══════════════════════════════════════════════════════════════
+      case 'face_auth_issue':
+        actions.add(ListTile(
+          leading: Icon(Icons.reply_rounded, color: tc.orange),
+          title: Text('Send troubleshooting steps',
+              style: TextStyle(color: tc.text, fontWeight: FontWeight.w700)),
+          subtitle: Text('Auto-fill common face scan fixes',
+              style: TextStyle(color: tc.muted, fontSize: 11.5)),
+          onTap: () {
+            Navigator.pop(context);
+            _showReplyDialog(
+              context, tc, n,
+              prefillBody:
+              'Hi ${n.employeeName ?? "there"}! We received your face scan report. '
+                  'Please try these steps:\n\n'
+                  '1. Make sure your face is well-lit (avoid backlight/shadow).\n'
+                  '2. Remove glasses, cap, or face mask.\n'
+                  '3. Hold the phone at eye level.\n'
+                  '4. Clean your camera lens.\n'
+                  '5. Close and reopen the app.\n\n'
+                  'If it still fails, reply here and we will re-enroll your face.',
+              dialogTitle: 'Send troubleshooting steps',
+            );
+          },
+        ));
+        actions.add(ListTile(
+          leading: Icon(Icons.face_retouching_off_rounded, color: tc.orange),
+          title: Text('Ask to re-enroll face',
+              style: TextStyle(color: tc.text, fontWeight: FontWeight.w700)),
+          subtitle: Text('Instruct employee to delete & re-enroll',
+              style: TextStyle(color: tc.muted, fontSize: 11.5)),
+          onTap: () {
+            Navigator.pop(context);
+            _showReplyDialog(
+              context, tc, n,
+              prefillBody:
+              'Hi ${n.employeeName ?? "there"}! Your face template needs to be re-enrolled.\n\n'
+                  'Please follow these steps:\n'
+                  '1. Open the app → Settings → Face ID.\n'
+                  '2. Tap "Remove Registered Face".\n'
+                  '3. Tap "Re-enroll Face" and follow the on-screen prompts.\n\n'
+                  'Reply here if you need help with any step.',
+              dialogTitle: 'Ask to re-enroll face',
+            );
+          },
+        ));
+        actions.add(ListTile(
+          leading: Icon(Icons.photo_camera_outlined, color: tc.orange),
+          title: Text('Ask for a selfie',
+              style: TextStyle(color: tc.text, fontWeight: FontWeight.w700)),
+          subtitle: Text('Verify identity visually before resetting',
+              style: TextStyle(color: tc.muted, fontSize: 11.5)),
+          onTap: () {
+            Navigator.pop(context);
+            _showReplyDialog(
+              context, tc, n,
+              prefillBody:
+              'Hi ${n.employeeName ?? "there"}! To help us verify your identity, '
+                  'please reply with a clear selfie holding a valid ID next to your face.\n\n'
+                  'Once we confirm, we will reset your face template so you can re-enroll.',
+              dialogTitle: 'Ask for a selfie',
+            );
+          },
+        ));
+        break;
       default:
         actions.add(ListTile(leading: Icon(Icons.quickreply_rounded, color: tc.orange), title: Text('Send acknowledgment', style: TextStyle(color: tc.text, fontWeight: FontWeight.w700)), subtitle: Text('Auto-fill reply', style: TextStyle(color: tc.muted, fontSize: 11.5)), onTap: () { Navigator.pop(context); _showReplyDialog(context, tc, n, prefillBody: AdminSupportActionsService.instance.cannedReplyFor(category), dialogTitle: 'Send acknowledgment'); }));
         break;
@@ -1478,6 +1567,7 @@ class _AdminNotificationPageState extends State<AdminNotificationPage>
       case 'pdf_password': return Icons.vpn_key_rounded;
       case 'salary_question': return Icons.receipt_long_rounded;
       case 'app_issue': return Icons.phonelink_erase_rounded;
+      case 'face_auth_issue': return Icons.face_retouching_off_rounded; // ✅ NEW
       default: return Icons.support_agent_rounded;
     }
   }

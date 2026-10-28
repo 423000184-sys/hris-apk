@@ -13,7 +13,6 @@ import 'package:onesignal_flutter/onesignal_flutter.dart';
 
 import 'screens/splash_screen.dart';
 import 'screens/admin_login_screen.dart';
-import 'screens/landing_screen.dart';
 import 'screens/employee_notifications_screen.dart';
 import 'firebase_options.dart';
 import 'services/database_service.dart';

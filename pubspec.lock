@@ -465,6 +465,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "5.11.1"
+  dio_cache_interceptor:
+    dependency: transitive
+    description:
+      name: dio_cache_interceptor
+      sha256: "9472f9f3dcaa384ae68e60606c1d04e6314dea5eab39f18d94ff9b0a300dbbe4"
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.0.7"
   dio_smart_retry:
     dependency: "direct main"
     description:
@@ -894,6 +902,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "8.3.2"
+  flutter_map_cache:
+    dependency: "direct main"
+    description:
+      name: flutter_map_cache
+      sha256: "4ec2f24db456dddcff3370b73efd7e9b9fddf65b2fb61b76b03185ff2682f026"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.1.0"
   flutter_plugin_android_lifecycle:
     dependency: transitive
     description:
@@ -1216,6 +1232,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.6.0"
+  http_cache_core:
+    dependency: transitive
+    description:
+      name: http_cache_core
+      sha256: d6de4ca6680e70f4eacd79e073d6a73734eb1da86305409e495adfabf404eddf
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.4"
+  http_cache_file_store:
+    dependency: "direct main"
+    description:
+      name: http_cache_file_store
+      sha256: b83bc178226d82a52f56b97801639ff8d94caeaf5464d25cc96082015111f375
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.2"
   http_certificate_pinning:
     dependency: "direct main"
     description:
@@ -1544,6 +1576,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.0"
+  network_info_plus:
+    dependency: "direct main"
+    description:
+      name: network_info_plus
+      sha256: "5bd4b86e28fed5ed4e6ac7764133c031dfb7d3f46aa2a81b46f55038aa78ecc0"
+      url: "https://pub.dev"
+    source: hosted
+    version: "5.0.3"
+  network_info_plus_platform_interface:
+    dependency: transitive
+    description:
+      name: network_info_plus_platform_interface
+      sha256: "7e7496a8a9d8136859b8881affc613c4a21304afeb6c324bcefc4bd0aff6b94b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.2"
   nfc_manager:
     dependency: "direct main"
     description:

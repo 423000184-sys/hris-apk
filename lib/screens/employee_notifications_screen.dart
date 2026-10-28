@@ -20,7 +20,7 @@ import '../widgets/skeleton_screens.dart';
 const String _kLogoAsset = 'assets/images/logo.png';
 
 // ⚠️ CHANGE THIS kung iba ang collection name sa Firestore
-const String _kNotificationsCollection = 'notifications';
+const String _kNotificationsCollection = 'employee_notifications';
 
 double _degToRad(double deg) => deg * 3.1415926535 / 180;
 
@@ -190,8 +190,8 @@ class _EmployeeNotificationsScreenState
         type: 'announcement',
         title: 'System Maintenance',
         message:
-        'Magkakaroon ng scheduled maintenance sa Sabado, 10PM–12AM. '
-            'Paki-log out bago mag 10PM.',
+        'There will be a scheduled maintenance this Saturday, 10PM–12AM. '
+            'Please log out before 10PM.',
         senderName: 'HR Admin',
         timestamp: now.subtract(const Duration(minutes: 3)),
         read: false,
@@ -202,7 +202,7 @@ class _EmployeeNotificationsScreenState
         type: 'payroll',
         title: 'Payslip Available',
         message:
-        'Available na ang payslip mo para sa cut-off na ito. '
+        'Your payslip for this cut-off is now available. '
             'Net pay: ₱22,300.00',
         senderName: 'Payroll Department',
         timestamp: now.subtract(const Duration(hours: 2)),
@@ -212,10 +212,10 @@ class _EmployeeNotificationsScreenState
         id: 'DEMO_NOTIF_003',
         employeeId: widget.employeeId,
         type: 'support_reply',
-        title: 'Reply sa Ticket #1247',
+        title: 'Reply to Ticket #1247',
         message:
-        'Naayos na ang issue mo sa biometric — paki-try ulit ang '
-            'fingerprint enrollment.',
+        'Your biometric issue has been fixed — please try the '
+            'fingerprint enrollment again.',
         senderName: 'IT Support',
         timestamp: now.subtract(const Duration(hours: 5)),
         read: false,
@@ -226,8 +226,8 @@ class _EmployeeNotificationsScreenState
         type: 'reminder',
         title: 'Clock-In Reminder',
         message:
-        'Huwag kalimutang mag clock-in bago mag 9:00 AM para hindi '
-            'ma-markahan ng late.',
+        'Do not forget to clock in before 9:00 AM to avoid being '
+            'marked as late.',
         senderName: 'System',
         timestamp: now.subtract(const Duration(hours: 12)),
         read: true,
@@ -238,8 +238,8 @@ class _EmployeeNotificationsScreenState
         type: 'support_resolved',
         title: 'Ticket Resolved',
         message:
-        'Ang ticket #1189 mo (leave balance discrepancy) ay resolved na. '
-            'Salamat sa pag-report.',
+        'Your ticket #1189 (leave balance discrepancy) has been resolved. '
+            'Thank you for reporting.',
         senderName: 'HR Admin',
         timestamp: now.subtract(const Duration(days: 2)),
         read: true,
@@ -250,7 +250,7 @@ class _EmployeeNotificationsScreenState
         type: 'announcement',
         title: 'Team Building 2026',
         message:
-        'Save the date! Team building sa Baguio sa March 15–16, 2026. '
+        'Save the date! Team building in Baguio on March 15–16, 2026. '
             'Details to follow.',
         senderName: 'Events Committee',
         timestamp: now.subtract(const Duration(days: 5)),
@@ -365,10 +365,32 @@ class _EmployeeNotificationsScreenState
     );
     if (ok != true) return;
 
-    for (final id in ids) {
-      await _deleteOne(id);
+    if (_isDemo) {
+      setState(() {
+        _demoItems.removeWhere((n) => ids.contains(n.id));
+        _selectedIds.clear();
+      });
+      return;
     }
-    if (mounted) setState(() => _selectedIds.clear());
+
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      for (final id in ids) {
+        batch.delete(FirebaseFirestore.instance.collection(_kNotificationsCollection).doc(id));
+      }
+      await batch.commit(); // Sabay-sabay na delete
+      if (mounted) setState(() => _selectedIds.clear());
+    } catch (e) {
+      debugPrint('❌ [Delete] Selected failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to delete selected notifications.'),
+            backgroundColor: Color(0xFFEF4444),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _deleteAll() async {
@@ -389,7 +411,6 @@ class _EmployeeNotificationsScreenState
           .where('employeeId', isEqualTo: widget.employeeId)
           .get();
 
-      // Fallback for snake_case field name
       QuerySnapshot<Map<String, dynamic>>? snap2;
       if (snap.docs.isEmpty) {
         try {
@@ -405,9 +426,15 @@ class _EmployeeNotificationsScreenState
         if (snap2 != null) ...snap2.docs.map((d) => d.reference),
       };
 
+      if (refs.isEmpty) return;
+
+      // 🔥 BATCH DELETE PARA HINDI MAG-HANG
+      final batch = FirebaseFirestore.instance.batch();
       for (final ref in refs) {
-        await ref.delete();
+        batch.delete(ref);
       }
+      await batch.commit();
+
       debugPrint('🗑️ [Delete] Deleted ${refs.length} notifications');
     } catch (e) {
       debugPrint('❌ [Delete] All failed: $e');
@@ -777,13 +804,13 @@ class _EmployeeNotificationsScreenState
             Icon(Icons.notifications_off_outlined,
                 size: 56, color: muted),
             const SizedBox(height: 12),
-            Text('Walang notifications',
+            Text('No notifications',
                 style: TextStyle(fontSize: 15, color: muted)),
             const SizedBox(height: 4),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: Text(
-                'Lalabas dito ang updates mula sa admin — announcements, payslips, reminders.',
+                'Updates from admin will appear here — announcements, payslips, reminders.',
                 style: TextStyle(fontSize: 12, color: muted),
                 textAlign: TextAlign.center,
               ),
@@ -1083,11 +1110,11 @@ class _EmployeeNotificationsScreenState
   String _fmtTime(DateTime d) {
     final now = DateTime.now();
     final diff = now.difference(d);
-    if (diff.inMinutes < 1) return 'Ngayon lang';
+    if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     if (diff.inDays < 7) return '${diff.inDays}d ago';
-    return DateFormat('MMM d, hh:mm a').format(d);
+    return DateFormat('MMM d, hh:mm h a').format(d);
   }
 }
 

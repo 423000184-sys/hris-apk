@@ -1,7 +1,16 @@
 // lib/screens/admin_tracking_page.dart
-// v2.3: 🎭 Demo Mode Support (Mock Zones & Action Blocking)
+// v3.2: 🛡️ WEB SAFETY HARDENING
+//   • _disposed flag guards every setState / map move / navigation
+//   • MapController.move deferred to post-frame to avoid disposed view
+//   • invalidateCache() throttled to 1x per second
+//   • All async operations check _disposed before continuing
+//   • Fixes: "Trying to render a disposed EngineFlutterView"
+// v3.1: 🎯 AUTO EVERYTHING from ADDRESS (geocode → detect → radius)
+// v3.0: 🏢 Building auto-detection via OSM Overpass API
+// v2.3: 🎭 Demo Mode Support
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, debugPrint;
@@ -15,7 +24,7 @@ import '../utils/geo_utils.dart';
 import '../services/geofence_service.dart';
 import '../services/employee_notification_service.dart';
 import '../services/admin_auth_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/demo_mode_service.dart';
 import '../widgets/bootstrap_grid.dart';
 
 class AdminTrackingPage extends StatefulWidget {
@@ -41,7 +50,6 @@ class AdminTrackingPage extends StatefulWidget {
 class _AdminTrackingPageState extends State<AdminTrackingPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -51,6 +59,41 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   }
 
   final MapController _mapController = MapController();
+
+  // 🛡️ Web safety
+  bool _disposed = false;
+  bool get _safe => mounted && !_disposed;
+
+  void _safeSetState(VoidCallback fn) {
+    if (_safe) setState(fn);
+  }
+
+  void _safeMoveMap(LatLng point, double zoom) {
+    if (!_safe) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_safe) return;
+      try {
+        _mapController.move(point, zoom);
+      } catch (e) {
+        if (kDebugMode) debugPrint('⚠️ map move skipped: $e');
+      }
+    });
+  }
+
+  // 🛡️ Throttle cache invalidation (fixes "Cache invalidated" spam)
+  DateTime? _lastCacheInvalidation;
+  void _safeInvalidateCache() {
+    final now = DateTime.now();
+    if (_lastCacheInvalidation != null &&
+        now.difference(_lastCacheInvalidation!) <
+            const Duration(seconds: 1)) {
+      return;
+    }
+    _lastCacheInvalidation = now;
+    try {
+      GeofenceService.instance.invalidateCache();
+    } catch (_) {}
+  }
 
   late double _currentLat;
   late double _currentLng;
@@ -74,18 +117,15 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   final Set<String> _inFlight = <String>{};
   bool _notifyingAll = false;
 
-  // 🎭 DEMO BLOCK HELPER
   void _demoBlock() {
     _snack('Action disabled in Demo Mode.', error: true);
   }
 
-  // 🎭 MOCK ZONES
   List<Map<String, dynamic>> _getMockZones() {
     return [
       {
         'id': 'demo_loc_1',
         'name': 'Main Office (Demo)',
-        'address': '123 Ayala Ave, Makati City',
         'lat': 14.5547,
         'lng': 121.0244,
         'radius': 150.0,
@@ -94,7 +134,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       {
         'id': 'demo_loc_2',
         'name': 'Warehouse (Demo)',
-        'address': '456 Quezon Ave, Quezon City',
         'lat': 14.6760,
         'lng': 121.0437,
         'radius': 200.0,
@@ -123,15 +162,15 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
 
   @override
   void dispose() {
+    _disposed = true;
     _radiusDebounce?.cancel();
+    _radiusDebounce = null;
     _locSub?.cancel();
+    _locSub = null;
     _inFlight.clear();
     super.dispose();
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🔒 SECURITY HELPERS
-  // ══════════════════════════════════════════════════════════════
   static String _sanitize(dynamic raw, {int maxLen = 120}) {
     if (raw == null) return '';
     var s = raw.toString();
@@ -200,9 +239,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // LISTENERS
-  // ══════════════════════════════════════════════════════════════
   void _listenToLocations() {
     _locSub?.cancel();
     _locSub = FirebaseFirestore.instance
@@ -211,25 +247,22 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         .snapshots()
         .listen(
           (snap) {
+        if (!_safe) return;
         final list = snap.docs
             .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
             .toList();
-        if (!mounted) return;
-        setState(() {
+        _safeSetState(() {
           _zones = list;
           _loadingZones = false;
         });
-        if (kDebugMode) {
-          debugPrint('📡 [Tracking] Locations: ${list.length} zone(s)');
-        }
         if (list.isNotEmpty && _selectedLocationIndex >= list.length) {
           _selectedLocationIndex = 0;
         }
       },
       onError: (e) {
         debugPrint('⚠️ [Tracking] locations stream error: $e');
-        if (!mounted) return;
-        setState(() => _loadingZones = false);
+        if (!_safe) return;
+        _safeSetState(() => _loadingZones = false);
       },
     );
   }
@@ -241,10 +274,11 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           .doc('geofence_config')
           .get();
 
+      if (!_safe) return;
+
       if (doc.exists && doc.data() != null) {
         final data = doc.data()!;
-        if (!mounted) return;
-        setState(() {
+        _safeSetState(() {
           _autoClockOut = (data['autoClockOut'] as bool?) ?? false;
           _geofenceViolation =
               (data['geofenceViolation'] as bool?) ?? false;
@@ -263,30 +297,21 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // AUTO-SAVE
-  // ══════════════════════════════════════════════════════════════
   Future<void> _autoSaveConfig() async {
-    if (_isDemo) return; // 🎭 Block in Demo
+    if (!_safe) return;
+    if (_isDemo) return;
     if (!_guard.tryAcquire('autosave_config')) return;
     if (_inFlight.contains('autosave')) return;
 
     final err = await _ensureAdmin();
-    if (err != null) {
-      if (kDebugMode) debugPrint('🚫 [Tracking] Auto-save blocked: $err');
-      return;
-    }
-
-    if (!_isValidRadius(_currentRadius)) {
-      if (kDebugMode) {
-        debugPrint('🚫 [Tracking] Invalid radius — abort auto-save');
-      }
-      return;
-    }
+    if (!_safe) return;
+    if (err != null) return;
+    if (!_isValidRadius(_currentRadius)) return;
 
     _inFlight.add('autosave');
     try {
       final admin = await _currentAdmin();
+      if (!_safe) return;
       await FirebaseFirestore.instance
           .collection('settings')
           .doc('geofence_config')
@@ -300,7 +325,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         'updatedBy': admin?.uid,
       }, SetOptions(merge: true));
 
-      GeofenceService.instance.invalidateCache();
+      _safeInvalidateCache();
     } catch (e) {
       debugPrint('❌ [Admin] Auto-save error: $e');
     } finally {
@@ -308,11 +333,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FORCE SAVE
-  // ══════════════════════════════════════════════════════════════
   Future<void> _saveConfigToFirestore() async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (!_safe) return;
+    if (_isDemo) return _demoBlock();
     if (_inFlight.contains('force_save')) return;
     if (!_guard.tryAcquire('force_save')) {
       _snack('Masyadong mabilis. Please wait a moment.', error: true);
@@ -320,20 +343,21 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
 
     final err = await _ensureAdmin();
+    if (!_safe) return;
     if (err != null) {
       _snack(err, error: true);
       return;
     }
-
     if (!_isValidRadius(_currentRadius)) {
       _snack('Invalid radius value.', error: true);
       return;
     }
 
     _inFlight.add('force_save');
-    setState(() => _isSaving = true);
+    _safeSetState(() => _isSaving = true);
     try {
       final admin = await _currentAdmin();
+      if (!_safe) return;
       await FirebaseFirestore.instance
           .collection('settings')
           .doc('geofence_config')
@@ -347,37 +371,27 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         'updatedBy': admin?.uid,
       }, SetOptions(merge: true));
 
-      GeofenceService.instance.invalidateCache();
+      _safeInvalidateCache();
 
       unawaited(_audit(
         action: 'update_geofence_config',
         targetId: 'geofence_config',
         targetType: 'settings',
-        metadata: {
-          'autoClockOut': _autoClockOut,
-          'geofenceViolation': _geofenceViolation,
-          'entryReminders': _entryReminders,
-          'eventAndHoliday': _eventAndHoliday,
-          'globalRadius': _currentRadius,
-        },
+        metadata: {'globalRadius': _currentRadius},
       ));
 
-      if (!mounted) return;
       _snack('Geofence saved! Radius: ${_currentRadius.toInt()}m');
     } catch (e) {
-      if (!mounted) return;
       _snack(_safeError(e), error: true);
     } finally {
       _inFlight.remove('force_save');
-      if (mounted) setState(() => _isSaving = false);
+      _safeSetState(() => _isSaving = false);
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // HOLIDAY BLAST NOTIFICATION
-  // ══════════════════════════════════════════════════════════════
   Future<void> _sendHolidayNotification() async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (!_safe) return;
+    if (_isDemo) return _demoBlock();
     if (_notifyingAll) return;
     if (!_guard.tryAcquire('holiday_notify')) {
       _snack('Masyadong mabilis.', error: true);
@@ -385,6 +399,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
 
     final err = await _ensureAdmin();
+    if (!_safe) return;
     if (err != null) {
       _snack(err, error: true);
       return;
@@ -397,8 +412,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         title: Text('Send to ALL employees?',
             style: TextStyle(color: tc.text)),
         content: Text(
-          'Ipapadala ang holiday/event announcement sa LAHAT ng '
-              'empleyado. Sigurado ka ba?',
+          'Ipapadala ang holiday/event announcement sa LAHAT ng empleyado. Sigurado ka ba?',
           style: TextStyle(color: tc.text),
         ),
         actions: [
@@ -417,6 +431,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         ],
       ),
     );
+    if (!_safe) return;
     if (ok != true) return;
 
     _notifyingAll = true;
@@ -436,31 +451,26 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         metadata: {'scope': 'all_employees'},
       ));
 
-      if (!mounted) return;
       _snack('✅ Holiday notification sent to ALL employees!');
     } catch (e) {
       debugPrint('❌ [Admin] Holiday notification failed: $e');
-      if (mounted) _snack(_safeError(e), error: true);
+      _snack(_safeError(e), error: true);
     } finally {
       _notifyingAll = false;
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // MAP CONTROLS
-  // ══════════════════════════════════════════════════════════════
   void _moveMapToPosition(double lat, double lng) {
     if (!_isValidLat(lat) || !_isValidLng(lng)) return;
-    _mapController.move(LatLng(lat, lng), 15.5);
+    _safeMoveMap(LatLng(lat, lng), 15.5);
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // CRUD LOCATIONS
-  // ══════════════════════════════════════════════════════════════
   Future<void> _openAddLocationDialog() async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (!_safe) return;
+    if (_isDemo) return _demoBlock();
 
     final err = await _ensureAdmin();
+    if (!_safe) return;
     if (err != null) {
       _snack(err, error: true);
       return;
@@ -474,14 +484,16 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         defaultRadius: _currentRadius,
       ),
     );
+    if (!_safe) return;
     if (created == true) {
-      GeofenceService.instance.invalidateCache();
+      _safeInvalidateCache();
       _snack('Location added successfully!');
     }
   }
 
   Future<void> _openEditLocationDialog(Map<String, dynamic> loc) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (!_safe) return;
+    if (_isDemo) return _demoBlock();
 
     final id = (loc['id'] ?? '').toString();
     if (!_isValidDocId(id)) {
@@ -490,6 +502,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
 
     final err = await _ensureAdmin();
+    if (!_safe) return;
     if (err != null) {
       _snack(err, error: true);
       return;
@@ -499,14 +512,16 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       context: context,
       builder: (_) => _LocationDialog(existing: loc),
     );
+    if (!_safe) return;
     if (updated == true) {
-      GeofenceService.instance.invalidateCache();
+      _safeInvalidateCache();
       _snack('Location updated.');
     }
   }
 
   Future<void> _confirmDeleteLocation(Map<String, dynamic> loc) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (!_safe) return;
+    if (_isDemo) return _demoBlock();
 
     final id = (loc['id'] ?? '').toString();
     if (!_isValidDocId(id)) {
@@ -520,6 +535,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
 
     final err = await _ensureAdmin();
+    if (!_safe) return;
     if (err != null) {
       _snack(err, error: true);
       return;
@@ -556,17 +572,19 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         ],
       ),
     );
+    if (!_safe) return;
     if (ok != true) return;
 
     _inFlight.add('del_$id');
     try {
       final admin = await _currentAdmin();
+      if (!_safe) return;
       await FirebaseFirestore.instance
           .collection('locations')
           .doc(id)
           .delete();
 
-      GeofenceService.instance.invalidateCache();
+      _safeInvalidateCache();
 
       unawaited(_audit(
         action: 'delete_location',
@@ -584,7 +602,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   }
 
   Future<void> _toggleLocationActive(Map<String, dynamic> loc) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (!_safe) return;
+    if (_isDemo) return _demoBlock();
 
     final id = (loc['id'] ?? '').toString();
     if (!_isValidDocId(id)) {
@@ -598,6 +617,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
 
     final err = await _ensureAdmin();
+    if (!_safe) return;
     if (err != null) {
       _snack(err, error: true);
       return;
@@ -607,21 +627,23 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     _inFlight.add('tog_$id');
     try {
       final admin = await _currentAdmin();
-      await FirebaseFirestore.instance.collection('locations').doc(id).update({
+      if (!_safe) return;
+      await FirebaseFirestore.instance
+          .collection('locations')
+          .doc(id)
+          .update({
         'active': !current,
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': admin?.uid,
       });
 
-      GeofenceService.instance.invalidateCache();
+      _safeInvalidateCache();
 
       unawaited(_audit(
         action: !current ? 'enable_location' : 'disable_location',
         targetId: id,
         targetType: 'location',
-        metadata: {
-          'name': _sanitize(loc['name'] ?? '', maxLen: 60),
-        },
+        metadata: {'name': _sanitize(loc['name'] ?? '', maxLen: 60)},
       ));
 
       _snack(!current ? 'Location enabled.' : 'Location disabled.');
@@ -633,7 +655,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   }
 
   void _snack(String msg, {bool error = false}) {
-    if (!mounted) return;
+    if (!_safe) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(_sanitize(msg, maxLen: 200)),
@@ -644,9 +666,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BUILD
-  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -659,7 +678,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 🎭 DEMO BANNER
               if (_isDemo) ...[
                 _buildDemoBanner(),
                 const SizedBox(height: 24),
@@ -679,9 +697,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🎭 DEMO BANNER
-  // ══════════════════════════════════════════════════════════════
   Widget _buildDemoBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -741,7 +756,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           children: [
             Expanded(
               child: Text(
-                'Configure authorized attendance zones. Toggle changes are saved automatically.',
+                'Type an address — the system auto-detects the building size and sets the radius.',
                 style: TextStyle(fontSize: 13, color: tc.muted),
               ),
             ),
@@ -750,12 +765,16 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
               decoration: BoxDecoration(
                 color: _isDemo ? tc.border : tc.green.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: _isDemo ? tc.border : tc.green.withValues(alpha: 0.3)),
+                border: Border.all(
+                    color: _isDemo
+                        ? tc.border
+                        : tc.green.withValues(alpha: 0.3)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.cloud_done_rounded, size: 11, color: _isDemo ? tc.muted : tc.green),
+                  Icon(Icons.cloud_done_rounded,
+                      size: 11, color: _isDemo ? tc.muted : tc.green),
                   const SizedBox(width: 4),
                   Text(_isDemo ? 'AUTO-SAVE OFF' : 'AUTO-SAVE ON',
                       style: TextStyle(
@@ -819,8 +838,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       if (lat == null || lng == null) continue;
       if (!_isValidLat(lat) || !_isValidLng(lng)) continue;
 
-      final color =
-      !active ? Colors.grey : (selected ? tc.orange : tc.blue);
+      final color = !active ? Colors.grey : (selected ? tc.orange : tc.blue);
 
       circles.add(CircleMarker(
         point: LatLng(lat, lng),
@@ -906,8 +924,12 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       children: [
                         InkWell(
                           onTap: () {
-                            _mapController.move(_mapController.camera.center,
-                                _mapController.camera.zoom + 0.5);
+                            if (!_safe) return;
+                            try {
+                              _mapController.move(
+                                  _mapController.camera.center,
+                                  _mapController.camera.zoom + 0.5);
+                            } catch (_) {}
                           },
                           child: SizedBox(
                             width: 32,
@@ -919,8 +941,12 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                         Container(height: 1, width: 32, color: tc.border),
                         InkWell(
                           onTap: () {
-                            _mapController.move(_mapController.camera.center,
-                                _mapController.camera.zoom - 0.5);
+                            if (!_safe) return;
+                            try {
+                              _mapController.move(
+                                  _mapController.camera.center,
+                                  _mapController.camera.zoom - 0.5);
+                            } catch (_) {}
                           },
                           child: SizedBox(
                             width: 32,
@@ -1067,21 +1093,30 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                     thumbColor: _isDemo ? tc.muted : tc.card,
                     thumbShape: const RoundSliderThumbShape(
                         enabledThumbRadius: 8, elevation: 2),
-                    overlayColor: (_isDemo ? tc.muted : tc.orange).withValues(alpha: 0.2),
+                    overlayColor:
+                    (_isDemo ? tc.muted : tc.orange)
+                        .withValues(alpha: 0.2),
                   ),
                   child: Slider(
                     value: _currentRadius.clamp(50.0, 2000.0),
                     min: 50.0,
                     max: 2000.0,
-                    onChanged: _isDemo ? null : (val) {
-                      setState(() => _currentRadius = val);
+                    onChanged: _isDemo
+                        ? null
+                        : (val) {
+                      _safeSetState(() => _currentRadius = val);
                       _radiusDebounce?.cancel();
                       _radiusDebounce = Timer(
                         const Duration(milliseconds: 800),
-                        _autoSaveConfig,
+                            () {
+                          if (!_safe) return;
+                          _autoSaveConfig();
+                        },
                       );
                     },
-                    onChangeEnd: _isDemo ? null : (_) {
+                    onChangeEnd: _isDemo
+                        ? null
+                        : (_) {
                       _radiusDebounce?.cancel();
                       _autoSaveConfig();
                     },
@@ -1166,18 +1201,17 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
 
     final String title =
     _sanitize(loc['name'] ?? 'Unnamed Location', maxLen: 60);
-    final String sub = _sanitize(loc['address'] ?? '', maxLen: 150);
-    final double lat =
-        (loc['lat'] as num?)?.toDouble() ?? widget.officeLat;
-    final double lng =
-        (loc['lng'] as num?)?.toDouble() ?? widget.officeLng;
+    final String address = _sanitize(loc['address'] ?? '', maxLen: 150);
+    final double lat = (loc['lat'] as num?)?.toDouble() ?? widget.officeLat;
+    final double lng = (loc['lng'] as num?)?.toDouble() ?? widget.officeLng;
     final double radius =
         (loc['radius'] as num?)?.toDouble() ?? _currentRadius;
 
     return GestureDetector(
       onTap: () {
+        if (!_safe) return;
         if (!_isValidLat(lat) || !_isValidLng(lng)) return;
-        setState(() {
+        _safeSetState(() {
           _selectedLocationIndex = index;
           _currentLat = lat;
           _currentLng = lng;
@@ -1234,24 +1268,29 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   height: 14,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: isSelected ? (_isDemo ? tc.border : tc.orange) : Colors.transparent,
+                    color: isSelected
+                        ? (_isDemo ? tc.border : tc.orange)
+                        : Colors.transparent,
                     border: Border.all(
-                      color: isSelected ? (_isDemo ? tc.border : tc.orange) : tc.muted,
+                      color: isSelected
+                          ? (_isDemo ? tc.border : tc.orange)
+                          : tc.muted,
                     ),
                   ),
                   child: isSelected
                       ? Icon(Icons.check,
-                      size: 10, color: _isDemo ? tc.muted : Colors.white)
+                      size: 10,
+                      color: _isDemo ? tc.muted : Colors.white)
                       : null,
                 ),
               ],
             ),
-            if (sub.isNotEmpty) ...[
+            if (address.isNotEmpty) ...[
               const SizedBox(height: 2),
-              Text(sub,
+              Text(address,
                   style: TextStyle(fontSize: 11, color: tc.muted),
                   overflow: TextOverflow.ellipsis,
-                  maxLines: 2),
+                  maxLines: 1),
             ],
             const SizedBox(height: 12),
             Row(
@@ -1307,7 +1346,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   icon: isActive
                       ? Icons.toggle_off_rounded
                       : Icons.toggle_on_rounded,
-                  color: _isDemo ? tc.muted : (isActive ? tc.muted : tc.green),
+                  color: _isDemo
+                      ? tc.muted
+                      : (isActive ? tc.muted : tc.green),
                   tooltip: isActive ? 'Disable' : 'Enable',
                   onTap: () => _toggleLocationActive(loc),
                 ),
@@ -1388,8 +1429,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           ),
           const SizedBox(height: 16),
           LayoutBuilder(builder: (context, constraints) {
-            final w =
-            constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
+            final w = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : 800.0;
 
             const double gap = 16;
             final int cols;
@@ -1410,7 +1452,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 subtitle: 'When staff leaves zone',
                 value: _autoClockOut,
                 onChanged: (v) async {
-                  setState(() => _autoClockOut = v);
+                  _safeSetState(() => _autoClockOut = v);
                   await _autoSaveConfig();
                 },
               ),
@@ -1419,7 +1461,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 subtitle: 'Alert admins on deviation',
                 value: _geofenceViolation,
                 onChanged: (v) async {
-                  setState(() => _geofenceViolation = v);
+                  _safeSetState(() => _geofenceViolation = v);
                   await _autoSaveConfig();
                 },
               ),
@@ -1428,7 +1470,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 subtitle: 'Push notice at perimeter',
                 value: _entryReminders,
                 onChanged: (v) async {
-                  setState(() => _entryReminders = v);
+                  _safeSetState(() => _entryReminders = v);
                   await _autoSaveConfig();
                 },
               ),
@@ -1437,9 +1479,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 subtitle: 'When Holiday or Event occurs',
                 value: _eventAndHoliday,
                 onChanged: (v) async {
-                  setState(() => _eventAndHoliday = v);
+                  _safeSetState(() => _eventAndHoliday = v);
                   await _autoSaveConfig();
-                  if (v && !_isDemo) {
+                  if (v && !_isDemo && _safe) {
                     await _sendHolidayNotification();
                   }
                 },
@@ -1471,7 +1513,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         color: tc.card,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: value ? (_isDemo ? tc.border : tc.orange.withValues(alpha: 0.5)) : tc.border,
+          color: value
+              ? (_isDemo ? tc.border : tc.orange.withValues(alpha: 0.5))
+              : tc.border,
           width: value ? 1.5 : 1,
         ),
       ),
@@ -1497,7 +1541,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       height: 6,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: value ? (_isDemo ? tc.muted : tc.green) : tc.muted,
+                        color: value
+                            ? (_isDemo ? tc.muted : tc.green)
+                            : tc.muted,
                       ),
                     ),
                     const SizedBox(width: 4),
@@ -1506,7 +1552,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       style: TextStyle(
                           fontSize: 9,
                           fontWeight: FontWeight.w800,
-                          color: value ? (_isDemo ? tc.muted : tc.green) : tc.muted,
+                          color: value
+                              ? (_isDemo ? tc.muted : tc.green)
+                              : tc.muted,
                           letterSpacing: 0.3),
                     ),
                     const SizedBox(width: 6),
@@ -1525,8 +1573,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           const SizedBox(width: 8),
           Switch(
             value: value,
-            activeColor: _isDemo ? tc.muted : tc.orange,
-            activeTrackColor: (_isDemo ? tc.muted : tc.orange).withValues(alpha: 0.4),
+            activeThumbColor: _isDemo ? tc.muted : tc.orange,
+            activeTrackColor:
+            (_isDemo ? tc.muted : tc.orange).withValues(alpha: 0.4),
             inactiveThumbColor: Colors.white,
             inactiveTrackColor: tc.muted,
             onChanged: _isDemo ? null : onChanged,
@@ -1539,7 +1588,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   Widget _buildActionButtons() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
+        final w =
+        constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
         final narrow = w < 500;
 
         final discardBtn = OutlinedButton(
@@ -1564,7 +1614,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
             backgroundColor: _isDemo ? tc.border : tc.green,
             foregroundColor: _isDemo ? tc.muted : Colors.white,
             elevation: 2,
-            shadowColor: (_isDemo ? tc.border : tc.green).withValues(alpha: 0.3),
+            shadowColor:
+            (_isDemo ? tc.border : tc.green).withValues(alpha: 0.3),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -1575,18 +1626,18 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           onPressed: (_isDemo || _isSaving) ? null : _saveConfigToFirestore,
           icon: _isSaving
               ? const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(
-                strokeWidth: 2, color: Colors.white),
-          )
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white))
               : const Icon(Icons.refresh_rounded, size: 16),
           label: Text(_isSaving ? 'Saving...' : 'Force Sync Now'),
           style: ElevatedButton.styleFrom(
             backgroundColor: _isDemo ? tc.border : tc.orange,
             foregroundColor: _isDemo ? tc.muted : Colors.white,
             elevation: 2,
-            shadowColor: (_isDemo ? tc.border : tc.orange).withValues(alpha: 0.3),
+            shadowColor:
+            (_isDemo ? tc.border : tc.orange).withValues(alpha: 0.3),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -1623,6 +1674,25 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// BUILDING INFO MODEL
+// ══════════════════════════════════════════════════════════════════
+class _BuildingInfo {
+  final LatLng center;
+  final double radiusMeters;
+  final double widthMeters;
+  final double heightMeters;
+  final List<LatLng> outline;
+
+  const _BuildingInfo({
+    required this.center,
+    required this.radiusMeters,
+    required this.widthMeters,
+    required this.heightMeters,
+    required this.outline,
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
 // ADD / EDIT LOCATION DIALOG
 // ══════════════════════════════════════════════════════════════════
 class _LocationDialog extends StatefulWidget {
@@ -1649,21 +1719,48 @@ class _LocationDialogState extends State<_LocationDialog> {
   late final TextEditingController _latCtrl;
   late final TextEditingController _lngCtrl;
   late final TextEditingController _radiusCtrl;
-  bool _saving = false;
 
-  // Map picker
   final MapController _dialogMapCtrl = MapController();
   LatLng? _pickedPoint;
+  _BuildingInfo? _detectedBuilding;
 
-  Timer? _searchDebounce;
-  int _searchGeneration = 0;
+  // 🛡️ Web safety — fixes "disposed EngineFlutterView"
+  bool _disposed = false;
+  bool get _safe => mounted && !_disposed;
+
+  void _safeSetState(VoidCallback fn) {
+    if (_safe) setState(fn);
+  }
+
+  void _safeMoveMap(LatLng point, double zoom) {
+    if (!_safe) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_safe) return;
+      try {
+        _dialogMapCtrl.move(point, zoom);
+      } catch (e) {
+        if (kDebugMode) debugPrint('⚠️ dialog map move skipped: $e');
+      }
+    });
+  }
+
+  // Pipeline status
   bool _searching = false;
+  bool _detecting = false;
   String? _statusText;
   bool _statusIsError = false;
-  bool _autoFilled = false;
+
+  Timer? _addressDebounce;
+  int _pipelineGeneration = 0;
 
   final List<DateTime> _geocodeCalls = [];
   static const int _maxGeocodePerMinute = 10;
+
+  final Map<String, LatLng?> _geocodeCache = {};
+  final Map<String, _BuildingInfo?> _buildingCache = {};
+
+  bool _saving = false;
+  bool _autoFilled = false;
 
   @override
   void initState() {
@@ -1682,16 +1779,11 @@ class _LocationDialogState extends State<_LocationDialog> {
         text: _sanitize(e['name'] ?? '', maxLen: 60));
     _addressCtrl = TextEditingController(
         text: _sanitize(e['address'] ?? '', maxLen: 150));
-
-    final lat =
-        (e['lat'] as num?)?.toDouble() ?? widget.defaultLat ?? 14.598050;
-    final lng =
-        (e['lng'] as num?)?.toDouble() ?? widget.defaultLng ?? 120.989170;
-
     _latCtrl = TextEditingController(
-        text: _isValidLat(lat) ? lat.toStringAsFixed(6) : '14.598050');
+        text: _isValidLat(initLat) ? initLat.toStringAsFixed(6) : '14.598050');
     _lngCtrl = TextEditingController(
-        text: _isValidLng(lng) ? lng.toStringAsFixed(6) : '120.989170');
+        text:
+        _isValidLng(initLng) ? initLng.toStringAsFixed(6) : '120.989170');
 
     final r =
         ((e['radius'] as num?)?.toDouble()) ?? widget.defaultRadius ?? 100;
@@ -1703,7 +1795,10 @@ class _LocationDialogState extends State<_LocationDialog> {
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
+    _disposed = true;
+    _pipelineGeneration++; // cancel all in-flight
+    _addressDebounce?.cancel();
+    _addressDebounce = null;
     _addressCtrl.removeListener(_onAddressChanged);
     _nameCtrl.dispose();
     _addressCtrl.dispose();
@@ -1728,6 +1823,45 @@ class _LocationDialogState extends State<_LocationDialog> {
   static bool _isValidLng(double v) => GeoUtils.isValidLng(v);
   static bool _isValidRadius(double v) => GeoUtils.isValidRadius(v);
 
+  double _haversineMeters(
+      double lat1, double lng1, double lat2, double lng2) {
+    const R = 6371000.0;
+    final dLat = (lat2 - lat1) * math.pi / 180;
+    final dLng = (lng2 - lng1) * math.pi / 180;
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1 * math.pi / 180) *
+            math.cos(lat2 * math.pi / 180) *
+            math.sin(dLng / 2) *
+            math.sin(dLng / 2);
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+  }
+
+  void _onAddressChanged() {
+    if (!_safe) return;
+    final q = _addressCtrl.text.trim();
+    _addressDebounce?.cancel();
+
+    if (q.length < 5) {
+      if (_statusText != null) {
+        _safeSetState(() {
+          _statusText = null;
+          _autoFilled = false;
+        });
+      }
+      return;
+    }
+
+    _addressDebounce = Timer(const Duration(milliseconds: 900), () {
+      if (!_safe) return;
+      _runAutoPipeline(q);
+    });
+
+    _safeSetState(() {
+      _statusText = '⏳ Type more... auto-detect will start in a moment';
+      _statusIsError = false;
+    });
+  }
+
   bool _geocodeRateOk() {
     final now = DateTime.now();
     _geocodeCalls
@@ -1737,181 +1871,302 @@ class _LocationDialogState extends State<_LocationDialog> {
     return true;
   }
 
-  void _onAddressChanged() {
-    final q = _addressCtrl.text.trim();
-    _searchDebounce?.cancel();
+  Future<void> _runAutoPipeline(String rawQuery) async {
+    if (!_safe) return;
+    final cleanQuery = _sanitize(rawQuery, maxLen: 150);
+    if (cleanQuery.length < 5) return;
 
-    if (q.length < 5) {
-      if (mounted && _statusText != null) {
-        setState(() {
-          _statusText = null;
-          _autoFilled = false;
-        });
-      }
+    final myGen = ++_pipelineGeneration;
+
+    _safeSetState(() {
+      _searching = true;
+      _detecting = false;
+      _statusText = '🔍 Searching: "$cleanQuery"...';
+      _statusIsError = false;
+    });
+
+    final latLng = await _geocodeAddress(cleanQuery);
+
+    if (!_safe || myGen != _pipelineGeneration) return;
+
+    if (latLng == null) {
+      _safeSetState(() {
+        _searching = false;
+        _detecting = false;
+        _statusText = '❌ Address not found. Try a more specific one.';
+        _statusIsError = true;
+      });
       return;
     }
 
-    _searchDebounce = Timer(const Duration(milliseconds: 900), () {
-      _autoFillFromAddress(q);
+    _latCtrl.text = latLng.latitude.toStringAsFixed(6);
+    _lngCtrl.text = latLng.longitude.toStringAsFixed(6);
+    _pickedPoint = latLng;
+    _safeMoveMap(latLng, 17.0);
+
+    _safeSetState(() {
+      _searching = false;
+      _detecting = true;
+      _statusText = '🏢 Building found — detecting size...';
+      _statusIsError = false;
     });
 
-    if (mounted) {
-      setState(() {
-        _statusText = '⏳ Hintayin kang matapos mag-type...';
+    final building = await _detectBuildingAt(latLng);
+
+    if (!_safe || myGen != _pipelineGeneration) return;
+
+    if (building != null) {
+      _latCtrl.text = building.center.latitude.toStringAsFixed(6);
+      _lngCtrl.text = building.center.longitude.toStringAsFixed(6);
+      _radiusCtrl.text = building.radiusMeters.toStringAsFixed(0);
+
+      _safeSetState(() {
+        _pickedPoint = building.center;
+        _detectedBuilding = building;
+        _autoFilled = true;
+        _detecting = false;
+        _statusText = '✅ ${building.widthMeters.toStringAsFixed(0)}m × '
+            '${building.heightMeters.toStringAsFixed(0)}m — '
+            'radius auto-set to ${building.radiusMeters.toStringAsFixed(0)}m';
         _statusIsError = false;
+      });
+
+      _safeMoveMap(building.center, 17.0);
+    } else {
+      _radiusCtrl.text = '100';
+      _safeSetState(() {
+        _detectedBuilding = null;
+        _autoFilled = false;
+        _detecting = false;
+        _statusText = '⚠️ Building not in OSM — default 100m applied. '
+            'Adjust radius manually if needed.';
+        _statusIsError = true;
       });
     }
   }
 
-  Future<void> _autoFillFromAddress(String query) async {
+  Future<LatLng?> _geocodeAddress(String query) async {
+    final key = query.toLowerCase().trim();
+    if (_geocodeCache.containsKey(key)) return _geocodeCache[key];
+
     if (!_geocodeRateOk()) {
-      if (mounted) {
-        setState(() {
+      if (_safe) {
+        _safeSetState(() {
           _searching = false;
-          _statusText =
-          '⚠️ Masyadong maraming lookups. Please wait 1 min.';
+          _statusText = '⚠️ Too many lookups. Wait 1 minute.';
           _statusIsError = true;
         });
       }
-      return;
-    }
-
-    final cleanQuery = _sanitize(query, maxLen: 150);
-    if (cleanQuery.length < 5) return;
-
-    final myGen = ++_searchGeneration;
-
-    if (mounted) {
-      setState(() {
-        _searching = true;
-        _statusText = '🔍 Hinahanap: "$cleanQuery"...';
-        _statusIsError = false;
-      });
+      return null;
     }
 
     try {
-      final uri = Uri.https(
-        'nominatim.openstreetmap.org',
-        '/search',
-        {
-          'q': cleanQuery,
-          'format': 'json',
-          'addressdetails': '1',
-          'limit': '1',
-        },
-      );
+      final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+        'q': query,
+        'format': 'json',
+        'addressdetails': '1',
+        'limit': '1',
+      });
 
       final headers = <String, String>{'Accept': 'application/json'};
-      if (!kIsWeb) {
-        headers['User-Agent'] = 'RACOMA-HRIS/1.0';
-      }
+      if (!kIsWeb) headers['User-Agent'] = 'RACOMA-HRIS/1.0';
 
       final response = await http
           .get(uri, headers: headers)
           .timeout(const Duration(seconds: 10));
 
-      if (myGen != _searchGeneration) return;
-
       if (response.statusCode != 200) {
-        if (mounted) {
-          setState(() {
-            _searching = false;
-            _statusText = '❌ Lookup failed (${response.statusCode})';
-            _statusIsError = true;
-          });
-        }
-        return;
+        _geocodeCache[key] = null;
+        return null;
       }
 
       final decoded = jsonDecode(response.body);
       final List<dynamic> list = decoded is List ? decoded : <dynamic>[];
-
       if (list.isEmpty) {
-        if (mounted) {
-          setState(() {
-            _searching = false;
-            _statusText =
-            '❌ Walang nahanap. Try a more specific address.';
-            _statusIsError = true;
-          });
-        }
-        return;
+        _geocodeCache[key] = null;
+        return null;
       }
 
       final first = list.first;
       if (first is! Map) {
-        if (mounted) {
-          setState(() {
-            _searching = false;
-            _statusText = '❌ Invalid response.';
-            _statusIsError = true;
-          });
-        }
-        return;
+        _geocodeCache[key] = null;
+        return null;
       }
 
       final lat = double.tryParse((first['lat'] ?? '').toString());
       final lon = double.tryParse((first['lon'] ?? '').toString());
-
-      if (lat == null ||
-          lon == null ||
-          !_isValidLat(lat) ||
-          !_isValidLng(lon)) {
-        if (mounted) {
-          setState(() {
-            _searching = false;
-            _statusText = '❌ Invalid coordinates sa result.';
-            _statusIsError = true;
-          });
-        }
-        return;
+      if (lat == null || lon == null) {
+        _geocodeCache[key] = null;
+        return null;
+      }
+      if (!_isValidLat(lat) || !_isValidLng(lon)) {
+        _geocodeCache[key] = null;
+        return null;
       }
 
-      if (!mounted || myGen != _searchGeneration) return;
-
-      _latCtrl.text = lat.toStringAsFixed(6);
-      _lngCtrl.text = lon.toStringAsFixed(6);
-
-      _pickedPoint = LatLng(lat, lon);
-      try {
-        _dialogMapCtrl.move(_pickedPoint!, 17.0);
-      } catch (_) {}
-
-      if (_nameCtrl.text.trim().isEmpty) {
-        final addr = first['address'];
-        if (addr is Map) {
-          final shortName = _sanitize(
-            addr['amenity'] ??
-                addr['building'] ??
-                addr['office'] ??
-                addr['shop'] ??
-                addr['road'] ??
-                '',
-            maxLen: 60,
-          );
-          if (shortName.isNotEmpty) _nameCtrl.text = shortName;
-        }
-      }
-
-      setState(() {
-        _searching = false;
-        _autoFilled = true;
-        _statusText = '✅ Auto-filled: '
-            '${lat.toStringAsFixed(4)}, ${lon.toStringAsFixed(4)}';
-        _statusIsError = false;
-      });
+      final result = LatLng(lat, lon);
+      _geocodeCache[key] = result;
+      return result;
     } catch (e) {
       debugPrint('❌ [Geocode] error: $e');
-      if (!mounted || myGen != _searchGeneration) return;
-      setState(() {
-        _searching = false;
-        _statusText = '❌ Network error. Check internet connection.';
+      _geocodeCache[key] = null;
+      return null;
+    }
+  }
+
+  Future<_BuildingInfo?> _detectBuildingAt(LatLng point) async {
+    final cacheKey =
+        '${point.latitude.toStringAsFixed(5)},${point.longitude.toStringAsFixed(5)}';
+    if (_buildingCache.containsKey(cacheKey)) {
+      return _buildingCache[cacheKey];
+    }
+
+    try {
+      final query = '''
+[out:json][timeout:12];
+(
+  way(around:60,${point.latitude},${point.longitude})["building"];
+);
+out geom;
+''';
+
+      final response = await http
+          .post(
+        Uri.parse('https://overpass-api.de/api/interpreter'),
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'data=${Uri.encodeComponent(query)}',
+      )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode != 200) {
+        _buildingCache[cacheKey] = null;
+        return null;
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final elements = json['elements'] as List?;
+      if (elements == null || elements.isEmpty) {
+        _buildingCache[cacheKey] = null;
+        return null;
+      }
+
+      _BuildingInfo? nearest;
+      double nearestDist = double.infinity;
+
+      for (final el in elements) {
+        final geometry = el['geometry'] as List?;
+        if (geometry == null || geometry.length < 3) continue;
+
+        final points = <LatLng>[];
+        double minLat = double.infinity, maxLat = -double.infinity;
+        double minLng = double.infinity, maxLng = -double.infinity;
+
+        for (final node in geometry) {
+          if (node is! Map) continue;
+          final lat = (node['lat'] as num?)?.toDouble();
+          final lng = (node['lon'] as num?)?.toDouble();
+          if (lat == null || lng == null) continue;
+
+          points.add(LatLng(lat, lng));
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+          if (lng < minLng) minLng = lng;
+          if (lng > maxLng) maxLng = lng;
+        }
+
+        if (points.isEmpty) continue;
+
+        final centerLat = (minLat + maxLat) / 2;
+        final centerLng = (minLng + maxLng) / 2;
+        final center = LatLng(centerLat, centerLng);
+
+        final dist = _haversineMeters(
+            point.latitude, point.longitude, centerLat, centerLng);
+
+        final midLat = (minLat + maxLat) / 2;
+        final midLng = (minLng + maxLng) / 2;
+
+        final widthM = _haversineMeters(midLat, minLng, midLat, maxLng);
+        final heightM = _haversineMeters(minLat, midLng, maxLat, midLng);
+
+        final halfDiag =
+            math.sqrt(widthM * widthM + heightM * heightM) / 2;
+        final radius = (halfDiag + 10).clamp(30.0, 2000.0);
+
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearest = _BuildingInfo(
+            center: center,
+            radiusMeters: radius,
+            widthMeters: widthM,
+            heightMeters: heightM,
+            outline: points,
+          );
+        }
+      }
+
+      _buildingCache[cacheKey] = nearest;
+      return nearest;
+    } catch (e) {
+      debugPrint('❌ [Overpass] error: $e');
+      _buildingCache[cacheKey] = null;
+      return null;
+    }
+  }
+
+  Future<void> _onMapTapped(LatLng tapPos) async {
+    if (!_safe) return;
+    if (!GeoUtils.isValidLat(tapPos.latitude) ||
+        !GeoUtils.isValidLng(tapPos.longitude)) {
+      return;
+    }
+
+    final myGen = ++_pipelineGeneration;
+
+    _safeSetState(() {
+      _pickedPoint = tapPos;
+      _latCtrl.text = tapPos.latitude.toStringAsFixed(6);
+      _lngCtrl.text = tapPos.longitude.toStringAsFixed(6);
+      _detectedBuilding = null;
+      _detecting = true;
+      _statusText = '🏢 Detecting building at tapped point...';
+      _statusIsError = false;
+    });
+
+    final building = await _detectBuildingAt(tapPos);
+
+    if (!_safe || myGen != _pipelineGeneration) return;
+
+    if (building != null) {
+      _latCtrl.text = building.center.latitude.toStringAsFixed(6);
+      _lngCtrl.text = building.center.longitude.toStringAsFixed(6);
+      _radiusCtrl.text = building.radiusMeters.toStringAsFixed(0);
+
+      _safeSetState(() {
+        _pickedPoint = building.center;
+        _detectedBuilding = building;
+        _autoFilled = true;
+        _detecting = false;
+        _statusText = '✅ ${building.widthMeters.toStringAsFixed(0)}m × '
+            '${building.heightMeters.toStringAsFixed(0)}m — '
+            'radius auto-set to ${building.radiusMeters.toStringAsFixed(0)}m';
+        _statusIsError = false;
+      });
+
+      _safeMoveMap(building.center, 17.0);
+    } else {
+      _safeSetState(() {
+        _detectedBuilding = null;
+        _autoFilled = false;
+        _detecting = false;
+        _statusText = '⚠️ No building here — adjust radius manually.';
         _statusIsError = true;
       });
     }
   }
 
   Future<void> _save() async {
+    if (!_safe) return;
     if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
 
@@ -1938,18 +2193,18 @@ class _LocationDialogState extends State<_LocationDialog> {
       return;
     }
 
-    setState(() => _saving = true);
+    _safeSetState(() => _saving = true);
     try {
       final name = _sanitize(_nameCtrl.text.trim(), maxLen: 60);
       final address = _sanitize(_addressCtrl.text.trim(), maxLen: 150);
 
       if (name.isEmpty) {
         _showError('Location name required.');
-        setState(() => _saving = false);
+        _safeSetState(() => _saving = false);
         return;
       }
 
-      final data = {
+      final data = <String, dynamic>{
         'name': name,
         'address': address,
         'lat': lat,
@@ -1959,6 +2214,14 @@ class _LocationDialogState extends State<_LocationDialog> {
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': admin.uid,
       };
+
+      if (_detectedBuilding != null) {
+        data['buildingWidthM'] = _detectedBuilding!.widthMeters;
+        data['buildingHeightM'] = _detectedBuilding!.heightMeters;
+        data['autoSizedRadius'] = true;
+      } else {
+        data['autoSizedRadius'] = false;
+      }
 
       if (widget.existing == null) {
         final ref = await FirebaseFirestore.instance
@@ -1974,9 +2237,9 @@ class _LocationDialogState extends State<_LocationDialog> {
           targetId: ref.id,
           metadata: {
             'name': name,
-            'lat': lat,
-            'lng': lng,
+            'address': address,
             'radius': radius,
+            'autoSized': _detectedBuilding != null,
           },
           actorUid: admin.uid,
         ));
@@ -1984,7 +2247,7 @@ class _LocationDialogState extends State<_LocationDialog> {
         final id = widget.existing!['id'].toString();
         if (id.isEmpty || id.length > 1500 || id.contains('/')) {
           _showError('Invalid location reference.');
-          setState(() => _saving = false);
+          _safeSetState(() => _saving = false);
           return;
         }
 
@@ -1998,19 +2261,19 @@ class _LocationDialogState extends State<_LocationDialog> {
           targetId: id,
           metadata: {
             'name': name,
-            'lat': lat,
-            'lng': lng,
+            'address': address,
             'radius': radius,
+            'autoSized': _detectedBuilding != null,
           },
           actorUid: admin.uid,
         ));
       }
 
-      if (!mounted) return;
-      Navigator.pop(context, true);
+      if (!_safe) return;
+      Navigator.of(context).pop(true);
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _saving = false);
+      if (!_safe) return;
+      _safeSetState(() => _saving = false);
       _showError(kDebugMode ? 'Failed: $e' : 'Failed to save. Try again.');
     }
   }
@@ -2037,7 +2300,7 @@ class _LocationDialogState extends State<_LocationDialog> {
   }
 
   void _showError(String msg) {
-    if (!mounted) return;
+    if (!_safe) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(_sanitize(msg, maxLen: 200)),
@@ -2060,7 +2323,7 @@ class _LocationDialogState extends State<_LocationDialog> {
             const SizedBox(width: 4),
             Expanded(
               child: Text(
-                'I-TAP ang mapa para i-set ang EXACT location ng building.',
+                'I-tap ang mapa para i-override — auto-detect pa rin ang building.',
                 style: TextStyle(fontSize: 10.5, color: tc.muted),
               ),
             ),
@@ -2068,95 +2331,186 @@ class _LocationDialogState extends State<_LocationDialog> {
         ),
         const SizedBox(height: 6),
         Container(
-          height: 220,
+          height: 240,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: tc.border),
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: FlutterMap(
-              mapController: _dialogMapCtrl,
-              options: MapOptions(
-                initialCenter: center,
-                initialZoom: 17.0,
-                onTap: (tapPos, latLng) {
-                  if (!GeoUtils.isValidLat(latLng.latitude) ||
-                      !GeoUtils.isValidLng(latLng.longitude)) {
-                    return;
-                  }
-                  setState(() {
-                    _pickedPoint = latLng;
-                    _latCtrl.text = latLng.latitude.toStringAsFixed(6);
-                    _lngCtrl.text = latLng.longitude.toStringAsFixed(6);
-                    _statusText = '📍 Pinned: '
-                        '${latLng.latitude.toStringAsFixed(5)}, '
-                        '${latLng.longitude.toStringAsFixed(5)}';
-                    _statusIsError = false;
-                    _autoFilled = false;
-                  });
-                },
-              ),
+            child: Stack(
               children: [
-                TileLayer(
-                  urlTemplate:
-                  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.hris.biometrics',
+                FlutterMap(
+                  mapController: _dialogMapCtrl,
+                  options: MapOptions(
+                    initialCenter: center,
+                    initialZoom: 17.0,
+                    onTap: (tapPos, latLng) => _onMapTapped(latLng),
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.hris.biometrics',
+                    ),
+                    if (_detectedBuilding != null)
+                      PolygonLayer(
+                        polygons: [
+                          Polygon(
+                            points: _detectedBuilding!.outline,
+                            color: Colors.blue.withValues(alpha: 0.20),
+                            borderColor: Colors.blue,
+                            borderStrokeWidth: 2,
+                          ),
+                        ],
+                      ),
+                    if (_pickedPoint != null)
+                      CircleLayer(
+                        circles: [
+                          CircleMarker(
+                            point: _pickedPoint!,
+                            radius: radius,
+                            useRadiusInMeter: true,
+                            color: tc.orange.withValues(alpha: 0.18),
+                            borderColor: tc.orange,
+                            borderStrokeWidth: 2,
+                          ),
+                        ],
+                      ),
+                    if (_pickedPoint != null)
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: _pickedPoint!,
+                            width: 40,
+                            height: 40,
+                            child: Icon(Icons.location_on,
+                                color: tc.orange, size: 38),
+                          ),
+                        ],
+                      ),
+                  ],
                 ),
-                if (_pickedPoint != null) ...[
-                  CircleLayer(
-                    circles: [
-                      CircleMarker(
-                        point: _pickedPoint!,
-                        radius: radius,
-                        useRadiusInMeter: true,
-                        color: tc.orange.withValues(alpha: 0.18),
-                        borderColor: tc.orange,
-                        borderStrokeWidth: 2,
+                if (_searching || _detecting)
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.3),
+                      child: Center(
+                        child: Card(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 12),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  _searching
+                                      ? 'Searching address...'
+                                      : 'Detecting building...',
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
-                    ],
+                    ),
                   ),
-                  MarkerLayer(
-                    markers: [
-                      Marker(
-                        point: _pickedPoint!,
-                        width: 40,
-                        height: 40,
-                        child: Icon(Icons.location_on,
-                            color: tc.orange, size: 38),
-                      ),
-                    ],
-                  ),
-                ],
               ],
             ),
           ),
         ),
         const SizedBox(height: 6),
+        _buildStatusLine(tc),
+        const SizedBox(height: 4),
         Row(
           children: [
             TextButton.icon(
               onPressed: () {
+                if (!_safe) return;
                 if (_pickedPoint == null) return;
-                try {
-                  _dialogMapCtrl.move(_pickedPoint!, 18.0);
-                } catch (_) {}
+                _safeMoveMap(_pickedPoint!, 18.0);
               },
               icon: const Icon(Icons.my_location, size: 14),
-              label: const Text('Recenter',
-                  style: TextStyle(fontSize: 11)),
+              label:
+              const Text('Recenter', style: TextStyle(fontSize: 11)),
               style: TextButton.styleFrom(
                 foregroundColor: tc.orange,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: const Size(0, 32),
               ),
             ),
-            const Spacer(),
-            Text(
-              'I-verify sa Google Maps kung tama ang pin.',
-              style: TextStyle(fontSize: 10, color: tc.muted),
-            ),
+            if (_detectedBuilding != null) ...[
+              const SizedBox(width: 4),
+              TextButton.icon(
+                onPressed: () {
+                  if (!_safe) return;
+                  _safeSetState(() {
+                    _detectedBuilding = null;
+                    _statusText = null;
+                  });
+                },
+                icon: const Icon(Icons.clear, size: 14),
+                label: const Text('Clear outline',
+                    style: TextStyle(fontSize: 11)),
+                style: TextButton.styleFrom(
+                  foregroundColor: tc.muted,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 32),
+                ),
+              ),
+            ],
           ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatusLine(AdminColors tc) {
+    final text = _statusText;
+    if (text == null) {
+      return Row(
+        children: [
+          Icon(Icons.auto_awesome_rounded, size: 12, color: tc.orange),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              'AUTO-DETECT: I-type ang address → radius auto-set.',
+              style: TextStyle(fontSize: 10.5, color: tc.muted),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      children: [
+        Icon(
+          _statusIsError
+              ? Icons.warning_amber_rounded
+              : Icons.check_circle_outline,
+          size: 12,
+          color: _statusIsError ? tc.orange : tc.green,
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            _sanitize(text, maxLen: 200),
+            style: TextStyle(
+              fontSize: 10.5,
+              color: _statusIsError ? tc.orange : tc.green,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ),
       ],
     );
@@ -2196,13 +2550,13 @@ class _LocationDialogState extends State<_LocationDialog> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'I-type ang address — auto-fill ang lat/lng, tapos i-tap ang mapa para i-fine-tune.',
+                  'I-type ang address — auto-detect ang building at radius.',
                   style: TextStyle(color: tc.muted, fontSize: 12),
                 ),
                 const SizedBox(height: 20),
 
                 _label('LOCATION NAME', tc),
-                _field(_nameCtrl, 'e.g. Head Office',
+                _field(_nameCtrl, 'e.g. Head Office / SM Mall',
                     maxLength: 60,
                     validator: (v) {
                       final t = (v ?? '').trim();
@@ -2213,15 +2567,12 @@ class _LocationDialogState extends State<_LocationDialog> {
 
                 const SizedBox(height: 14),
 
-                _label('ADDRESS', tc),
+                _label('ADDRESS (AUTO-DETECT)', tc),
                 _buildAddressField(tc),
 
-                const SizedBox(height: 6),
-                _buildStatusLine(tc),
+                const SizedBox(height: 16),
 
-                const SizedBox(height: 14),
-
-                _label('PIN SA MAPA (RECOMMENDED)', tc),
+                _label('MAP PREVIEW', tc),
                 _buildMapPicker(tc),
                 const SizedBox(height: 14),
 
@@ -2274,9 +2625,7 @@ class _LocationDialogState extends State<_LocationDialog> {
                               validator: (v) {
                                 final n = double.tryParse((v ?? '').trim());
                                 if (n == null) return 'Invalid';
-                                if (n < -180 || n > 180) {
-                                  return '-180 to 180';
-                                }
+                                if (n < -180 || n > 180) return '-180 to 180';
                                 return null;
                               }),
                         ],
@@ -2287,19 +2636,77 @@ class _LocationDialogState extends State<_LocationDialog> {
 
                 const SizedBox(height: 14),
 
-                _label('RADIUS (meters)', tc),
+                Row(
+                  children: [
+                    Expanded(child: _label('RADIUS (meters)', tc)),
+                    if (_detectedBuilding != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: tc.green.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.auto_awesome_rounded,
+                                size: 9, color: tc.green),
+                            const SizedBox(width: 2),
+                            Text('AUTO',
+                                style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w800,
+                                    color: tc.green,
+                                    letterSpacing: 0.5)),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
                 _field(_radiusCtrl, '100',
                     keyboardType: TextInputType.number,
                     maxLength: 5,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                    ],
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     validator: (v) {
                       final n = double.tryParse((v ?? '').trim());
                       if (n == null) return 'Enter a number';
                       if (n < 20 || n > 5000) return '20 - 5000 only';
                       return null;
                     }),
+
+                if (_detectedBuilding != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border:
+                      Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.business_rounded,
+                            size: 14, color: Colors.blue),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Building: '
+                                '${_detectedBuilding!.widthMeters.toStringAsFixed(0)}m × '
+                                '${_detectedBuilding!.heightMeters.toStringAsFixed(0)}m '
+                                '(longest ${math.max(_detectedBuilding!.widthMeters, _detectedBuilding!.heightMeters).toStringAsFixed(0)}m)',
+                            style: const TextStyle(
+                                color: Color(0xFF1565C0),
+                                fontSize: 11,
+                                height: 1.4,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
 
                 const SizedBox(height: 12),
 
@@ -2317,7 +2724,7 @@ class _LocationDialogState extends State<_LocationDialog> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Employees na WFH o Company Drivers ay exempted dito.',
+                          'WFH at Company Drivers ay exempted sa geofence.',
                           style: TextStyle(
                               color: tc.text, fontSize: 11, height: 1.4),
                         ),
@@ -2333,7 +2740,7 @@ class _LocationDialogState extends State<_LocationDialog> {
                   children: [
                     TextButton(
                       onPressed:
-                      _saving ? null : () => Navigator.pop(context),
+                      _saving ? null : () => Navigator.of(context).pop(),
                       child:
                       Text('Cancel', style: TextStyle(color: tc.muted)),
                     ),
@@ -2389,12 +2796,12 @@ class _LocationDialogState extends State<_LocationDialog> {
       style: TextStyle(color: tc.text, fontSize: 14),
       cursorColor: tc.orange,
       decoration: InputDecoration(
-        hintText: 'e.g. 629 J. Nepomuceno St, Quiapo, Manila',
+        hintText: 'e.g. SM Mall of Asia, Pasay City',
         hintStyle: TextStyle(color: tc.muted, fontSize: 13),
         counterText: '',
         filled: true,
         fillColor: tc.surface,
-        suffixIcon: _searching
+        suffixIcon: (_searching || _detecting)
             ? Padding(
           padding: const EdgeInsets.only(right: 12),
           child: SizedBox(
@@ -2406,13 +2813,19 @@ class _LocationDialogState extends State<_LocationDialog> {
         )
             : (_addressCtrl.text.trim().isNotEmpty
             ? IconButton(
-          icon: Icon(Icons.close_rounded,
-              size: 16, color: tc.muted),
+          icon:
+          Icon(Icons.close_rounded, size: 16, color: tc.muted),
           onPressed: () {
+            if (!_safe) return;
             _addressCtrl.clear();
-            setState(() {
+            _addressDebounce?.cancel();
+            _pipelineGeneration++;
+            _safeSetState(() {
               _statusText = null;
               _autoFilled = false;
+              _detectedBuilding = null;
+              _searching = false;
+              _detecting = false;
             });
           },
         )
@@ -2432,45 +2845,6 @@ class _LocationDialogState extends State<_LocationDialog> {
           borderSide: BorderSide(color: tc.orange, width: 1.5),
         ),
       ),
-    );
-  }
-
-  Widget _buildStatusLine(AdminColors tc) {
-    final text = _statusText;
-    if (text == null) {
-      return Row(
-        children: [
-          Icon(Icons.auto_fix_high_rounded, size: 12, color: tc.orange),
-          const SizedBox(width: 4),
-          Expanded(
-            child: Text(
-              'AUTO-FILL: I-type ang address → kusang lalabas ang lat/lng',
-              style: TextStyle(fontSize: 10.5, color: tc.muted),
-            ),
-          ),
-        ],
-      );
-    }
-
-    return Row(
-      children: [
-        Icon(
-          _statusIsError ? Icons.error_outline : Icons.check_circle_outline,
-          size: 12,
-          color: _statusIsError ? tc.red : tc.green,
-        ),
-        const SizedBox(width: 4),
-        Expanded(
-          child: Text(
-            _sanitize(text, maxLen: 150),
-            style: TextStyle(
-              fontSize: 10.5,
-              color: _statusIsError ? tc.red : tc.green,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ],
     );
   }
 
