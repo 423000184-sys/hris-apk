@@ -1,7 +1,7 @@
 // lib/screens/landing_screen.dart
-// v2.5: 🔒 REMOVED visible Admin Login buttons
-//       🔑 Added Secret Keyboard Shortcut: Ctrl + Shift + A
-//       🕵️ Kept 5-tap / Long-press on logo as fallback
+// v2.6: 🎭 Demo Mode now requires admin-approved access code
+//       → Opens DemoRequestScreen instead of starting demo directly
+//       🔒 All security features preserved (session lock, hidden admin, etc.)
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -11,12 +11,12 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../models/employee.dart';
-import '../services/demo_mode_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/security_service.dart';
 import '../services/session_lock_service.dart';
 import '../widgets/bootstrap_grid.dart';
 import 'admin_login_screen.dart';
+import 'demo_request_screen.dart'; // 🆕
 import 'login_screen.dart';
 import 'main_screen.dart';
 
@@ -726,7 +726,7 @@ class _LandingScreenState extends State<LandingScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🎭 DEMO MODE — REQUIRES INTERNET
+  // 🎭 DEMO MODE — REQUIRES INTERNET + ADMIN APPROVAL
   // ═══════════════════════════════════════════════════════════════════════
   Future<void> _openDemoMode() async {
     if (_isNavigating) return;
@@ -757,24 +757,22 @@ class _LandingScreenState extends State<LandingScreen>
         } catch (_) {}
       }
 
-      await DemoModeService.instance.startDemoSession();
-
-      _secureLog('🎭 Demo mode activated — routing to LOGIN SCREEN');
-
       try {
         await _logSecurityEvent(
-          type: 'demo_mode_activated',
+          type: 'demo_request_opened',
           severity: 'info',
-          details: 'User entered DEMO MODE from landing screen',
+          details: 'User opened demo access request screen',
         );
       } catch (_) {}
 
       if (!mounted) return;
 
+      // ✅ Opens DemoRequestScreen — the actual DemoModeService.startDemoSession()
+      //    is called inside after successful code redemption.
       await Navigator.of(context, rootNavigator: true).push(
         MaterialPageRoute(
-          builder: (_) => const LoginScreen(),
-          settings: const RouteSettings(name: '/login-demo'),
+          builder: (_) => const DemoRequestScreen(),
+          settings: const RouteSettings(name: '/demo-request'),
         ),
       );
     } catch (e) {
@@ -1228,13 +1226,13 @@ class _LandingScreenState extends State<LandingScreen>
               if (_deviceCompromised) ...[
                 const SizedBox(width: 12),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 4),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: Colors.red.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                        color: Colors.red.withValues(alpha: 0.5)),
+                    border:
+                    Border.all(color: Colors.red.withValues(alpha: 0.5)),
                   ),
                   child: const Row(
                     children: [
@@ -1318,8 +1316,8 @@ class _LandingScreenState extends State<LandingScreen>
               GestureDetector(
                 onTap: _goToLogin,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 4),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: Colors.white, width: 1),

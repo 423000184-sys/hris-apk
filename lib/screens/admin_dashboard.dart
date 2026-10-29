@@ -1,11 +1,13 @@
 // lib/screens/admin_dashboard.dart
-// v1.5: 🧭 LAHAT ng navigation items ay inilagay na sa Left Sidebar (navItems).
-//       🔇 Removed Live Presence and Password Requests from nav & menus.
-//       🐛 Fixed "Assign Client Meeting" routing to tab 8 (was tab 7).
+// v1.7: 🎭 Demo Requests tab + live pending badge + email-failed alert.
+//       🔔 AppBar warning icon when email delivery issues exist.
+//       🧭 All existing nav items preserved.
 import 'dart:async';
 import 'dart:math' show sin, cos, asin, sqrt, pi;
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import 'admin_database.dart';
 import 'admin_theme.dart';
 import 'admin_attendance_page.dart' as attendance;
@@ -24,6 +26,7 @@ import 'admin_add_client_location_page.dart';
 import 'admin_login_screen.dart';
 import 'admin_presence_monitor_screen.dart';
 import 'admin_password_change_requests_page.dart';
+import 'admin_demo_requests_screen.dart';
 
 import '../widgets/admin_notification_bell.dart';
 import '../services/employee_notification_service.dart';
@@ -35,7 +38,6 @@ import '../services/presence_backup_service.dart';
 import '../services/notification_backup_service.dart';
 import 'notification_backup_list_page.dart';
 
-// 🆕 IMPORT ONESIGNAL SENDER
 import '../services/onesignal_sender.dart';
 
 class _AdminNavItem {
@@ -81,6 +83,19 @@ class AdminDashboardState extends State<AdminDashboard>
   StreamSubscription? _attendanceSub;
   StreamSubscription? _locSub;
 
+  // 🆕 Demo-request pending badge
+  int _pendingDemoRequests = 0;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _demoReqSub;
+
+  // 🆕 Email-failed alert
+  int _emailFailedDemoRequests = 0;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+  _demoReqFailedSub;
+
+  // 🆕 Demo Requests filter state
+  String _demoReqInitialFilter = 'pending';
+  int _demoReqScreenRefreshKey = 0;
+
   String? _verifyLogId;
   Map<String, dynamic>? _verifyLogData;
   Map<String, dynamic>? _selectedPayrollEmployee;
@@ -89,7 +104,6 @@ class AdminDashboardState extends State<AdminDashboard>
 
   AdminColors get _c => ThemeProvider.instance.colors;
 
-  // ── Demo mode accessor (single source of truth) ──
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
   static const double officeLat = 14.6114;
@@ -97,7 +111,7 @@ class AdminDashboardState extends State<AdminDashboard>
   static const double radiusLimit = 1500.0;
 
   // ═══════════════════════════════════════════════════════════════
-  // DEMO DATA — realistic-looking samples used when _isDemo is true
+  // DEMO DATA
   // ═══════════════════════════════════════════════════════════════
   static final List<Map<String, dynamic>> _demoEmployees = [
     {
@@ -150,7 +164,8 @@ class AdminDashboardState extends State<AdminDashboard>
       'name': 'Maria Santos',
       'type': 'IN',
       'status': 'On Time',
-      'timestamp': DateTime.now().subtract(const Duration(hours: 7, minutes: 30)),
+      'timestamp': DateTime.now()
+          .subtract(const Duration(hours: 7, minutes: 30)),
     },
     {
       'id': 'demo-log-003',
@@ -205,7 +220,7 @@ class AdminDashboardState extends State<AdminDashboard>
   ];
 
   // ═══════════════════════════════════════════════════════════════
-  // NAV ITEMS — LAHAT NG TABS AY NANDITO NA PARA SA SIDEBAR
+  // NAV ITEMS
   // ═══════════════════════════════════════════════════════════════
   static const List<_AdminNavItem> _navItems = [
     _AdminNavItem(0, 'Overview', Icons.grid_view_rounded),
@@ -215,10 +230,11 @@ class AdminDashboardState extends State<AdminDashboard>
     _AdminNavItem(4, 'Activity', Icons.checklist_rounded),
     _AdminNavItem(5, 'Tracking', Icons.location_on_rounded),
     _AdminNavItem(6, 'Payroll', Icons.receipt_long_rounded),
-    _AdminNavItem(7, 'Presence Monitor', Icons.security_rounded), // 🆕 Added
-    _AdminNavItem(8, 'Client Meeting', Icons.assignment_ind_rounded), // 🆕 Added
-    _AdminNavItem(9, 'Client Location', Icons.add_location_alt_rounded), // 🆕 Added
-    _AdminNavItem(15, 'Password Requests', Icons.password_rounded), // 🆕 Added
+    _AdminNavItem(7, 'Presence Monitor', Icons.security_rounded),
+    _AdminNavItem(8, 'Client Meeting', Icons.assignment_ind_rounded),
+    _AdminNavItem(9, 'Client Location', Icons.add_location_alt_rounded),
+    _AdminNavItem(15, 'Password Requests', Icons.password_rounded),
+    _AdminNavItem(16, 'Demo Requests', Icons.vpn_key_rounded),
   ];
 
   String get _searchHint {
@@ -241,6 +257,8 @@ class AdminDashboardState extends State<AdminDashboard>
         return 'Search not available here';
       case 15:
         return 'Search password change requests...';
+      case 16:
+        return 'Search demo requests...';
       default:
         return 'Search...';
     }
@@ -284,18 +302,64 @@ class AdminDashboardState extends State<AdminDashboard>
 
     ThemeProvider.instance.addListener(_onThemeChanged);
 
-    // 🎭 DEMO MODE: load sample data, DO NOT touch Firestore / Auth
     if (_isDemo) {
       _loadDemoData();
     } else {
       NotificationBackupService.instance.init();
       _loadEmployees();
       _setupStreams();
+      _watchPendingDemoRequests();
+      _watchEmailFailedDemoRequests();
     }
 
     _searchFocus.addListener(() {
       if (mounted) setState(() {});
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🆕 DEMO-REQUEST WATCHERS
+  // ═══════════════════════════════════════════════════════════════
+  void _watchPendingDemoRequests() {
+    if (_isDemo) return;
+    try {
+      _demoReqSub = FirebaseFirestore.instance
+          .collection('demo_requests')
+          .where('status', isEqualTo: 'pending')
+          .snapshots()
+          .listen(
+            (snap) {
+          if (mounted) {
+            setState(() => _pendingDemoRequests = snap.docs.length);
+          }
+        },
+        onError: (e) => debugPrint('Demo request watch error: $e'),
+      );
+    } catch (e) {
+      debugPrint('Demo request watch failed: $e');
+    }
+  }
+
+  void _watchEmailFailedDemoRequests() {
+    if (_isDemo) return;
+    try {
+      _demoReqFailedSub = FirebaseFirestore.instance
+          .collection('demo_requests')
+          .where('status', isEqualTo: 'email_failed')
+          .snapshots()
+          .listen(
+            (snap) {
+          if (mounted) {
+            setState(
+                    () => _emailFailedDemoRequests = snap.docs.length);
+          }
+        },
+        onError: (e) =>
+            debugPrint('Email-failed demo watch error: $e'),
+      );
+    } catch (e) {
+      debugPrint('Email-failed demo watch failed: $e');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -345,6 +409,8 @@ class AdminDashboardState extends State<AdminDashboard>
     _empSub?.cancel();
     _attendanceSub?.cancel();
     _locSub?.cancel();
+    _demoReqSub?.cancel();
+    _demoReqFailedSub?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -395,6 +461,24 @@ class AdminDashboardState extends State<AdminDashboard>
     setState(() {
       _tab = index;
       _search = '';
+      _selectedPayrollEmployee = null;
+      if (_showCreateLeave) _showCreateLeave = false;
+      if (index == 16) {
+        // Reset filter + force refresh
+        _demoReqInitialFilter = 'pending';
+        _demoReqScreenRefreshKey++;
+      }
+    });
+  }
+
+  // 🆕 Open Demo Requests tab with specific filter pre-selected
+  void _openDemoRequestsWithFilter(String filter) {
+    setState(() {
+      _demoReqInitialFilter = filter;
+      _demoReqScreenRefreshKey++;
+      _tab = 16;
+      _search = '';
+      _searchCtrl.clear();
       _selectedPayrollEmployee = null;
       if (_showCreateLeave) _showCreateLeave = false;
     });
@@ -458,7 +542,6 @@ class AdminDashboardState extends State<AdminDashboard>
 
     if (confirm != true) return;
 
-    // 🎭 Exit demo first (before signOut), kung naka-demo
     if (_isDemo) {
       await DemoModeService.instance.endDemoSession();
     } else {
@@ -482,7 +565,7 @@ class AdminDashboardState extends State<AdminDashboard>
     String selectedType = 'announcement';
     String selectedRecipient = 'ALL';
     String selectedPriority = 'normal';
-    bool isSending = false; // 🆕 Loading state habang nagpapadala
+    bool isSending = false;
 
     InputDecoration dropDeco(String hint) => InputDecoration(
       filled: true,
@@ -530,7 +613,7 @@ class AdminDashboardState extends State<AdminDashboard>
 
     showDialog(
       context: context,
-      barrierDismissible: false, // 🆕 Iwasan ma-close habang nagpapadala
+      barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlgState) => AlertDialog(
           backgroundColor: c.card,
@@ -586,8 +669,7 @@ class AdminDashboardState extends State<AdminDashboard>
                           color: c.orange.withValues(alpha: 0.10),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                              color:
-                              c.orange.withValues(alpha: 0.4)),
+                              color: c.orange.withValues(alpha: 0.4)),
                         ),
                         child: Row(
                           children: [
@@ -634,7 +716,9 @@ class AdminDashboardState extends State<AdminDashboard>
                           value: 'general',
                           child: Text('📋 General', style: itemStyle())),
                     ],
-                    onChanged: isSending ? null : (v) => setDlgState(
+                    onChanged: isSending
+                        ? null
+                        : (v) => setDlgState(
                             () => selectedType = v ?? 'announcement'),
                   ),
                   const SizedBox(height: 12),
@@ -675,7 +759,9 @@ class AdminDashboardState extends State<AdminDashboard>
                         );
                       }),
                     ],
-                    onChanged: isSending ? null : (v) => setDlgState(
+                    onChanged: isSending
+                        ? null
+                        : (v) => setDlgState(
                             () => selectedRecipient = v ?? 'ALL'),
                   ),
                   const SizedBox(height: 12),
@@ -702,7 +788,9 @@ class AdminDashboardState extends State<AdminDashboard>
                           value: 'high',
                           child: Text('High', style: itemStyle())),
                     ],
-                    onChanged: isSending ? null : (v) => setDlgState(
+                    onChanged: isSending
+                        ? null
+                        : (v) => setDlgState(
                             () => selectedPriority = v ?? 'normal'),
                   ),
                   const SizedBox(height: 12),
@@ -745,21 +833,22 @@ class AdminDashboardState extends State<AdminDashboard>
               child: Text('Cancel', style: TextStyle(color: c.muted)),
             ),
             ElevatedButton.icon(
-              onPressed: isSending ? null : () async {
+              onPressed: isSending
+                  ? null
+                  : () async {
                 final title = titleCtrl.text.trim();
                 final message = messageCtrl.text.trim();
                 if (title.isEmpty || message.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content:
-                      Text('Please fill in both title and message.'),
+                      content: Text(
+                          'Please fill in both title and message.'),
                       backgroundColor: Color(0xFFEF4444),
                     ),
                   );
                   return;
                 }
 
-                // 🎭 DEMO MODE: do not touch Firestore
                 if (_isDemo) {
                   Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -775,7 +864,6 @@ class AdminDashboardState extends State<AdminDashboard>
                 setDlgState(() => isSending = true);
 
                 try {
-                  // 1. I-save sa database para lumabas sa listahan ng employee
                   await EmployeeNotificationService.instance.send(
                     type: selectedType,
                     title: title,
@@ -784,16 +872,17 @@ class AdminDashboardState extends State<AdminDashboard>
                     priority: selectedPriority,
                   );
 
-                  // 2. I-trigger ang OneSignal Push Notification
                   bool pushSent = false;
                   if (selectedRecipient == 'ALL') {
-                    pushSent = await OneSignalSender.instance.sendToAll(
+                    pushSent =
+                    await OneSignalSender.instance.sendToAll(
                       title: title,
                       message: message,
                       type: selectedType,
                     );
                   } else {
-                    pushSent = await OneSignalSender.instance.sendToEmployee(
+                    pushSent = await OneSignalSender.instance
+                        .sendToEmployee(
                       employeeId: selectedRecipient,
                       title: title,
                       message: message,
@@ -813,7 +902,9 @@ class AdminDashboardState extends State<AdminDashboard>
                             : '✅ Sent to employee + Push Notification')
                             : '⚠️ Saved to DB, but Push Notification failed. Check API Key.',
                       ),
-                      backgroundColor: pushSent ? const Color(0xFF16A34A) : Colors.orange,
+                      backgroundColor: pushSent
+                          ? const Color(0xFF16A34A)
+                          : Colors.orange,
                     ),
                   );
                 } catch (e) {
@@ -836,7 +927,11 @@ class AdminDashboardState extends State<AdminDashboard>
                     horizontal: 20, vertical: 12),
               ),
               icon: isSending
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      color: Colors.white, strokeWidth: 2))
                   : const Icon(Icons.send_rounded, size: 16),
               label: Text(
                 isSending ? 'Sending...' : 'Send',
@@ -849,9 +944,6 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // PRESENCE & BACKUP DIALOG — force backup blocked in demo mode
-  // ═══════════════════════════════════════════════════════════════
   void _showPresenceDialog(BuildContext context, AdminColors c) {
     showModalBottomSheet(
       context: context,
@@ -929,7 +1021,6 @@ class AdminDashboardState extends State<AdminDashboard>
                   onTap: () async {
                     Navigator.pop(ctx);
 
-                    // 🎭 DEMO MODE: do not touch real backup storage
                     if (_isDemo) {
                       _showSnack(
                           '🧪 Demo mode — backup NOT created (sample only).');
@@ -1048,7 +1139,6 @@ class AdminDashboardState extends State<AdminDashboard>
   }
 
   Future<void> _loadEmployees() async {
-    // 🎭 Defensive: never hit Firestore in demo mode
     if (_isDemo) {
       _loadDemoData();
       return;
@@ -1077,13 +1167,12 @@ class AdminDashboardState extends State<AdminDashboard>
   }
 
   void _setupStreams() {
-    // 🎭 Defensive: skip real streams in demo mode
     if (_isDemo) return;
 
     _empSub = AdminDatabase.streamEmployees().listen(
           (emps) {
         if (mounted) {
-          if (_isDemo) return; // safety in case demo turns on mid-stream
+          if (_isDemo) return;
           if (_initialLoadDone && emps.isEmpty) return;
           setState(() {
             _employees = emps;
@@ -1111,10 +1200,12 @@ class AdminDashboardState extends State<AdminDashboard>
           setState(() {
             _attendanceLogs = logs;
             _loginLogs = logs
-                .where((l) => l['type'] == 'IN' || l['type'] == 'LOGIN')
+                .where((l) =>
+            l['type'] == 'IN' || l['type'] == 'LOGIN')
                 .toList();
             _logoutLogs = logs
-                .where((l) => l['type'] == 'OUT' || l['type'] == 'LOGOUT')
+                .where((l) =>
+            l['type'] == 'OUT' || l['type'] == 'LOGOUT')
                 .toList();
           });
         }
@@ -1171,7 +1262,6 @@ class AdminDashboardState extends State<AdminDashboard>
     if (!_initialLoadDone) {
       setState(() => _loading = true);
     }
-    // 🎭 Demo mode → reload demo data, never Firestore
     if (_isDemo) {
       _loadDemoData();
       return;
@@ -1182,7 +1272,6 @@ class AdminDashboardState extends State<AdminDashboard>
 
   @override
   Widget build(BuildContext context) {
-    // 🎭 DEMO MODE — auth guard bypassed, real data never loaded
     if (_isDemo) {
       return AnimatedBuilder(
         animation: ThemeProvider.instance,
@@ -1195,7 +1284,6 @@ class AdminDashboardState extends State<AdminDashboard>
       );
     }
 
-    // Normal auth path
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
@@ -1325,9 +1413,8 @@ class AdminDashboardState extends State<AdminDashboard>
           const SizedBox(width: 14),
           Icon(
             available ? Icons.search_rounded : Icons.search_off_rounded,
-            color: !available
-                ? c.muted
-                : (isFocused ? c.accent : c.navText),
+            color:
+            !available ? c.muted : (isFocused ? c.accent : c.navText),
             size: 18,
           ),
           const SizedBox(width: 8),
@@ -1410,8 +1497,8 @@ class AdminDashboardState extends State<AdminDashboard>
         onPressed: _openDrawer,
         tooltip: 'Open menu',
         padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(
-            minWidth: 44, minHeight: 44),
+        constraints:
+        const BoxConstraints(minWidth: 44, minHeight: 44),
       ),
       leadingWidth: wide ? null : (isTiny ? 40 : 48),
       bottom: PreferredSize(
@@ -1438,8 +1525,8 @@ class AdminDashboardState extends State<AdminDashboard>
               message:
               'Demo mode is ON — sample data only. Sign out to disable.',
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 6, vertical: 2),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: c.orange.withValues(alpha: 0.18),
                   borderRadius: BorderRadius.circular(4),
@@ -1474,8 +1561,8 @@ class AdminDashboardState extends State<AdminDashboard>
               : 'Switch to Dark Mode',
           onPressed: () => ThemeProvider.instance.toggleDarkMode(),
           padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(
-              minWidth: 40, minHeight: 40),
+          constraints:
+          const BoxConstraints(minWidth: 40, minHeight: 40),
           icon: AnimatedSwitcher(
             duration: const Duration(milliseconds: 250),
             transitionBuilder: (child, anim) => RotationTransition(
@@ -1494,6 +1581,45 @@ class AdminDashboardState extends State<AdminDashboard>
         ),
 
         AdminNotificationBell(iconColor: c.accent),
+
+        // 🆕 Email-failed alert icon
+        if (_emailFailedDemoRequests > 0)
+          IconButton(
+            tooltip:
+            '$_emailFailedDemoRequests demo request(s) with email issues',
+            onPressed: () =>
+                _openDemoRequestsWithFilter('emailFailed'),
+            icon: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  Icons.mark_email_unread_rounded,
+                  size: 21,
+                  color: c.orange,
+                ),
+                Positioned(
+                  right: -6,
+                  top: -4,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: c.red,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '$_emailFailedDemoRequests',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
 
         if (wide) ...[
           IconButton(
@@ -1545,9 +1671,50 @@ class AdminDashboardState extends State<AdminDashboard>
                   context,
                   adminRoute(const NotificationBackupListPage()),
                 );
+              } else if (v == 'email_issues') {
+                _openDemoRequestsWithFilter('emailFailed');
               }
             },
             itemBuilder: (_) => [
+              if (_emailFailedDemoRequests > 0)
+                PopupMenuItem(
+                  value: 'email_issues',
+                  child: Row(children: [
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Icon(Icons.mark_email_unread_rounded,
+                            size: 18, color: c.orange),
+                        Positioned(
+                          right: -4,
+                          top: -3,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: c.red,
+                              borderRadius:
+                              BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '$_emailFailedDemoRequests',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Email Issues ($_emailFailedDemoRequests)',
+                      style: TextStyle(color: c.text, fontSize: 13),
+                    ),
+                  ]),
+                ),
               PopupMenuItem(
                 value: 'send_update',
                 child: Row(children: [
@@ -1598,7 +1765,6 @@ class AdminDashboardState extends State<AdminDashboard>
         child: Column(
           children: [
             const SizedBox(height: 20),
-
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
@@ -1648,16 +1814,14 @@ class AdminDashboardState extends State<AdminDashboard>
                 ],
               ),
             ),
-
             const SizedBox(height: 28),
-
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: _navItems.map((item) => _navTile(item)).toList(),
+                children:
+                _navItems.map((item) => _navTile(item)).toList(),
               ),
             ),
-
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
               child: Material(
@@ -1699,7 +1863,6 @@ class AdminDashboardState extends State<AdminDashboard>
                 ),
               ),
             ),
-
             Padding(
               padding: const EdgeInsets.all(12),
               child: Container(
@@ -1783,14 +1946,34 @@ class AdminDashboardState extends State<AdminDashboard>
                   size: 18,
                 ),
                 const SizedBox(width: 14),
-                Text(
-                  item.label,
-                  style: TextStyle(
-                    color: sel ? c.sidebarActiveText : c.navText,
-                    fontSize: 14,
-                    fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
+                Expanded(
+                  child: Text(
+                    item.label,
+                    style: TextStyle(
+                      color: sel ? c.sidebarActiveText : c.navText,
+                      fontSize: 14,
+                      fontWeight:
+                      sel ? FontWeight.w700 : FontWeight.w500,
+                    ),
                   ),
                 ),
+                if (item.index == 16 && _pendingDemoRequests > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: sel ? Colors.white : c.red,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$_pendingDemoRequests',
+                      style: TextStyle(
+                        color: sel ? c.orange : Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1884,6 +2067,26 @@ class AdminDashboardState extends State<AdminDashboard>
                           fontSize: 14,
                         ),
                       ),
+                      trailing: (item.index == 16 &&
+                          _pendingDemoRequests > 0)
+                          ? Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: c.red,
+                          borderRadius:
+                          BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          '$_pendingDemoRequests',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      )
+                          : null,
                       selected: sel,
                       selectedTileColor: c.orange,
                       shape: RoundedRectangleBorder(
@@ -1901,7 +2104,8 @@ class AdminDashboardState extends State<AdminDashboard>
               ),
               Divider(color: c.navBorder, height: 1),
               ListTile(
-                leading: Icon(Icons.logout_rounded, color: c.red, size: 20),
+                leading:
+                Icon(Icons.logout_rounded, color: c.red, size: 20),
                 title: Text(
                   _isDemo ? 'Exit Demo Mode' : 'Sign Out',
                   style: TextStyle(
@@ -2020,7 +2224,7 @@ class AdminDashboardState extends State<AdminDashboard>
           userLogs: _userLogs,
           searchQuery: _search,
           onCreateLeaveRequest: _openCreateLeaveRequest,
-          onAssignClientMeeting: () => _handleNavTap(8), // 🐛 Fixed: tab 8
+          onAssignClientMeeting: () => _handleNavTap(8),
         );
       case 5:
         return AdminTrackingPage(
@@ -2045,10 +2249,8 @@ class AdminDashboardState extends State<AdminDashboard>
           userLogs: _userLogs,
           onSelectEmployee: (emp) => openPayrollManagement(emp),
         );
-
       case 7:
         return const AdminPresenceMonitorScreen();
-
       case 8:
         return AdminAssignClientMeetingPage(
           employees: _employees,
@@ -2065,10 +2267,15 @@ class AdminDashboardState extends State<AdminDashboard>
           onSaved: () {},
           onTabNavigate: (idx) => _handleNavTap(idx),
         );
-
       case 15:
         return const PasswordChangeRequestsPage();
-
+      case 16:
+        return AdminDemoRequestsScreen(
+          key: ValueKey('demo_req_$_demoReqScreenRefreshKey'),
+          embedded: true,
+          initialFilter: _demoReqInitialFilter,
+          onBack: () => _handleNavTap(0),
+        );
       default:
         return const Center(child: Text('View not found'));
     }
