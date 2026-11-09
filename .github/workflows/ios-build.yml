@@ -66,7 +66,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15
     permissions:
       contents: write # deletes the trigger tag
     timeout-minutes: 90 # a cold React Native/Expo build on the free runner takes 30-60 minutes
@@ -194,7 +194,7 @@ jobs:
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: '16.4'
 
       - name: Restore DerivedData cache
         uses: actions/cache/restore@v6
