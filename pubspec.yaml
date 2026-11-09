@@ -127,7 +127,7 @@ dependencies:
   noise_meter: ^5.0.2
 
   # ─── Error Tracking ───────────────────────────────────────────────
-  sentry_flutter: ^8.10.0
+  sentry_flutter: ^9.14.0
 
   # ─── 🔔 OneSignal Push Notifications ──────────────────────────────
   onesignal_flutter: ^5.1.2
