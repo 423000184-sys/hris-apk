@@ -1,0 +1,19 @@
+{
+  "project": "RACOMA",
+  "platform": "ios",
+  "github": {
+    "owner": "423000184-sys",
+    "repo": "hris-apk"
+  },
+  "provider": "github",
+  "codemagic": {},
+  "bitrise": {},
+  "ios": {},
+  "flutter": {
+    "version": "3.47.9",
+    "watch": {}
+  },
+  "reactNative": {},
+  "kmp": {},
+  "mobai": {}
+}
