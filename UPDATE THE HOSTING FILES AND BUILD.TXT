@@ -1,0 +1,7 @@
+cd C:\Users\april\Documents\hris_biometrics; `
+flutter build web --release --base-href /app/; `
+Remove-Item -Recurse -Force "C:\hris-apk-hosting\app" -ErrorAction SilentlyContinue; `
+New-Item -ItemType Directory -Force -Path "C:\hris-apk-hosting\app" | Out-Null; `
+Copy-Item -Recurse -Force "build\web\*" "C:\hris-apk-hosting\app\"; `
+cd C:\hris-apk-hosting; `
+firebase deploy --only hosting

@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>HRIS Biometrics — Next-Gen Attendance</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;700;800;900&family=Barlow:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        :root{
+          --bd:#040404;--bc:#0D0D0D;--bl:#141414;
+          --or:#FF5500;--oh:#FF7A1A;--og:#FF3D00;
+          --am:#FFAA00;--dn:#FF2244;
+          --w:#fff;--w80:rgba(255,255,255,.8);--w50:rgba(255,255,255,.5);
+          --w20:rgba(255,255,255,.2);--w10:rgba(255,255,255,.1);
+        }
+        html{scroll-behavior:smooth}
+        body{background:var(--bd);color:var(--w);font-family:'Barlow',sans-serif;overflow-x:hidden;min-height:100vh}
+        a{text-decoration:none;color:inherit}
+        button{border:none;background:none;cursor:pointer;font-family:inherit}
+        #bg-canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
+        .page{position:relative;z-index:1;opacity:0;transform:translateY(16px);animation:fadeSlide 1.4s cubic-bezier(.16,1,.3,1) forwards}
+        @keyframes fadeSlide{to{opacity:1;transform:translateY(0)}}
+
+        /* NAVBAR */
+        .navbar{position:sticky;top:0;z-index:100;background:rgba(4,4,4,.94);border-bottom:1px solid rgba(255,85,0,.2);backdrop-filter:blur(12px)}
+        .nav-inner{max-width:1200px;margin:0 auto;padding:0 24px;height:70px;display:flex;align-items:center;gap:14px}
+        .logo-mark{width:40px;height:40px;border-radius:4px;flex-shrink:0;background:linear-gradient(135deg,#FF5500,#CC2200);display:flex;align-items:center;justify-content:center;box-shadow:0 0 16px rgba(255,85,0,.4);font-size:20px}
+        .logo-text .hris{font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:15px;letter-spacing:3px;color:#fff;line-height:1.1}
+        .logo-text .bio{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:8px;letter-spacing:4px;color:#FF5500;line-height:1}
+        .nav-spacer{flex:1}
+        .nav-links{display:flex;align-items:center}
+        .nav-link{padding:8px 18px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px}
+        .nav-link span{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:11px;letter-spacing:1.5px;color:rgba(255,255,255,.5);text-transform:uppercase;transition:color .18s}
+        .nav-link-bar{height:1.5px;width:0;background:#FF5500;transition:width .18s}
+        .nav-link:hover span{color:#fff}
+        .nav-link:hover .nav-link-bar{width:20px}
+        .btn-primary{display:inline-flex;align-items:center;justify-content:center;padding:10px 20px;border-radius:4px;cursor:pointer;background:linear-gradient(135deg,#FF5500,#CC2200);font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:#fff;box-shadow:0 4px 12px rgba(255,85,0,.25);transition:all .18s;white-space:nowrap;border:none}
+        .btn-primary:hover{background:linear-gradient(135deg,#FF7A1A,#FF3D00);box-shadow:0 6px 24px rgba(255,85,0,.5);transform:translateY(-1px)}
+        .hamburger{display:none;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);cursor:pointer;color:#fff;background:none;align-items:center;justify-content:center}
+        .hamburger svg{display:block;width:20px;height:20px}
+
+        /* GEO BANNER */
+        .geo-banner{padding:10px 20px;display:flex;align-items:center;justify-content:center;gap:8px;font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:12px;letter-spacing:.3px;flex-wrap:wrap;min-height:36px}
+        .geo-banner.checking{background:#1A1200;color:#FFAA00}
+        .geo-banner.inside{background:#071A07;color:#4CAF50}
+        .geo-banner.outside{background:rgba(255,34,68,.12);color:#FF2244}
+        .spinner{width:14px;height:14px;border:2px solid transparent;border-top-color:#FFAA00;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .retry-btn{padding:4px 10px;border:1px solid rgba(255,34,68,.5);border-radius:4px;font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:10px;letter-spacing:1px;color:#FF2244;cursor:pointer;background:none;text-transform:uppercase}
+        .retry-btn:hover{background:rgba(255,34,68,.1)}
+
+        /* MOBILE MENU */
+        .mobile-menu{display:none;background:#0D0D0D;border-bottom:1px solid rgba(255,85,0,.3);padding:24px 28px}
+        .mobile-menu.open{display:block}
+        .mmlink{display:flex;align-items:center;gap:14px;padding:16px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.1)}
+        .mmlink:last-of-type{border:none}
+        .mmbar{width:3px;height:16px;background:#FF5500;flex-shrink:0}
+        .mmlink span{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:14px;letter-spacing:2px;text-transform:uppercase;color:#fff}
+
+        /* HERO */
+        .hero{max-width:1200px;margin:0 auto;padding:90px 48px;display:flex;align-items:center;gap:56px}
+        .hero-left{flex:52;min-width:0}
+        .hero-right{flex:48;min-width:0}
+        .chip-label{display:inline-flex;align-items:center;gap:8px;padding:7px 14px;border-radius:3px;background:rgba(255,85,0,.08);border:1px solid rgba(255,85,0,.3);font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#FF5500}
+        .chip-dot{width:5px;height:5px;border-radius:50%;background:#FF5500;flex-shrink:0}
+        .hero-title{font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:clamp(38px,5vw,60px);line-height:1.05;letter-spacing:-2px;color:#fff;margin-top:32px}
+        .hero-title .orange{color:#FF5500;text-shadow:0 0 30px rgba(255,85,0,.6),0 0 60px rgba(255,85,0,.3)}
+        .hero-sub{display:flex;align-items:flex-start;gap:14px;margin-top:28px}
+        .hero-sub-bar{width:40px;height:2px;background:#FF5500;flex-shrink:0;margin-top:10px}
+        .hero-sub p{font-size:15px;color:rgba(255,255,255,.8);line-height:1.75;font-weight:300;letter-spacing:.2px}
+        .hero-cta{display:flex;align-items:center;gap:16px;margin-top:44px;flex-wrap:wrap}
+        .btn-ghost{display:inline-flex;align-items:center;justify-content:center;padding:15px 30px;border-radius:4px;cursor:pointer;background:transparent;border:1px solid rgba(255,255,255,.2);font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:13px;letter-spacing:1.2px;text-transform:uppercase;color:rgba(255,255,255,.8);transition:all .18s;white-space:nowrap}
+        .btn-ghost:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.5);color:#fff}
+        .btn-geo{display:inline-flex;align-items:center;gap:8px;padding:15px 30px;border-radius:4px;cursor:pointer;font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:13px;letter-spacing:1.2px;text-transform:uppercase;transition:all .18s;white-space:nowrap;border:none}
+        .btn-geo.allowed{background:linear-gradient(135deg,#FF5500,#CC2200);color:#fff;box-shadow:0 4px 12px rgba(255,85,0,.25)}
+        .btn-geo.allowed:hover{background:linear-gradient(135deg,#FF7A1A,#FF3D00);box-shadow:0 6px 24px rgba(255,85,0,.5);transform:translateY(-1px)}
+        .btn-geo.blocked{background:linear-gradient(135deg,#3A3A3A,#222);color:#888;border:1px solid #555 !important;cursor:not-allowed}
+        .btn-geo.checking{background:linear-gradient(135deg,#4A3A00,#2A2200);color:#FFAA00;border:1px solid rgba(255,170,0,.4) !important;cursor:wait}
+        .btn-geo.w-full{width:100%;justify-content:center}
+        .mini-spin{width:14px;height:14px;border:2px solid transparent;border-top-color:#FFAA00;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+
+        /* GEOFENCE WIDGET */
+        .geo-wrap{width:100%;aspect-ratio:1;position:relative}
+        .geo-circle{width:100%;aspect-ratio:1;border-radius:50%;overflow:hidden;border:1.5px solid rgba(255,85,0,.3);box-shadow:0 0 60px rgba(255,85,0,.1);position:relative;background:#0D0D0D;transition:border-color .4s,box-shadow .4s}
+        canvas#geo-canvas{width:100%;height:100%;display:block}
+        .geo-overlay{position:absolute;inset:0;pointer-events:none}
+        .status-badge{position:absolute;top:22px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:4px;font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:10px;letter-spacing:1.5px;white-space:nowrap;transition:all .4s}
+        .status-badge.inside{background:rgba(255,85,0,.1);border:1px solid rgba(255,85,0,.4);color:#FF5500}
+        .status-badge.outside{background:rgba(255,34,68,.1);border:1px solid rgba(255,34,68,.4);color:#FF2244}
+        .hq-marker{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:6px;animation:hqPulse 3s ease-in-out infinite}
+        @keyframes hqPulse{0%,100%{transform:translate(-50%,-50%) scale(.96)}50%{transform:translate(-50%,-50%) scale(1.04)}}
+        .hq-icon{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#FF5500,#CC2200);display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 0 28px rgba(255,85,0,.4)}
+        .hq-label{padding:4px 8px;border-radius:4px;text-align:center;background:rgba(4,4,4,.9);border:1px solid rgba(255,85,0,.4)}
+        .hq-name{font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:8px;letter-spacing:1.5px;color:#FF5500;display:block}
+        .hq-addr{font-family:'Barlow Condensed',sans-serif;font-weight:500;font-size:6px;color:#FF8844;letter-spacing:.3px;display:block;margin-top:2px}
+        .emp-pin{position:absolute;display:flex;flex-direction:column;align-items:center;gap:3px;transition:all .6s cubic-bezier(.16,1,.3,1)}
+        .emp-circle{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;transition:all .6s}
+        .emp-circle.inside{background:rgba(255,85,0,.12);border:2px solid rgba(255,85,0,.7);box-shadow:0 0 14px rgba(255,85,0,.45)}
+        .emp-circle.outside{background:rgba(255,34,68,.12);border:2px solid rgba(255,34,68,.7);box-shadow:0 0 14px rgba(255,34,68,.45)}
+        .emp-tag{padding:2px 5px;border-radius:3px;font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:7px;letter-spacing:.8px;background:rgba(4,4,4,.9);transition:all .6s}
+        .emp-tag.inside{color:#FF5500;border:1px solid rgba(255,85,0,.35)}
+        .emp-tag.outside{color:#FF2244;border:1px solid rgba(255,34,68,.35)}
+        .clock-status{position:absolute;bottom:22px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:9px 16px;border-radius:5px;white-space:nowrap;font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:10px;letter-spacing:1.5px;transition:all .4s}
+        .clock-status.allowed{background:rgba(255,85,0,.1);border:1px solid rgba(255,85,0,.4);color:#FF5500;box-shadow:0 0 16px rgba(255,85,0,.2)}
+        .clock-status.denied{background:rgba(255,34,68,.1);border:1px solid rgba(255,34,68,.4);color:#FF2244;box-shadow:0 0 16px rgba(255,34,68,.2)}
+        .dot-pulse{width:7px;height:7px;border-radius:50%;background:#FF5500;flex-shrink:0;animation:dotBlink 1.4s ease-in-out infinite}
+        @keyframes dotBlink{0%,100%{opacity:1}50%{opacity:.3}}
+
+        /* CAROUSEL */
+        .carousel-dots{display:flex;gap:6px;margin-bottom:18px}
+        .cdot{height:3px;border-radius:2px;transition:all .3s;flex-shrink:0;background:rgba(255,255,255,.2)}
+        .cdot.active{width:28px;background:#FF5500}
+        .cdot.inactive{width:6px}
+        .carousel-card{padding:20px;border-radius:4px;background:#0D0D0D;display:flex;align-items:center;gap:16px;animation:carIn .6s cubic-bezier(.16,1,.3,1)}
+        @keyframes carIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+        .cicon{width:50px;height:50px;border-radius:4px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:22px}
+        .cicon.f0{background:linear-gradient(135deg,#FF5500,#CC2200)}
+        .cicon.f1{background:linear-gradient(135deg,#FFAA00,#CC6600)}
+        .cicon.f2{background:linear-gradient(135deg,#FF7A1A,#CC3300)}
+        .cicon.f3{background:linear-gradient(135deg,#FF3D00,#991A00)}
+        .clabel{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:14px;letter-spacing:.5px;color:#fff;margin-bottom:4px}
+        .cdetail{font-size:12px;color:rgba(255,255,255,.5);line-height:1.45}
+        .carrow{width:28px;height:28px;border-radius:4px;border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px;color:rgba(255,255,255,.5)}
+
+        /* STATS */
+        .stats-row{background:#0D0D0D;border-top:1px solid rgba(255,85,0,.15);border-bottom:1px solid rgba(255,85,0,.15)}
+        .stats-inner{max-width:1200px;margin:0 auto;padding:28px 48px;display:flex;align-items:center}
+        .stat-item{flex:1;text-align:center;padding:18px 8px}
+        .stat-value{font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:26px;letter-spacing:-.5px;color:#FF5500}
+        .stat-label{font-size:11px;color:rgba(255,255,255,.5);font-weight:500;letter-spacing:.5px;line-height:1.4;margin-top:5px}
+        .stat-div{width:1px;height:40px;background:rgba(255,255,255,.1);flex-shrink:0}
+
+        /* FEATURES */
+        .feats{max-width:1200px;margin:0 auto;padding:80px 48px}
+        .sec-title{font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:40px;line-height:1.1;letter-spacing:-1px;color:#fff;text-align:center;margin-top:20px}
+        .sec-sub{font-size:14px;color:rgba(255,255,255,.5);text-align:center;margin-top:8px}
+        .feat-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:52px}
+        .feat-card{padding:24px;border-radius:4px;background:#0D0D0D;border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;gap:20px;cursor:pointer;transition:all .2s}
+        .feat-card:hover{background:#141414;border-color:rgba(255,85,0,.5);box-shadow:0 0 24px rgba(255,85,0,.12)}
+        .ficon{width:52px;height:52px;border-radius:4px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:24px;transition:box-shadow .2s}
+        .ficon.c0{background:linear-gradient(135deg,#FF5500,#CC2200)}
+        .ficon.c1{background:linear-gradient(135deg,#FFAA00,#CC6600)}
+        .ficon.c2{background:linear-gradient(135deg,#FF7A1A,#CC3300)}
+        .ficon.c3{background:linear-gradient(135deg,#FF3D00,#991A00)}
+        .feat-card:hover .ficon{box-shadow:0 0 16px rgba(255,85,0,.4)}
+        .fname{font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:13px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,.8);margin-bottom:6px}
+        .fdetail{font-size:12px;color:rgba(255,255,255,.5);line-height:1.5}
+        .farrow{width:32px;height:32px;border-radius:4px;border:1px solid rgba(255,255,255,.1);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:16px;color:rgba(255,255,255,.2);transition:all .2s}
+        .feat-card:hover .farrow{border-color:rgba(255,85,0,.5);background:rgba(255,85,0,.15);color:#FF5500}
+
+        /* CTA */
+        .cta-wrap{padding:0 48px;max-width:1296px;margin:0 auto}
+        .cta-box{padding:64px;border-radius:8px;background:#0D0D0D;border:1px solid rgba(255,85,0,.3);box-shadow:0 0 60px rgba(255,85,0,.1);text-align:center;position:relative;overflow:hidden}
+        .cta-box::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at center,rgba(255,85,0,.08),transparent 70%);animation:ctaGlow 2s ease-in-out infinite alternate;pointer-events:none}
+        @keyframes ctaGlow{from{opacity:.4}to{opacity:1}}
+        .cta-tag{display:inline-block;padding:6px 14px;border-radius:3px;background:rgba(255,85,0,.1);border:1px solid rgba(255,85,0,.4);font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:10px;letter-spacing:3px;color:#FF5500;text-transform:uppercase;margin-bottom:24px}
+        .cta-title{font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:42px;line-height:1.1;letter-spacing:-1px;color:#fff;margin-bottom:16px}
+        .cta-sub{font-size:14px;color:rgba(255,255,255,.5);line-height:1.6;margin-bottom:36px}
+        .cta-btns{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap}
+
+        /* FOOTER */
+        .footer-inner{max-width:1200px;margin:0 auto;padding:32px 48px;display:flex;align-items:center;justify-content:space-between}
+        .footer-brand{display:flex;align-items:center;gap:14px}
+        .footer-bname{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:12px;letter-spacing:2px;color:rgba(255,255,255,.5)}
+        .footer-copy,.footer-ver{font-size:11px;color:rgba(255,255,255,.2);letter-spacing:.5px}
+
+        /* RESPONSIVE */
+        @media(max-width:860px){
+          .nav-links,.nav-btn-d{display:none}
+          .hamburger{display:flex}
+          .hero{flex-direction:column;padding:52px 24px;gap:0}
+          .hero-left{order:2;width:100%}
+          .hero-right{order:1;width:100%;max-width:360px;margin:0 auto 40px}
+          .hero-title{font-size:40px;letter-spacing:-1.5px;text-align:center}
+          .hero-sub p{font-size:14px;text-align:center}
+          .hero-sub{justify-content:center}
+          .hero-sub-bar{display:none}
+          .hero-cta{justify-content:center;margin-top:36px}
+          .hero-cta .btn-geo,.hero-cta .btn-ghost{width:100%;justify-content:center}
+          .hero-carousel{margin-top:44px}
+          .carousel-dots{justify-content:center}
+          .chip-label{display:inline-flex}
+          .stats-inner{padding:28px 12px}
+          .feats{padding:80px 24px}
+          .sec-title{font-size:30px}
+          .feat-grid{grid-template-columns:1fr}
+          .cta-wrap{padding:0 24px}
+          .cta-box{padding:40px 24px}
+          .cta-title{font-size:28px}
+          .cta-btns .btn-geo,.cta-btns .btn-ghost{width:100%;justify-content:center}
+          .cta-btns{flex-direction:column}
+          .footer-inner{flex-direction:column;gap:16px;text-align:center;padding:32px 24px}
+        }
+        @media(max-width:480px){
+          .stats-inner{display:grid;grid-template-columns:1fr 1fr;padding:0}
+          .stat-div{display:none}
+          .stat-item{border-bottom:1px solid rgba(255,255,255,.1);padding:14px 8px}
+        }
+
+        /* SNACKBAR */
+        #snackbar{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);min-width:300px;max-width:90vw;padding:12px 16px;border-radius:8px;display:flex;align-items:center;gap:8px;z-index:9999;transition:transform .3s cubic-bezier(.16,1,.3,1),opacity .3s;pointer-events:none;opacity:0}
+        #snackbar.show{transform:translateX(-50%) translateY(0);opacity:1;pointer-events:auto}
+        #snack-text{flex:1;font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:13px;color:#fff;letter-spacing:.3px}
+        #snack-retry{font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:11px;letter-spacing:1px;color:#fff;background:none;border:none;cursor:pointer;text-transform:uppercase;padding-left:8px}
+    </style>
+</head>
+<body>
+
+<canvas id="bg-canvas"></canvas>
+
+<div class="page">
+
+    <!-- NAVBAR -->
+    <nav class="navbar">
+        <div class="nav-inner">
+            <div class="logo-mark">🖐</div>
+            <div class="logo-text">
+                <div class="hris">HRIS</div>
+                <div class="bio">BIOMETRICS</div>
+            </div>
+            <div class="nav-spacer"></div>
+            <div class="nav-links">
+                <div class="nav-link"><span>Features</span><div class="nav-link-bar"></div></div>
+                <div class="nav-link"><span>Pricing</span><div class="nav-link-bar"></div></div>
+                <div class="nav-link"><span>Docs</span><div class="nav-link-bar"></div></div>
+            </div>
+            <div class="nav-btn-d" style="margin-left:20px">
+                <button class="btn-primary" onclick="onSignIn()">SIGN IN</button>
+            </div>
+            <button class="hamburger" onclick="toggleMenu()" id="hamburger">
+                <svg id="hicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+                </svg>
+            </button>
+        </div>
+        <div class="geo-banner checking" id="geo-banner">
+            <div class="spinner"></div>
+            <span style="font-size:13px">📍</span>
+            <span id="geo-banner-text">Verifying location · 240 Lacson Ave, Sampaloc, Manila</span>
+        </div>
+    </nav>
+
+    <!-- MOBILE MENU -->
+    <div class="mobile-menu" id="mobile-menu">
+        <div class="mmlink"><div class="mmbar"></div><span>Features</span></div>
+        <div class="mmlink"><div class="mmbar"></div><span>Pricing</span></div>
+        <div class="mmlink"><div class="mmbar"></div><span>Docs</span></div>
+        <div style="margin-top:20px">
+            <button class="btn-geo checking w-full" id="menu-geo-btn" onclick="onGetStarted()">
+                <div class="mini-spin"></div>CHECKING LOCATION…
+            </button>
+        </div>
+    </div>
+
+    <!-- HERO -->
+    <div style="max-width:1200px;margin:0 auto">
+        <div class="hero">
+            <div class="hero-left">
+                <div class="chip-label"><div class="chip-dot"></div>Enterprise Attendance Platform</div>
+                <div class="hero-title">NEXT-GEN<br><span class="orange">BIOMETRIC</span><br>ATTENDANCE</div>
+                <div class="hero-sub">
+                    <div class="hero-sub-bar"></div>
+                    <p>Clock-in is locked outside the zone. Geo-fencing enforces location at the hardware level — no workarounds.</p>
+                </div>
+                <div class="hero-cta">
+                    <button class="btn-geo checking" id="hero-geo-btn" onclick="onGetStarted()">
+                        <div class="mini-spin"></div>CHECKING LOCATION…
+                    </button>
+                    <button class="btn-ghost">LEARN MORE</button>
+                </div>
+                <div class="hero-carousel" style="margin-top:64px">
+                    <div class="carousel-dots" id="cdots"></div>
+                    <div id="ccard"></div>
+                </div>
+            </div>
+            <div class="hero-right">
+                <div class="geo-wrap">
+                    <div class="geo-circle" id="geo-border">
+                        <canvas id="geo-canvas"></canvas>
+                        <div class="geo-overlay">
+                            <div class="status-badge inside" id="status-badge">
+                                <span style="font-size:11px">📍</span> INSIDE ZONE
+                            </div>
+                            <div class="hq-marker">
+                                <div class="hq-icon">🏢</div>
+                                <div class="hq-label">
+                                    <span class="hq-name">HQ OFFICE</span>
+                                    <span class="hq-addr">240 Lacson Ave, Sampaloc, Manila</span>
+                                </div>
+                            </div>
+                            <div class="emp-pin" id="emp-pin" style="top:37%;left:59%;transform:translate(-50%,-50%)">
+                                <div class="emp-circle inside" id="emp-circ">👤</div>
+                                <div class="emp-tag inside" id="emp-tag">EMP-001</div>
+                            </div>
+                            <div class="clock-status allowed" id="clock-st">
+                                <div class="dot-pulse"></div>CLOCK-IN AVAILABLE
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- STATS -->
+    <div class="stats-row">
+        <div class="stats-inner">
+            <div class="stat-item"><div class="stat-value">99.7%</div><div class="stat-label">Face Match Accuracy</div></div>
+            <div class="stat-div"></div>
+            <div class="stat-item"><div class="stat-value">&lt;0.3s</div><div class="stat-label">Auth Speed</div></div>
+            <div class="stat-div"></div>
+            <div class="stat-item"><div class="stat-value">500K+</div><div class="stat-label">Daily Check-ins</div></div>
+            <div class="stat-div"></div>
+            <div class="stat-item"><div class="stat-value">99.9%</div><div class="stat-label">Uptime SLA</div></div>
+        </div>
+    </div>
+
+    <!-- FEATURES -->
+    <div class="feats">
+        <div style="display:flex;justify-content:center">
+            <div class="chip-label"><div class="chip-dot"></div>Platform Features</div>
+        </div>
+        <div class="sec-title">BUILT FOR<br>ENTERPRISE SCALE</div>
+        <div class="sec-sub">Everything you need for modern attendance control</div>
+        <div class="feat-grid">
+            <div class="feat-card"><div class="ficon c0">🧬</div><div style="flex:1"><div class="fname">Face Recognition</div><div class="fdetail">AI-powered facial biometrics with 99.7% accuracy</div></div><div class="farrow">›</div></div>
+            <div class="feat-card"><div class="ficon c1">📍</div><div style="flex:1"><div class="fname">Geo-Fencing</div><div class="fdetail">Precision GPS clock-in within defined site boundaries</div></div><div class="farrow">›</div></div>
+            <div class="feat-card"><div class="ficon c2">🔒</div><div style="flex:1"><div class="fname">Fingerprint Auth</div><div class="fdetail">Hardware-level biometric security on every device</div></div><div class="farrow">›</div></div>
+            <div class="feat-card"><div class="ficon c3">☁️</div><div style="flex:1"><div class="fname">Real-Time Sync</div><div class="fdetail">Instant cross-platform attendance data sync</div></div><div class="farrow">›</div></div>
+        </div>
+    </div>
+
+    <!-- CTA -->
+    <div class="cta-wrap">
+        <div class="cta-box">
+            <div class="cta-tag">READY TO DEPLOY</div>
+            <div class="cta-title">START SECURING<br>ATTENDANCE TODAY</div>
+            <div class="cta-sub">Deploy in minutes. No hardware required. Works on any device.</div>
+            <div class="cta-btns">
+                <button class="btn-geo checking" id="cta-geo-btn" onclick="onGetStarted()">
+                    <div class="mini-spin"></div>CHECKING LOCATION…
+                </button>
+                <button class="btn-ghost">CONTACT SALES</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- FOOTER -->
+    <div style="border-top:1px solid rgba(255,255,255,.1);margin-top:64px">
+        <div class="footer-inner">
+            <div class="footer-brand">
+                <div class="logo-mark" style="width:36px;height:36px;font-size:18px">🖐</div>
+                <div class="footer-bname">HRIS BIOMETRICS</div>
+            </div>
+            <div class="footer-copy">© 2025 HRIS Biometrics. All rights reserved.</div>
+            <div class="footer-ver">v2.0 · Cross-Platform Ready</div>
+        </div>
+    </div>
+
+</div>
+
+<!-- SNACKBAR -->
+<div id="snackbar">
+    <span id="snack-icon">📍</span>
+    <span id="snack-text"></span>
+    <button id="snack-retry" style="display:none" onclick="runGeoCheck()">RETRY</button>
+</div>
+
+<script>
+    // ── CONFIG ──
+    const OLAT=14.602120,OLNG=120.999292,ORAD=100;
+    const OADDR='240 Lacson Ave, Sampaloc, Manila';
+
+    // ── STATE ──
+    let geoState={checking:true,inside:false,dist:null,err:null};
+    let menuOpen=false;
+    let outsideRadius=false;
+
+    // ── HAVERSINE ──
+    function haversine(a,b,c,d){
+      const R=6371000,dA=(c-a)*Math.PI/180,dB=(d-b)*Math.PI/180;
+      const x=Math.sin(dA/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dB/2)**2;
+      return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+    }
+
+    // ── GEO CHECK ──
+    function runGeoCheck(){
+      geoState={checking:true,inside:false,dist:null,err:null};
+      updateGeoUI();
+      if(!navigator.geolocation){
+        geoState={checking:false,inside:false,dist:null,err:'Geolocation not supported'};
+        updateGeoUI();return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        p=>{
+          const d=haversine(p.coords.latitude,p.coords.longitude,OLAT,OLNG);
+          geoState={checking:false,inside:d<=ORAD,dist:d,err:null};
+          updateGeoUI();
+        },
+        e=>{
+          const m=e.code===1?'Location permission denied':e.code===2?'Location unavailable':'Location timeout';
+          geoState={checking:false,inside:false,dist:null,err:m};
+          updateGeoUI();
+        },
+        {enableHighAccuracy:true,timeout:12000,maximumAge:0}
+      );
+    }
+
+    // ── UPDATE UI ──
+    function setGeoBtn(el,state){
+      if(!el)return;
+      const isMenu=el.id==='menu-geo-btn';
+      el.className='btn-geo '+state+(isMenu?' w-full':'');
+      el.style.border='none';
+      if(state==='checking'){el.innerHTML='<div class="mini-spin"></div>CHECKING LOCATION…'}
+      else if(state==='allowed'){el.innerHTML='GET STARTED FREE'}
+      else{el.innerHTML='🚫 OUTSIDE WORK ZONE'}
+    }
+
+    function updateGeoUI(){
+      const{checking,inside,dist,err}=geoState;
+      outsideRadius=!inside&&!checking;
+
+      // Banner
+      const bn=document.getElementById('geo-banner');
+      bn.className='geo-banner '+(checking?'checking':inside?'inside':'outside');
+      if(checking){
+        bn.innerHTML='<div class="spinner"></div><span style="font-size:13px">📍</span><span>Verifying location · '+OADDR+'</span>';
+      }else if(inside){
+        const ds=dist!=null?' · '+Math.round(dist)+' m from office':'';
+        bn.innerHTML='<span>✅</span><span>Inside work zone · '+OADDR+ds+'</span>';
+      }else{
+        const ds=err?'Location error — '+err:dist!=null?'You are '+Math.round(dist)+' m from '+OADDR:'Outside work zone · '+OADDR;
+        bn.innerHTML='<span>🚫</span><span>'+ds+'</span><button class="retry-btn" onclick="runGeoCheck()">RETRY</button>';
+      }
+
+      // Buttons
+      ['hero-geo-btn','cta-geo-btn','menu-geo-btn'].forEach(id=>{
+        setGeoBtn(document.getElementById(id),checking?'checking':inside?'allowed':'blocked');
+      });
+
+      // Widget border
+      const wb=document.getElementById('geo-border');
+      wb.style.borderColor=checking?'rgba(255,170,0,.3)':inside?'rgba(255,85,0,.3)':'rgba(255,34,68,.4)';
+      wb.style.boxShadow=checking?'0 0 60px rgba(255,170,0,.08)':inside?'0 0 60px rgba(255,85,0,.12)':'0 0 60px rgba(255,34,68,.18)';
+
+      // Status badge
+      const sb=document.getElementById('status-badge');
+      if(inside){sb.className='status-badge inside';sb.innerHTML='<span style="font-size:11px">📍</span> INSIDE ZONE'}
+      else{sb.className='status-badge outside';sb.innerHTML='<span style="font-size:11px">🚫</span> OUTSIDE ZONE'}
+
+      // Employee pin
+      const ep=document.getElementById('emp-pin');
+      const ec=document.getElementById('emp-circ');
+      const et=document.getElementById('emp-tag');
+      if(inside){ep.style.top='37%';ep.style.left='59%';ec.className='emp-circle inside';et.className='emp-tag inside'}
+      else{ep.style.top='47%';ep.style.left='69%';ec.className='emp-circle outside';et.className='emp-tag outside'}
+
+      // Clock status
+      const cs=document.getElementById('clock-st');
+      if(inside){cs.className='clock-status allowed';cs.innerHTML='<div class="dot-pulse"></div>CLOCK-IN AVAILABLE'}
+      else{cs.className='clock-status denied';cs.innerHTML='🚫 OUTSIDE ZONE — DENIED'}
+    }
+
+    // ── ACTIONS ──
+    function onGetStarted(){
+      if(geoState.checking){showSnack('Verifying your location…','#856404',false);return}
+      if(!geoState.inside){
+        const d=geoState.dist,m=geoState.err;
+        const msg=m?'Location error: '+m:d!=null?'You are '+Math.round(d)+' m from '+OADDR+'. Move inside the zone.':'Outside work zone. Move to '+OADDR;
+        showSnack(msg,'#FF2244',true);return;
+      }
+      showSnack('✅ Location verified! Redirecting to login…','#155215',false);
+    }
+    function onSignIn(){showSnack('Opening sign-in screen…','#1A1A1A',false)}
+
+    function toggleMenu(){
+      menuOpen=!menuOpen;
+      document.getElementById('mobile-menu').classList.toggle('open',menuOpen);
+      document.getElementById('hicon').innerHTML=menuOpen
+        ?'<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
+        :'<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>';
+    }
+
+    // ── SNACKBAR ──
+    let snackT=null;
+    function showSnack(msg,bg,retry){
+      const sb=document.getElementById('snackbar');
+      document.getElementById('snack-text').textContent=msg;
+      document.getElementById('snack-retry').style.display=retry?'block':'none';
+      sb.style.background=bg;
+      sb.classList.add('show');
+      clearTimeout(snackT);
+      snackT=setTimeout(()=>sb.classList.remove('show'),5000);
+    }
+
+    // ── FEATURE CAROUSEL ──
+    const feats=[
+      {icon:'🧬',label:'Face Recognition',detail:'AI-powered facial biometrics with 99.7% accuracy',cls:'f0',col:'rgba(255,85,0,.35)'},
+      {icon:'📍',label:'Geo-Fencing',detail:'Precision GPS clock-in within defined site boundaries',cls:'f1',col:'rgba(255,170,0,.35)'},
+      {icon:'🔒',label:'Fingerprint Auth',detail:'Hardware-level biometric security on every device',cls:'f2',col:'rgba(255,122,26,.35)'},
+      {icon:'☁️',label:'Real-Time Sync',detail:'Instant cross-platform attendance data sync',cls:'f3',col:'rgba(255,61,0,.35)'},
+    ];
+    let curFeat=0;
+    function renderCar(){
+      const f=feats[curFeat];
+      document.getElementById('cdots').innerHTML=feats.map((_,i)=>`<div class="cdot ${i===curFeat?'active':'inactive'}"></div>`).join('');
+      document.getElementById('ccard').innerHTML=`
+        <div class="carousel-card" style="border:1px solid ${f.col};box-shadow:0 0 20px rgba(255,85,0,.08)">
+          <div class="cicon ${f.cls}">${f.icon}</div>
+          <div style="flex:1"><div class="clabel">${f.label}</div><div class="cdetail">${f.detail}</div></div>
+          <div class="carrow">›</div>
+        </div>`;
+    }
+    renderCar();
+    setInterval(()=>{curFeat=(curFeat+1)%feats.length;renderCar()},4000);
+
+    // ── CINEMATIC BG ──
+    (function(){
+      const c=document.getElementById('bg-canvas'),ctx=c.getContext('2d');
+      let w,h,ang=0;
+      function rsz(){w=c.width=window.innerWidth;h=c.height=window.innerHeight}
+      rsz();window.addEventListener('resize',rsz);
+      function draw(){
+        ctx.clearRect(0,0,w,h);
+        ctx.strokeStyle='rgba(255,85,0,0.022)';ctx.lineWidth=.5;
+        for(let i=0;i<22;i++){const x=w/22*i;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}
+        for(let i=0;i<34;i++){const y=h/34*i;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}
+        const g=ctx.createRadialGradient(w*.12,h*.18,0,w*.12,h*.18,w*.5);
+        g.addColorStop(0,'rgba(255,85,0,0.07)');g.addColorStop(1,'transparent');
+        ctx.fillStyle=g;ctx.fillRect(0,0,w,h);
+        const cx=w*.76,cy=h*.26;
+        ctx.strokeStyle='rgba(255,85,0,0.035)';ctx.lineWidth=1;
+        [w*.3,w*.18].forEach(r=>{ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.stroke()});
+        ctx.fillStyle='rgba(255,85,0,0.14)';
+        for(let i=0;i<5;i++){const a=ang+i*2*Math.PI/5,r=w*.24;ctx.beginPath();ctx.arc(cx+r*Math.cos(a),cy+r*Math.sin(a),2.5,0,Math.PI*2);ctx.fill()}
+        const f=ctx.createLinearGradient(0,h*.55,0,h);
+        f.addColorStop(0,'transparent');f.addColorStop(1,'rgba(4,4,4,0.65)');
+        ctx.fillStyle=f;ctx.fillRect(0,h*.55,w,h*.45);
+      }
+      (function tick(){ang+=.004;draw();requestAnimationFrame(tick)})();
+    })();
+
+    // ── GEO FENCE CANVAS ──
+    (function(){
+      const cv=document.getElementById('geo-canvas'),ctx=cv.getContext('2d');
+      let rot=0,pulse=1,pulseD=1,radar=0,rip=0,glow=.7,glowD=1;
+      let sz=0;
+
+      function resize(){
+        const parent=cv.parentElement;
+        sz=parent.clientWidth;
+        const dpr=window.devicePixelRatio||1;
+        cv.width=sz*dpr;cv.height=sz*dpr;
+        ctx.setTransform(dpr,0,0,dpr,0,0);
+      }
+      resize();
+      const ro=new ResizeObserver(resize);
+      ro.observe(cv.parentElement);
+
+      function dashedCircle(cx,cy,r,col,dl,gap,sw,off=0){
+        if(r<=1)return;
+        ctx.strokeStyle=col;ctx.lineWidth=sw;ctx.lineCap='round';
+        const c=2*Math.PI*r,tot=dl+gap,n=Math.max(1,Math.round(c/tot));
+        for(let i=0;i<n;i++){const sa=off+i*tot/r;ctx.beginPath();ctx.arc(cx,cy,r,sa,sa+dl/r);ctx.stroke()}
+      }
+      function dashedLine(x1,y1,x2,y2,col,dl,gap,sw){
+        const dx=x2-x1,dy=y2-y1,d=Math.hypot(dx,dy);if(!d)return;
+        ctx.strokeStyle=col;ctx.lineWidth=sw;ctx.lineCap='round';
+        const ux=dx/d,uy=dy/d;let drawn=0,on=true,px=x1,py=y1;
+        while(drawn<d){const s=on?Math.min(dl,d-drawn):Math.min(gap,d-drawn);const ex=px+ux*s,ey=py+uy*s;if(on){ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(ex,ey);ctx.stroke()}px=ex;py=ey;drawn+=s;on=!on}
+      }
+
+      function draw(){
+        if(!sz)return;
+        ctx.clearRect(0,0,sz,sz);
+        const cx=sz/2,cy=sz/2,r=sz/2;
+        const outside=outsideRadius;
+        const ac=outside?'#FF2244':'#FF5500';
+
+        // BG
+        const bg=ctx.createRadialGradient(cx,cy,0,cx,cy,r);
+        bg.addColorStop(0,'#131313');bg.addColorStop(.5,'#0D0D0D');bg.addColorStop(1,'#040404');
+        ctx.fillStyle=bg;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();
+
+        // Grid
+        ctx.strokeStyle='rgba(255,85,0,0.04)';ctx.lineWidth=.5;
+        for(let i=-12;i<=12;i++){
+          ctx.beginPath();ctx.moveTo(cx+i*20,0);ctx.lineTo(cx+i*20,sz);ctx.stroke();
+          ctx.beginPath();ctx.moveTo(0,cy+i*20);ctx.lineTo(sz,cy+i*20);ctx.stroke();
+        }
+
+        const fR=r*.44*pulse;
+
+        // Fence fill
+        ctx.fillStyle=outside?'rgba(255,34,68,0.04)':'rgba(255,85,0,0.07)';
+        ctx.beginPath();ctx.arc(cx,cy,fR,0,Math.PI*2);ctx.fill();
+
+        // Glow ring
+        ctx.fillStyle=outside?`rgba(255,34,68,${.05*glow})`:`rgba(255,85,0,${.05*glow})`;
+        ctx.beginPath();ctx.arc(cx,cy,fR+16,0,Math.PI*2);ctx.fill();
+
+        // Fence border
+        dashedCircle(cx,cy,fR,outside?`rgba(255,34,68,.75)`:`rgba(255,85,0,.75)`,10,6,1.8);
+
+        // Radar (inside only)
+        if(!outside){
+          const sa=radar*2*Math.PI;
+          ctx.save();ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,fR,sa-1.4,sa);ctx.closePath();
+          ctx.fillStyle='rgba(255,85,0,0.12)';ctx.fill();ctx.restore();
+          ctx.strokeStyle='rgba(255,85,0,0.55)';ctx.lineWidth=1.5;
+          ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+fR*Math.cos(sa),cy+fR*Math.sin(sa));ctx.stroke();
+        }
+
+        // Ripple rings
+        for(let i=0;i<3;i++){
+          const t=(rip+i/3)%1;
+          ctx.strokeStyle=outside?`rgba(255,34,68,${(1-t)*.22})`:`rgba(255,85,0,${(1-t)*.22})`;
+          ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(cx,cy,fR*.75*t,0,Math.PI*2);ctx.stroke();
+        }
+
+        // Outside: dashed distance line
+        if(outside){
+          const ea=.22,ed=.35;
+          const ex=cx+ed*sz*Math.cos(ea),ey=cy+ed*sz*Math.sin(ea);
+          const edX=cx+fR*Math.cos(ea),edY=cy+fR*Math.sin(ea);
+          dashedLine(edX,edY,ex,ey,'rgba(255,34,68,0.65)',7,4,1.5);
+          const lx=(edX+ex)/2+18,ly=(edY+ey)/2-4;
+          ctx.fillStyle='rgba(4,4,4,0.88)';
+          ctx.beginPath();
+          if(ctx.roundRect)ctx.roundRect(lx-20,ly-8,44,18,3);
+          else ctx.rect(lx-20,ly-8,44,18);
+          ctx.fill();
+          ctx.fillStyle='#FF2244';ctx.font='bold 9px "Barlow Condensed",sans-serif';
+          ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('1.2 KM',lx,ly+1);
+        }
+
+        // Outer orbit ring
+        dashedCircle(cx,cy,r*.84,'rgba(255,85,0,0.06)',5,9,1,rot);
+
+        // Rotating dots
+        ctx.fillStyle='rgba(255,85,0,0.2)';
+        for(let i=0;i<6;i++){const a=rot+i*Math.PI/3,dr=r*.81;ctx.beginPath();ctx.arc(cx+dr*Math.cos(a),cy+dr*Math.sin(a),2.5,0,Math.PI*2);ctx.fill()}
+
+        // Compass ticks
+        ctx.strokeStyle='rgba(255,85,0,0.12)';ctx.lineWidth=1.5;
+        for(let i=0;i<4;i++){const a=i*Math.PI/2;ctx.beginPath();ctx.moveTo(cx+r*.88*Math.cos(a),cy+r*.88*Math.sin(a));ctx.lineTo(cx+r*.78*Math.cos(a),cy+r*.78*Math.sin(a));ctx.stroke()}
+      }
+
+      (function tick(){
+        rot+=.005;
+        pulse+=.004*pulseD;if(pulse>1.04||pulse<.96)pulseD*=-1;
+        radar+=.008;if(radar>=1)radar=0;
+        rip+=.012;if(rip>=1)rip=0;
+        glow+=.012*glowD;if(glow>1||glow<.4)glowD*=-1;
+        draw();requestAnimationFrame(tick);
+      })();
+    })();
+
+    // ── INIT ──
+    runGeoCheck();
+</script>
+</body>
+</html>

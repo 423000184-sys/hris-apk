@@ -1,0 +1,77 @@
+buildscript {
+    ext.kotlin_version = '2.0.0'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.3.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath 'com.google.gms:google-services:4.4.1'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = '../build'
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+
+// ✅ I-apply ang evaluationDependsOn AFTER ng buildDir config
+subprojects {
+    project.evaluationDependsOn(':app')
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ✅ FIX: Override Kotlin language/api version sa LAHAT ng modules
+//         (kasama ang sentry_flutter na gumagamit ng Kotlin 1.6)
+// ═══════════════════════════════════════════════════════════════════
+subprojects {
+    // Kotlin compile tasks — i-override ang language version
+    plugins.withId('org.jetbrains.kotlin.android') {
+        tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+            kotlinOptions {
+                // 🔥 ITO ANG MISSING — kailangan i-override ang language version
+                languageVersion = "2.0"
+                apiVersion = "2.0"
+                jvmTarget = "17"
+                // Optional: suppress warnings para hindi ma-block ang build
+                freeCompilerArgs += [
+                        "-Xsuppress-version-warnings",
+                        "-opt-in=kotlin.RequiresOptIn",
+                ]
+            }
+        }
+    }
+
+    // Android library compile options
+    plugins.withId('com.android.library') {
+        project.android {
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+        }
+    }
+
+    // Android application compile options
+    plugins.withId('com.android.application') {
+        project.android {
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+        }
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

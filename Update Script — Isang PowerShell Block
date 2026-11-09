@@ -1,0 +1,92 @@
+ Paano Gamitin
+ $version = "v1.0.4"           # ← bagong version number
+ $title = "HRIS Biometrics v1.0.4"
+ $notes = "New updates and fixes"
+
+# ═══════════════════════════════════════════════════════════════
+# HRIS UPDATE SCRIPT — Buong Update Flow
+# ═══════════════════════════════════════════════════════════════
+
+# SETUP
+$gh = "C:\Program Files\GitHub CLI\gh.exe"
+$projectPath = "C:\Users\april\Documents\hris_biometrics"
+$hostingPath = "C:\hris-apk-hosting"
+
+# VERSION — PALITAN ITO KADA UPDATE
+$version = "v1.0.4"
+$title = "HRIS Biometrics v1.0.4"
+$notes = "New updates and fixes"
+
+Clear-Host
+Write-Host ""
+Write-Host "╔══════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║          HRIS UPDATE SCRIPT — $version                ║" -ForegroundColor Cyan
+Write-Host "╚══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+
+# STEP 1 — BUILD FLUTTER WEB
+Write-Host "[1/6] Building Flutter web..." -ForegroundColor Yellow
+cd $projectPath
+flutter clean | Out-Null
+flutter pub get | Out-Null
+flutter build web --release --base-href /app/
+Write-Host "✓ Flutter web built" -ForegroundColor Green
+Write-Host ""
+
+# STEP 2 — BUILD APK
+Write-Host "[2/6] Building Android APK..." -ForegroundColor Yellow
+flutter build apk --release
+Write-Host "✓ APK built" -ForegroundColor Green
+Write-Host ""
+
+# STEP 3 — COPY WEB BUILD SA /app/
+Write-Host "[3/6] Copying web build to hosting..." -ForegroundColor Yellow
+Remove-Item -Recurse -Force "$hostingPath\app" -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path "$hostingPath\app" | Out-Null
+Copy-Item -Path "$projectPath\build\web\*" -Destination "$hostingPath\app\" -Recurse -Force
+Write-Host "✓ Web build copied" -ForegroundColor Green
+Write-Host ""
+
+# STEP 4 — UPDATE LANDING PAGE VERSION
+Write-Host "[4/6] Updating landing page..." -ForegroundColor Yellow
+$landingPage = "$hostingPath\index.html"
+if (Test-Path $landingPage) {
+    $content = Get-Content -Path $landingPage -Raw
+    $content = $content -replace 'releases/download/v[\d.]+/', "releases/download/$version/"
+    $content = $content -replace 'Version [\d.]+', "Version $($version -replace 'v','')"
+    Set-Content -Path $landingPage -Value $content -Encoding utf8
+}
+Write-Host "✓ Landing page updated" -ForegroundColor Green
+Write-Host ""
+
+# STEP 5 — DEPLOY SA FIREBASE
+Write-Host "[5/6] Deploying to Firebase..." -ForegroundColor Yellow
+cd $hostingPath
+firebase deploy --only hosting
+Write-Host "✓ Deployed to Firebase" -ForegroundColor Green
+Write-Host ""
+
+# STEP 6 — CREATE GITHUB RELEASE
+Write-Host "[6/6] Creating GitHub release..." -ForegroundColor Yellow
+& $gh release create $version "$projectPath\build\app\outputs\flutter-apk\app-release.apk" --repo 423000184-sys/hris-apk --title $title --notes $notes
+Write-Host "✓ GitHub release created" -ForegroundColor Green
+Write-Host ""
+
+# STEP 7 — PUSH SOURCE CODE
+Write-Host "[7/7] Pushing source code..." -ForegroundColor Yellow
+cd $projectPath
+git add .
+git commit -m "Update $version"
+git push
+Write-Host "✓ Source pushed" -ForegroundColor Green
+Write-Host ""
+
+# DONE
+Write-Host "╔══════════════════════════════════════════════════════════╗" -ForegroundColor Green
+Write-Host "║                    ✓ COMPLETE!                          ║" -ForegroundColor Green
+Write-Host "╚══════════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host ""
+Write-Host "Landing:  https://week-9-activity-53484.web.app" -ForegroundColor Cyan
+Write-Host "App:      https://week-9-activity-53484.web.app/app/" -ForegroundColor Cyan
+Write-Host "Release:  https://github.com/423000184-sys/hris-apk/releases/tag/$version" -ForegroundColor Cyan
+Write-Host ""
