@@ -130,9 +130,6 @@ class DeviceBindingService {
     debugPrint('🔗 [DeviceBinding] Bound $deviceId to $employeeId');
   }
 
-  // ═══════════════════════════════════════════════════════════════════
-  // ADMIN REVOKE — tatawagin ng Admin Panel
-  // ═══════════════════════════════════════════════════════════════════
   Future<void> revokeBinding(String employeeId) async {
     await FirebaseFirestore.instance
         .collection('employees')
