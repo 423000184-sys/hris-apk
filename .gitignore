@@ -55,3 +55,5 @@ serviceAccount.json
 serviceAccount.json
 *.json.key
 **/serviceAccount*.json
+dist/
+*.ipa
