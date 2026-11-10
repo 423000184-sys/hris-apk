@@ -104,10 +104,10 @@ class PayrollPdfService {
         required Employee employee,
         required DateTime periodStart,
         required DateTime periodEnd,
-        String companyName = 'TOPTRADERS IMPORT EXPORT CORP',
+        String companyName = 'Jumbo Worldwide Express Logistics Inc.',
         String companyAddress =
-        '10/F GE Antonio Bldg., J.Bocobo-TM Kalaw Sts Ermita, Manila',
-        String companyContact = 'Tel. Nos. (02) 8525-5541',
+        'Unit 12N, 8 Adriatico Tower, Padre Faura Street, Ermita, Manila',
+        String companyContact = '',
         required double regularPay,
         required double basicPay,
         required double basicHours,

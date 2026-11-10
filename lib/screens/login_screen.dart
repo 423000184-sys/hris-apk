@@ -24,6 +24,8 @@ import '../services/security_hardening_service.dart';
 import '../services/fcm_service.dart';
 import '../services/employee_notification_listener.dart';
 import '../services/device_info_service.dart';
+import '../services/device_binding_service.dart';
+import '../services/demo_mode_service.dart'; // 🆕 IMPORT PARA SA DEMO
 import '../models/employee.dart';
 import 'biometric_method_screen.dart';
 import 'landing_screen.dart';
@@ -34,7 +36,7 @@ void _secureLog(String message) {
 }
 
 String _sha256Hex(String input) =>
-    sha256.convert(utf8.encode(input)).toString();
+sha256.convert(utf8.encode(input)).toString();
 
 enum _LoginStep { selectMethod, pinEntry, nfcWait, clientMeeting }
 enum _NetworkState { online, offline, checking }
@@ -46,23 +48,23 @@ class _ThemeColors {
   Color get bgTop => isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
   Color get bgMid => isDark ? const Color(0xFF0F0D0B) : const Color(0xFFFFF0E5);
   Color get bgBottom =>
-      isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFE3D1);
+  isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFE3D1);
   Color get cardBg =>
-      isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
+  isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
   Color get cardBorder =>
-      isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
+  isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
   Color get optionBorder =>
-      isDark ? const Color(0xFF7C2D12) : const Color(0xFFFDBA74);
+  isDark ? const Color(0xFF7C2D12) : const Color(0xFFFDBA74);
   Color get hoverBg =>
-      isDark ? const Color(0xFF27272A) : const Color(0xFFFFF7ED);
+  isDark ? const Color(0xFF27272A) : const Color(0xFFFFF7ED);
   Color get textDark => isDark ? Colors.white : const Color(0xFF1F2937);
   Color get textMuted =>
-      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
+  isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
   Color get infoBg => isDark ? const Color(0xFF1F1F23) : Colors.white;
   Color get infoBorder =>
-      isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
+  isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
   Color get infoText =>
-      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
+  isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
   Color get methodIconBg => isDark ? const Color(0xFF27272A) : Colors.white;
 }
 
@@ -70,12 +72,10 @@ class _ClientMeetingValidationResult {
   final bool dateOk;
   final bool timeOk;
   final bool locationOk;
-
   final DateTime now;
   final DateTime scheduledStart;
   final DateTime scheduledEnd;
   final Duration grace;
-
   final double? distanceMeters;
   final double clientRadius;
 
@@ -102,7 +102,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen>
-    with TickerProviderStateMixin, WidgetsBindingObserver {
+with TickerProviderStateMixin, WidgetsBindingObserver {
   String _pinInput = '';
   bool _isLoading = false;
   bool _nfcAvailable = false;
@@ -242,15 +242,18 @@ class _LoginScreenState extends State<LoginScreen>
   bool get _isPinLockedOut {
     if (_activeBackoff != null && _activeBackoff! > Duration.zero) return true;
     if (_memLockoutUntil != null &&
-        _memLockoutUntil!.isAfter(DateTime.now())) {
+      _memLockoutUntil!.isAfter(DateTime.now())) {
       return true;
-    }
-    return _pinLockoutUntil != null && _pinLockoutUntil!.isAfter(DateTime.now());
+      }
+      return _pinLockoutUntil != null && _pinLockoutUntil!.isAfter(DateTime.now());
   }
 
   @override
   void initState() {
     super.initState();
+
+    // 🚨 1. PATAYIN AGAD ANG DEMO MODE PAGBUKAS NG APP
+    DemoModeService.instance.endDemoSession();
 
     SharedPreferences.getInstance().then((prefs) {
       prefs.setBool('demo_mode_enabled', false);
@@ -262,24 +265,24 @@ class _LoginScreenState extends State<LoginScreen>
     _sessionNonce = _generateSessionNonce();
 
     _shakeController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 500));
+      vsync: this, duration: const Duration(milliseconds: 500));
     _fadeController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 600));
+      vsync: this, duration: const Duration(milliseconds: 600));
     _modalController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 260));
+      vsync: this, duration: const Duration(milliseconds: 260));
     _nfcPulseController =
-        AnimationController(vsync: this, duration: const Duration(seconds: 2));
+    AnimationController(vsync: this, duration: const Duration(seconds: 2));
 
     _shakeAnim = Tween<double>(begin: 0, end: 10).animate(
-        CurvedAnimation(parent: _shakeController, curve: Curves.elasticIn));
+      CurvedAnimation(parent: _shakeController, curve: Curves.elasticIn));
     _fadeAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(parent: _fadeController, curve: Curves.easeOut));
+      CurvedAnimation(parent: _fadeController, curve: Curves.easeOut));
     _modalScaleAnim = Tween<double>(begin: 0.9, end: 1.0).animate(
-        CurvedAnimation(parent: _modalController, curve: Curves.easeOutBack));
+      CurvedAnimation(parent: _modalController, curve: Curves.easeOutBack));
     _modalOpacityAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(parent: _modalController, curve: Curves.easeOut));
+      CurvedAnimation(parent: _modalController, curve: Curves.easeOut));
     _nfcPulseAnim = Tween<double>(begin: 0.9, end: 1.1).animate(
-        CurvedAnimation(parent: _nfcPulseController, curve: Curves.easeInOut));
+      CurvedAnimation(parent: _nfcPulseController, curve: Curves.easeInOut));
 
     _nfcPulseController.repeat(reverse: true);
     _fadeController.forward();
@@ -292,30 +295,30 @@ class _LoginScreenState extends State<LoginScreen>
 
     try {
       _networkSub =
-          ConnectivityService.instance.onStatusChange.listen((online) {
-            if (!mounted) return;
-            _secureLog('🌐 [LoginScreen] connectivity → online=$online');
+      ConnectivityService.instance.onStatusChange.listen((online) {
+        if (!mounted) return;
+        _secureLog('🌐 [LoginScreen] connectivity → online=$online');
 
-            if (!online) {
-              _overlayDelayTimer?.cancel();
-              setState(() {
-                _networkState = _NetworkState.offline;
-                _networkErrorMessage =
-                'No internet connection.\nPlease check your network.';
-                _showOfflineOverlay = false;
-              });
+        if (!online) {
+          _overlayDelayTimer?.cancel();
+          setState(() {
+            _networkState = _NetworkState.offline;
+            _networkErrorMessage =
+            'No internet connection.\nPlease check your network.';
+          _showOfflineOverlay = false;
+          });
 
-              _overlayDelayTimer = Timer(const Duration(milliseconds: 1200), () {
-                if (mounted && _networkState == _NetworkState.offline) {
-                  setState(() => _showOfflineOverlay = true);
-                }
-              });
-            } else if (_networkState == _NetworkState.offline) {
-              _overlayDelayTimer?.cancel();
-              _showOfflineOverlay = false;
-              _checkNetworkOnEntry();
+          _overlayDelayTimer = Timer(const Duration(milliseconds: 1200), () {
+            if (mounted && _networkState == _NetworkState.offline) {
+              setState(() => _showOfflineOverlay = true);
             }
           });
+        } else if (_networkState == _NetworkState.offline) {
+          _overlayDelayTimer?.cancel();
+          _showOfflineOverlay = false;
+          _checkNetworkOnEntry();
+        }
+      });
     } catch (e) {
       _secureLog('⚠️ [LoginScreen] connectivity failed: $e');
     }
@@ -343,7 +346,7 @@ class _LoginScreenState extends State<LoginScreen>
       await SecurityHardeningService.instance.checkDeviceIntegrity();
       if (!ok) {
         _secureLog('🚨 [Integrity] Compromised: '
-            '${SecurityHardeningService.instance.integrityIssues.join(",")}');
+        '${SecurityHardeningService.instance.integrityIssues.join(",")}');
         await _logSecurityEvent(
           type: 'compromised_device',
           severity: 'critical',
@@ -377,8 +380,8 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final obscure = state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden;
+    state == AppLifecycleState.paused ||
+    state == AppLifecycleState.hidden;
 
     if (obscure != _obscureContent && mounted) {
       setState(() => _obscureContent = obscure);
@@ -475,18 +478,18 @@ class _LoginScreenState extends State<LoginScreen>
         return;
       }
       if (_pinLockoutUntil == null ||
-          _pinLockoutUntil!.isBefore(DateTime.now())) {
+        _pinLockoutUntil!.isBefore(DateTime.now())) {
         timer.cancel();
-        setState(() {
-          _pinLockoutUntil = null;
-          _memLockoutUntil = null;
-          _pinFailedAttempts = 0;
-          _activeBackoff = null;
-        });
-        SecurityHardeningService.instance.resetFailures();
-        return;
-      }
-      setState(() {});
+      setState(() {
+        _pinLockoutUntil = null;
+        _memLockoutUntil = null;
+        _pinFailedAttempts = 0;
+        _activeBackoff = null;
+      });
+      SecurityHardeningService.instance.resetFailures();
+      return;
+        }
+        setState(() {});
     });
   }
 
@@ -514,8 +517,8 @@ class _LoginScreenState extends State<LoginScreen>
       if (!_isOnline) return;
 
       final hashDevice = _deviceFingerprint != null
-          ? _sha256Hex(_deviceFingerprint!)
-          : null;
+      ? _sha256Hex(_deviceFingerprint!)
+      : null;
 
       await FirebaseFirestore.instance.collection('security_events').add({
         'type': type,
@@ -535,7 +538,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _isRateLimited() {
     if (_lastPinAttemptAt == null) return false;
     final elapsed =
-        DateTime.now().difference(_lastPinAttemptAt!).inMilliseconds;
+    DateTime.now().difference(_lastPinAttemptAt!).inMilliseconds;
     return elapsed < _pinRateLimitMs;
   }
 
@@ -631,8 +634,8 @@ class _LoginScreenState extends State<LoginScreen>
 
     try {
       final assignment = await ClientMeetingAssignmentService.instance
-          .getActiveAssignmentForEmployee(emp.id)
-          .timeout(const Duration(seconds: 10));
+      .getActiveAssignmentForEmployee(emp.id)
+      .timeout(const Duration(seconds: 10));
 
       if (!mounted) return;
       setState(() {
@@ -718,10 +721,10 @@ class _LoginScreenState extends State<LoginScreen>
         permission = await Geolocator.requestPermission();
       }
       if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
+        permission == LocationPermission.deniedForever) {
         return false;
-      }
-      return true;
+        }
+        return true;
     } catch (e) {
       return false;
     }
@@ -822,8 +825,8 @@ class _LoginScreenState extends State<LoginScreen>
 
     try {
       final match = await ClientLocationService.instance
-          .validateLocation(lat: lat, lng: lng)
-          .timeout(const Duration(seconds: 8));
+      .validateLocation(lat: lat, lng: lng)
+      .timeout(const Duration(seconds: 8));
 
       if (!mounted) return;
       setState(() {
@@ -848,26 +851,26 @@ class _LoginScreenState extends State<LoginScreen>
       final name = (p.name ?? '').trim();
       String placeName = '';
       if (subLocality.isNotEmpty &&
-          locality.isNotEmpty &&
-          subLocality != locality) {
+        locality.isNotEmpty &&
+        subLocality != locality) {
         placeName = '$subLocality, $locality';
-      } else if (locality.isNotEmpty) {
-        placeName = locality;
-      } else if (subAdmin.isNotEmpty) {
-        placeName = subAdmin;
-      } else if (admin.isNotEmpty) {
-        placeName = admin;
-      } else if (subLocality.isNotEmpty) {
-        placeName = subLocality;
-      } else if (street.isNotEmpty) {
-        placeName = street;
-      } else if (name.isNotEmpty) {
-        placeName = name;
-      } else {
-        placeName = 'Unknown location';
-      }
-      if (!mounted) return;
-      setState(() => _currentPlaceName = placeName);
+        } else if (locality.isNotEmpty) {
+          placeName = locality;
+        } else if (subAdmin.isNotEmpty) {
+          placeName = subAdmin;
+        } else if (admin.isNotEmpty) {
+          placeName = admin;
+        } else if (subLocality.isNotEmpty) {
+          placeName = subLocality;
+        } else if (street.isNotEmpty) {
+          placeName = street;
+        } else if (name.isNotEmpty) {
+          placeName = name;
+        } else {
+          placeName = 'Unknown location';
+        }
+        if (!mounted) return;
+        setState(() => _currentPlaceName = placeName);
     } catch (e) {
       if (!mounted) return;
       setState(() => _currentPlaceName = 'Location unavailable');
@@ -889,18 +892,18 @@ class _LoginScreenState extends State<LoginScreen>
         _currentLongitude = null;
         _locationTimestamp = null;
         _currentPlaceName = 'Getting location…';
-        _currentAccuracy = null;
-        _isMockedGps = false;
-        _clientMatch = null;
-        _validatingClient = false;
+      _currentAccuracy = null;
+      _isMockedGps = false;
+      _clientMatch = null;
+      _validatingClient = false;
       });
     }
   }
 
   Future<void> _ensureFreshLocation() async {
     final age = _locationTimestamp != null
-        ? DateTime.now().difference(_locationTimestamp!).inSeconds
-        : 999;
+    ? DateTime.now().difference(_locationTimestamp!).inSeconds
+    : 999;
 
     if (age < 30 && _currentLatitude != null && _currentLongitude != null) {
       return;
@@ -979,7 +982,7 @@ class _LoginScreenState extends State<LoginScreen>
                   });
                 }
                 _setError(
-                    'Keyfob not registered. Locked for ${_remainingLockoutText()}.');
+                  'Keyfob not registered. Locked for ${_remainingLockoutText()}.');
               } else {
                 _setError('Keyfob not registered. Contact your Admin.');
               }
@@ -995,45 +998,38 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
-  /// ✅ MERGED NFC QUERY:
-  /// 1) Exact `where` query (fast, scalable)
-  /// 2) Clean-format `where` query (colons/spaces stripped)
-  /// 3) Client-side scan as last resort (legacy tag formats only)
   Future<Employee?> _findEmployeeByNfc(String serial) async {
     try {
       final cleanScanned = serial
-          .replaceAll(':', '')
-          .replaceAll(' ', '')
-          .toUpperCase();
+      .replaceAll(':', '')
+      .replaceAll(' ', '')
+      .toUpperCase();
 
-      // 1) Exact
       var snap = await FirebaseFirestore.instance
-          .collection('employees')
-          .where('nfcTagId', isEqualTo: serial)
-          .limit(1)
-          .get();
+      .collection('employees')
+      .where('nfcTagId', isEqualTo: serial)
+      .limit(1)
+      .get();
 
-      // 2) Clean format
       if (snap.docs.isEmpty) {
         snap = await FirebaseFirestore.instance
-            .collection('employees')
-            .where('nfcTagId', isEqualTo: cleanScanned)
-            .limit(1)
-            .get();
+        .collection('employees')
+        .where('nfcTagId', isEqualTo: cleanScanned)
+        .limit(1)
+        .get();
       }
 
       if (snap.docs.isNotEmpty) {
         final doc = snap.docs.first;
         final data = doc.data();
         _secureLog(
-            '✅ [NFC] Match found: ${doc.id} | isActive: ${data['isActive']}');
+          '✅ [NFC] Match found: ${doc.id} | isActive: ${data['isActive']}');
         if (_isEmployeeLoginable(data)) {
           return _docToEmployee(doc);
         }
         throw 'Account found but is inactive. Please contact Admin.';
       }
 
-      // 3) Client-side fallback (legacy formats — only if above missed)
       _secureLog('⚠️ [NFC] Falling back to client-side scan…');
       final all =
       await FirebaseFirestore.instance.collection('employees').get();
@@ -1041,14 +1037,14 @@ class _LoginScreenState extends State<LoginScreen>
       for (final doc in all.docs) {
         final data = doc.data();
         final dbTag = (data['nfcTagId'] ?? '')
-            .toString()
-            .replaceAll(':', '')
-            .replaceAll(' ', '')
-            .toUpperCase();
+        .toString()
+        .replaceAll(':', '')
+        .replaceAll(' ', '')
+        .toUpperCase();
 
         if (dbTag.isNotEmpty && dbTag == cleanScanned) {
           _secureLog(
-              '✅ [NFC] Fallback match: ${doc.id} | isActive: ${data['isActive']}');
+            '✅ [NFC] Fallback match: ${doc.id} | isActive: ${data['isActive']}');
           if (_isEmployeeLoginable(data)) {
             return _docToEmployee(doc);
           }
@@ -1076,17 +1072,17 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       final id = tryKey('nfca') ??
-          tryKey('nfcb') ??
-          tryKey('nfcf') ??
-          tryKey('nfcv') ??
-          tryKey('isodep') ??
-          tryKey('mifare-classic') ??
-          tryKey('mifare-ultralight');
+      tryKey('nfcb') ??
+      tryKey('nfcf') ??
+      tryKey('nfcv') ??
+      tryKey('isodep') ??
+      tryKey('mifare-classic') ??
+      tryKey('mifare-ultralight');
       if (id == null || id.isEmpty) return null;
       return id
-          .map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join(':')
-          .toUpperCase();
+      .map((b) => b.toRadixString(16).padLeft(2, '0'))
+      .join(':')
+      .toUpperCase();
     } catch (_) {
       return null;
     }
@@ -1123,7 +1119,7 @@ class _LoginScreenState extends State<LoginScreen>
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(Icons.lock_reset_rounded,
-                    color: _orange, size: 20),
+                                  color: _orange, size: 20),
               ),
               const SizedBox(width: 10),
               const Expanded(
@@ -1144,8 +1140,8 @@ class _LoginScreenState extends State<LoginScreen>
                   style: TextStyle(
                     fontSize: 12.5,
                     color: isDark
-                        ? const Color(0xFFB0B0B0)
-                        : const Color(0xFF71717A),
+                    ? const Color(0xFFB0B0B0)
+                    : const Color(0xFF71717A),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -1185,17 +1181,17 @@ class _LoginScreenState extends State<LoginScreen>
             TextButton(
               onPressed: submitting ? null : () => Navigator.pop(ctx),
               child: const Text('Cancel',
-                  style: TextStyle(color: Color(0xFF71717A))),
+                                style: TextStyle(color: Color(0xFF71717A))),
             ),
             FilledButton.icon(
               onPressed: submitting
-                  ? null
-                  : () async {
+              ? null
+              : () async {
                 final empId = empIdCtrl.text.trim();
                 if (empId.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                        content: Text('Please enter your Employee ID')),
+                      content: Text('Please enter your Employee ID')),
                   );
                   return;
                 }
@@ -1213,13 +1209,13 @@ class _LoginScreenState extends State<LoginScreen>
                 if (ok) _showRequestSuccessDialog(empId);
               },
               icon: submitting
-                  ? const SizedBox(
+              ? const SizedBox(
                 width: 14,
                 height: 14,
                 child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.white),
+                  strokeWidth: 2, color: Colors.white),
               )
-                  : const Icon(Icons.send_rounded, size: 16),
+              : const Icon(Icons.send_rounded, size: 16),
               label: Text(submitting ? 'Sending…' : 'Send Request'),
               style: FilledButton.styleFrom(
                 backgroundColor: _orange,
@@ -1245,17 +1241,17 @@ class _LoginScreenState extends State<LoginScreen>
       String? empDocId;
 
       var snap = await fs
-          .collection('employees')
-          .where('employeeId', isEqualTo: employeeIdentifier)
-          .limit(1)
-          .get();
+      .collection('employees')
+      .where('employeeId', isEqualTo: employeeIdentifier)
+      .limit(1)
+      .get();
 
       if (snap.docs.isEmpty && employeeIdentifier.contains('@')) {
         snap = await fs
-            .collection('employees')
-            .where('email', isEqualTo: employeeIdentifier.toLowerCase())
-            .limit(1)
-            .get();
+        .collection('employees')
+        .where('email', isEqualTo: employeeIdentifier.toLowerCase())
+        .limit(1)
+        .get();
       }
 
       if (snap.docs.isEmpty) {
@@ -1275,11 +1271,11 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       final empName = empData != null
-          ? (empData['name'] ??
-          '${empData['firstName'] ?? ''} ${empData['lastName'] ?? ''}')
-          .toString()
-          .trim()
-          : employeeIdentifier;
+      ? (empData['name'] ??
+      '${empData['firstName'] ?? ''} ${empData['lastName'] ?? ''}')
+      .toString()
+      .trim()
+      : employeeIdentifier;
 
       final empEmail = (empData?['email'] ?? '').toString();
 
@@ -1294,8 +1290,8 @@ class _LoginScreenState extends State<LoginScreen>
         'sessionNonce': _sessionNonce,
         'platform': kIsWeb ? 'web' : 'mobile',
         'deviceHash': _deviceFingerprint != null
-            ? _sha256Hex(_deviceFingerprint!)
-            : null,
+        ? _sha256Hex(_deviceFingerprint!)
+        : null,
       });
 
       await fs.collection('admin_notifications').add({
@@ -1303,20 +1299,20 @@ class _LoginScreenState extends State<LoginScreen>
         'title': '🔐 Password Change Request',
         'message':
         '$empName ($employeeIdentifier) is requesting a password/PIN reset.'
-            '${reason.isNotEmpty ? " Reason: $reason" : ""}',
-        'employeeId': empDocId,
-        'employeeName': empName,
-        'employeeIdentifier': employeeIdentifier,
-        'priority': 'high',
-        'read': false,
+      '${reason.isNotEmpty ? " Reason: $reason" : ""}',
+      'employeeId': empDocId,
+      'employeeName': empName,
+      'employeeIdentifier': employeeIdentifier,
+      'priority': 'high',
+      'read': false,
+      'requestId': reqRef.id,
+      'metadata': {
         'requestId': reqRef.id,
-        'metadata': {
-          'requestId': reqRef.id,
-          'reason': reason,
-          'employeeIdentifier': employeeIdentifier,
-        },
-        'timestamp': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(),
+        'reason': reason,
+        'employeeIdentifier': employeeIdentifier,
+      },
+      'timestamp': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
       });
 
       await _logSecurityEvent(
@@ -1354,7 +1350,7 @@ class _LoginScreenState extends State<LoginScreen>
                 color: Colors.green.withValues(alpha: 0.15),
               ),
               child: const Icon(Icons.check_circle_rounded,
-                  color: Colors.green, size: 32),
+                                color: Colors.green, size: 32),
             ),
             const SizedBox(height: 16),
             const Text(
@@ -1364,10 +1360,10 @@ class _LoginScreenState extends State<LoginScreen>
             const SizedBox(height: 10),
             const Text(
               'Your password change request has been sent to Admin/HR.\n\n'
-                  'Please wait for their approval.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  fontSize: 13, height: 1.5, color: Color(0xFF71717A)),
+            'Please wait for their approval.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13, height: 1.5, color: Color(0xFF71717A)),
             ),
           ],
         ),
@@ -1379,13 +1375,13 @@ class _LoginScreenState extends State<LoginScreen>
               style: ElevatedButton.styleFrom(
                 backgroundColor: _orange,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
               ),
               child: const Text('OK',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
+                                style: TextStyle(fontWeight: FontWeight.w700)),
             ),
           ),
         ],
@@ -1393,9 +1389,55 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🚨 DITO ANG EMPLOYEE LOGIN LOGIC 🚨
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _loginWithPin() async {
     if (_pinInput.length < 4) return;
     if (_loggingIn) return;
+
+    // 🚨 CUSTOM LOGIN BYPASS PARA SA EMPLOYEE 🚨
+    // Palitan ang '1234' kung gusto mo ibang PIN
+    if (_pinInput == '1234') {
+      _loggingIn = true;
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+
+      // Gumawa ng dummy employee para makalampas
+      final dummyEmployee = Employee.fromMap({
+        'id': 'custom-emp-id',
+        'employee_id': 'EMP-CUSTOM',
+        'first_name': 'Custom',
+        'last_name': 'Employee',
+        'full_name': 'Custom Employee',
+        'email': 'employee@racoma.com',
+        'role': 'Employee',
+        'position': 'Staff',
+        'is_active': 1,
+        'created_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+
+      _activeEmployee = dummyEmployee;
+      _loggingIn = false;
+
+      if (mounted) {
+        // Deretso sa Biometric Method Screen (lalaktawan ang Firebase checks)
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => BiometricMethodScreen(
+              employee: dummyEmployee,
+              arrivalTime: _arrivalTime,
+              mode: BiometricFlowMode.login,
+            ),
+          ),
+        );
+      }
+      return; // 🛑 Patigilin dito, huwag nang tumuloy sa totoong Firebase login
+    }
+    // ═══════════════════════════════════════════════════════════════
 
     if (!kIsWeb && _deviceCompromised) {
       _setError('This device is flagged as compromised. Login blocked.');
@@ -1461,7 +1503,7 @@ class _LoginScreenState extends State<LoginScreen>
           type: 'pin_failed',
           severity: failCount >= 3 ? 'high' : 'medium',
           details: 'Failed PIN attempt #$failCount'
-              '${weak ? " (weak pattern)" : ""}',
+        '${weak ? " (weak pattern)" : ""}',
         );
 
         if (delay > Duration.zero) {
@@ -1473,7 +1515,7 @@ class _LoginScreenState extends State<LoginScreen>
             });
           }
           throw 'Too many failed attempts. Account locked for '
-              '${_remainingLockoutText()}.';
+          '${_remainingLockoutText()}.';
         }
 
         final remaining = _maxPinAttempts - _pinFailedAttempts;
@@ -1516,9 +1558,9 @@ class _LoginScreenState extends State<LoginScreen>
         }
         try {
           await FirebaseFirestore.instance
-              .collection('employees')
-              .doc(employee.id)
-              .update({
+          .collection('employees')
+          .doc(employee.id)
+          .update({
             'isOnline': true,
             'isLoggedIn': true,
             'isActive': true,
@@ -1549,8 +1591,8 @@ class _LoginScreenState extends State<LoginScreen>
           setState(() {
             _isLoading = false;
             _pinInput = '';
-            _errorMessage = null;
-            _clientMeetingMode = false;
+          _errorMessage = null;
+          _clientMeetingMode = false;
           });
         }
         _goToStep(_LoginStep.clientMeeting);
@@ -1578,10 +1620,10 @@ class _LoginScreenState extends State<LoginScreen>
       final lookup = SecurityHardeningService.instance.pinLookupHash(cleanPin);
 
       final snap = await FirebaseFirestore.instance
-          .collection('employees')
-          .where('pinLookupHash', isEqualTo: lookup)
-          .limit(5)
-          .get();
+      .collection('employees')
+      .where('pinLookupHash', isEqualTo: lookup)
+      .limit(5)
+      .get();
 
       if (snap.docs.isNotEmpty) {
         for (final doc in snap.docs) {
@@ -1593,7 +1635,7 @@ class _LoginScreenState extends State<LoginScreen>
 
           if (salt != null && hash != null) {
             final ok = await SecurityHardeningService.instance
-                .verifyPinAsync(cleanPin, salt, hash);
+            .verifyPinAsync(cleanPin, salt, hash);
             if (!ok) continue;
           }
 
@@ -1609,10 +1651,10 @@ class _LoginScreenState extends State<LoginScreen>
 
       _secureLog('⚠️ [PIN Query] Falling back to legacy plaintext lookup');
       final legacy = await FirebaseFirestore.instance
-          .collection('employees')
-          .where('pin', isEqualTo: cleanPin)
-          .limit(5)
-          .get();
+      .collection('employees')
+      .where('pin', isEqualTo: cleanPin)
+      .limit(5)
+      .get();
 
       for (final doc in legacy.docs) {
         if (_isEmployeeLoginable(doc.data())) {
@@ -1637,10 +1679,10 @@ class _LoginScreenState extends State<LoginScreen>
       if (pinInt != null) {
         _secureLog('⚠️ [PIN Query] Trying legacy numeric pin ($pinInt)');
         final legacyInt = await FirebaseFirestore.instance
-            .collection('employees')
-            .where('pin', isEqualTo: pinInt)
-            .limit(5)
-            .get();
+        .collection('employees')
+        .where('pin', isEqualTo: pinInt)
+        .limit(5)
+        .get();
 
         for (final doc in legacyInt.docs) {
           if (_isEmployeeLoginable(doc.data())) {
@@ -1673,9 +1715,9 @@ class _LoginScreenState extends State<LoginScreen>
     if (empId.isEmpty) return null;
     try {
       final doc = await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(empId)
-          .get();
+      .collection('employees')
+      .doc(empId)
+      .get();
       if (!doc.exists) return null;
       return _docToEmployee(doc);
     } catch (e) {
@@ -1710,13 +1752,13 @@ class _LoginScreenState extends State<LoginScreen>
       'nfc_tag_id': data['nfcTagId'],
       'is_active': data['status'] == 'active' ? 1 : 0,
       'created_at': (data['createdAt'] as Timestamp?)
-          ?.toDate()
-          .toIso8601String() ??
-          DateTime.now().toIso8601String(),
+      ?.toDate()
+      .toIso8601String() ??
+      DateTime.now().toIso8601String(),
       'updated_at': (data['updatedAt'] as Timestamp?)
-          ?.toDate()
-          .toIso8601String() ??
-          DateTime.now().toIso8601String(),
+      ?.toDate()
+      .toIso8601String() ??
+      DateTime.now().toIso8601String(),
     });
   }
 
@@ -1725,9 +1767,9 @@ class _LoginScreenState extends State<LoginScreen>
       final currentUser = FirebaseAuth.instance.currentUser;
 
       final snap = await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(employee.id)
-          .get();
+      .collection('employees')
+      .doc(employee.id)
+      .get();
       final data = snap.data();
       final email = (data?['email'] as String? ?? '').trim();
       final password = (data?['password'] as String? ?? '').trim();
@@ -1739,55 +1781,55 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       if (currentUser != null &&
-          existingAuthUid.isNotEmpty &&
-          currentUser.uid == existingAuthUid) {
+        existingAuthUid.isNotEmpty &&
+        currentUser.uid == existingAuthUid) {
         _secureLog('✅ [Auth] Already signed in as $existingAuthUid');
-        return;
-      }
-
-      try {
-        final cred = await FirebaseAuth.instance
-            .signInWithEmailAndPassword(email: email, password: password);
-        _secureLog('✅ [Auth] Signed in: ${cred.user?.uid}');
-
-        if (cred.user != null && existingAuthUid != cred.user!.uid) {
-          try {
-            await FirebaseFirestore.instance
-                .collection('employees')
-                .doc(employee.id)
-                .update({'authUid': cred.user!.uid});
-          } catch (e) {
-            _secureLog('⚠️ [Auth] Failed to save authUid: $e');
-          }
+      return;
         }
-        return;
-      } catch (signInErr) {
-        final code = signInErr is FirebaseAuthException ? signInErr.code : '';
-        _secureLog('⚠️ [Auth] Sign-in failed ($code), trying create...');
 
-        if (_notFoundCodes.contains(code)) {
-          try {
-            final cred = await FirebaseAuth.instance
-                .createUserWithEmailAndPassword(
-                email: email, password: password);
-            _secureLog('✅ [Auth] Created: ${cred.user?.uid}');
-            final uid = cred.user?.uid ?? '';
-            if (uid.isNotEmpty) {
-              try {
-                await FirebaseFirestore.instance
-                    .collection('employees')
-                    .doc(employee.id)
-                    .update({'authUid': uid});
-              } catch (e) {
-                _secureLog('⚠️ [Auth] Failed to save authUid: $e');
-              }
+        try {
+          final cred = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(email: email, password: password);
+          _secureLog('✅ [Auth] Signed in: ${cred.user?.uid}');
+
+          if (cred.user != null && existingAuthUid != cred.user!.uid) {
+            try {
+              await FirebaseFirestore.instance
+              .collection('employees')
+              .doc(employee.id)
+              .update({'authUid': cred.user!.uid});
+            } catch (e) {
+              _secureLog('⚠️ [Auth] Failed to save authUid: $e');
             }
-            return;
-          } catch (createErr) {
-            _secureLog('❌ [Auth] Create failed: $createErr');
+          }
+          return;
+        } catch (signInErr) {
+          final code = signInErr is FirebaseAuthException ? signInErr.code : '';
+          _secureLog('⚠️ [Auth] Sign-in failed ($code), trying create...');
+
+          if (_notFoundCodes.contains(code)) {
+            try {
+              final cred = await FirebaseAuth.instance
+              .createUserWithEmailAndPassword(
+                email: email, password: password);
+              _secureLog('✅ [Auth] Created: ${cred.user?.uid}');
+              final uid = cred.user?.uid ?? '';
+              if (uid.isNotEmpty) {
+                try {
+                  await FirebaseFirestore.instance
+                  .collection('employees')
+                  .doc(employee.id)
+                  .update({'authUid': uid});
+                } catch (e) {
+                  _secureLog('⚠️ [Auth] Failed to save authUid: $e');
+                }
+              }
+              return;
+            } catch (createErr) {
+              _secureLog('❌ [Auth] Create failed: $createErr');
+            }
           }
         }
-      }
     } catch (e) {
       _secureLog('❌ [Auth] Outer error: $e');
     }
@@ -1808,48 +1850,82 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
-  /// ✅ CRITICAL: Auth FIRST, then attendance query.
   Future<void> _openSession(Employee employee) async {
     try {
       if (_sessionNonce.length < 16) {
         throw StateError('Session nonce invalid');
       }
 
-      // ✅ STEP 1: Sign in to FirebaseAuth FIRST (needed for Firestore rules)
+      // 🔒 DEVICE BINDING CHECK
+      final bindingStatus = await DeviceBindingService().checkBinding(employee.id);
+
+      debugPrint('🔍 [DeviceBinding] allowed=${bindingStatus.allowed}, '
+          'needsBinding=${bindingStatus.needsBinding}, reason=${bindingStatus.reason}');
+
+      if (!bindingStatus.allowed) {
+        _secureLog('🚨 [DeviceBinding] Rejected: ${bindingStatus.reason}');
+
+        try {
+          await FirebaseAuth.instance.signOut();
+        } catch (_) {}
+
+        if (mounted) {
+          setState(() => _isLoading = false);
+          _showBlockedDialog(
+            title: 'Device Not Authorized',
+            icon: Icons.phonelink_lock_rounded,
+            iconColor: Colors.red,
+            message: 'This account is currently bound to another device.\n\n'
+                'To transfer your access, please contact HR/Admin. '
+                'They need to revoke the old device before you can '
+                'log in on this new phone.\n\n'
+                '⚠️ If you are using the SAME phone and did not change devices, '
+                'show this to HR/Admin to refresh your binding record.',
+          );
+        }
+        return;
+      }
+
+      // 🆕 AUTO-BIND KUNG BAGO ANG DEVICE O KAKA-REVOKE LANG
+      if (bindingStatus.needsBinding) {
+        try {
+          await DeviceBindingService().bindDevice(employee.id);
+          _secureLog('🔗 [DeviceBinding] Bound new device to ${employee.id}');
+        } catch (e) {
+          _secureLog('⚠️ [DeviceBinding] Bind failed: $e');
+        }
+      }
+
       await _signIntoFirebaseAuth(employee);
 
-      // ✅ STEP 2: Safe to query attendance_logs now
       final deviceId = await DeviceInfoService.instance.getUniqueDeviceId();
       final deviceModel = await DeviceInfoService.instance.getDeviceModel();
 
       final latestAttendance = await FirebaseFirestore.instance
-          .collection('attendance_logs')
-          .where('employeeId', isEqualTo: employee.employeeId)
-          .orderBy('timestamp', descending: true)
-          .limit(1)
-          .get();
+      .collection('attendance_logs')
+      .where('employeeId', isEqualTo: employee.employeeId)
+      .orderBy('timestamp', descending: true)
+      .limit(1)
+      .get();
 
       if (latestAttendance.docs.isNotEmpty) {
         final lastRecord = latestAttendance.docs.first.data();
         final lastType = lastRecord['type'];
         final activeDeviceId = lastRecord['device_id'];
         final activeDeviceModel =
-            lastRecord['device_model'] ?? 'another device';
+        lastRecord['device_model'] ?? 'another device';
 
         final now = DateTime.now();
         final todayStr =
-            '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
         final recordDate = lastRecord['date'] ?? '';
 
-        _secureLog(
-            '🔍 [OneDevice] Last Type: $lastType | Record Device: $activeDeviceId | My Device: $deviceId');
-
         if (lastType == 'clock_in' &&
-            activeDeviceId != null &&
-            activeDeviceId != deviceId &&
-            recordDate == todayStr) {
+          activeDeviceId != null &&
+          activeDeviceId != deviceId &&
+          recordDate == todayStr) {
           throw "DEVICE LOCKED: You are still clocked in on $activeDeviceModel. Please clock out from that device first.";
-        }
+          }
       }
 
       _activeEmployee = employee;
@@ -1857,21 +1933,18 @@ class _LoginScreenState extends State<LoginScreen>
 
       try {
         await EmployeeNotificationListener.instance.start(employee.id);
-        _secureLog('✅ [NotifListener] Started for ${employee.id}');
       } catch (e) {
         _secureLog('⚠️ [NotifListener] Start failed: $e');
       }
 
       try {
         await FcmService.instance.associateWithEmployee(employee.id);
-        _secureLog('✅ [FCM] Token associated with ${employee.id}');
       } catch (e) {
         _secureLog('⚠️ [FCM] Associate failed: $e');
       }
 
       try {
         OneSignal.login(employee.id);
-        _secureLog('✅ [OneSignal] Linked employee: ${employee.id}');
       } catch (e) {
         _secureLog('⚠️ [OneSignal] Link failed: $e');
       }
@@ -1890,9 +1963,9 @@ class _LoginScreenState extends State<LoginScreen>
 
       try {
         await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(employee.id)
-            .update({
+        .collection('employees')
+        .doc(employee.id)
+        .update({
           'isOnline': true,
           'isLoggedIn': true,
           'isActive': true,
@@ -1976,7 +2049,7 @@ class _LoginScreenState extends State<LoginScreen>
     if (key == 'del') {
       if (_pinInput.isNotEmpty) {
         setState(
-                () => _pinInput = _pinInput.substring(0, _pinInput.length - 1));
+          () => _pinInput = _pinInput.substring(0, _pinInput.length - 1));
       }
     } else if (_pinInput.length < 4) {
       setState(() => _pinInput += key);
@@ -2013,7 +2086,7 @@ class _LoginScreenState extends State<LoginScreen>
       _step = step;
       _errorMessage = null;
       _pinInput = '';
-      _captureSuccess = false;
+    _captureSuccess = false;
     });
     _modalController.forward(from: 0);
     if (step == _LoginStep.nfcWait) _startNfcSession();
@@ -2028,7 +2101,7 @@ class _LoginScreenState extends State<LoginScreen>
   void _goBack() {
     if (_step == _LoginStep.selectMethod) {
       Navigator.pushReplacement(context,
-          MaterialPageRoute(builder: (_) => const LandingScreen()));
+                                MaterialPageRoute(builder: (_) => const LandingScreen()));
     } else {
       if (_step == _LoginStep.nfcWait && !kIsWeb) {
         try {
@@ -2048,9 +2121,9 @@ class _LoginScreenState extends State<LoginScreen>
             _step = _LoginStep.selectMethod;
             _errorMessage = null;
             _pinInput = '';
-            _captureSuccess = false;
-            _clientMeetingMode = false;
-            _activeAssignment = null;
+          _captureSuccess = false;
+          _clientMeetingMode = false;
+          _activeAssignment = null;
           });
           _checkActiveMeeting();
         }
@@ -2098,19 +2171,19 @@ class _LoginScreenState extends State<LoginScreen>
       if (authUser != null) {
         try {
           final snap = await FirebaseFirestore.instance
-              .collection('employees')
-              .where('authUid', isEqualTo: authUser.uid)
-              .limit(1)
-              .get();
+          .collection('employees')
+          .where('authUid', isEqualTo: authUser.uid)
+          .limit(1)
+          .get();
 
           if (snap.docs.isNotEmpty) {
             resolved = _docToEmployee(snap.docs.first);
           } else if (authUser.email != null) {
             final emailSnap = await FirebaseFirestore.instance
-                .collection('employees')
-                .where('email', isEqualTo: authUser.email!.toLowerCase())
-                .limit(1)
-                .get();
+            .collection('employees')
+            .where('email', isEqualTo: authUser.email!.toLowerCase())
+            .limit(1)
+            .get();
             if (emailSnap.docs.isNotEmpty) {
               resolved = _docToEmployee(emailSnap.docs.first);
             }
@@ -2128,9 +2201,8 @@ class _LoginScreenState extends State<LoginScreen>
         title: 'Not Logged In',
         icon: Icons.lock_rounded,
         iconColor: Colors.orange,
-        message:
-        'Please log in first using your PIN or Key Fob before accessing '
-            'Client Meeting check-in.',
+        message: 'Please log in first using your PIN or Key Fob before accessing '
+      'Client Meeting check-in.',
       );
       return;
     }
@@ -2142,8 +2214,8 @@ class _LoginScreenState extends State<LoginScreen>
     try {
       final empId = employee.id;
       final assignment = await ClientMeetingAssignmentService.instance
-          .getActiveAssignmentForEmployee(empId)
-          .timeout(const Duration(seconds: 10));
+      .getActiveAssignmentForEmployee(empId)
+      .timeout(const Duration(seconds: 10));
 
       if (!mounted) return;
 
@@ -2158,9 +2230,9 @@ class _LoginScreenState extends State<LoginScreen>
           icon: Icons.lock_rounded,
           iconColor: Colors.orange,
           message: 'You don\'t have a scheduled client meeting right now.\n\n'
-              'Admin or HR must assign you a client meeting before you can '
-              'log one.\n\n'
-              '📞 Please contact HR/Admin to request an assignment.',
+        'Admin or HR must assign you a client meeting before you can '
+        'log one.\n\n'
+        '📞 Please contact HR/Admin to request an assignment.',
         );
         return;
       }
@@ -2212,2828 +2284,2854 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<_ClientMeetingValidationResult> _validateClientMeetingPreconditions(
-      ClientMeetingAssignment a) async {
-    final now = DateTime.now();
+    ClientMeetingAssignment a) async {
+      final now = DateTime.now();
 
-    final scheduledDate = DateTime(
-      a.scheduledStart.year,
-      a.scheduledStart.month,
-      a.scheduledStart.day,
-    );
-    final today = DateTime(now.year, now.month, now.day);
-    final dateOk = scheduledDate == today;
+      final scheduledDate = DateTime(
+        a.scheduledStart.year,
+        a.scheduledStart.month,
+        a.scheduledStart.day,
+      );
+      final today = DateTime(now.year, now.month, now.day);
+      final dateOk = scheduledDate == today;
 
-    Duration grace = const Duration(minutes: 15);
-    try {
-      final g = (a as dynamic).gracePeriod;
-      if (g is Duration) grace = g;
-    } catch (_) {}
+      Duration grace = const Duration(minutes: 15);
+      try {
+        final g = (a as dynamic).gracePeriod;
+        if (g is Duration) grace = g;
+      } catch (_) {}
 
-    final windowStart = a.scheduledStart.subtract(grace);
-    final windowEnd = a.scheduledEnd.add(grace);
+      final windowStart = a.scheduledStart.subtract(grace);
+      final windowEnd = a.scheduledEnd.add(grace);
 
-    final timeOk = now.isAfter(windowStart) && now.isBefore(windowEnd);
+      final timeOk = now.isAfter(windowStart) && now.isBefore(windowEnd);
 
-    double? distance;
-    bool locationOk = false;
+      double? distance;
+      bool locationOk = false;
 
-    final hasClientCoords =
-        a.clientLat.abs() > 0.0001 || a.clientLng.abs() > 0.0001;
+      final hasClientCoords =
+      a.clientLat.abs() > 0.0001 || a.clientLng.abs() > 0.0001;
 
-    if (!hasClientCoords) {
-      locationOk = true;
-    } else {
-      await _ensureFreshLocation();
-
-      if (_currentLatitude != null && _currentLongitude != null) {
-        if (_isMockedGps) {
-          locationOk = false;
-        } else {
-          distance = Geolocator.distanceBetween(
-            _currentLatitude!,
-            _currentLongitude!,
-            a.clientLat,
-            a.clientLng,
-          );
-          locationOk = distance <= a.clientRadius;
-        }
+      if (!hasClientCoords) {
+        locationOk = true;
       } else {
-        locationOk = false;
+        await _ensureFreshLocation();
+
+        if (_currentLatitude != null && _currentLongitude != null) {
+          if (_isMockedGps) {
+            locationOk = false;
+          } else {
+            distance = Geolocator.distanceBetween(
+              _currentLatitude!,
+              _currentLongitude!,
+              a.clientLat,
+              a.clientLng,
+            );
+            locationOk = distance <= a.clientRadius;
+          }
+        } else {
+          locationOk = false;
+        }
       }
+
+      return _ClientMeetingValidationResult(
+        dateOk: dateOk,
+        timeOk: timeOk,
+        locationOk: locationOk,
+        now: now,
+        scheduledStart: a.scheduledStart,
+        scheduledEnd: a.scheduledEnd,
+        grace: grace,
+        distanceMeters: distance,
+        clientRadius: a.clientRadius,
+      );
     }
 
-    return _ClientMeetingValidationResult(
-      dateOk: dateOk,
-      timeOk: timeOk,
-      locationOk: locationOk,
-      now: now,
-      scheduledStart: a.scheduledStart,
-      scheduledEnd: a.scheduledEnd,
-      grace: grace,
-      distanceMeters: distance,
-      clientRadius: a.clientRadius,
-    );
-  }
-
-  void _showValidatingDialog() {
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-        return AlertDialog(
-          backgroundColor: isDark ? const Color(0xFF18181B) : Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          content: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  width: 48,
-                  height: 48,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 3,
-                    color: _orange,
-                  ),
-                ),
-                SizedBox(height: 16),
-                Text('Verifying...',
-                    style:
-                    TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                SizedBox(height: 6),
-                Text('Checking date, time, and location',
-                    style:
-                    TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-              ],
+    void _showValidatingDialog() {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) {
+          final isDark = Theme.of(ctx).brightness == Brightness.dark;
+          return AlertDialog(
+            backgroundColor: isDark ? const Color(0xFF18181B) : Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
             ),
-          ),
-        );
-      },
-    );
-  }
+            content: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3,
+                      color: _orange,
+                    ),
+                  ),
+                  SizedBox(height: 16),
+                  Text('Verifying...',
+                       style:
+                       TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                       SizedBox(height: 6),
+                       Text('Checking date, time, and location',
+                            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    }
 
-  Future<void> _showValidationFailedDialog(
+    Future<void> _showValidationFailedDialog(
       _ClientMeetingValidationResult v, ClientMeetingAssignment a) async {
-    if (!mounted) return;
+        if (!mounted) return;
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+        final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    late String failReason;
-    IconData failIcon = Icons.error_outline_rounded;
-    Color failColor = Colors.red;
+        late String failReason;
+        IconData failIcon = Icons.error_outline_rounded;
+        Color failColor = Colors.red;
 
-    if (!v.dateOk) {
-      failReason =
-      'Wrong date. The meeting is scheduled on ${a.dateLabel}, '
+        if (!v.dateOk) {
+          failReason = 'Wrong date. The meeting is scheduled on ${a.dateLabel}, '
           'but today is ${_formatFullDate(v.now)}.';
-      failIcon = Icons.calendar_today_rounded;
-    } else if (!v.timeOk) {
-      if (v.now.isBefore(v.scheduledStart.subtract(v.grace))) {
-        final mins = v.scheduledStart.difference(v.now).inMinutes;
-        failReason = 'You are too early. The meeting starts at '
+          failIcon = Icons.calendar_today_rounded;
+        } else if (!v.timeOk) {
+          if (v.now.isBefore(v.scheduledStart.subtract(v.grace))) {
+            final mins = v.scheduledStart.difference(v.now).inMinutes;
+            failReason = 'You are too early. The meeting starts at '
             '${_formatTimeOfDay(v.scheduledStart)}.\n\n'
             'About $mins more minutes before it begins.';
-      } else {
-        final mins = v.now.difference(v.scheduledEnd).inMinutes;
-        failReason = 'You are late. The meeting ended at '
+          } else {
+            final mins = v.now.difference(v.scheduledEnd).inMinutes;
+            failReason = 'You are late. The meeting ended at '
             '${_formatTimeOfDay(v.scheduledEnd)}.\n\n'
             'You are $mins minutes late.';
-      }
-      failIcon = Icons.access_time_rounded;
-      failColor = Colors.orange;
-    } else if (!v.locationOk) {
-      if (_isMockedGps) {
-        failReason = 'Mock / fake GPS is not allowed.\n\n'
+          }
+          failIcon = Icons.access_time_rounded;
+          failColor = Colors.orange;
+        } else if (!v.locationOk) {
+          if (_isMockedGps) {
+            failReason = 'Mock / fake GPS is not allowed.\n\n'
             'Please turn off mock location in your device settings.';
-        failIcon = Icons.warning_amber_rounded;
-      } else if (v.distanceMeters != null) {
-        failReason = 'You are not at the client location.\n\n'
+            failIcon = Icons.warning_amber_rounded;
+          } else if (v.distanceMeters != null) {
+            failReason = 'You are not at the client location.\n\n'
             'Your distance: ${v.distanceMeters!.toStringAsFixed(0)} meters\n'
             'Allowed radius: ${v.clientRadius.toStringAsFixed(0)} meters\n\n'
             'Move closer to ${a.clientName} before checking in.';
-        failIcon = Icons.location_off_rounded;
-      } else {
-        failReason = 'Unable to get your GPS location.\n\n'
+            failIcon = Icons.location_off_rounded;
+          } else {
+            failReason = 'Unable to get your GPS location.\n\n'
             'Please turn on location services and try again.';
-        failIcon = Icons.location_disabled_rounded;
-      }
-    } else {
-      failReason = 'Unable to verify the assignment. Please try again.';
-    }
+            failIcon = Icons.location_disabled_rounded;
+          }
+        } else {
+          failReason = 'Unable to verify the assignment. Please try again.';
+        }
 
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF18181B) : Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        contentPadding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: failColor.withValues(alpha: 0.15),
-              ),
-              child: Icon(failIcon, color: failColor, size: 30),
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: isDark ? const Color(0xFF18181B) : Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
             ),
-            const SizedBox(height: 16),
-            Text(
-              'Cannot Check-In',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: isDark ? Colors.white : const Color(0xFF1F2937),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              failReason,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.5,
-                color:
-                isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.03)
-                    : const Color(0xFFF9FAFB),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.08)
-                      : const Color(0xFFE5E7EB),
-                ),
-              ),
-              child: Column(
-                children: [
-                  _validationRow(
-                    label: 'Date',
-                    ok: v.dateOk,
-                    detail: a.dateLabel,
-                    isDark: isDark,
-                  ),
-                  const SizedBox(height: 8),
-                  _validationRow(
-                    label: 'Time',
-                    ok: v.timeOk,
-                    detail: '${_formatTimeOfDay(v.scheduledStart)} → '
-                        '${_formatTimeOfDay(v.scheduledEnd)}',
-                    isDark: isDark,
-                  ),
-                  const SizedBox(height: 8),
-                  _validationRow(
-                    label: 'Location',
-                    ok: v.locationOk,
-                    detail: v.distanceMeters != null
-                        ? '${v.distanceMeters!.toStringAsFixed(0)}m / '
-                        '${v.clientRadius.toStringAsFixed(0)}m'
-                        : 'No GPS',
-                    isDark: isDark,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () => Navigator.pop(ctx),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _orange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              child: const Text('OK',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _validationRow({
-    required String label,
-    required bool ok,
-    required String detail,
-    required bool isDark,
-  }) {
-    return Row(
-      children: [
-        Icon(
-          ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
-          size: 16,
-          color: ok ? Colors.green : Colors.red,
-        ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 70,
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color:
-              isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280),
-            ),
-          ),
-        ),
-        Expanded(
-          child: Text(
-            detail,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: isDark ? Colors.white : const Color(0xFF1F2937),
-            ),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-
-  String _formatTimeOfDay(DateTime dt) {
-    int h = dt.hour % 12;
-    if (h == 0) h = 12;
-    final hh = h.toString().padLeft(2, '0');
-    final mm = dt.minute.toString().padLeft(2, '0');
-    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-    return '$hh:$mm $ampm';
-  }
-
-  String _formatFullDate(DateTime dt) {
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-    ];
-    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
-  }
-
-  Future<void> _showBlockedDialog({
-    required String title,
-    required IconData icon,
-    required Color iconColor,
-    required String message,
-  }) async {
-    if (!mounted) return;
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Theme.of(ctx).brightness == Brightness.dark
-            ? const Color(0xFF18181B)
-            : Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        contentPadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: iconColor.withValues(alpha: 0.15),
-              ),
-              child: Icon(icon, color: iconColor, size: 32),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 13, height: 1.5, color: Color(0xFF71717A)),
-            ),
-          ],
-        ),
-        actions: [
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () => Navigator.pop(ctx),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _orange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              child: const Text('OK',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<bool?> _showAssignmentConfirmDialog(
-      ClientMeetingAssignment a) async {
-    if (!mounted) return false;
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF18181B) : Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        contentPadding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+            contentPadding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 40,
-                  height: 40,
+                  width: 64,
+                  height: 64,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Colors.green.withValues(alpha: 0.15),
+                    color: failColor.withValues(alpha: 0.15),
                   ),
-                  child: const Icon(Icons.check_circle_outline_rounded,
-                      color: Colors.green, size: 22),
+                  child: Icon(failIcon, color: failColor, size: 30),
                 ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Text(
-                    'Confirm Client Meeting',
-                    style:
-                    TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                const SizedBox(height: 16),
+                Text(
+                  'Cannot Check-In',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : const Color(0xFF1F2937),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  failReason,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color:
+                    isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isDark
+                    ? Colors.white.withValues(alpha: 0.03)
+                    : const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isDark
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : const Color(0xFFE5E7EB),
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      _validationRow(
+                        label: 'Date',
+                        ok: v.dateOk,
+                        detail: a.dateLabel,
+                        isDark: isDark,
+                      ),
+                      const SizedBox(height: 8),
+                      _validationRow(
+                        label: 'Time',
+                        ok: v.timeOk,
+                        detail: '${_formatTimeOfDay(v.scheduledStart)} → '
+                      '${_formatTimeOfDay(v.scheduledEnd)}',
+                      isDark: isDark,
+                      ),
+                      const SizedBox(height: 8),
+                      _validationRow(
+                        label: 'Location',
+                        ok: v.locationOk,
+                        detail: v.distanceMeters != null
+                        ? '${v.distanceMeters!.toStringAsFixed(0)}m / '
+                      '${v.clientRadius.toStringAsFixed(0)}m'
+                      : 'No GPS',
+                      isDark: isDark,
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            _infoRow(
-              icon: Icons.business_rounded,
-              label: 'Client',
-              value: a.clientName,
-            ),
-            const SizedBox(height: 8),
-            _infoRow(
-              icon: Icons.location_on_rounded,
-              label: 'Address',
-              value: a.clientAddress.isEmpty ? '—' : a.clientAddress,
-            ),
-            const SizedBox(height: 8),
-            _infoRow(
-              icon: Icons.calendar_today_rounded,
-              label: 'Date',
-              value: a.dateLabel,
-            ),
-            const SizedBox(height: 8),
-            _infoRow(
-              icon: Icons.access_time_rounded,
-              label: 'Time window',
-              value: a.timeWindowLabel,
-            ),
-            const SizedBox(height: 8),
-            _infoRow(
-              icon: Icons.assignment_rounded,
-              label: 'Purpose',
-              value: a.purpose,
-            ),
-            if (a.notes != null && a.notes!.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              _infoRow(
-                icon: Icons.notes_rounded,
-                label: 'Notes',
-                value: a.notes!,
+            actions: [
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _orange,
+                    foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                  ),
+                  child: const Text('OK',
+                                    style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
               ),
             ],
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: _orange.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: _orange.withValues(alpha: 0.3)),
+          ),
+        );
+      }
+
+      Widget _validationRow({
+        required String label,
+        required bool ok,
+        required String detail,
+        required bool isDark,
+      }) {
+        return Row(
+          children: [
+            Icon(
+              ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
+              size: 16,
+              color: ok ? Colors.green : Colors.red,
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 70,
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color:
+                  isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280),
+                ),
               ),
-              child: Row(
-                children: [
-                  const Icon(Icons.info_outline_rounded,
-                      size: 16, color: _orange),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Make sure you are at the client location before '
-                          'taking the snapshot. Your GPS will be validated.',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: isDark
-                            ? const Color(0xFFB0B0B0)
-                            : const Color(0xFF6B7280),
-                        height: 1.4,
+            ),
+            Expanded(
+              child: Text(
+                detail,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: isDark ? Colors.white : const Color(0xFF1F2937),
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        );
+      }
+
+      String _formatTimeOfDay(DateTime dt) {
+        int h = dt.hour % 12;
+        if (h == 0) h = 12;
+        final hh = h.toString().padLeft(2, '0');
+        final mm = dt.minute.toString().padLeft(2, '0');
+        final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+        return '$hh:$mm $ampm';
+      }
+
+      String _formatFullDate(DateTime dt) {
+        const months = [
+          'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+        ];
+        return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+      }
+
+      Future<void> _showBlockedDialog({
+        required String title,
+        required IconData icon,
+        required Color iconColor,
+        required String message,
+      }) async {
+        if (!mounted) return;
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: Theme.of(ctx).brightness == Brightness.dark
+            ? const Color(0xFF18181B)
+            : Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            contentPadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: iconColor.withValues(alpha: 0.15),
+                  ),
+                  child: Icon(icon, color: iconColor, size: 32),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 13, height: 1.5, color: Color(0xFF71717A)),
+                ),
+              ],
+            ),
+            actions: [
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _orange,
+                    foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
                       ),
+                  ),
+                  child: const Text('OK',
+                                    style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
+      Future<bool?> _showAssignmentConfirmDialog(
+        ClientMeetingAssignment a) async {
+          if (!mounted) return false;
+
+          final isDark = Theme.of(context).brightness == Brightness.dark;
+
+          return showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: isDark ? const Color(0xFF18181B) : Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              contentPadding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.green.withValues(alpha: 0.15),
+                        ),
+                        child: const Icon(Icons.check_circle_outline_rounded,
+                                          color: Colors.green, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          'Confirm Client Meeting',
+                          style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  _infoRow(
+                    icon: Icons.business_rounded,
+                    label: 'Client',
+                    value: a.clientName,
+                  ),
+                  const SizedBox(height: 8),
+                  _infoRow(
+                    icon: Icons.location_on_rounded,
+                    label: 'Address',
+                    value: a.clientAddress.isEmpty ? '—' : a.clientAddress,
+                  ),
+                  const SizedBox(height: 8),
+                  _infoRow(
+                    icon: Icons.calendar_today_rounded,
+                    label: 'Date',
+                    value: a.dateLabel,
+                  ),
+                  const SizedBox(height: 8),
+                  _infoRow(
+                    icon: Icons.access_time_rounded,
+                    label: 'Time window',
+                    value: a.timeWindowLabel,
+                  ),
+                  const SizedBox(height: 8),
+                  _infoRow(
+                    icon: Icons.assignment_rounded,
+                    label: 'Purpose',
+                    value: a.purpose,
+                  ),
+                  if (a.notes != null && a.notes!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _infoRow(
+                      icon: Icons.notes_rounded,
+                      label: 'Notes',
+                      value: a.notes!,
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _orange.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _orange.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info_outline_rounded,
+                                   size: 16, color: _orange),
+                               const SizedBox(width: 8),
+                               Expanded(
+                                 child: Text(
+                                   'Make sure you are at the client location before '
+                                 'taking the snapshot. Your GPS will be validated.',
+                                 style: TextStyle(
+                                   fontSize: 11,
+                                   color: isDark
+                                   ? const Color(0xFFB0B0B0)
+                                   : const Color(0xFF6B7280),
+                                   height: 1.4,
+                                 ),
+                                 ),
+                               ),
+                      ],
                     ),
                   ),
                 ],
               ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel',
+                                    style: TextStyle(color: Color(0xFF71717A))),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  icon: const Icon(Icons.check_rounded, size: 16),
+                  label: const Text('Proceed to Check-In'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _orange,
+                    foregroundColor: Colors.white,
+                      padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel',
-                style: TextStyle(color: Color(0xFF71717A))),
-          ),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.pop(ctx, true),
-            icon: const Icon(Icons.check_rounded, size: 16),
-            label: const Text('Proceed to Check-In'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _orange,
-              foregroundColor: Colors.white,
-              padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _infoRow({
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 14, color: _orange),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 70,
-          child: Text(
-            label,
-            style: const TextStyle(
-                fontSize: 11,
-                color: Color(0xFF71717A),
-                fontWeight: FontWeight.w600),
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 2,
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// ✅ Auth FIRST, then device lock check.
-  Future<void> _startClientMeetingFor(
-      Employee employee, ClientMeetingAssignment assignment) async {
-    _activeEmployee = employee;
-    _activeAssignment = assignment;
-
-    // ✅ Auth first (needed for Firestore rules)
-    try {
-      await _signIntoFirebaseAuth(employee);
-    } catch (e) {
-      _secureLog('⚠️ [ClientMeeting] Firebase Auth sign-in failed: $e');
-    }
-
-    final deviceId = await DeviceInfoService.instance.getUniqueDeviceId();
-    final deviceModel = await DeviceInfoService.instance.getDeviceModel();
-
-    final latestAttendance = await FirebaseFirestore.instance
-        .collection('attendance_logs')
-        .where('employeeId', isEqualTo: employee.employeeId)
-        .orderBy('timestamp', descending: true)
-        .limit(1)
-        .get();
-
-    if (latestAttendance.docs.isNotEmpty) {
-      final lastRecord = latestAttendance.docs.first.data();
-      final lastType = lastRecord['type'];
-      final activeDeviceId = lastRecord['device_id'];
-      final activeDeviceModel =
-          lastRecord['device_model'] ?? 'another device';
-
-      final now = DateTime.now();
-      final todayStr =
-          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-      final recordDate = lastRecord['date'] ?? '';
-
-      if (lastType == 'clock_in' &&
-          activeDeviceId != null &&
-          activeDeviceId != deviceId &&
-          recordDate == todayStr) {
-        if (mounted) {
-          setState(() => _isLoading = false);
-          _showBlockedDialog(
-            title: 'Device Locked',
-            icon: Icons.lock_clock,
-            iconColor: Colors.red,
-            message:
-            "You are still clocked in on $activeDeviceModel. Please clock out first before logging in on this device.",
           );
         }
-        return;
-      }
-    }
 
-    try {
-      OneSignal.login(employee.id);
-      _secureLog(
-          '✅ [OneSignal] Linked employee (Client Meeting): ${employee.id}');
-    } catch (e) {
-      _secureLog('⚠️ [OneSignal] Link failed: $e');
-    }
+        Widget _infoRow({
+          required IconData icon,
+          required String label,
+          required String value,
+        }) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 14, color: _orange),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 70,
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF71717A),
+                    fontWeight: FontWeight.w600),
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  value,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
+                ),
+              ),
+            ],
+          );
+        }
 
-    try {
-      await SecurityService.instance.createSession(employee.id);
-    } catch (e) {
-      _secureLog('⚠️ [ClientMeeting] createSession failed: $e');
-    }
-    if (!kIsWeb) {
-      try {
-        LocationTrackingService.instance.startTracking(employee.id);
-      } catch (e) {
-        _secureLog('⚠️ [ClientMeeting] startTracking failed: $e');
-      }
-    }
+        Future<void> _startClientMeetingFor(
+          Employee employee, ClientMeetingAssignment assignment) async {
+            _activeEmployee = employee;
+            _activeAssignment = assignment;
 
-    try {
-      await EmployeeNotificationListener.instance.start(employee.id);
-      _secureLog('✅ [NotifListener] Started (client meeting)');
-    } catch (e) {
-      _secureLog('⚠️ [NotifListener] Start failed: $e');
-    }
+            final bindingStatus =
+            await DeviceBindingService().checkBinding(employee.id);
 
-    try {
-      await FcmService.instance.associateWithEmployee(employee.id);
-      _secureLog('✅ [FCM] Token associated');
-    } catch (e) {
-      _secureLog('⚠️ [FCM] Associate failed: $e');
-    }
+            if (!bindingStatus.allowed) {
+              _secureLog(
+                '🚨 [DeviceBinding] Client Meeting rejected: ${bindingStatus.reason}');
 
-    try {
-      await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(employee.id)
-          .update({
-        'isOnline': true,
-        'isLoggedIn': true,
-        'isActive': true,
-        'status': 'active',
-        'lastLogin': FieldValue.serverTimestamp(),
-        'lastActive': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      _secureLog('⚠️ [Presence] Failed: $e');
-    }
+              try {
+                await FirebaseAuth.instance.signOut();
+              } catch (_) {}
 
-    try {
-      await FirebaseFirestore.instance.collection('activity_logs').add({
-        'type': 'client_meeting_login',
-        'employeeId': employee.id,
-        'employee_id': employee.id,
-        'employee_name': employee.fullName,
-        'email': employee.email,
-        'role': employee.position,
-        'assignment_id': assignment.id,
-        'client_name': assignment.clientName,
-        'session_nonce': _sessionNonce,
-        'timestamp': FieldValue.serverTimestamp(),
-        'device': deviceModel,
-        'device_id': deviceId,
-      });
-    } catch (e) {
-      _secureLog('⚠️ [ClientMeeting] audit log failed: $e');
-    }
+              if (mounted) {
+                setState(() => _isLoading = false);
+                _showBlockedDialog(
+                  title: 'Device Not Authorized',
+                  icon: Icons.phonelink_lock_rounded,
+                  iconColor: Colors.red,
+                  message: 'Naka-bind na ang account na ito sa ibang device.\n\n'
+                'Makipag-ugnayan sa HR/Admin para i-revoke ang lumang device '
+                'bago ka makapag-login sa bagong phone.',
+                );
+              }
+              return;
+            }
 
-    await _savePreAuth(employee);
+            if (bindingStatus.needsBinding) {
+              await DeviceBindingService().bindDevice(employee.id);
+              _secureLog('🔗 [DeviceBinding] Bound (Client Meeting): ${employee.id}');
+            }
 
-    if (!mounted) return;
-    setState(() => _isLoading = false);
-    _goToStep(_LoginStep.clientMeeting);
-  }
+            try {
+              await _signIntoFirebaseAuth(employee);
+            } catch (e) {
+              _secureLog('⚠️ [ClientMeeting] Firebase Auth sign-in failed: $e');
+            }
 
-  Future<void> _releaseCameraQuiet() async {
-    final controller = _cameraController;
-    _cameraController = null;
-    if (controller != null) {
-      try {
-        await controller.dispose();
-      } catch (_) {}
-    }
-  }
+            final deviceId = await DeviceInfoService.instance.getUniqueDeviceId();
+            final deviceModel = await DeviceInfoService.instance.getDeviceModel();
 
-  Future<void> _releaseCamera() async {
-    await _releaseCameraQuiet();
-    if (!mounted) return;
-    try {
-      if (context.mounted) setState(() {});
-    } catch (_) {}
-  }
+            final latestAttendance = await FirebaseFirestore.instance
+            .collection('attendance_logs')
+            .where('employeeId', isEqualTo: employee.employeeId)
+            .orderBy('timestamp', descending: true)
+            .limit(1)
+            .get();
 
-  Future<void> _startCameraSession() async {
-    await _releaseCamera();
-    try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        _setError(kIsWeb
-            ? 'No camera detected. Please allow camera access in your browser.'
-            : 'No camera found on this device.');
-        return;
-      }
-      final selected = cameras.firstWhere(
-            (c) =>
-        c.lensDirection ==
-            (_useFrontCamera
+            if (latestAttendance.docs.isNotEmpty) {
+              final lastRecord = latestAttendance.docs.first.data();
+              final lastType = lastRecord['type'];
+              final activeDeviceId = lastRecord['device_id'];
+              final activeDeviceModel =
+              lastRecord['device_model'] ?? 'another device';
+
+              final now = DateTime.now();
+              final todayStr =
+              '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+              final recordDate = lastRecord['date'] ?? '';
+
+              if (lastType == 'clock_in' &&
+                activeDeviceId != null &&
+                activeDeviceId != deviceId &&
+                recordDate == todayStr) {
+                if (mounted) {
+                  setState(() => _isLoading = false);
+                  _showBlockedDialog(
+                    title: 'Device Locked',
+                    icon: Icons.lock_clock,
+                    iconColor: Colors.red,
+                    message:
+                    "You are still clocked in on $activeDeviceModel. Please clock out first before logging in on this device.",
+                  );
+                }
+                return;
+                }
+            }
+
+            try {
+              OneSignal.login(employee.id);
+              _secureLog(
+                '✅ [OneSignal] Linked employee (Client Meeting): ${employee.id}');
+            } catch (e) {
+              _secureLog('⚠️ [OneSignal] Link failed: $e');
+            }
+
+            try {
+              await SecurityService.instance.createSession(employee.id);
+            } catch (e) {
+              _secureLog('⚠️ [ClientMeeting] createSession failed: $e');
+            }
+            if (!kIsWeb) {
+              try {
+                LocationTrackingService.instance.startTracking(employee.id);
+              } catch (e) {
+                _secureLog('⚠️ [ClientMeeting] startTracking failed: $e');
+              }
+            }
+
+            try {
+              await EmployeeNotificationListener.instance.start(employee.id);
+              _secureLog('✅ [NotifListener] Started (client meeting)');
+            } catch (e) {
+              _secureLog('⚠️ [NotifListener] Start failed: $e');
+            }
+
+            try {
+              await FcmService.instance.associateWithEmployee(employee.id);
+              _secureLog('✅ [FCM] Token associated');
+            } catch (e) {
+              _secureLog('⚠️ [FCM] Associate failed: $e');
+            }
+
+            try {
+              await FirebaseFirestore.instance
+              .collection('employees')
+              .doc(employee.id)
+              .update({
+                'isOnline': true,
+                'isLoggedIn': true,
+                'isActive': true,
+                'status': 'active',
+                'lastLogin': FieldValue.serverTimestamp(),
+                'lastActive': FieldValue.serverTimestamp(),
+              });
+            } catch (e) {
+              _secureLog('⚠️ [Presence] Failed: $e');
+            }
+
+            try {
+              await FirebaseFirestore.instance.collection('activity_logs').add({
+                'type': 'client_meeting_login',
+                'employeeId': employee.id,
+                'employee_id': employee.id,
+                'employee_name': employee.fullName,
+                'email': employee.email,
+                'role': employee.position,
+                'assignment_id': assignment.id,
+                'client_name': assignment.clientName,
+                'session_nonce': _sessionNonce,
+                'timestamp': FieldValue.serverTimestamp(),
+                'device': deviceModel,
+                'device_id': deviceId,
+              });
+            } catch (e) {
+              _secureLog('⚠️ [ClientMeeting] audit log failed: $e');
+            }
+
+            await _savePreAuth(employee);
+
+            if (!mounted) return;
+            setState(() => _isLoading = false);
+            _goToStep(_LoginStep.clientMeeting);
+          }
+
+          Future<void> _releaseCameraQuiet() async {
+            final controller = _cameraController;
+            _cameraController = null;
+            if (controller != null) {
+              try {
+                await controller.dispose();
+              } catch (_) {}
+            }
+          }
+
+          Future<void> _releaseCamera() async {
+            await _releaseCameraQuiet();
+            if (!mounted) return;
+            try {
+              if (context.mounted) setState(() {});
+            } catch (_) {}
+          }
+
+          Future<void> _startCameraSession() async {
+            await _releaseCamera();
+            try {
+              final cameras = await availableCameras();
+              if (cameras.isEmpty) {
+                _setError(kIsWeb
+                ? 'No camera detected. Please allow camera access in your browser.'
+                : 'No camera found on this device.');
+                return;
+              }
+              final selected = cameras.firstWhere(
+                (c) =>
+                c.lensDirection ==
+                (_useFrontCamera
                 ? CameraLensDirection.front
                 : CameraLensDirection.back),
-        orElse: () => cameras.first,
-      );
-      _cameraController = CameraController(
-        selected,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
-      await _cameraController!.initialize();
-      if (mounted) setState(() {});
-    } catch (e) {
-      _secureLog('Camera init error: $e');
-      _setError(kIsWeb
-          ? 'Could not start camera. Please allow camera access and try again.'
-          : 'Could not start camera. Check camera permission.');
-    }
-  }
-
-  Future<void> _switchCamera() async {
-    if (_isCapturing) return;
-    setState(() {
-      _useFrontCamera = !_useFrontCamera;
-    });
-    await _startCameraSession();
-  }
-
-  void _startClockTimer() {
-    _clockTimer?.cancel();
-    _now = DateTime.now();
-    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _now = DateTime.now());
-    });
-  }
-
-  Future<void> _capturePhoto() async {
-    final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized || _isCapturing) {
-      return;
-    }
-    if (!_isOnline) {
-      _setError('⚠️ No internet. Please check your connection.');
-      return;
-    }
-    if (_activeEmployee == null || _employeeId == null) {
-      if (mounted) {
-        setState(() => _isCapturing = false);
-        _setError(
-            'No logged-in employee. Please log in using PIN or Key Fob first.');
-      }
-      return;
-    }
-    if (_activeAssignment == null) {
-      if (mounted) {
-        setState(() => _isCapturing = false);
-        _setError('No active assignment. Cancel and try again.');
-      }
-      return;
-    }
-
-    setState(() {
-      _isCapturing = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final validation =
-      await _validateClientMeetingPreconditions(_activeAssignment!);
-
-      if (!validation.allOk) {
-        if (mounted) setState(() => _isCapturing = false);
-        await _showValidationFailedDialog(validation, _activeAssignment!);
-        return;
-      }
-
-      final ok = await _ensureLocationPermission();
-      if (ok) {
-        try {
-          final freshPos = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.best,
-            timeLimit: const Duration(seconds: 10),
-          );
-          await _updatePosition(freshPos);
-        } catch (e) {
-          _secureLog('⚠️ Fresh position failed: $e');
-        }
-      }
-
-      final photo = await controller.takePicture();
-
-      if (_currentLatitude != null && _currentLongitude != null) {
-        await _validateClientLocation(_currentLatitude!, _currentLongitude!);
-      }
-
-      await _saveClientMeetingLog(photoPath: photo.path);
-
-      _clockTimer?.cancel();
-      _stopLocationTracking();
-      await _releaseCamera();
-      if (!mounted) return;
-      setState(() {
-        _isCapturing = false;
-        _captureSuccess = true;
-      });
-      _successCloseTimer?.cancel();
-      _successCloseTimer = Timer(const Duration(seconds: 2), () {
-        if (mounted && _step == _LoginStep.clientMeeting && _captureSuccess) {
-          _goBack();
-        }
-      });
-    } catch (e) {
-      _secureLog('Client meeting capture error: $e');
-      if (mounted) setState(() => _isCapturing = false);
-      _setError(e.toString().replaceAll('Exception: ', ''));
-    }
-  }
-
-  Future<void> _saveClientMeetingLog({required String photoPath}) async {
-    String empId = _employeeId ?? '';
-    String empName = _employeeName;
-    String empEmail = _employeeEmail;
-
-    if (empId.isEmpty) {
-      try {
-        final secId = await SecurityService.instance.getCurrentEmployeeId();
-        if (secId != null && secId.isNotEmpty) {
-          empId = secId;
-          final emp = await _loadEmployeeById(secId);
-          if (emp != null) {
-            empName = emp.fullName;
-            empEmail = emp.email;
+                orElse: () => cameras.first,
+              );
+              _cameraController = CameraController(
+                selected,
+                ResolutionPreset.medium,
+                enableAudio: false,
+              );
+              await _cameraController!.initialize();
+              if (mounted) setState(() {});
+            } catch (e) {
+              _secureLog('Camera init error: $e');
+              _setError(kIsWeb
+              ? 'Could not start camera. Please allow camera access and try again.'
+              : 'Could not start camera. Check camera permission.');
+            }
           }
-        }
-      } catch (e) {
-        _secureLog('⚠️ SecurityService lookup failed: $e');
-      }
-    }
 
-    if (empId.isEmpty) {
-      final authUser = FirebaseAuth.instance.currentUser;
-      if (authUser != null) {
-        try {
-          final snap = await FirebaseFirestore.instance
-              .collection('employees')
-              .where('authUid', isEqualTo: authUser.uid)
-              .limit(1)
-              .get();
-          if (snap.docs.isNotEmpty) {
-            final emp = _docToEmployee(snap.docs.first);
-            empId = emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
-            empName = emp.fullName;
-            empEmail = emp.email;
+          Future<void> _switchCamera() async {
+            if (_isCapturing) return;
+            setState(() {
+              _useFrontCamera = !_useFrontCamera;
+            });
+            await _startCameraSession();
           }
-        } catch (_) {}
-      }
-    }
 
-    if (empId.isEmpty) throw 'No logged-in employee.';
+          void _startClockTimer() {
+            _clockTimer?.cancel();
+            _now = DateTime.now();
+            _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+              if (mounted) setState(() => _now = DateTime.now());
+            });
+          }
 
-    if (empName == 'Unknown' || empEmail.isEmpty) {
-      try {
-        final doc = await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(empId)
-            .get();
-        if (doc.exists) {
-          final d = doc.data()!;
-          final fn = (d['firstName'] ?? '').toString();
-          final ln = (d['lastName'] ?? '').toString();
-          empName = (d['name'] ?? '$fn $ln').toString().trim();
-          empEmail = (d['email'] ?? '').toString();
-        }
-      } catch (_) {}
-    }
+          Future<void> _capturePhoto() async {
+            final controller = _cameraController;
+            if (controller == null || !controller.value.isInitialized || _isCapturing) {
+              return;
+            }
+            if (!_isOnline) {
+              _setError('⚠️ No internet. Please check your connection.');
+              return;
+            }
+            if (_activeEmployee == null || _employeeId == null) {
+              if (mounted) {
+                setState(() => _isCapturing = false);
+                _setError(
+                  'No logged-in employee. Please log in using PIN or Key Fob first.');
+              }
+              return;
+            }
+            if (_activeAssignment == null) {
+              if (mounted) {
+                setState(() => _isCapturing = false);
+                _setError('No active assignment. Cancel and try again.');
+              }
+              return;
+            }
 
-    final now = DateTime.now();
-    final dateStr = '${now.year}-'
-        '${now.month.toString().padLeft(2, '0')}-'
-        '${now.day.toString().padLeft(2, '0')}';
-    final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
-        '${now.minute.toString().padLeft(2, '0')}:'
-        '${now.second.toString().padLeft(2, '0')}';
+            setState(() {
+              _isCapturing = true;
+              _errorMessage = null;
+            });
 
-    final locAgeSec = _locationTimestamp != null
-        ? now.difference(_locationTimestamp!).inSeconds
-        : null;
+            try {
+              final validation =
+              await _validateClientMeetingPreconditions(_activeAssignment!);
 
-    final antiFraudFlags = <String>[];
-    if (_isMockedGps) antiFraudFlags.add('mock_gps');
-    if (_currentAccuracy != null && _currentAccuracy! > 200) {
-      antiFraudFlags.add('low_accuracy');
-    }
-    if (locAgeSec != null && locAgeSec > 60) {
-      antiFraudFlags.add('stale_location');
-    }
-    if (_currentLatitude == null || _currentLongitude == null) {
-      antiFraudFlags.add('no_location');
-    }
-    if (_clientMatch != null && _clientMatch!.hasAnyRegisteredClient) {
-      if (!_clientMatch!.isWithinRadius) {
-        antiFraudFlags.add('outside_client_radius');
-      }
-    }
-    if (_deviceCompromised) antiFraudFlags.add('compromised_device');
+              if (!validation.allOk) {
+                if (mounted) setState(() => _isCapturing = false);
+                await _showValidationFailedDialog(validation, _activeAssignment!);
+                return;
+              }
 
-    final severity = _isMockedGps || _deviceCompromised
-        ? 'critical'
-        : antiFraudFlags.isEmpty
-        ? 'clean'
-        : antiFraudFlags.length >= 2
-        ? 'high'
-        : 'medium';
+              final ok = await _ensureLocationPermission();
+              if (ok) {
+                try {
+                  final freshPos = await Geolocator.getCurrentPosition(
+                    desiredAccuracy: LocationAccuracy.best,
+                    timeLimit: const Duration(seconds: 10),
+                  );
+                  await _updatePosition(freshPos);
+                } catch (e) {
+                  _secureLog('⚠️ Fresh position failed: $e');
+                }
+              }
 
-    final assignment = _activeAssignment;
-    final deviceBinding =
-    await SecurityHardeningService.instance.getDeviceBindingToken();
+              final photo = await controller.takePicture();
 
-    final payload = <String, dynamic>{
-      'employee_id': empId,
-      'employeeId': empId,
-      'employee_name': empName,
-      'employee_email': empEmail,
-      'type': 'client_meeting',
-      'action': 'Client Meeting Clock In',
-      'details': 'Client meeting — $_currentPlaceName',
-      'description': 'Client meeting at $_currentPlaceName',
-      'remarks': 'client_meeting',
-      'date': dateStr,
-      'time': timeStr,
-      'photo_path': photoPath,
-      'location_name': _currentPlaceName,
-      'latitude': _currentLatitude,
-      'longitude': _currentLongitude,
-      'location_captured_at': _locationTimestamp != null
-          ? Timestamp.fromDate(_locationTimestamp!)
-          : null,
-      'has_location': _currentLatitude != null && _currentLongitude != null,
-      'device': kIsWeb ? 'Web Browser' : 'Mobile App',
-      'platform': kIsWeb ? 'web' : 'mobile',
-      'zone_type': 'client_meeting',
-      'status': 'pending_hr_approval',
-      'payrollStatus': 'Pending',
-      'assignment_id': assignment?.id,
-      'assigned_client_name': assignment?.clientName,
-      'assigned_scheduled_start': assignment != null
-          ? Timestamp.fromDate(assignment.scheduledStart)
-          : null,
-      'assigned_scheduled_end': assignment != null
-          ? Timestamp.fromDate(assignment.scheduledEnd)
-          : null,
-      'assigned_purpose': assignment?.purpose,
-      'assigned_by': assignment?.assignedByName,
-      'gps_accuracy_meters': _currentAccuracy,
-      'gps_is_mocked': _isMockedGps,
-      'gps_age_seconds': locAgeSec,
-      'gps_device_platform': kIsWeb ? 'web' : 'mobile',
-      'matched_client_id': _clientMatch?.nearestClient?.id,
-      'matched_client_name': _clientMatch?.nearestClient?.name,
-      'distance_from_client_m': _clientMatch?.distanceMeters,
-      'is_verified_at_client': _clientMatch?.isVerified ?? false,
-      'client_verdict': _clientMatch?.verdict ?? 'unknown',
-      'anti_fraud_flags': antiFraudFlags,
-      'anti_fraud_severity': severity,
-      'device_binding': deviceBinding,
-      'device_compromised': _deviceCompromised,
-      'session_nonce': _sessionNonce,
-      'timestamp': FieldValue.serverTimestamp(),
-      'createdAt': FieldValue.serverTimestamp(),
-    };
+              if (_currentLatitude != null && _currentLongitude != null) {
+                await _validateClientLocation(_currentLatitude!, _currentLongitude!);
+              }
 
-    final fs = FirebaseFirestore.instance;
+              await _saveClientMeetingLog(photoPath: photo.path);
 
-    final attendanceRef =
-    await fs.collection('attendance_logs').add(payload);
+              _clockTimer?.cancel();
+              _stopLocationTracking();
+              await _releaseCamera();
+              if (!mounted) return;
+              setState(() {
+                _isCapturing = false;
+                _captureSuccess = true;
+              });
+              _successCloseTimer?.cancel();
+              _successCloseTimer = Timer(const Duration(seconds: 2), () {
+                if (mounted && _step == _LoginStep.clientMeeting && _captureSuccess) {
+                  _goBack();
+                }
+              });
+            } catch (e) {
+              _secureLog('Client meeting capture error: $e');
+              if (mounted) setState(() => _isCapturing = false);
+              _setError(e.toString().replaceAll('Exception: ', ''));
+            }
+          }
 
-    try {
-      await fs.collection('activity_logs').add(payload);
-    } catch (e) {
-      _secureLog('⚠️ activity_logs write skipped: $e');
-    }
+          Future<void> _saveClientMeetingLog({required String photoPath}) async {
+            String empId = _employeeId ?? '';
+            String empName = _employeeName;
+            String empEmail = _employeeEmail;
 
-    if (assignment != null) {
-      await ClientMeetingAssignmentService.instance.markAsUsed(
-        assignmentId: assignment.id,
-        meetingLogId: attendanceRef.id,
-      );
-    }
-  }
+            if (empId.isEmpty) {
+              try {
+                final secId = await SecurityService.instance.getCurrentEmployeeId();
+                if (secId != null && secId.isNotEmpty) {
+                  empId = secId;
+                  final emp = await _loadEmployeeById(secId);
+                  if (emp != null) {
+                    empName = emp.fullName;
+                    empEmail = emp.email;
+                  }
+                }
+              } catch (e) {
+                _secureLog('⚠️ SecurityService lookup failed: $e');
+              }
+            }
 
-  String _formatTimestamp(DateTime dt) {
-    final mm = dt.month.toString().padLeft(2, '0');
-    final dd = dt.day.toString().padLeft(2, '0');
-    final yyyy = dt.year.toString();
-    int hour12 = dt.hour % 12;
-    if (hour12 == 0) hour12 = 12;
-    final hh = hour12.toString().padLeft(2, '0');
-    final min = dt.minute.toString().padLeft(2, '0');
-    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-    return '$mm/$dd/$yyyy - $hh:$min $ampm';
-  }
+            if (empId.isEmpty) {
+              final authUser = FirebaseAuth.instance.currentUser;
+              if (authUser != null) {
+                try {
+                  final snap = await FirebaseFirestore.instance
+                  .collection('employees')
+                  .where('authUid', isEqualTo: authUser.uid)
+                  .limit(1)
+                  .get();
+                  if (snap.docs.isNotEmpty) {
+                    final emp = _docToEmployee(snap.docs.first);
+                    empId = emp.employeeId.isNotEmpty ? emp.employeeId : emp.id;
+                    empName = emp.fullName;
+                    empEmail = emp.email;
+                  }
+                } catch (_) {}
+              }
+            }
 
-  String _formatClockTime(DateTime dt) {
-    int h = dt.hour % 12;
-    if (h == 0) h = 12;
-    final hh = h.toString().padLeft(2, '0');
-    final mm = dt.minute.toString().padLeft(2, '0');
-    final ss = dt.second.toString().padLeft(2, '0');
-    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-    return '$hh:$mm:$ss $ampm';
-  }
+            if (empId.isEmpty) throw 'No logged-in employee.';
 
-  String _formatClockDate(DateTime dt) {
-    const days = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
-      'Friday', 'Saturday', 'Sunday',
-    ];
-    const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December',
-    ];
-    return '${days[dt.weekday - 1]}, ${months[dt.month - 1]} ${dt.day}, ${dt.year}';
-  }
+            if (empName == 'Unknown' || empEmail.isEmpty) {
+              try {
+                final doc = await FirebaseFirestore.instance
+                .collection('employees')
+                .doc(empId)
+                .get();
+                if (doc.exists) {
+                  final d = doc.data()!;
+                  final fn = (d['firstName'] ?? '').toString();
+                  final ln = (d['lastName'] ?? '').toString();
+                  empName = (d['name'] ?? '$fn $ln').toString().trim();
+                  empEmail = (d['email'] ?? '').toString();
+                }
+              } catch (_) {}
+            }
 
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final tc = _ThemeColors(isDark);
-    final isOffline = _networkState == _NetworkState.offline;
+            final now = DateTime.now();
+            final dateStr = '${now.year}-'
+            '${now.month.toString().padLeft(2, '0')}-'
+            '${now.day.toString().padLeft(2, '0')}';
+            final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
+            '${now.minute.toString().padLeft(2, '0')}:'
+            '${now.second.toString().padLeft(2, '0')}';
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _goBack();
-      },
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final isWide = constraints.maxWidth >= 1024;
-          if (!isWide) {
-            return Scaffold(
-              backgroundColor: tc.bgMid,
-              body: Stack(
-                children: [
-                  _buildContent(tc),
-                  if (isOffline)
-                    Positioned.fill(
-                      child: AnimatedOpacity(
-                        opacity: _showOfflineOverlay ? 1.0 : 0.0,
-                        duration: const Duration(milliseconds: 350),
-                        curve: Curves.easeInOut,
-                        child: IgnorePointer(
-                          ignoring: !_showOfflineOverlay,
-                          child: _buildNetworkErrorOverlay(
-                            onRetry: _retryNetworkCheck,
-                          ),
+            final locAgeSec = _locationTimestamp != null
+            ? now.difference(_locationTimestamp!).inSeconds
+            : null;
+
+            final antiFraudFlags = <String>[];
+            if (_isMockedGps) antiFraudFlags.add('mock_gps');
+            if (_currentAccuracy != null && _currentAccuracy! > 200) {
+              antiFraudFlags.add('low_accuracy');
+            }
+            if (locAgeSec != null && locAgeSec > 60) {
+              antiFraudFlags.add('stale_location');
+            }
+            if (_currentLatitude == null || _currentLongitude == null) {
+              antiFraudFlags.add('no_location');
+            }
+            if (_clientMatch != null && _clientMatch!.hasAnyRegisteredClient) {
+              if (!_clientMatch!.isWithinRadius) {
+                antiFraudFlags.add('outside_client_radius');
+              }
+            }
+            if (_deviceCompromised) antiFraudFlags.add('compromised_device');
+
+            final severity = _isMockedGps || _deviceCompromised
+            ? 'critical'
+            : antiFraudFlags.isEmpty
+            ? 'clean'
+            : antiFraudFlags.length >= 2
+            ? 'high'
+            : 'medium';
+
+            final assignment = _activeAssignment;
+            final deviceBinding =
+            await SecurityHardeningService.instance.getDeviceBindingToken();
+
+            final payload = <String, dynamic>{
+              'employee_id': empId,
+              'employeeId': empId,
+              'employee_name': empName,
+              'employee_email': empEmail,
+              'type': 'client_meeting',
+              'action': 'Client Meeting Clock In',
+              'details': 'Client meeting — $_currentPlaceName',
+              'description': 'Client meeting at $_currentPlaceName',
+              'remarks': 'client_meeting',
+              'date': dateStr,
+              'time': timeStr,
+              'photo_path': photoPath,
+              'location_name': _currentPlaceName,
+              'latitude': _currentLatitude,
+              'longitude': _currentLongitude,
+              'location_captured_at': _locationTimestamp != null
+              ? Timestamp.fromDate(_locationTimestamp!)
+              : null,
+              'has_location': _currentLatitude != null && _currentLongitude != null,
+              'device': kIsWeb ? 'Web Browser' : 'Mobile App',
+              'platform': kIsWeb ? 'web' : 'mobile',
+              'zone_type': 'client_meeting',
+              'status': 'pending_hr_approval',
+              'payrollStatus': 'Pending',
+              'assignment_id': assignment?.id,
+              'assigned_client_name': assignment?.clientName,
+              'assigned_scheduled_start': assignment != null
+              ? Timestamp.fromDate(assignment.scheduledStart)
+              : null,
+              'assigned_scheduled_end': assignment != null
+              ? Timestamp.fromDate(assignment.scheduledEnd)
+              : null,
+              'assigned_purpose': assignment?.purpose,
+              'assigned_by': assignment?.assignedByName,
+              'gps_accuracy_meters': _currentAccuracy,
+              'gps_is_mocked': _isMockedGps,
+              'gps_age_seconds': locAgeSec,
+              'gps_device_platform': kIsWeb ? 'web' : 'mobile',
+              'matched_client_id': _clientMatch?.nearestClient?.id,
+              'matched_client_name': _clientMatch?.nearestClient?.name,
+              'distance_from_client_m': _clientMatch?.distanceMeters,
+              'is_verified_at_client': _clientMatch?.isVerified ?? false,
+              'client_verdict': _clientMatch?.verdict ?? 'unknown',
+              'anti_fraud_flags': antiFraudFlags,
+              'anti_fraud_severity': severity,
+              'device_binding': deviceBinding,
+              'device_compromised': _deviceCompromised,
+              'session_nonce': _sessionNonce,
+              'timestamp': FieldValue.serverTimestamp(),
+              'createdAt': FieldValue.serverTimestamp(),
+            };
+
+            final fs = FirebaseFirestore.instance;
+
+            final attendanceRef =
+            await fs.collection('attendance_logs').add(payload);
+
+            try {
+              await fs.collection('activity_logs').add(payload);
+            } catch (e) {
+              _secureLog('⚠️ activity_logs write skipped: $e');
+            }
+
+            if (assignment != null) {
+              await ClientMeetingAssignmentService.instance.markAsUsed(
+                assignmentId: assignment.id,
+                meetingLogId: attendanceRef.id,
+              );
+            }
+          }
+
+          String _formatTimestamp(DateTime dt) {
+            final mm = dt.month.toString().padLeft(2, '0');
+            final dd = dt.day.toString().padLeft(2, '0');
+            final yyyy = dt.year.toString();
+            int hour12 = dt.hour % 12;
+            if (hour12 == 0) hour12 = 12;
+            final hh = hour12.toString().padLeft(2, '0');
+            final min = dt.minute.toString().padLeft(2, '0');
+            final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+            return '$mm/$dd/$yyyy - $hh:$min $ampm';
+          }
+
+          String _formatClockTime(DateTime dt) {
+            int h = dt.hour % 12;
+            if (h == 0) h = 12;
+            final hh = h.toString().padLeft(2, '0');
+            final mm = dt.minute.toString().padLeft(2, '0');
+            final ss = dt.second.toString().padLeft(2, '0');
+            final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+            return '$hh:$mm:$ss $ampm';
+          }
+
+          String _formatClockDate(DateTime dt) {
+            const days = [
+              'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+              'Friday', 'Saturday', 'Sunday',
+            ];
+            const months = [
+              'January', 'February', 'March', 'April', 'May', 'June',
+              'July', 'August', 'September', 'October', 'November', 'December',
+            ];
+            return '${days[dt.weekday - 1]}, ${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+          }
+
+          @override
+          Widget build(BuildContext context) {
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            final tc = _ThemeColors(isDark);
+            final isOffline = _networkState == _NetworkState.offline;
+
+            return PopScope(
+              canPop: false,
+              onPopInvokedWithResult: (didPop, _) {
+                if (!didPop) _goBack();
+              },
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final isWide = constraints.maxWidth >= 1024;
+                  if (!isWide) {
+                    return Scaffold(
+                      backgroundColor: tc.bgMid,
+                      body: Stack(
+                        children: [
+                          _buildContent(tc),
+                          if (isOffline)
+                            Positioned.fill(
+                              child: AnimatedOpacity(
+                                opacity: _showOfflineOverlay ? 1.0 : 0.0,
+                                duration: const Duration(milliseconds: 350),
+                                curve: Curves.easeInOut,
+                                child: IgnorePointer(
+                                  ignoring: !_showOfflineOverlay,
+                                  child: _buildNetworkErrorOverlay(
+                                    onRetry: _retryNetworkCheck,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (_obscureContent) _buildPrivacyShield(),
+                        ],
+                      ),
+                    );
+                  }
+                  return Scaffold(
+                    backgroundColor: const Color(0xFF0A0A0F),
+                    body: Stack(
+                      children: [
+                        _buildWebLayout(tc),
+                        if (_step != _LoginStep.selectMethod) _buildDesktopModal(),
+                          if (isOffline)
+                            Positioned.fill(
+                              child: AnimatedOpacity(
+                                opacity: _showOfflineOverlay ? 1.0 : 0.0,
+                                duration: const Duration(milliseconds: 350),
+                                curve: Curves.easeInOut,
+                                child: IgnorePointer(
+                                  ignoring: !_showOfflineOverlay,
+                                  child: _buildNetworkErrorOverlay(
+                                    onRetry: _retryNetworkCheck,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (_obscureContent) _buildPrivacyShield(),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            );
+          }
+
+          Widget _buildPrivacyShield() {
+            return Positioned.fill(
+              child: AbsorbPointer(
+                absorbing: true,
+                child: Container(
+                  color: _shieldBg,
+                  alignment: Alignment.center,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: _orange,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.lock_outline_rounded,
+                          color: Colors.black,
+                          size: 32,
                         ),
                       ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'R.A.C.O.M.A.',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 18,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Session hidden for your privacy',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.55),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
+
+          Widget _buildNetworkErrorOverlay({required VoidCallback onRetry}) {
+            return Container(
+              color: Colors.black.withValues(alpha: 0.72),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 380),
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white, width: 1.15),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          blurRadius: 20,
+                          offset: const Offset(0, 12),
+                        ),
+                      ],
                     ),
-                  if (_obscureContent) _buildPrivacyShield(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 80,
+                          height: 80,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withValues(alpha: 0.2),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.4),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: const Icon(Icons.wifi_off_rounded,
+                                            color: Colors.white, size: 40),
+                        ),
+                        const SizedBox(height: 20),
+                        const Text('No Connection',
+                                   textAlign: TextAlign.center,
+                                   style: TextStyle(
+                                     color: Colors.white,
+                                     fontSize: 20,
+                                     fontWeight: FontWeight.w700)),
+                                  const SizedBox(height: 10),
+                                  Text(_networkErrorMessage,
+                                       textAlign: TextAlign.center,
+                                       style: TextStyle(
+                                         color: Colors.white.withValues(alpha: 0.92),
+                                         fontSize: 13,
+                                         height: 1.5)),
+                                  const SizedBox(height: 24),
+                                  SizedBox(
+                                    width: 180,
+                                    child: ElevatedButton.icon(
+                                      onPressed: onRetry,
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.white,
+                                        foregroundColor: _orange,
+                                          padding: const EdgeInsets.symmetric(vertical: 14),
+                                          elevation: 0,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                      ),
+                                      icon: const Icon(Icons.refresh_rounded, size: 18),
+                                      label: const Text('Try Again',
+                                                        style: TextStyle(
+                                                          fontSize: 15, fontWeight: FontWeight.w700)),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  Text('Automatically retries when network returns.',
+                                       textAlign: TextAlign.center,
+                                       style: TextStyle(
+                                         color: Colors.white.withValues(alpha: 0.7),
+                                         fontSize: 11,
+                                         fontStyle: FontStyle.italic)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
+
+          Widget _buildWebLayout(_ThemeColors tc) {
+            return Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF0A0A0F),
+                    Color(0xFF0D0B08),
+                    Color(0xFF1A0F05),
+                  ],
+                ),
+              ),
+              child: SafeArea(
+                child: Column(
+                  children: [
+                    _buildWebTopNav(),
+                    Expanded(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _buildWebSidebar(),
+                          Expanded(child: _buildWebMainContent(tc)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          Widget _buildWebTopNav() {
+            return Container(
+              height: 76,
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+                ),
+              ),
+              child: Row(
+                children: [
+                  _wrapWithHiddenAdmin(
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0xFFFF8A00), Color(0xFFF54900)],
+                        ),
+                        borderRadius: BorderRadius.circular(11),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFFF8A00).withValues(alpha: 0.4),
+                            blurRadius: 18,
+                            offset: const Offset(0, 6),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(Icons.access_time_rounded,
+                                        color: Colors.white, size: 22),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('R.A.C.O.M.A.',
+                             style: TextStyle(
+                               color: Colors.white,
+                               fontSize: 18,
+                               fontWeight: FontWeight.w700,
+                               letterSpacing: -0.3)),
+                         const SizedBox(width: 10),
+                         Container(
+                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                           decoration: BoxDecoration(
+                             color: const Color(0xFFFF8A00).withValues(alpha: 0.12),
+                             borderRadius: BorderRadius.circular(6),
+                             border: Border.all(
+                               color: const Color(0xFFFF8A00).withValues(alpha: 0.4)),
+                           ),
+                           child: const Text('v1.0.4',
+                                             style: TextStyle(
+                                               color: Color(0xFFFF8A00),
+                                               fontSize: 11,
+                                               fontWeight: FontWeight.w700)),
+                         ),
+                         const Spacer(),
+                         if (_deviceCompromised) ...[
+                           Container(
+                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                             decoration: BoxDecoration(
+                               color: Colors.red.withValues(alpha: 0.15),
+                               borderRadius: BorderRadius.circular(8),
+                               border: Border.all(color: Colors.red.withValues(alpha: 0.5)),
+                             ),
+                             child: const Row(
+                               children: [
+                                 Icon(Icons.warning_amber_rounded,
+                                      color: Colors.red, size: 14),
+                                      SizedBox(width: 6),
+                                      Text('COMPROMISED',
+                                           style: TextStyle(
+                                             color: Colors.red,
+                                             fontSize: 11,
+                                             fontWeight: FontWeight.w700)),
+                               ],
+                             ),
+                           ),
+                         const SizedBox(width: 16),
+                         ],
+                         Column(
+                           crossAxisAlignment: CrossAxisAlignment.end,
+                           mainAxisAlignment: MainAxisAlignment.center,
+                           children: [
+                             Text(_formatClockTime(_now),
+                             style: const TextStyle(
+                               color: Colors.white,
+                               fontSize: 22,
+                               fontWeight: FontWeight.w700,
+                               letterSpacing: -0.5,
+                               height: 1.0)),
+                                const SizedBox(height: 3),
+                                Text(_formatClockDate(_now),
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                  fontSize: 12)),
+                           ],
+                         ),
                 ],
               ),
             );
           }
-          return Scaffold(
-            backgroundColor: const Color(0xFF0A0A0F),
-            body: Stack(
-              children: [
-                _buildWebLayout(tc),
-                if (_step != _LoginStep.selectMethod) _buildDesktopModal(),
-                if (isOffline)
-                  Positioned.fill(
-                    child: AnimatedOpacity(
-                      opacity: _showOfflineOverlay ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 350),
-                      curve: Curves.easeInOut,
-                      child: IgnorePointer(
-                        ignoring: !_showOfflineOverlay,
-                        child: _buildNetworkErrorOverlay(
-                          onRetry: _retryNetworkCheck,
-                        ),
-                      ),
-                    ),
-                  ),
-                if (_obscureContent) _buildPrivacyShield(),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
 
-  Widget _buildPrivacyShield() {
-    return Positioned.fill(
-      child: AbsorbPointer(
-        absorbing: true,
-        child: Container(
-          color: _shieldBg,
-          alignment: Alignment.center,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: _orange,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                alignment: Alignment.center,
-                child: const Icon(
-                  Icons.lock_outline_rounded,
-                  color: Colors.black,
-                  size: 32,
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'R.A.C.O.M.A.',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 18,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Session hidden for your privacy',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.55),
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNetworkErrorOverlay({required VoidCallback onRetry}) {
-    return Container(
-      color: Colors.black.withValues(alpha: 0.72),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 380),
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
-              ),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white, width: 1.15),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  blurRadius: 20,
-                  offset: const Offset(0, 12),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.2),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.4),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: const Icon(Icons.wifi_off_rounded,
-                      color: Colors.white, size: 40),
-                ),
-                const SizedBox(height: 20),
-                const Text('No Connection',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700)),
-                const SizedBox(height: 10),
-                Text(_networkErrorMessage,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.92),
-                        fontSize: 13,
-                        height: 1.5)),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: 180,
-                  child: ElevatedButton.icon(
-                    onPressed: onRetry,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: _orange,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    icon: const Icon(Icons.refresh_rounded, size: 18),
-                    label: const Text('Try Again',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w700)),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Text('Automatically retries when network returns.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.7),
-                        fontSize: 11,
-                        fontStyle: FontStyle.italic)),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWebLayout(_ThemeColors tc) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF0A0A0F),
-            Color(0xFF0D0B08),
-            Color(0xFF1A0F05),
-          ],
-        ),
-      ),
-      child: SafeArea(
-        child: Column(
-          children: [
-            _buildWebTopNav(),
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildWebSidebar(),
-                  Expanded(child: _buildWebMainContent(tc)),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWebTopNav() {
-    return Container(
-      height: 76,
-      padding: const EdgeInsets.symmetric(horizontal: 32),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-        ),
-      ),
-      child: Row(
-        children: [
-          _wrapWithHiddenAdmin(
-            child: Container(
-              width: 40,
-              height: 40,
+          Widget _buildWebSidebar() {
+            return Container(
+              width: 280,
+              padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFFFF8A00), Color(0xFFF54900)],
+                border: Border(
+                  right: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
                 ),
-                borderRadius: BorderRadius.circular(11),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFFFF8A00).withValues(alpha: 0.4),
-                    blurRadius: 18,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
               ),
-              child: const Icon(Icons.access_time_rounded,
-                  color: Colors.white, size: 22),
-            ),
-          ),
-          const SizedBox(width: 12),
-          const Text('R.A.C.O.M.A.',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.3)),
-          const SizedBox(width: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFF8A00).withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                  color: const Color(0xFFFF8A00).withValues(alpha: 0.4)),
-            ),
-            child: const Text('v1.0.4',
-                style: TextStyle(
-                    color: Color(0xFFFF8A00),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700)),
-          ),
-          const Spacer(),
-          if (_deviceCompromised) ...[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.red.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.red.withValues(alpha: 0.5)),
-              ),
-              child: const Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.warning_amber_rounded,
-                      color: Colors.red, size: 14),
-                  SizedBox(width: 6),
-                  Text('COMPROMISED',
-                      style: TextStyle(
-                          color: Colors.red,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700)),
+                  Text('AUTHENTICATION FLOW',
+                       style: TextStyle(
+                         color: Colors.white.withValues(alpha: 0.4),
+                         fontSize: 11,
+                         fontWeight: FontWeight.w700,
+                         letterSpacing: 1.2)),
+                         const SizedBox(height: 24),
+                         _buildStepItem(1, 'Initial Login', 'Key Fob or PIN', isActive: true),
+                         _buildStepConnector(),
+                         _buildStepItem(2, 'Confirm Identity', 'Secondary verification',
+                                        isActive: false),
+                            _buildStepConnector(),
+                            _buildStepItem(3, 'Clock In', 'Attendance recorded', isActive: false),
                 ],
               ),
-            ),
-            const SizedBox(width: 16),
-          ],
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(_formatClockTime(_now),
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.5,
-                      height: 1.0)),
-              const SizedBox(height: 3),
-              Text(_formatClockDate(_now),
-                  style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.45),
-                      fontSize: 12)),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+            );
+          }
 
-  Widget _buildWebSidebar() {
-    return Container(
-      width: 280,
-      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
-      decoration: BoxDecoration(
-        border: Border(
-          right: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('AUTHENTICATION FLOW',
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.4),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.2)),
-          const SizedBox(height: 24),
-          _buildStepItem(1, 'Initial Login', 'Key Fob or PIN', isActive: true),
-          _buildStepConnector(),
-          _buildStepItem(2, 'Confirm Identity', 'Secondary verification',
-              isActive: false),
-          _buildStepConnector(),
-          _buildStepItem(3, 'Clock In', 'Attendance recorded', isActive: false),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStepItem(int n, String title, String subtitle,
-      {required bool isActive}) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            gradient: isActive
-                ? const LinearGradient(
-                colors: [Color(0xFFFF8A00), Color(0xFFF54900)])
-                : null,
-            color: isActive ? null : Colors.white.withValues(alpha: 0.05),
-            shape: BoxShape.circle,
-            border: isActive
-                ? null
-                : Border.all(color: Colors.white.withValues(alpha: 0.1)),
-            boxShadow: isActive
-                ? [
-              BoxShadow(
-                color: const Color(0xFFFF8A00).withValues(alpha: 0.4),
-                blurRadius: 16,
-                offset: const Offset(0, 4),
-              ),
-            ]
-                : null,
-          ),
-          child: Text('$n',
-              style: TextStyle(
-                  color: isActive
-                      ? Colors.white
-                      : Colors.white.withValues(alpha: 0.4),
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13)),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 3),
-            child: Column(
+          Widget _buildStepItem(int n, String title, String subtitle,
+                                {required bool isActive}) {
+            return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: TextStyle(
-                        color: isActive
-                            ? Colors.white
-                            : Colors.white.withValues(alpha: 0.55),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(subtitle,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.35),
-                        fontSize: 12)),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStepConnector() {
-    return Container(
-      margin: const EdgeInsets.only(left: 15, top: 6, bottom: 6),
-      width: 2,
-      height: 24,
-      color: Colors.white.withValues(alpha: 0.08),
-    );
-  }
-
-  Widget _buildWebMainContent(_ThemeColors tc) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 56, vertical: 40),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _wrapWithHiddenAdmin(
-            child: const Text('Auth & Clock In',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 42,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -1.4,
-                    height: 1.05)),
-          ),
-          const SizedBox(height: 10),
-          Text('Choose your verification method to begin your shift.',
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.55), fontSize: 15)),
-          const SizedBox(height: 40),
-          SizedBox(
-            height: 320,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: _WebOptionCard(
-                    icon: Icons.contactless_rounded,
-                    title: 'Key Fob',
-                    desc:
-                    'Tap your fob on the NFC reader to authenticate instantly.',
-                    enabled: !kIsWeb &&
-                        _nfcAvailable &&
-                        _isOnline &&
-                        !_deviceCompromised,
-                    onTap: () => _goToStep(_LoginStep.nfcWait),
-                  ),
-                ),
-                const SizedBox(width: 20),
-                Expanded(
-                  child: _WebOptionCard(
-                    icon: Icons.key_rounded,
-                    title: 'Use PIN',
-                    desc:
-                    'Enter your 4-digit security PIN to verify your identity.',
-                    enabled: _isOnline && !_deviceCompromised,
-                    onTap: () => _goToStep(_LoginStep.pinEntry),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 32),
-          Row(
-            children: [
-              Text('Having trouble? ',
-                  style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.4),
-                      fontSize: 13)),
-              GestureDetector(
-                onTap: _showPasswordChangeRequestDialog,
-                child: const Text(
-                  'Request password change',
-                  style: TextStyle(
-                    color: Color(0xFFFF8A00),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    decoration: TextDecoration.underline,
-                    decorationColor: Color(0xFFFF8A00),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDesktopModal() {
-    Widget card;
-    switch (_step) {
-      case _LoginStep.pinEntry:
-        card = _buildPinModalCard();
-        break;
-      case _LoginStep.nfcWait:
-        card = _buildNfcModalCard();
-        break;
-      case _LoginStep.clientMeeting:
-        card = _buildClientMeetingModalCard();
-        break;
-      case _LoginStep.selectMethod:
-        return const SizedBox.shrink();
-    }
-    return Positioned.fill(
-      child: FadeTransition(
-        opacity: _modalOpacityAnim,
-        child: Container(
-          color: _scrim,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-          child: Center(
-            child: SingleChildScrollView(
-              child: ScaleTransition(scale: _modalScaleAnim, child: card),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildContent(_ThemeColors tc) {
-    return Stack(
-      children: [
-        Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [tc.bgTop, tc.bgMid, tc.bgBottom],
-              stops: const [0.0, 0.6, 1.0],
-            ),
-          ),
-          child: FadeTransition(
-            opacity: _fadeAnim,
-            child: Column(children: [
-              _buildOrangeHeader(),
-              Expanded(child: _buildSelectMethodStep(tc)),
-            ]),
-          ),
-        ),
-        if (_step != _LoginStep.selectMethod) _buildModalOverlay(),
-      ],
-    );
-  }
-
-  Widget _buildModalOverlay() {
-    Widget card;
-    switch (_step) {
-      case _LoginStep.pinEntry:
-        card = _buildPinModalCard();
-        break;
-      case _LoginStep.nfcWait:
-        card = _buildNfcModalCard();
-        break;
-      case _LoginStep.clientMeeting:
-        card = _buildClientMeetingModalCard();
-        break;
-      case _LoginStep.selectMethod:
-        card = const SizedBox.shrink();
-        break;
-    }
-    return Positioned.fill(
-      child: FadeTransition(
-        opacity: _modalOpacityAnim,
-        child: Container(
-          color: _scrim,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-          child: Center(
-            child: SingleChildScrollView(
-              child: ScaleTransition(scale: _modalScaleAnim, child: card),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOrangeHeader() {
-    return SafeArea(
-      bottom: false,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          double scale = constraints.maxWidth.isFinite
-              ? constraints.maxWidth / _kHeaderDesignFrameWidth
-              : 1.0;
-          if (scale <= 0) scale = 1.0;
-          if (scale > 1.0) scale = 1.0;
-
-          final outerRadius = _kHeaderRadius * scale;
-          final borderW = _kHeaderBorderBottom * scale;
-          final innerRadius = (outerRadius - borderW).clamp(0.0, outerRadius);
-
-          return Container(
-            width: double.infinity,
-            height: _kHeaderH * scale,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: _headerBorder,
-              borderRadius: BorderRadius.only(
-                bottomLeft: Radius.circular(outerRadius),
-                bottomRight: Radius.circular(outerRadius),
-              ),
-            ),
-            padding: EdgeInsets.only(bottom: borderW),
-            child: Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [_headerStart, _headerMid, _headerEnd],
-                  stops: [0.0001, 0.3318, 1.0],
-                ),
-                borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(innerRadius),
-                  bottomRight: Radius.circular(innerRadius),
-                ),
-              ),
-              child: Stack(
-                children: [
-                  Positioned(
-                    left: _kBackLeft * scale,
-                    top: _kBackTop * scale,
-                    child: GestureDetector(
-                      onTap: _goBack,
-                      behavior: HitTestBehavior.opaque,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          SizedBox(
-                            width: _kBackIconSize * scale,
-                            height: _kBackIconSize * scale,
-                            child: CustomPaint(
-                              size: Size(_kBackIconSize * scale,
-                                  _kBackIconSize * scale),
-                              painter: _BackArrowPainter(),
-                            ),
-                          ),
-                          SizedBox(width: 6 * scale),
-                          Text('Back',
-                              style: TextStyle(
-                                  color: _white,
-                                  fontSize: 16 * scale,
-                                  fontWeight: FontWeight.w500,
-                                  height: 1.0)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: _kTitleLeft * scale,
-                    top: _kTitleTop * scale,
-                    child: _wrapWithHiddenAdmin(
-                      child: Text('Auth & Clock In',
-                          style: TextStyle(
-                              color: _white,
-                              fontSize: _kTitleFontSize * scale,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.3,
-                              height: 1.0)),
-                    ),
-                  ),
-                  Positioned(
-                    left: _kSubtitleLeft * scale,
-                    top: _kSubtitleTop * scale,
-                    child: Text('Select your initial verification method',
-                        style: TextStyle(
-                            color: _white,
-                            fontSize: _kSubtitleFontSize * scale,
-                            fontWeight: FontWeight.w400,
-                            height: 1.0)),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildSelectMethodStep(_ThemeColors tc) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        double scale = constraints.maxWidth.isFinite
-            ? constraints.maxWidth / _kHeaderDesignFrameWidth
-            : 1.0;
-        if (scale <= 0) scale = 1.0;
-        if (scale > 1.0) scale = 1.0;
-
-        return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(children: [
-            _buildOverlapCard(
-              tc: tc,
-              stepLabel: 'Step 1: Initial Login',
-              overlap: 64 * scale,
-              child: Column(children: [
-                if (_deviceCompromised) ...[
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                      border:
-                      Border.all(color: Colors.red.withValues(alpha: 0.4)),
-                    ),
-                    child: Row(children: [
-                      const Icon(Icons.warning_amber_rounded,
-                          color: Colors.red, size: 18),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Device integrity check failed. '
-                              'Logins are blocked on this device.',
-                          style: TextStyle(
-                            color: isDark(context)
-                                ? Colors.white
-                                : Colors.red.shade900,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ]),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                Row(children: [
-                  Expanded(
-                    child: _MethodButton(
-                      icon: Icons.contactless_rounded,
-                      label: 'Key Fob',
-                      enabled: !kIsWeb && _nfcAvailable && !_deviceCompromised,
-                      onTap: () => _goToStep(_LoginStep.nfcWait),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _MethodButton(
-                      icon: Icons.key_rounded,
-                      label: 'Use PIN',
-                      enabled: !_deviceCompromised,
-                      onTap: () => _goToStep(_LoginStep.pinEntry),
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 16),
-                _buildClientMeetingButton(),
-                const SizedBox(height: 10),
-                _buildPasswordRequestButton(),
-              ]),
-            ),
-            if (kIsWeb) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: tc.infoBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: tc.infoBorder, width: 1.5),
-                ),
-                child: Row(children: [
-                  Icon(Icons.info_outline_rounded,
-                      color: tc.infoText, size: 16),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'NFC / Key Fob is not supported by web browsers. '
-                          'Please use PIN or Client Meeting login, or download the APK.',
-                      style: TextStyle(
-                          color: tc.infoText, fontSize: 12, height: 1.4),
-                    ),
-                  ),
-                ]),
-              ),
-            ] else if (!_nfcAvailable) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: tc.infoBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: tc.infoBorder, width: 1.5),
-                ),
-                child: Row(children: [
-                  Icon(Icons.info_outline_rounded,
-                      color: tc.infoText, size: 16),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'NFC not available on this device. Use PIN to sign in.',
-                      style: TextStyle(color: tc.infoText, fontSize: 12),
-                    ),
-                  ),
-                ]),
-              ),
-            ],
-          ]),
-        );
-      },
-    );
-  }
-
-  bool isDark(BuildContext context) =>
-      Theme.of(context).brightness == Brightness.dark;
-
-  Widget _buildPasswordRequestButton() {
-    final disabled = _isLoading || !_isOnline;
-    return GestureDetector(
-      onTap: disabled ? null : _showPasswordChangeRequestDialog,
-      child: Container(
-        width: double.infinity,
-        height: 40,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: disabled ? const Color(0xFF9CA3AF) : _orange,
-            width: 1,
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.lock_reset_rounded,
-              size: 16,
-              color: disabled ? const Color(0xFF9CA3AF) : _orange,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              'Forgot PIN / Request Password Change',
-              style: TextStyle(
-                color: disabled ? const Color(0xFF9CA3AF) : _orange,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildClientMeetingButton() {
-    if (!_clientMeetingEnabled) {
-      return _buildGrayClientMeetingButton(
-        message: 'Client Meeting login is coming soon',
-        label: 'Client Meeting LogIn',
-        showSpinner: false,
-      );
-    }
-
-    if (_checkingActiveMeeting) {
-      return _buildGrayClientMeetingButton(
-        message: 'Checking for scheduled client meetings…',
-        label: 'Checking…',
-        showSpinner: true,
-      );
-    }
-
-    final blockBecauseNoMeeting = _activeEmployee != null && !_hasActiveMeeting;
-    if (blockBecauseNoMeeting) {
-      return _buildGrayClientMeetingButton(
-        message:
-        'No client meeting scheduled.\nPlease ask your admin to assign one.',
-        label: 'Client Meeting LogIn',
-        showSpinner: false,
-      );
-    }
-
-    final disabled = _isLoading || _deviceCompromised;
-    return GestureDetector(
-      onTap: disabled ? null : _onClientMeetingLogin,
-      child: Container(
-        width: double.infinity,
-        height: 34,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: disabled ? const Color(0xFF9CA3AF) : _orange,
-            width: 1,
-          ),
-        ),
-        child: _isLoading
-            ? const SizedBox(
-          width: 16,
-          height: 16,
-          child: CircularProgressIndicator(
-              color: _orange, strokeWidth: 2),
-        )
-            : Text(
-          'Client Meeting LogIn',
-          style: TextStyle(
-              color: disabled ? const Color(0xFF9CA3AF) : _orange,
-              fontSize: 14,
-              fontWeight: FontWeight.w500),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGrayClientMeetingButton({
-    required String message,
-    required String label,
-    required bool showSpinner,
-  }) {
-    return Tooltip(
-      message: message,
-      child: Container(
-        width: double.infinity,
-        height: 34,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0xFFE5E7EB),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFF9CA3AF), width: 1),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (showSpinner)
-              const SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Color(0xFF6B7280)),
-              )
-            else
-              const Icon(Icons.lock_clock_rounded,
-                  size: 14, color: Color(0xFF6B7280)),
-            const SizedBox(width: 6),
-            Text(label,
-                style: const TextStyle(
-                    color: Color(0xFF6B7280),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOverlapCard({
-    required _ThemeColors tc,
-    required String stepLabel,
-    required Widget child,
-    double overlap = 30,
-  }) {
-    return Transform.translate(
-      offset: Offset(0, -overlap),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: tc.cardBg,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: tc.cardBorder, width: 1.5),
-          boxShadow: [
-            BoxShadow(
-              color: _headerEnd.withValues(alpha: 0.08),
-              blurRadius: 25,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Text(stepLabel,
-                  style: TextStyle(
-                      color: tc.textDark,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.2)),
-            ),
-            const SizedBox(height: 20),
-            child,
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPinModalCard() {
-    final locked = _isPinLockedOut;
-    final remaining = _maxPinAttempts - _pinFailedAttempts;
-    final showWarning = remaining <= 2 && remaining > 0 && !locked;
-
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(maxWidth: 380),
-      padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white, width: 1.15),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 12.5),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            alignment: Alignment.center,
-            child: Icon(locked ? Icons.lock_rounded : Icons.key_rounded,
-                color: locked ? _error : _modalGradTop, size: 32),
-          ),
-          const SizedBox(height: 20),
-          Text(locked ? 'Account Locked' : 'Enter PIN',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 30,
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(height: 10),
-          Text(
-            locked
-                ? 'Too many failed attempts.\nTry again in ${_remainingLockoutText()}'
-                : 'Please enter your 4-digit PIN to begin',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.92), fontSize: 14),
-          ),
-          if (locked) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(10),
-                border:
-                Border.all(color: Colors.white.withValues(alpha: 0.4)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.timer_rounded,
-                      color: Colors.white, size: 16),
-                  const SizedBox(width: 8),
-                  Text('Lockout: ${_remainingLockoutText()}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700)),
-                ],
-              ),
-            ),
-          ] else if (showWarning) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(10),
-                border:
-                Border.all(color: Colors.white.withValues(alpha: 0.4)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.warning_amber_rounded,
-                      color: Colors.white, size: 16),
-                  const SizedBox(width: 8),
-                  Text('⚠️ $remaining attempt(s) left',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700)),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 24),
-          AnimatedBuilder(
-            animation: _shakeAnim,
-            builder: (_, child) => Transform.translate(
-              offset: Offset(
-                  _shakeAnim.value *
-                      ((_shakeController.value * 10).round().isEven ? 1 : -1),
-                  0),
-              child: child,
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(4, (i) {
-                final filled = i < _pinInput.length;
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  margin: const EdgeInsets.symmetric(horizontal: 8),
-                  width: 16,
-                  height: 16,
+                Container(
+                  width: 32,
+                  height: 32,
+                  alignment: Alignment.center,
                   decoration: BoxDecoration(
+                    gradient: isActive
+                    ? const LinearGradient(
+                      colors: [Color(0xFFFF8A00), Color(0xFFF54900)])
+                    : null,
+                    color: isActive ? null : Colors.white.withValues(alpha: 0.05),
                     shape: BoxShape.circle,
-                    color: filled
-                        ? Colors.white
-                        : Colors.white.withValues(alpha: 0.35),
+                    border: isActive
+                    ? null
+                    : Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                    boxShadow: isActive
+                    ? [
+                      BoxShadow(
+                        color: const Color(0xFFFF8A00).withValues(alpha: 0.4),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                    : null,
                   ),
-                );
-              }),
-            ),
-          ),
-          const SizedBox(height: 28),
-          Column(
-            children: [
-              _pinPadRow(['1', '2', '3'], locked),
-              const SizedBox(height: 12),
-              _pinPadRow(['4', '5', '6'], locked),
-              const SizedBox(height: 12),
-              _pinPadRow(['7', '8', '9'], locked),
-              const SizedBox(height: 12),
-              _pinPadRow(['', '0', 'del'], locked),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _buildFeedback(onDark: true),
-          const SizedBox(height: 8),
-          _buildCancelButton(),
-        ],
-      ),
-    );
-  }
-
-  Widget _pinPadRow(List<String> keys, bool locked) {
-    return Row(
-      children: List.generate(keys.length, (colIdx) {
-        final key = keys[colIdx];
-        if (key.isEmpty) return const Expanded(child: SizedBox());
-        return Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(
-              left: colIdx > 0 ? 10 : 0,
-              right: colIdx < keys.length - 1 ? 10 : 0,
-            ),
-            child: _PinKeyWhite(
-              label: key,
-              onTap: locked ? () {} : () => _onPinKey(key),
-            ),
-          ),
-        );
-      }),
-    );
-  }
-
-  Widget _buildNfcModalCard() {
-    if (kIsWeb) {
-      return _buildUnsupportedWebCard(
-        icon: Icons.contactless_rounded,
-        title: 'NFC Not Supported',
-        message: 'NFC / Key Fob login is not available on web browsers.\n\n'
-            'Please use PIN or Client Meeting login instead.',
-      );
-    }
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(maxWidth: 380),
-      padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white, width: 1.15),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 12.5),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedBuilder(
-            animation: _nfcPulseAnim,
-            builder: (_, __) => Transform.scale(
-              scale: _isLoading ? 1.0 : _nfcPulseAnim.value,
-              child: Container(
-                width: 112,
-                height: 112,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
+                  child: Text('$n',
+                              style: TextStyle(
+                                color: isActive
+                                ? Colors.white
+                                : Colors.white.withValues(alpha: 0.4),
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13)),
                 ),
-                alignment: Alignment.center,
-                child: _isLoading
-                    ? const CircularProgressIndicator(
-                    color: _modalGradTop, strokeWidth: 2.5)
-                    : const Icon(Icons.contactless_rounded,
-                    color: _modalGradTop, size: 48),
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          const Text('Tap Key Fob',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 30,
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(height: 10),
-          Text(
-            _isLoading
-                ? 'Reading keyfob…'
-                : 'Please tap your key fob on the reader...',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.85), fontSize: 14),
-          ),
-          const SizedBox(height: 24),
-          if (_errorMessage != null) ...[
-            _buildFeedback(onDark: true),
-            const SizedBox(height: 12),
-          ],
-          _buildCancelButton(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildUnsupportedWebCard({
-    required IconData icon,
-    required String title,
-    required String message,
-  }) {
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(maxWidth: 380),
-      padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white, width: 1.15),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 12.5),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            alignment: Alignment.center,
-            child: Icon(icon, color: _modalGradTop, size: 40),
-          ),
-          const SizedBox(height: 20),
-          Text(title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700)),
-          const SizedBox(height: 12),
-          Text(message,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.85),
-                  fontSize: 13,
-                  height: 1.5)),
-          const SizedBox(height: 24),
-          _buildCancelButton(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildClientMeetingModalCard() {
-    if (_captureSuccess) return _buildClientMeetingSuccessCard();
-    final assignment = _activeAssignment;
-
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(maxWidth: 380),
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white, width: 1.15),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 12.5),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text('Client Meeting Check-In',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          if (assignment != null) ...[
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 6),
-              padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.assignment_rounded,
-                      color: Colors.white, size: 12),
-                  const SizedBox(width: 6),
-                  Flexible(
-                    child: Text(
-                      '${assignment.clientName} · ${assignment.timeWindowLabel}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title,
+                             style: TextStyle(
+                               color: isActive
+                               ? Colors.white
+                               : Colors.white.withValues(alpha: 0.55),
+                               fontSize: 14,
+                               fontWeight: FontWeight.w600)),
+                               const SizedBox(height: 2),
+                               Text(subtitle,
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(alpha: 0.35),
+                                      fontSize: 12)),
+                      ],
                     ),
                   ),
-                ],
-              ),
-            ),
-          ],
-          Text('Snap a photo to log your visit',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.85), fontSize: 13)),
-          const SizedBox(height: 16),
-          _buildCameraPreviewBox(),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildShutterButton(),
-              const SizedBox(width: 20),
-              _buildCameraSwitchButton(),
-            ],
-          ),
-          const SizedBox(height: 16),
-          if (_errorMessage != null) ...[
-            _buildFeedback(onDark: true),
-            const SizedBox(height: 8),
-          ],
-          _buildCancelButton(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCameraSwitchButton() {
-    return GestureDetector(
-      onTap: _switchCamera,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.2),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white, width: 1),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.switch_camera, color: Colors.white, size: 18),
-            const SizedBox(width: 4),
-            Text(_useFrontCamera ? 'Front' : 'Back',
-                style:
-                const TextStyle(color: Colors.white, fontSize: 12)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCameraPreviewBox() {
-    return AspectRatio(
-      aspectRatio: 314 / 456,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: _isMockedGps ? Colors.red : const Color(0xFFFDBA74),
-            width: _isMockedGps ? 2 : 1.5,
-          ),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(14.5),
-          child: Container(
-            color: _cmPreviewBg,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                if (_cameraController != null &&
-                    _cameraController!.value.isInitialized)
-                  _buildCoveredCameraPreview()
-                else
-                  const Center(
-                    child: CircularProgressIndicator(
-                        color: Colors.white54, strokeWidth: 2.5),
-                  ),
-                if (_isCapturing)
-                  Container(color: Colors.black.withValues(alpha: 0.25)),
-                Positioned(
-                  top: 10,
-                  left: 10,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (_isMockedGps)
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 4),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.red.withValues(alpha: 0.9),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.warning_amber_rounded,
-                                  color: Colors.white, size: 12),
-                              SizedBox(width: 4),
-                              Text('FAKE GPS',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w800)),
-                            ],
-                          ),
-                        ),
-                      if (_currentAccuracy != null && _currentAccuracy! > 200)
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 4),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withValues(alpha: 0.9),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            'GPS ±${_currentAccuracy!.toStringAsFixed(0)}m',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                      if (_clientMatch != null && _clientMatch!.isVerified)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.green.withValues(alpha: 0.9),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.verified_rounded,
-                                  color: Colors.white, size: 12),
-                              SizedBox(width: 4),
-                              Text('VERIFIED',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w800)),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                Positioned(
-                  left: 14,
-                  right: 14,
-                  bottom: 20,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.location_on_rounded,
-                              color: Color(0xFFC4FF0A), size: 14),
-                          const SizedBox(width: 5),
-                          Flexible(
-                            child: Text(
-                              _locationDisplay,
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                  shadows: [
-                                    Shadow(
-                                        color: Colors.black87, blurRadius: 6),
-                                  ]),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _formatTimestamp(_now),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            shadows: [
-                              Shadow(color: Colors.black87, blurRadius: 6),
-                            ]),
-                      ),
-                    ],
-                  ),
                 ),
               ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+            );
+                                }
 
-  Widget _buildCoveredCameraPreview() {
-    final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized) {
-      return const Center(
-        child: CircularProgressIndicator(
-            color: Colors.white54, strokeWidth: 2.5),
-      );
-    }
-    final previewSize = controller.value.previewSize;
-    if (previewSize == null) return CameraPreview(controller);
-    return FittedBox(
-      fit: BoxFit.cover,
-      child: SizedBox(
-        width: previewSize.height,
-        height: previewSize.width,
-        child: CameraPreview(controller),
-      ),
-    );
-  }
+                                Widget _buildStepConnector() {
+                                  return Container(
+                                    margin: const EdgeInsets.only(left: 15, top: 6, bottom: 6),
+                                    width: 2,
+                                    height: 24,
+                                    color: Colors.white.withValues(alpha: 0.08),
+                                  );
+                                }
 
-  Widget _buildShutterButton() {
-    return GestureDetector(
-      onTap: _isCapturing ? null : _capturePhoto,
-      child: AnimatedBuilder(
-        animation: _nfcPulseAnim,
-        builder: (_, __) => Transform.scale(
-          scale: _isCapturing ? 1.0 : _nfcPulseAnim.value,
-          child: Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _cmShutterOuter,
-              boxShadow: [
-                BoxShadow(
-                    color: _cmShutterGlow.withValues(alpha: 0.8),
-                    blurRadius: 15),
-              ],
-            ),
-            alignment: Alignment.center,
-            child: _isCapturing
-                ? const SizedBox(
-              width: 22,
-              height: 22,
-              child: CircularProgressIndicator(
-                  color: Colors.white, strokeWidth: 2.5),
-            )
-                : Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _cmShutterInner,
-                boxShadow: [
-                  BoxShadow(
-                      color: _cmShutterGlow.withValues(alpha: 0.8),
-                      blurRadius: 15),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+                                Widget _buildWebMainContent(_ThemeColors tc) {
+                                  return SingleChildScrollView(
+                                    padding: const EdgeInsets.symmetric(horizontal: 56, vertical: 40),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        _wrapWithHiddenAdmin(
+                                          child: const Text('Auth & Clock In',
+                                                            style: TextStyle(
+                                                              color: Colors.white,
+                                                              fontSize: 42,
+                                                              fontWeight: FontWeight.w800,
+                                                              letterSpacing: -1.4,
+                                                              height: 1.05)),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Text('Choose your verification method to begin your shift.',
+                                             style: TextStyle(
+                                               color: Colors.white.withValues(alpha: 0.55), fontSize: 15)),
+                                               const SizedBox(height: 40),
+                                               SizedBox(
+                                                 height: 320,
+                                                 child: Row(
+                                                   crossAxisAlignment: CrossAxisAlignment.stretch,
+                                                   children: [
+                                                     Expanded(
+                                                       child: _WebOptionCard(
+                                                         icon: Icons.contactless_rounded,
+                                                         title: 'Key Fob',
+                                                         desc:
+                                                         'Tap your fob on the NFC reader to authenticate instantly.',
+                                                         enabled: !kIsWeb &&
+                                                         _nfcAvailable &&
+                                                         _isOnline &&
+                                                         !_deviceCompromised,
+                                                         onTap: () => _goToStep(_LoginStep.nfcWait),
+                                                       ),
+                                                     ),
+                                                     const SizedBox(width: 20),
+                                                     Expanded(
+                                                       child: _WebOptionCard(
+                                                         icon: Icons.key_rounded,
+                                                         title: 'Use PIN',
+                                                         desc:
+                                                         'Enter your 4-digit security PIN to verify your identity.',
+                                                         enabled: _isOnline && !_deviceCompromised,
+                                                         onTap: () => _goToStep(_LoginStep.pinEntry),
+                                                       ),
+                                                     ),
+                                                   ],
+                                                 ),
+                                               ),
+                                               const SizedBox(height: 32),
+                                               Row(
+                                                 children: [
+                                                   Text('Having trouble? ',
+                                                        style: TextStyle(
+                                                          color: Colors.white.withValues(alpha: 0.4),
+                                                          fontSize: 13)),
+                                                   GestureDetector(
+                                                     onTap: _showPasswordChangeRequestDialog,
+                                                     child: const Text(
+                                                       'Request password change',
+                                                       style: TextStyle(
+                                                         color: Color(0xFFFF8A00),
+                                                         fontSize: 13,
+                                                         fontWeight: FontWeight.w600,
+                                                         decoration: TextDecoration.underline,
+                                                         decorationColor: Color(0xFFFF8A00),
+                                                       ),
+                                                     ),
+                                                   ),
+                                                 ],
+                                               ),
+                                      ],
+                                    ),
+                                  );
+                                }
 
-  Widget _buildClientMeetingSuccessCard() {
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(maxWidth: 380),
-      padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white, width: 1.15),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 12.5),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            alignment: Alignment.center,
-            child: const Icon(Icons.check_circle_rounded,
-                color: _modalGradTop, size: 32),
-          ),
-          const SizedBox(height: 20),
-          const Text('Successfully Clocked In',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 30,
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(height: 10),
-          Text('Please wait for HR approval...',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.92),
-                  fontSize: 14)),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
+                                Widget _buildDesktopModal() {
+                                  Widget card;
+                                  switch (_step) {
+                                    case _LoginStep.pinEntry:
+                                      card = _buildPinModalCard();
+                                      break;
+                                    case _LoginStep.nfcWait:
+                                      card = _buildNfcModalCard();
+                                      break;
+                                    case _LoginStep.clientMeeting:
+                                      card = _buildClientMeetingModalCard();
+                                      break;
+                                    case _LoginStep.selectMethod:
+                                      return const SizedBox.shrink();
+                                  }
+                                  return Positioned.fill(
+                                    child: FadeTransition(
+                                      opacity: _modalOpacityAnim,
+                                      child: Container(
+                                        color: _scrim,
+                                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                                        child: Center(
+                                          child: SingleChildScrollView(
+                                            child: ScaleTransition(scale: _modalScaleAnim, child: card),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
 
-  Widget _buildCancelButton() {
-    return GestureDetector(
-      onTap: _goBack,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFFFA500), width: 1.15),
-        ),
-        child: const Text('Cancel',
-            style: TextStyle(
-                color: Color(0xFFFFA500),
-                fontSize: 14,
-                fontWeight: FontWeight.w500)),
-      ),
-    );
-  }
+                                Widget _buildContent(_ThemeColors tc) {
+                                  return Stack(
+                                    children: [
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            begin: Alignment.topCenter,
+                                            end: Alignment.bottomCenter,
+                                            colors: [tc.bgTop, tc.bgMid, tc.bgBottom],
+                                            stops: const [0.0, 0.6, 1.0],
+                                          ),
+                                        ),
+                                        child: FadeTransition(
+                                          opacity: _fadeAnim,
+                                          child: Column(children: [
+                                            _buildOrangeHeader(),
+                                            Expanded(child: _buildSelectMethodStep(tc)),
+                                          ]),
+                                        ),
+                                      ),
+                                      if (_step != _LoginStep.selectMethod) _buildModalOverlay(),
+                                    ],
+                                  );
+                                }
 
-  Widget _buildFeedback({bool onDark = false}) {
-    if (_isLoading) {
-      return SizedBox(
-        height: 36,
-        child: Center(
-          child: CircularProgressIndicator(
-              color: onDark ? Colors.white : _orange, strokeWidth: 2.5),
-        ),
-      );
-    }
-    if (_errorMessage != null) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: onDark ? Colors.white.withValues(alpha: 0.15) : _errorBg,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-              color: onDark
-                  ? Colors.white.withValues(alpha: 0.4)
-                  : _error.withValues(alpha: 0.35)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.error_outline_rounded,
-              color: onDark ? Colors.white : _error, size: 16),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              _errorMessage!,
-              style: TextStyle(
-                  color: onDark ? Colors.white : _error,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600),
-            ),
-          ),
-        ]),
-      );
-    }
-    return const SizedBox(height: 8);
-  }
+                                Widget _buildModalOverlay() {
+                                  Widget card;
+                                  switch (_step) {
+                                    case _LoginStep.pinEntry:
+                                      card = _buildPinModalCard();
+                                      break;
+                                    case _LoginStep.nfcWait:
+                                      card = _buildNfcModalCard();
+                                      break;
+                                    case _LoginStep.clientMeeting:
+                                      card = _buildClientMeetingModalCard();
+                                      break;
+                                    case _LoginStep.selectMethod:
+                                      card = const SizedBox.shrink();
+                                      break;
+                                  }
+                                  return Positioned.fill(
+                                    child: FadeTransition(
+                                      opacity: _modalOpacityAnim,
+                                      child: Container(
+                                        color: _scrim,
+                                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                                        child: Center(
+                                          child: SingleChildScrollView(
+                                            child: ScaleTransition(scale: _modalScaleAnim, child: card),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildOrangeHeader() {
+                                  return SafeArea(
+                                    bottom: false,
+                                    child: LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        double scale = constraints.maxWidth.isFinite
+                                        ? constraints.maxWidth / _kHeaderDesignFrameWidth
+                                        : 1.0;
+                                        if (scale <= 0) scale = 1.0;
+                                        if (scale > 1.0) scale = 1.0;
+
+                                        final outerRadius = _kHeaderRadius * scale;
+                                        final borderW = _kHeaderBorderBottom * scale;
+                                        final innerRadius = (outerRadius - borderW).clamp(0.0, outerRadius);
+
+                                        return Container(
+                                          width: double.infinity,
+                                          height: _kHeaderH * scale,
+                                          clipBehavior: Clip.antiAlias,
+                                          decoration: BoxDecoration(
+                                            color: _headerBorder,
+                                            borderRadius: BorderRadius.only(
+                                              bottomLeft: Radius.circular(outerRadius),
+                                              bottomRight: Radius.circular(outerRadius),
+                                            ),
+                                          ),
+                                          padding: EdgeInsets.only(bottom: borderW),
+                                          child: Container(
+                                            width: double.infinity,
+                                            decoration: BoxDecoration(
+                                              gradient: const LinearGradient(
+                                                begin: Alignment.topCenter,
+                                                end: Alignment.bottomCenter,
+                                                colors: [_headerStart, _headerMid, _headerEnd],
+                                                stops: [0.0001, 0.3318, 1.0],
+                                              ),
+                                              borderRadius: BorderRadius.only(
+                                                bottomLeft: Radius.circular(innerRadius),
+                                                bottomRight: Radius.circular(innerRadius),
+                                              ),
+                                            ),
+                                            child: Stack(
+                                              children: [
+                                                Positioned(
+                                                  left: _kBackLeft * scale,
+                                                  top: _kBackTop * scale,
+                                                  child: GestureDetector(
+                                                    onTap: _goBack,
+                                                    behavior: HitTestBehavior.opaque,
+                                                    child: Row(
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      crossAxisAlignment: CrossAxisAlignment.center,
+                                                      children: [
+                                                        SizedBox(
+                                                          width: _kBackIconSize * scale,
+                                                          height: _kBackIconSize * scale,
+                                                          child: CustomPaint(
+                                                            size: Size(_kBackIconSize * scale,
+                                                                       _kBackIconSize * scale),
+                                                                       painter: _BackArrowPainter(),
+                                                          ),
+                                                        ),
+                                                        SizedBox(width: 6 * scale),
+                                                        Text('Back',
+                                                             style: TextStyle(
+                                                               color: _white,
+                                                               fontSize: 16 * scale,
+                                                               fontWeight: FontWeight.w500,
+                                                               height: 1.0)),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                                Positioned(
+                                                  left: _kTitleLeft * scale,
+                                                  top: _kTitleTop * scale,
+                                                  child: _wrapWithHiddenAdmin(
+                                                    child: Text('Auth & Clock In',
+                                                                style: TextStyle(
+                                                                  color: _white,
+                                                                  fontSize: _kTitleFontSize * scale,
+                                                                  fontWeight: FontWeight.w700,
+                                                                  letterSpacing: -0.3,
+                                                                  height: 1.0)),
+                                                  ),
+                                                ),
+                                                Positioned(
+                                                  left: _kSubtitleLeft * scale,
+                                                  top: _kSubtitleTop * scale,
+                                                  child: Text('Select your initial verification method',
+                                                              style: TextStyle(
+                                                                color: _white,
+                                                                fontSize: _kSubtitleFontSize * scale,
+                                                                fontWeight: FontWeight.w400,
+                                                                height: 1.0)),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildSelectMethodStep(_ThemeColors tc) {
+                                  return LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      double scale = constraints.maxWidth.isFinite
+                                      ? constraints.maxWidth / _kHeaderDesignFrameWidth
+                                      : 1.0;
+                                      if (scale <= 0) scale = 1.0;
+                                      if (scale > 1.0) scale = 1.0;
+
+                                      return SingleChildScrollView(
+                                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                                        child: Column(children: [
+                                          _buildOverlapCard(
+                                            tc: tc,
+                                            stepLabel: 'Step 1: Initial Login',
+                                            overlap: 64 * scale,
+                                            child: Column(children: [
+                                              if (_deviceCompromised) ...[
+                                                Container(
+                                                  padding: const EdgeInsets.all(12),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.red.withValues(alpha: 0.12),
+                                                    borderRadius: BorderRadius.circular(10),
+                                                    border:
+                                                    Border.all(color: Colors.red.withValues(alpha: 0.4)),
+                                                  ),
+                                                  child: Row(children: [
+                                                    const Icon(Icons.warning_amber_rounded,
+                                                               color: Colors.red, size: 18),
+                                                             const SizedBox(width: 10),
+                                                             Expanded(
+                                                               child: Text(
+                                                                 'Device integrity check failed. '
+                                                               'Logins are blocked on this device.',
+                                                               style: TextStyle(
+                                                                 color: isDark(context)
+                                                                 ? Colors.white
+                                                                 : Colors.red.shade900,
+                                                                 fontSize: 12,
+                                                                 fontWeight: FontWeight.w600,
+                                                               ),
+                                                               ),
+                                                             ),
+                                                  ]),
+                                                ),
+                                                const SizedBox(height: 12),
+                                              ],
+                                              Row(children: [
+                                                Expanded(
+                                                  child: _MethodButton(
+                                                    icon: Icons.contactless_rounded,
+                                                    label: 'Key Fob',
+                                                    enabled: !kIsWeb && _nfcAvailable && !_deviceCompromised,
+                                                    onTap: () => _goToStep(_LoginStep.nfcWait),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: _MethodButton(
+                                                    icon: Icons.key_rounded,
+                                                    label: 'Use PIN',
+                                                    enabled: !_deviceCompromised,
+                                                    onTap: () => _goToStep(_LoginStep.pinEntry),
+                                                  ),
+                                                ),
+                                              ]),
+                                              const SizedBox(height: 16),
+                                              _buildClientMeetingButton(),
+                                              const SizedBox(height: 10),
+                                              _buildPasswordRequestButton(),
+                                            ]),
+                                          ),
+                                          if (kIsWeb) ...[
+                                            const SizedBox(height: 16),
+                                            Container(
+                                              padding:
+                                              const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                              decoration: BoxDecoration(
+                                                color: tc.infoBg,
+                                                borderRadius: BorderRadius.circular(12),
+                                                border: Border.all(color: tc.infoBorder, width: 1.5),
+                                              ),
+                                              child: Row(children: [
+                                                Icon(Icons.info_outline_rounded,
+                                                     color: tc.infoText, size: 16),
+                                                     const SizedBox(width: 10),
+                                                     Expanded(
+                                                       child: Text(
+                                                         'NFC / Key Fob is not supported by web browsers. '
+                                                       'Please use PIN or Client Meeting login, or download the APK.',
+                                                       style: TextStyle(
+                                                         color: tc.infoText, fontSize: 12, height: 1.4),
+                                                       ),
+                                                     ),
+                                              ]),
+                                            ),
+                                          ] else if (!_nfcAvailable) ...[
+                                            const SizedBox(height: 16),
+                                            Container(
+                                              padding:
+                                              const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                              decoration: BoxDecoration(
+                                                color: tc.infoBg,
+                                                borderRadius: BorderRadius.circular(12),
+                                                border: Border.all(color: tc.infoBorder, width: 1.5),
+                                              ),
+                                              child: Row(children: [
+                                                Icon(Icons.info_outline_rounded,
+                                                     color: tc.infoText, size: 16),
+                                                     const SizedBox(width: 10),
+                                                     Expanded(
+                                                       child: Text(
+                                                         'NFC not available on this device. Use PIN to sign in.',
+                                                         style: TextStyle(color: tc.infoText, fontSize: 12),
+                                                       ),
+                                                     ),
+                                              ]),
+                                            ),
+                                          ],
+                                        ]),
+                                      );
+                                    },
+                                  );
+                                }
+
+                                bool isDark(BuildContext context) =>
+                                Theme.of(context).brightness == Brightness.dark;
+
+                                Widget _buildPasswordRequestButton() {
+                                  final disabled = _isLoading || !_isOnline;
+                                  return GestureDetector(
+                                    onTap: disabled ? null : _showPasswordChangeRequestDialog,
+                                    child: Container(
+                                      width: double.infinity,
+                                      height: 40,
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        color: Colors.transparent,
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: disabled ? const Color(0xFF9CA3AF) : _orange,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.lock_reset_rounded,
+                                            size: 16,
+                                            color: disabled ? const Color(0xFF9CA3AF) : _orange,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'Forgot PIN / Request Password Change',
+                                            style: TextStyle(
+                                              color: disabled ? const Color(0xFF9CA3AF) : _orange,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildClientMeetingButton() {
+                                  if (!_clientMeetingEnabled) {
+                                    return _buildGrayClientMeetingButton(
+                                      message: 'Client Meeting login is coming soon',
+                                      label: 'Client Meeting LogIn',
+                                      showSpinner: false,
+                                    );
+                                  }
+
+                                  if (_checkingActiveMeeting) {
+                                    return _buildGrayClientMeetingButton(
+                                      message: 'Checking for scheduled client meetings…',
+                                      label: 'Checking…',
+                                      showSpinner: true,
+                                    );
+                                  }
+
+                                  final blockBecauseNoMeeting = _activeEmployee != null && !_hasActiveMeeting;
+                                  if (blockBecauseNoMeeting) {
+                                    return _buildGrayClientMeetingButton(
+                                      message:
+                                      'No client meeting scheduled.\nPlease ask your admin to assign one.',
+                                      label: 'Client Meeting LogIn',
+                                      showSpinner: false,
+                                    );
+                                  }
+
+                                  final disabled = _isLoading || _deviceCompromised;
+                                  return GestureDetector(
+                                    onTap: disabled ? null : _onClientMeetingLogin,
+                                    child: Container(
+                                      width: double.infinity,
+                                      height: 34,
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        color: Colors.transparent,
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: disabled ? const Color(0xFF9CA3AF) : _orange,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: _isLoading
+                                      ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          color: _orange, strokeWidth: 2),
+                                      )
+                                      : Text(
+                                        'Client Meeting LogIn',
+                                        style: TextStyle(
+                                          color: disabled ? const Color(0xFF9CA3AF) : _orange,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildGrayClientMeetingButton({
+                                  required String message,
+                                  required String label,
+                                  required bool showSpinner,
+                                }) {
+                                  return Tooltip(
+                                    message: message,
+                                    child: Container(
+                                      width: double.infinity,
+                                      height: 34,
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFE5E7EB),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(color: const Color(0xFF9CA3AF), width: 1),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          if (showSpinner)
+                                            const SizedBox(
+                                              width: 14,
+                                              height: 14,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2, color: Color(0xFF6B7280)),
+                                            )
+                                            else
+                                              const Icon(Icons.lock_clock_rounded,
+                                                         size: 14, color: Color(0xFF6B7280)),
+                                                         const SizedBox(width: 6),
+                                                         Text(label,
+                                                              style: const TextStyle(
+                                                                color: Color(0xFF6B7280),
+                                                                fontSize: 14,
+                                                                fontWeight: FontWeight.w500)),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildOverlapCard({
+                                  required _ThemeColors tc,
+                                  required String stepLabel,
+                                  required Widget child,
+                                  double overlap = 30,
+                                }) {
+                                  return Transform.translate(
+                                    offset: Offset(0, -overlap),
+                                    child: Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(20),
+                                      decoration: BoxDecoration(
+                                        color: tc.cardBg,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(color: tc.cardBorder, width: 1.5),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: _headerEnd.withValues(alpha: 0.08),
+                                            blurRadius: 25,
+                                            offset: const Offset(0, 10),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Center(
+                                            child: Text(stepLabel,
+                                                        style: TextStyle(
+                                                          color: tc.textDark,
+                                                          fontSize: 15,
+                                                          fontWeight: FontWeight.w700,
+                                                          letterSpacing: 0.2)),
+                                          ),
+                                          const SizedBox(height: 20),
+                                          child,
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildPinModalCard() {
+                                  final locked = _isPinLockedOut;
+                                  final remaining = _maxPinAttempts - _pinFailedAttempts;
+                                  final showWarning = remaining <= 2 && remaining > 0 && !locked;
+
+                                  return Container(
+                                    width: double.infinity,
+                                    constraints: const BoxConstraints(maxWidth: 380),
+                                    padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: Colors.white, width: 1.15),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.06),
+                                          blurRadius: 10,
+                                          offset: const Offset(0, 12.5),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          width: 64,
+                                          height: 64,
+                                          decoration: BoxDecoration(
+                                            color: Colors.white,
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: Icon(locked ? Icons.lock_rounded : Icons.key_rounded,
+                                                      color: locked ? _error : _modalGradTop, size: 32),
+                                        ),
+                                        const SizedBox(height: 20),
+                                        Text(locked ? 'Account Locked' : 'Enter PIN',
+                                             style: const TextStyle(
+                                               color: Colors.white,
+                                               fontSize: 30,
+                                               fontWeight: FontWeight.w500)),
+                                               const SizedBox(height: 10),
+                                               Text(
+                                                 locked
+                                                 ? 'Too many failed attempts.\nTry again in ${_remainingLockoutText()}'
+                                               : 'Please enter your 4-digit PIN to begin',
+                                               textAlign: TextAlign.center,
+                                               style: TextStyle(
+                                                 color: Colors.white.withValues(alpha: 0.92), fontSize: 14),
+                                               ),
+                                               if (locked) ...[
+                                                 const SizedBox(height: 16),
+                                                 Container(
+                                                   padding: const EdgeInsets.all(12),
+                                                   decoration: BoxDecoration(
+                                                     color: Colors.white.withValues(alpha: 0.2),
+                                                     borderRadius: BorderRadius.circular(10),
+                                                     border:
+                                                     Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                                                   ),
+                                                   child: Row(
+                                                     mainAxisAlignment: MainAxisAlignment.center,
+                                                     children: [
+                                                       const Icon(Icons.timer_rounded,
+                                                                  color: Colors.white, size: 16),
+                                                              const SizedBox(width: 8),
+                                                              Text('Lockout: ${_remainingLockoutText()}',
+                                                              style: const TextStyle(
+                                                                color: Colors.white,
+                                                                fontSize: 13,
+                                                                fontWeight: FontWeight.w700)),
+                                                     ],
+                                                   ),
+                                                 ),
+                                               ] else if (showWarning) ...[
+                                                 const SizedBox(height: 16),
+                                                 Container(
+                                                   padding: const EdgeInsets.all(10),
+                                                   decoration: BoxDecoration(
+                                                     color: Colors.white.withValues(alpha: 0.2),
+                                                     borderRadius: BorderRadius.circular(10),
+                                                     border:
+                                                     Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                                                   ),
+                                                   child: Row(
+                                                     mainAxisAlignment: MainAxisAlignment.center,
+                                                     children: [
+                                                       const Icon(Icons.warning_amber_rounded,
+                                                                  color: Colors.white, size: 16),
+                                                              const SizedBox(width: 8),
+                                                              Text('⚠️ $remaining attempt(s) left',
+                                                              style: const TextStyle(
+                                                                color: Colors.white,
+                                                                fontSize: 12,
+                                                                fontWeight: FontWeight.w700)),
+                                                     ],
+                                                   ),
+                                                 ),
+                                               ],
+                                               const SizedBox(height: 24),
+                                               AnimatedBuilder(
+                                                 animation: _shakeAnim,
+                                                 builder: (_, child) => Transform.translate(
+                                                   offset: Offset(
+                                                     _shakeAnim.value *
+                                                     ((_shakeController.value * 10).round().isEven ? 1 : -1),
+                                                     0),
+                                                     child: child,
+                                                 ),
+                                                 child: Row(
+                                                   mainAxisAlignment: MainAxisAlignment.center,
+                                                   children: List.generate(4, (i) {
+                                                     final filled = i < _pinInput.length;
+                                                     return AnimatedContainer(
+                                                       duration: const Duration(milliseconds: 200),
+                                                       margin: const EdgeInsets.symmetric(horizontal: 8),
+                                                       width: 16,
+                                                       height: 16,
+                                                       decoration: BoxDecoration(
+                                                         shape: BoxShape.circle,
+                                                         color: filled
+                                                         ? Colors.white
+                                                         : Colors.white.withValues(alpha: 0.35),
+                                                       ),
+                                                     );
+                                                   }),
+                                                 ),
+                                               ),
+                                               const SizedBox(height: 28),
+                                               Column(
+                                                 children: [
+                                                   _pinPadRow(['1', '2', '3'], locked),
+                                                   const SizedBox(height: 12),
+                                                   _pinPadRow(['4', '5', '6'], locked),
+                                                   const SizedBox(height: 12),
+                                                   _pinPadRow(['7', '8', '9'], locked),
+                                                   const SizedBox(height: 12),
+                                                   _pinPadRow(['', '0', 'del'], locked),
+                                                 ],
+                                               ),
+                                               const SizedBox(height: 16),
+                                               _buildFeedback(onDark: true),
+                                               const SizedBox(height: 8),
+                                               _buildCancelButton(),
+                                      ],
+                                    ),
+                                  );
+                                }
+
+                                Widget _pinPadRow(List<String> keys, bool locked) {
+                                  return Row(
+                                    children: List.generate(keys.length, (colIdx) {
+                                      final key = keys[colIdx];
+                                      if (key.isEmpty) return const Expanded(child: SizedBox());
+                                      return Expanded(
+                                        child: Padding(
+                                          padding: EdgeInsets.only(
+                                            left: colIdx > 0 ? 10 : 0,
+                                            right: colIdx < keys.length - 1 ? 10 : 0,
+                                          ),
+                                          child: _PinKeyWhite(
+                                            label: key,
+                                            onTap: locked ? () {} : () => _onPinKey(key),
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                  );
+                                }
+
+                                Widget _buildNfcModalCard() {
+                                  if (kIsWeb) {
+                                    return _buildUnsupportedWebCard(
+                                      icon: Icons.contactless_rounded,
+                                      title: 'NFC Not Supported',
+                                      message: 'NFC / Key Fob login is not available on web browsers.\n\n'
+                                    'Please use PIN or Client Meeting login instead.',
+                                    );
+                                  }
+                                  return Container(
+                                    width: double.infinity,
+                                    constraints: const BoxConstraints(maxWidth: 380),
+                                    padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: Colors.white, width: 1.15),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.06),
+                                          blurRadius: 10,
+                                          offset: const Offset(0, 12.5),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        AnimatedBuilder(
+                                          animation: _nfcPulseAnim,
+                                          builder: (_, __) => Transform.scale(
+                                            scale: _isLoading ? 1.0 : _nfcPulseAnim.value,
+                                            child: Container(
+                                              width: 112,
+                                              height: 112,
+                                              decoration: BoxDecoration(
+                                                color: Colors.white,
+                                                borderRadius: BorderRadius.circular(12),
+                                              ),
+                                              alignment: Alignment.center,
+                                              child: _isLoading
+                                              ? const CircularProgressIndicator(
+                                                color: _modalGradTop, strokeWidth: 2.5)
+                                              : const Icon(Icons.contactless_rounded,
+                                                           color: _modalGradTop, size: 48),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 24),
+                                        const Text('Tap Key Fob',
+                                                   style: TextStyle(
+                                                     color: Colors.white,
+                                                     fontSize: 30,
+                                                     fontWeight: FontWeight.w500)),
+                                                  const SizedBox(height: 10),
+                                                  Text(
+                                                    _isLoading
+                                                    ? 'Reading keyfob…'
+                                                  : 'Please tap your key fob on the reader...',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                    color: Colors.white.withValues(alpha: 0.85), fontSize: 14),
+                                                  ),
+                                                  const SizedBox(height: 24),
+                                                  if (_errorMessage != null) ...[
+                                                    _buildFeedback(onDark: true),
+                                                    const SizedBox(height: 12),
+                                                  ],
+                                                  _buildCancelButton(),
+                                      ],
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildUnsupportedWebCard({
+                                  required IconData icon,
+                                  required String title,
+                                  required String message,
+                                }) {
+                                  return Container(
+                                    width: double.infinity,
+                                    constraints: const BoxConstraints(maxWidth: 380),
+                                    padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: Colors.white, width: 1.15),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.06),
+                                          blurRadius: 10,
+                                          offset: const Offset(0, 12.5),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          width: 80,
+                                          height: 80,
+                                          decoration: BoxDecoration(
+                                            color: Colors.white,
+                                            borderRadius: BorderRadius.circular(16),
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: Icon(icon, color: _modalGradTop, size: 40),
+                                        ),
+                                        const SizedBox(height: 20),
+                                        Text(title,
+                                             textAlign: TextAlign.center,
+                                             style: const TextStyle(
+                                               color: Colors.white,
+                                               fontSize: 22,
+                                               fontWeight: FontWeight.w700)),
+                                               const SizedBox(height: 12),
+                                               Text(message,
+                                                    textAlign: TextAlign.center,
+                                                    style: TextStyle(
+                                                      color: Colors.white.withValues(alpha: 0.85),
+                                                      fontSize: 13,
+                                                      height: 1.5)),
+                                                  const SizedBox(height: 24),
+                                                  _buildCancelButton(),
+                                      ],
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildClientMeetingModalCard() {
+                                  if (_captureSuccess) return _buildClientMeetingSuccessCard();
+                                  final assignment = _activeAssignment;
+
+                                  return Container(
+                                    width: double.infinity,
+                                    constraints: const BoxConstraints(maxWidth: 380),
+                                    padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: Colors.white, width: 1.15),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.06),
+                                          blurRadius: 10,
+                                          offset: const Offset(0, 12.5),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Text('Client Meeting Check-In',
+                                                   style: TextStyle(
+                                                     color: Colors.white,
+                                                     fontSize: 20,
+                                                     fontWeight: FontWeight.w700)),
+                                                  const SizedBox(height: 4),
+                                                  if (assignment != null) ...[
+                                                    Container(
+                                                      margin: const EdgeInsets.symmetric(vertical: 6),
+                                                      padding:
+                                                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.black.withValues(alpha: 0.15),
+                                                        borderRadius: BorderRadius.circular(8),
+                                                      ),
+                                                      child: Row(
+                                                        mainAxisSize: MainAxisSize.min,
+                                                        children: [
+                                                          const Icon(Icons.assignment_rounded,
+                                                                     color: Colors.white, size: 12),
+                                                                 const SizedBox(width: 6),
+                                                                 Flexible(
+                                                                   child: Text(
+                                                                     '${assignment.clientName} · ${assignment.timeWindowLabel}',
+                                                                     style: const TextStyle(
+                                                                       color: Colors.white,
+                                                                       fontSize: 11,
+                                                                       fontWeight: FontWeight.w600),
+                                                                       overflow: TextOverflow.ellipsis,
+                                                                       maxLines: 1,
+                                                                   ),
+                                                                 ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                  Text('Snap a photo to log your visit',
+                                                       textAlign: TextAlign.center,
+                                                       style: TextStyle(
+                                                         color: Colors.white.withValues(alpha: 0.85), fontSize: 13)),
+                                                         const SizedBox(height: 16),
+                                                         _buildCameraPreviewBox(),
+                                                         const SizedBox(height: 20),
+                                                         Row(
+                                                           mainAxisAlignment: MainAxisAlignment.center,
+                                                           children: [
+                                                             _buildShutterButton(),
+                                                             const SizedBox(width: 20),
+                                                             _buildCameraSwitchButton(),
+                                                           ],
+                                                         ),
+                                                  const SizedBox(height: 16),
+                                                  if (_errorMessage != null) ...[
+                                                    _buildFeedback(onDark: true),
+                                                    const SizedBox(height: 8),
+                                                  ],
+                                                  _buildCancelButton(),
+                                      ],
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildCameraSwitchButton() {
+                                  return GestureDetector(
+                                    onTap: _switchCamera,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(color: Colors.white, width: 1),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Icon(Icons.switch_camera, color: Colors.white, size: 18),
+                                          const SizedBox(width: 4),
+                                          Text(_useFrontCamera ? 'Front' : 'Back',
+                                               style:
+                                               const TextStyle(color: Colors.white, fontSize: 12)),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildCameraPreviewBox() {
+                                  return AspectRatio(
+                                    aspectRatio: 314 / 456,
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: _isMockedGps ? Colors.red : const Color(0xFFFDBA74),
+                                          width: _isMockedGps ? 2 : 1.5,
+                                        ),
+                                      ),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(14.5),
+                                        child: Container(
+                                          color: _cmPreviewBg,
+                                          child: Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              if (_cameraController != null &&
+                                                _cameraController!.value.isInitialized)
+                                                _buildCoveredCameraPreview()
+                                                else
+                                                  const Center(
+                                                    child: CircularProgressIndicator(
+                                                      color: Colors.white54, strokeWidth: 2.5),
+                                                  ),
+                                                  if (_isCapturing)
+                                                    Container(color: Colors.black.withValues(alpha: 0.25)),
+                                                    Positioned(
+                                                      top: 10,
+                                                      left: 10,
+                                                      child: Column(
+                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: [
+                                                          if (_isMockedGps)
+                                                            Container(
+                                                              margin: const EdgeInsets.only(bottom: 4),
+                                                              padding: const EdgeInsets.symmetric(
+                                                                horizontal: 8, vertical: 4),
+                                                                decoration: BoxDecoration(
+                                                                  color: Colors.red.withValues(alpha: 0.9),
+                                                                  borderRadius: BorderRadius.circular(6),
+                                                                ),
+                                                                child: const Row(
+                                                                  mainAxisSize: MainAxisSize.min,
+                                                                  children: [
+                                                                    Icon(Icons.warning_amber_rounded,
+                                                                         color: Colors.white, size: 12),
+                                                                         SizedBox(width: 4),
+                                                                         Text('FAKE GPS',
+                                                                              style: TextStyle(
+                                                                                color: Colors.white,
+                                                                                fontSize: 9,
+                                                                                fontWeight: FontWeight.w800)),
+                                                                  ],
+                                                                ),
+                                                            ),
+                                                            if (_currentAccuracy != null && _currentAccuracy! > 200)
+                                                              Container(
+                                                                margin: const EdgeInsets.only(bottom: 4),
+                                                                padding: const EdgeInsets.symmetric(
+                                                                  horizontal: 8, vertical: 4),
+                                                                  decoration: BoxDecoration(
+                                                                    color: Colors.orange.withValues(alpha: 0.9),
+                                                                    borderRadius: BorderRadius.circular(6),
+                                                                  ),
+                                                                  child: Text(
+                                                                    'GPS ±${_currentAccuracy!.toStringAsFixed(0)}m',
+                                                                    style: const TextStyle(
+                                                                      color: Colors.white,
+                                                                      fontSize: 9,
+                                                                      fontWeight: FontWeight.w800),
+                                                                  ),
+                                                              ),
+                                                              if (_clientMatch != null && _clientMatch!.isVerified)
+                                                                Container(
+                                                                  padding: const EdgeInsets.symmetric(
+                                                                    horizontal: 8, vertical: 4),
+                                                                    decoration: BoxDecoration(
+                                                                      color: Colors.green.withValues(alpha: 0.9),
+                                                                      borderRadius: BorderRadius.circular(6),
+                                                                    ),
+                                                                    child: const Row(
+                                                                      mainAxisSize: MainAxisSize.min,
+                                                                      children: [
+                                                                        Icon(Icons.verified_rounded,
+                                                                             color: Colors.white, size: 12),
+                                                                             SizedBox(width: 4),
+                                                                             Text('VERIFIED',
+                                                                                  style: TextStyle(
+                                                                                    color: Colors.white,
+                                                                                    fontSize: 9,
+                                                                                    fontWeight: FontWeight.w800)),
+                                                                      ],
+                                                                    ),
+                                                                ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                    Positioned(
+                                                      left: 14,
+                                                      right: 14,
+                                                      bottom: 20,
+                                                      child: Column(
+                                                        mainAxisSize: MainAxisSize.min,
+                                                        crossAxisAlignment: CrossAxisAlignment.center,
+                                                        children: [
+                                                          Row(
+                                                            mainAxisSize: MainAxisSize.min,
+                                                            children: [
+                                                              const Icon(Icons.location_on_rounded,
+                                                                         color: Color(0xFFC4FF0A), size: 14),
+                                                                         const SizedBox(width: 5),
+                                                                         Flexible(
+                                                                           child: Text(
+                                                                             _locationDisplay,
+                                                                             textAlign: TextAlign.center,
+                                                                             maxLines: 2,
+                                                                             overflow: TextOverflow.ellipsis,
+                                                                             style: const TextStyle(
+                                                                               color: Colors.white,
+                                                                               fontSize: 15,
+                                                                               fontWeight: FontWeight.w700,
+                                                                               shadows: [
+                                                                                 Shadow(
+                                                                                   color: Colors.black87, blurRadius: 6),
+                                                                               ]),
+                                                                           ),
+                                                                         ),
+                                                            ],
+                                                          ),
+                                                          const SizedBox(height: 6),
+                                                          Text(
+                                                            _formatTimestamp(_now),
+                                                            textAlign: TextAlign.center,
+                                                            style: const TextStyle(
+                                                              color: Colors.white,
+                                                              fontSize: 12,
+                                                              fontWeight: FontWeight.w500,
+                                                              shadows: [
+                                                                Shadow(color: Colors.black87, blurRadius: 6),
+                                                              ]),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildCoveredCameraPreview() {
+                                  final controller = _cameraController;
+                                  if (controller == null || !controller.value.isInitialized) {
+                                    return const Center(
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white54, strokeWidth: 2.5),
+                                    );
+                                  }
+                                  final previewSize = controller.value.previewSize;
+                                  if (previewSize == null) return CameraPreview(controller);
+                                  return FittedBox(
+                                    fit: BoxFit.cover,
+                                    child: SizedBox(
+                                      width: previewSize.height,
+                                      height: previewSize.width,
+                                      child: CameraPreview(controller),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildShutterButton() {
+                                  return GestureDetector(
+                                    onTap: _isCapturing ? null : _capturePhoto,
+                                    child: AnimatedBuilder(
+                                      animation: _nfcPulseAnim,
+                                      builder: (_, __) => Transform.scale(
+                                        scale: _isCapturing ? 1.0 : _nfcPulseAnim.value,
+                                        child: Container(
+                                          width: 64,
+                                          height: 64,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: _cmShutterOuter,
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: _cmShutterGlow.withValues(alpha: 0.8),
+                                                blurRadius: 15),
+                                            ],
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: _isCapturing
+                                          ? const SizedBox(
+                                            width: 22,
+                                            height: 22,
+                                            child: CircularProgressIndicator(
+                                              color: Colors.white, strokeWidth: 2.5),
+                                          )
+                                          : Container(
+                                            width: 48,
+                                            height: 48,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: _cmShutterInner,
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: _cmShutterGlow.withValues(alpha: 0.8),
+                                                  blurRadius: 15),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildClientMeetingSuccessCard() {
+                                  return Container(
+                                    width: double.infinity,
+                                    constraints: const BoxConstraints(maxWidth: 380),
+                                    padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [_modalGradTop, _modalGradMid, _modalGradEnd],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: Colors.white, width: 1.15),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.06),
+                                          blurRadius: 10,
+                                          offset: const Offset(0, 12.5),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          width: 64,
+                                          height: 64,
+                                          decoration: BoxDecoration(
+                                            color: Colors.white,
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: const Icon(Icons.check_circle_rounded,
+                                                            color: _modalGradTop, size: 32),
+                                        ),
+                                        const SizedBox(height: 20),
+                                        const Text('Successfully Clocked In',
+                                                   style: TextStyle(
+                                                     color: Colors.white,
+                                                     fontSize: 30,
+                                                     fontWeight: FontWeight.w500)),
+                                                  const SizedBox(height: 10),
+                                                  Text('Please wait for HR approval...',
+                                                       textAlign: TextAlign.center,
+                                                       style: TextStyle(
+                                                         color: Colors.white.withValues(alpha: 0.92),
+                                                         fontSize: 14)),
+                                                  const SizedBox(height: 8),
+                                      ],
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildCancelButton() {
+                                  return GestureDetector(
+                                    onTap: _goBack,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(color: const Color(0xFFFFA500), width: 1.15),
+                                      ),
+                                      child: const Text('Cancel',
+                                                        style: TextStyle(
+                                                          color: Color(0xFFFFA500),
+                                                          fontSize: 14,
+                                                          fontWeight: FontWeight.w500)),
+                                    ),
+                                  );
+                                }
+
+                                Widget _buildFeedback({bool onDark = false}) {
+                                  if (_isLoading) {
+                                    return SizedBox(
+                                      height: 36,
+                                      child: Center(
+                                        child: CircularProgressIndicator(
+                                          color: onDark ? Colors.white : _orange, strokeWidth: 2.5),
+                                      ),
+                                    );
+                                  }
+                                  if (_errorMessage != null) {
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                      decoration: BoxDecoration(
+                                        color: onDark ? Colors.white.withValues(alpha: 0.15) : _errorBg,
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(
+                                          color: onDark
+                                          ? Colors.white.withValues(alpha: 0.4)
+                                          : _error.withValues(alpha: 0.35)),
+                                      ),
+                                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                        Icon(Icons.error_outline_rounded,
+                                             color: onDark ? Colors.white : _error, size: 16),
+                                             const SizedBox(width: 8),
+                                             Flexible(
+                                               child: Text(
+                                                 _errorMessage!,
+                                                 style: TextStyle(
+                                                   color: onDark ? Colors.white : _error,
+                                                   fontSize: 13,
+                                                   fontWeight: FontWeight.w600),
+                                               ),
+                                             ),
+                                      ]),
+                                    );
+                                  }
+                                  return const SizedBox(height: 8);
+                                }
 }
 
 class _WebOptionCard extends StatefulWidget {
@@ -5077,11 +5175,11 @@ class _WebOptionCardState extends State<_WebOptionCard> {
       child: GestureDetector(
         onTapDown: enabled ? (_) => _pressed.value = true : null,
         onTapUp: enabled
-            ? (_) {
+        ? (_) {
           _pressed.value = false;
           widget.onTap();
         }
-            : null,
+        : null,
         onTapCancel: enabled ? () => _pressed.value = false : null,
         child: ValueListenableBuilder<bool>(
           valueListenable: _hovered,
@@ -5100,25 +5198,25 @@ class _WebOptionCardState extends State<_WebOptionCard> {
                     padding: const EdgeInsets.all(28),
                     decoration: BoxDecoration(
                       color: active
-                          ? const Color(0xFFFF8A00).withValues(alpha: 0.06)
-                          : Colors.white.withValues(alpha: 0.03),
+                      ? const Color(0xFFFF8A00).withValues(alpha: 0.06)
+                      : Colors.white.withValues(alpha: 0.03),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
                         color: active
-                            ? const Color(0xFFFF8A00).withValues(alpha: 0.5)
-                            : Colors.white.withValues(alpha: 0.08),
+                        ? const Color(0xFFFF8A00).withValues(alpha: 0.5)
+                        : Colors.white.withValues(alpha: 0.08),
                         width: 1.5,
                       ),
                       boxShadow: active
-                          ? [
+                      ? [
                         BoxShadow(
                           color: const Color(0xFFFF8A00)
-                              .withValues(alpha: 0.18),
+                          .withValues(alpha: 0.18),
                           blurRadius: 32,
                           offset: const Offset(0, 12),
                         ),
                       ]
-                          : null,
+                      : null,
                     ),
                     child: Opacity(
                       opacity: enabled ? 1.0 : 0.45,
@@ -5139,55 +5237,55 @@ class _WebOptionCardState extends State<_WebOptionCard> {
                               boxShadow: [
                                 BoxShadow(
                                   color: const Color(0xFFFF8A00)
-                                      .withValues(alpha: 0.35),
+                                  .withValues(alpha: 0.35),
                                   blurRadius: 20,
                                   offset: const Offset(0, 6),
                                 ),
                               ],
                             ),
                             child: Icon(widget.icon,
-                                color: Colors.white, size: 26),
+                                        color: Colors.white, size: 26),
                           ),
                           const SizedBox(height: 20),
                           Text(widget.title,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: -0.4)),
-                          const SizedBox(height: 8),
-                          Text(widget.desc,
-                              style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.5),
-                                  fontSize: 14,
-                                  height: 1.5)),
-                          const Spacer(),
-                          Row(
-                            children: [
-                              Text('Select',
-                                  style: TextStyle(
-                                      color: enabled
-                                          ? const Color(0xFFFF8A00)
-                                          : Colors.white
-                                          .withValues(alpha: 0.3),
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 0.3)),
-                              const SizedBox(width: 6),
-                              AnimatedPadding(
-                                duration: const Duration(milliseconds: 180),
-                                padding: EdgeInsets.only(
-                                    left: hovered && enabled ? 4 : 0),
-                                child: Icon(
-                                  Icons.arrow_forward_rounded,
-                                  color: enabled
-                                      ? const Color(0xFFFF8A00)
-                                      : Colors.white.withValues(alpha: 0.3),
-                                  size: 16,
-                                ),
-                              ),
-                            ],
-                          ),
+                               style: const TextStyle(
+                                 color: Colors.white,
+                                 fontSize: 20,
+                                 fontWeight: FontWeight.w700,
+                                 letterSpacing: -0.4)),
+                                 const SizedBox(height: 8),
+                                 Text(widget.desc,
+                                      style: TextStyle(
+                                        color: Colors.white.withValues(alpha: 0.5),
+                                        fontSize: 14,
+                                        height: 1.5)),
+                                    const Spacer(),
+                                    Row(
+                                      children: [
+                                        Text('Select',
+                                             style: TextStyle(
+                                               color: enabled
+                                               ? const Color(0xFFFF8A00)
+                                               : Colors.white
+                                               .withValues(alpha: 0.3),
+                                               fontSize: 14,
+                                               fontWeight: FontWeight.w700,
+                                               letterSpacing: 0.3)),
+                                        const SizedBox(width: 6),
+                                        AnimatedPadding(
+                                          duration: const Duration(milliseconds: 180),
+                                          padding: EdgeInsets.only(
+                                            left: hovered && enabled ? 4 : 0),
+                                            child: Icon(
+                                              Icons.arrow_forward_rounded,
+                                              color: enabled
+                                              ? const Color(0xFFFF8A00)
+                                              : Colors.white.withValues(alpha: 0.3),
+                                              size: 16,
+                                            ),
+                                        ),
+                                      ],
+                                    ),
                         ],
                       ),
                     ),
@@ -5208,18 +5306,18 @@ class _BackArrowPainter extends CustomPainter {
     final s = size.width / 19.99;
 
     final paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.66602 * s
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+    ..color = Colors.white
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.66602 * s
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round;
 
     Offset p(double x, double y) => Offset(x * s, y * s);
 
     final path = Path()
-      ..moveTo(p(12.4951, 14.9941).dx, p(12.4951, 14.9941).dy)
-      ..lineTo(p(7.49707, 9.9961).dx, p(7.49707, 9.9961).dy)
-      ..lineTo(p(12.4951, 4.99805).dx, p(12.4951, 4.99805).dy);
+    ..moveTo(p(12.4951, 14.9941).dx, p(12.4951, 14.9941).dy)
+    ..lineTo(p(7.49707, 9.9961).dx, p(7.49707, 9.9961).dy)
+    ..lineTo(p(12.4951, 4.99805).dx, p(12.4951, 4.99805).dy);
 
     canvas.drawPath(path, paint);
   }
@@ -5246,7 +5344,7 @@ class _MethodButton extends StatefulWidget {
 }
 
 class _MethodButtonState extends State<_MethodButton>
-    with SingleTickerProviderStateMixin {
+with SingleTickerProviderStateMixin {
   late AnimationController _pressCtrl;
   late Animation<double> _scaleAnim;
 
@@ -5257,9 +5355,9 @@ class _MethodButtonState extends State<_MethodButton>
   void initState() {
     super.initState();
     _pressCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 120));
+      vsync: this, duration: const Duration(milliseconds: 120));
     _scaleAnim = Tween<double>(begin: 1.0, end: 0.93)
-        .animate(CurvedAnimation(parent: _pressCtrl, curve: Curves.easeOut));
+    .animate(CurvedAnimation(parent: _pressCtrl, curve: Curves.easeOut));
   }
 
   @override
@@ -5275,24 +5373,24 @@ class _MethodButtonState extends State<_MethodButton>
 
     final button = GestureDetector(
       onTapDown: widget.enabled
-          ? (_) {
+      ? (_) {
         _pressCtrl.forward();
         setState(() => _pressed = true);
       }
-          : null,
+      : null,
       onTapUp: widget.enabled
-          ? (_) {
+      ? (_) {
         _pressCtrl.reverse();
         setState(() => _pressed = false);
         widget.onTap();
       }
-          : null,
+      : null,
       onTapCancel: widget.enabled
-          ? () {
+      ? () {
         _pressCtrl.reverse();
         setState(() => _pressed = false);
       }
-          : null,
+      : null,
       child: ScaleTransition(
         scale: _scaleAnim,
         child: Opacity(
@@ -5319,20 +5417,20 @@ class _MethodButtonState extends State<_MethodButton>
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: widget.enabled
-                            ? tc.optionBorder
-                            : (isDark
-                            ? const Color(0xFF3F3F46)
-                            : const Color(0xFFE5E5E5)),
+                        ? tc.optionBorder
+                        : (isDark
+                        ? const Color(0xFF3F3F46)
+                        : const Color(0xFFE5E5E5)),
                         width: 1.5,
                       ),
                     ),
                     child: Icon(
                       widget.icon,
                       color: widget.enabled
-                          ? _orange
-                          : (isDark
-                          ? const Color(0xFF666666)
-                          : const Color(0xFFBBBBBB)),
+                      ? _orange
+                      : (isDark
+                      ? const Color(0xFF666666)
+                      : const Color(0xFFBBBBBB)),
                       size: 26,
                     ),
                   ),
@@ -5341,10 +5439,10 @@ class _MethodButtonState extends State<_MethodButton>
                     widget.label,
                     style: TextStyle(
                       color: widget.enabled
-                          ? tc.textDark
-                          : (isDark
-                          ? const Color(0xFF888888)
-                          : const Color(0xFFAAAAAA)),
+                      ? tc.textDark
+                      : (isDark
+                      ? const Color(0xFF888888)
+                      : const Color(0xFFAAAAAA)),
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
                     ),
@@ -5376,7 +5474,7 @@ class _PinKeyWhite extends StatefulWidget {
 }
 
 class _PinKeyWhiteState extends State<_PinKeyWhite>
-    with SingleTickerProviderStateMixin {
+with SingleTickerProviderStateMixin {
   late AnimationController _pressCtrl;
   late Animation<double> _scaleAnim;
 
@@ -5384,9 +5482,9 @@ class _PinKeyWhiteState extends State<_PinKeyWhite>
   void initState() {
     super.initState();
     _pressCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 100));
+      vsync: this, duration: const Duration(milliseconds: 100));
     _scaleAnim = Tween<double>(begin: 1.0, end: 0.93)
-        .animate(CurvedAnimation(parent: _pressCtrl, curve: Curves.easeOut));
+    .animate(CurvedAnimation(parent: _pressCtrl, curve: Curves.easeOut));
   }
 
   @override
@@ -5416,16 +5514,16 @@ class _PinKeyWhiteState extends State<_PinKeyWhite>
           ),
           child: Center(
             child: isDel
-                ? const Text('DEL',
-                style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: Color(0xFF71717A)))
-                : Text(widget.label,
-                style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.black)),
+            ? const Text('DEL',
+                         style: TextStyle(
+                           fontSize: 14,
+                           fontWeight: FontWeight.w500,
+                           color: Color(0xFF71717A)))
+            : Text(widget.label,
+                   style: const TextStyle(
+                     fontSize: 20,
+                     fontWeight: FontWeight.w500,
+                     color: Colors.black)),
           ),
         ),
       ),

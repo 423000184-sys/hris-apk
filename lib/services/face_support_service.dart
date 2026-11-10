@@ -28,7 +28,7 @@ class FaceSupportService {
   FaceSupportService._();
   static final FaceSupportService instance = FaceSupportService._();
 
-  static const String _collection = 'admin_notifications';
+  static const String _collection = 'support_reports';
 
   /// Sends a "Face Recognition Issue" ticket to the admin notification feed.
   Future<FaceSupportResult> reportIssue({
@@ -46,38 +46,47 @@ class FaceSupportService {
     String? stage,    // idle | scanning | error | success
     String? errorDetail,
   }) async {
-    final title = 'Face Scan Issue — ${_labelForSubCategory(subCategory)}';
+    // 🔑 Fallback kung walang ma-detect na category
+    final safeSubCategory = subCategory.trim().isEmpty ? 'other' : subCategory.trim();
 
-    final metadata = <String, dynamic>{
-      'status': 'pending',
-      'category': 'face_auth_issue',
-      'categoryLabel': 'Face Recognition Issue',
-      'subCategory': subCategory,
+    // 🔑 Dynamic Detection para malaman kung Fingerprint ba o Face
+    final isFingerprint = safeSubCategory.contains('fingerprint') || safeSubCategory.contains('sensor');
+    final issueCategory = isFingerprint ? 'fingerprint' : 'facial_recognition';
+    final issueTypeLabel = isFingerprint ? 'Fingerprint Issue' : 'Face Recognition Issue';
+    final title = '$issueTypeLabel — ${_labelForSubCategory(safeSubCategory)}';
+
+    final now = DateTime.now();
+    final payload = <String, dynamic>{
+      // 🔑 Root-level fields
+      'status': 'pending', // 👈 Dapat laging pending pag bagong send
+      'category': issueCategory,
+      'categoryLabel': issueTypeLabel,
+      'subCategory': safeSubCategory, // 👈 Gamitin ang safeSubCategory
+      'issueMessage': issueMessage,
+      'employeeId': employeeId,
+      'employeeDocId': employeeDocId,
+      'employeeName': employeeName,
+      'employeeEmail': employeeEmail,
+      'deviceModel': deviceModel,
+      'zoneType': zoneType,
+      'platform': kIsWeb ? 'web' : 'mobile',
+      'createdAt': FieldValue.serverTimestamp(),
+      'timestamp': FieldValue.serverTimestamp(),
+
+      // Optional fields
       if (faceMatchPercent != null) 'faceMatchPercent': faceMatchPercent,
-      if (deviceModel != null) 'deviceModel': deviceModel,
       if (authMode != null) 'authMode': authMode,
       if (stage != null) 'stage': stage,
       if (errorDetail != null && errorDetail.isNotEmpty) 'errorDetail': errorDetail,
       if (additionalNotes != null && additionalNotes.isNotEmpty) 'additionalNotes': additionalNotes,
-    };
 
-    final payload = <String, dynamic>{
+      // 🔔 Para sa Bell Icon notification
       'type': 'support_request',
       'title': title,
       'message': issueMessage,
       'priority': 'high',
       'read': false,
-      'employeeId': employeeId,
-      'employeeDocId': employeeDocId,
-      'employeeName': employeeName,
-      'employeeEmail': employeeEmail,
-      'device': deviceModel,
-      'zoneType': zoneType,
-      'platform': kIsWeb ? 'web' : 'mobile',
-      'timestamp': FieldValue.serverTimestamp(),
-      'metadata': metadata,
     };
-
     // Fast path: try online directly.
     if (NetworkGuard.instance.isOnline) {
       try {
@@ -110,13 +119,16 @@ class FaceSupportService {
 
   static String _labelForSubCategory(String c) {
     switch (c) {
-      case 'face_not_recognized': return 'Face not recognized';
-      case 'camera_error':        return 'Camera problem';
-      case 'liveness_failed':     return 'Liveness check failed';
-      case 'no_enrollment':       return 'No face registered';
-      case 'geofence_issue':      return 'Location / geofence issue';
-      case 'security_issue':      return 'Security check failed';
-      default:                    return 'Other';
+      case 'face_not_recognized':       return 'Face not recognized';
+      case 'camera_error':              return 'Camera problem';
+      case 'liveness_failed':           return 'Liveness check failed';
+      case 'no_enrollment':             return 'No face registered';
+      case 'fingerprint_not_recognized':return 'Fingerprint not recognized';
+      case 'sensor_error':              return 'Sensor error';
+      case 'lockout_issue':             return 'Locked out';
+      case 'geofence_issue':            return 'Location / geofence issue';
+      case 'security_issue':            return 'Security check failed';
+      default:                          return 'Other';
     }
   }
 }

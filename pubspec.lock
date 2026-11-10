@@ -1848,6 +1848,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.6.0"
+  pwa_installer:
+    dependency: "direct main"
+    description:
+      name: pwa_installer
+      sha256: "7ea0a2f87a5e24da0a84bb8f06bf131c8467203232676827f55290b09b1635c1"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.0"
   qr:
     dependency: transitive
     description:

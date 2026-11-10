@@ -11,6 +11,12 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'local_notification_service.dart';
+import 'device_binding_service.dart'; // <--- IDINAGDAG
+
+// ═══════════════════════════════════════════════════════════════
+// NAVIGATOR KEY (Para makapag-redirect pabalik sa login screen)
+// ═══════════════════════════════════════════════════════════════
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void _secureLog(String m) {
   if (kDebugMode) debugPrint('[FCM] $m');
@@ -23,6 +29,14 @@ void _secureLog(String m) {
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage msg) async {
   debugPrint('🔔 [BG] ========== MESSAGE RECEIVED ==========');
+
+  // 🚨 CHECK FOR WIPE COMMAND FIRST
+  if (msg.data['type'] == 'DEVICE_REVOKED') {
+    debugPrint('🚨 [BG] DEVICE REVOKED! Wiping local data...');
+    await DeviceBindingService().wipeLocalData();
+    return; // Wag na mag-show ng notification, tapos na ang laban.
+  }
+
   debugPrint('🔔 [BG] ID: ${msg.messageId}');
   debugPrint('🔔 [BG] Title: ${msg.notification?.title ?? msg.data['title']}');
   debugPrint('🔔 [BG] Body: ${msg.notification?.body ?? msg.data['body']}');
@@ -160,6 +174,12 @@ class FcmService {
     // 2) Foreground listener
     await _foregroundSub?.cancel();
     _foregroundSub = FirebaseMessaging.onMessage.listen((msg) {
+      // 🚨 CHECK FOR WIPE COMMAND
+      if (msg.data['type'] == 'DEVICE_REVOKED') {
+        _handleDeviceRevoked();
+        return;
+      }
+
       _secureLog('📩 [FG] Message: ${msg.notification?.title}');
       _showViaLocalService(msg);
     });
@@ -167,6 +187,12 @@ class FcmService {
     // 3) Background tap
     await _openedSub?.cancel();
     _openedSub = FirebaseMessaging.onMessageOpenedApp.listen((msg) {
+      // 🚨 CHECK FOR WIPE COMMAND
+      if (msg.data['type'] == 'DEVICE_REVOKED') {
+        _handleDeviceRevoked();
+        return;
+      }
+
       _secureLog('👆 Tapped: ${msg.data}');
       _handleTap(msg.data);
     });
@@ -175,8 +201,13 @@ class FcmService {
     try {
       final initialMsg = await _msg.getInitialMessage();
       if (initialMsg != null) {
-        _secureLog('🚀 Opened from terminated');
-        _handleTap(initialMsg.data);
+        // 🚨 CHECK FOR WIPE COMMAND
+        if (initialMsg.data['type'] == 'DEVICE_REVOKED') {
+          await _handleDeviceRevoked();
+        } else {
+          _secureLog('🚀 Opened from terminated');
+          _handleTap(initialMsg.data);
+        }
       }
     } catch (e) {
       _secureLog('⚠️ getInitialMessage: $e');
@@ -203,6 +234,17 @@ class FcmService {
     } catch (_) {}
 
     _secureLog('✅ FCM initialized');
+  }
+
+  // 🚨 HELPER PARA SA WIPE AT LOGOUT
+  Future<void> _handleDeviceRevoked() async {
+    _secureLog('🚨 DEVICE REVOKED! Wiping and redirecting to login...');
+
+    // 1. I-wipe ang local data (tokens, cached biometrics, etc.)
+    await DeviceBindingService().wipeLocalData();
+
+    // 2. I-redirect pabalik sa login screen
+    navigatorKey.currentState?.pushNamedAndRemoveUntil('/login', (_) => false);
   }
 
   Future<void> _showViaLocalService(RemoteMessage msg) async {

@@ -5,11 +5,11 @@
   "targets": {
     "week-9-activity-53484": {
       "hosting": {
-        "employee": [
-          "week-9-activity-53484"
-        ],
         "admin": [
           "racoma-admin"
+        ],
+        "employee": [
+          "racoma-employee"
         ]
       }
     }

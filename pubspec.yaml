@@ -132,6 +132,9 @@ dependencies:
   # ─── 🔔 OneSignal Push Notifications ──────────────────────────────
   onesignal_flutter: ^5.1.2
 
+  # ─── PWA Installer ────────────────────────────────────────────────
+  pwa_installer: ^0.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

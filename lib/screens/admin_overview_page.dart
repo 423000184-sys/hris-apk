@@ -1,5 +1,5 @@
 // lib/screens/admin_overview_page.dart
-// v2.2: 🎭 Demo Mode Mock Data — Actual data is hidden when Demo Mode is active
+// v2.4: 🧹 Finalized filtering. Excludes Demo and Duplicates only.
 import 'dart:math' show max;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -133,7 +133,7 @@ class _AdminOverviewPageState extends State<AdminOverviewPage> {
   // ══════════════════════════════════════════════════════════════
   Future<void> _exitDemo() async {
     try {
-      await DemoModeService.instance.endDemoSession(); // ✅ Ginamit ang tamang method
+      await DemoModeService.instance.endDemoSession();
     } catch (_) {}
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
@@ -159,7 +159,7 @@ class _AdminOverviewPageState extends State<AdminOverviewPage> {
     final isDemo = _isDemo;
 
     // ═══════════════════════════════════════════════════════════
-    // 🎭 DATA SELECTION (MOCK VS ACTUAL)
+    // 🎭 DATA SELECTION (MOCK VS ACTUAL WITH FILTERING)
     // ═══════════════════════════════════════════════════════════
     List<Map<String, dynamic>> activeEmployeesList;
     List<Map<String, dynamic>> activeLoginLogs;
@@ -214,12 +214,51 @@ class _AdminOverviewPageState extends State<AdminOverviewPage> {
       });
 
     } else {
-      // Totoong Data mula sa Firebase
-      activeEmployeesList = widget.employees;
-      activeLoginLogs = widget.loginLogs;
-      activeLogoutLogs = widget.logoutLogs;
+      // 🚨 TOTOONG DATA: LINISIN NATIN BAGO KALKULAHIN
+      final Map<String, Map<String, dynamic>> uniqueEmployees = {};
+
+      for (final emp in widget.employees) {
+        final docId = (emp['id'] ?? '').toString().toLowerCase();
+        final empId = (emp['employeeId'] ?? '').toString().toLowerCase();
+        final nameStr = (emp['name'] ?? '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}').toString().toLowerCase();
+        final emailStr = (emp['email'] ?? '').toString().toLowerCase();
+
+        // 1. Filter Demo Accounts
+        if (docId.contains('demo') ||
+            empId.contains('demo') ||
+            nameStr.contains('demo') ||
+            emailStr.contains('demo') ||
+            emp['isDemo'] == true) {
+          continue;
+        }
+
+        // 2. Duplicate Check (Para isa lang si April)
+        final key = empId.isNotEmpty ? empId : docId;
+        uniqueEmployees[key] = emp;
+      }
+
+      activeEmployeesList = uniqueEmployees.values.toList();
+
+      // Kunin lang ang mga IDs ng valid employees
+      final validIds = activeEmployeesList.map((e) => (e['id'] ?? e['employeeId'] ?? '').toString()).toSet();
+
+      // I-filter din ang mga logs at locations para sa valid employees lang
+      activeLoginLogs = widget.loginLogs.where((l) {
+        final id = (l['employee_id'] ?? l['employeeId'] ?? '').toString();
+        return validIds.contains(id);
+      }).toList();
+
+      activeLogoutLogs = widget.logoutLogs.where((l) {
+        final id = (l['employee_id'] ?? l['employeeId'] ?? '').toString();
+        return validIds.contains(id);
+      }).toList();
+
+      activeLocations = widget.locations.where((l) {
+        final id = (l['employee_id'] ?? l['employeeId'] ?? '').toString();
+        return validIds.contains(id) || id.isEmpty;
+      }).toList();
+
       activeRegLogs = widget.regLogs;
-      activeLocations = widget.locations;
     }
 
     // ─── Compute stats ───

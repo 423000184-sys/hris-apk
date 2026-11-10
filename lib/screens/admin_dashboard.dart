@@ -1,7 +1,7 @@
 // lib/screens/admin_dashboard.dart
-// v1.7: 🎭 Demo Requests tab + live pending badge + email-failed alert.
-//       🔔 AppBar warning icon when email delivery issues exist.
-//       🧭 All existing nav items preserved.
+// v2.0: 🆕 Support Reports nav item + live pending badge.
+//       Admin can now act on employee "Contact Admin" reports
+//       (unlock fingerprint / re-register / clear lockout / reply).
 import 'dart:async';
 import 'dart:math' show sin, cos, asin, sqrt, pi;
 import 'package:flutter/material.dart';
@@ -26,7 +26,8 @@ import 'admin_add_client_location_page.dart';
 import 'admin_login_screen.dart';
 import 'admin_presence_monitor_screen.dart';
 import 'admin_password_change_requests_page.dart';
-import 'admin_demo_requests_screen.dart';
+import 'admin_device_management_screen.dart';
+import 'admin_support_reports_page.dart'; // 🆕 Support Reports
 
 import '../widgets/admin_notification_bell.dart';
 import '../services/employee_notification_service.dart';
@@ -82,19 +83,9 @@ class AdminDashboardState extends State<AdminDashboard>
   StreamSubscription? _empSub;
   StreamSubscription? _attendanceSub;
   StreamSubscription? _locSub;
+  StreamSubscription? _reportsSub; // 🆕 pending support reports count
 
-  // 🆕 Demo-request pending badge
-  int _pendingDemoRequests = 0;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _demoReqSub;
-
-  // 🆕 Email-failed alert
-  int _emailFailedDemoRequests = 0;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
-  _demoReqFailedSub;
-
-  // 🆕 Demo Requests filter state
-  String _demoReqInitialFilter = 'pending';
-  int _demoReqScreenRefreshKey = 0;
+  int _pendingReportCount = 0; // 🆕
 
   String? _verifyLogId;
   Map<String, dynamic>? _verifyLogData;
@@ -220,7 +211,7 @@ class AdminDashboardState extends State<AdminDashboard>
   ];
 
   // ═══════════════════════════════════════════════════════════════
-  // NAV ITEMS
+  // NAV ITEMS — added Support Reports (index 18)
   // ═══════════════════════════════════════════════════════════════
   static const List<_AdminNavItem> _navItems = [
     _AdminNavItem(0, 'Overview', Icons.grid_view_rounded),
@@ -234,7 +225,8 @@ class AdminDashboardState extends State<AdminDashboard>
     _AdminNavItem(8, 'Client Meeting', Icons.assignment_ind_rounded),
     _AdminNavItem(9, 'Client Location', Icons.add_location_alt_rounded),
     _AdminNavItem(15, 'Password Requests', Icons.password_rounded),
-    _AdminNavItem(16, 'Demo Requests', Icons.vpn_key_rounded),
+    _AdminNavItem(17, 'Device Management', Icons.phonelink_setup_rounded),
+    _AdminNavItem(18, 'Support Reports', Icons.support_agent_rounded), // 🆕
   ];
 
   String get _searchHint {
@@ -257,8 +249,10 @@ class AdminDashboardState extends State<AdminDashboard>
         return 'Search not available here';
       case 15:
         return 'Search password change requests...';
-      case 16:
-        return 'Search demo requests...';
+      case 17:
+        return 'Search not available here';
+      case 18:
+        return 'Search not available here';
       default:
         return 'Search...';
     }
@@ -308,8 +302,7 @@ class AdminDashboardState extends State<AdminDashboard>
       NotificationBackupService.instance.init();
       _loadEmployees();
       _setupStreams();
-      _watchPendingDemoRequests();
-      _watchEmailFailedDemoRequests();
+      _subscribePendingSupportReports(); // 🆕
     }
 
     _searchFocus.addListener(() {
@@ -318,48 +311,22 @@ class AdminDashboardState extends State<AdminDashboard>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 🆕 DEMO-REQUEST WATCHERS
+  // 🆕 Pending Support Reports counter
   // ═══════════════════════════════════════════════════════════════
-  void _watchPendingDemoRequests() {
+  void _subscribePendingSupportReports() {
     if (_isDemo) return;
-    try {
-      _demoReqSub = FirebaseFirestore.instance
-          .collection('demo_requests')
-          .where('status', isEqualTo: 'pending')
-          .snapshots()
-          .listen(
-            (snap) {
-          if (mounted) {
-            setState(() => _pendingDemoRequests = snap.docs.length);
-          }
-        },
-        onError: (e) => debugPrint('Demo request watch error: $e'),
-      );
-    } catch (e) {
-      debugPrint('Demo request watch failed: $e');
-    }
-  }
-
-  void _watchEmailFailedDemoRequests() {
-    if (_isDemo) return;
-    try {
-      _demoReqFailedSub = FirebaseFirestore.instance
-          .collection('demo_requests')
-          .where('status', isEqualTo: 'email_failed')
-          .snapshots()
-          .listen(
-            (snap) {
-          if (mounted) {
-            setState(
-                    () => _emailFailedDemoRequests = snap.docs.length);
-          }
-        },
-        onError: (e) =>
-            debugPrint('Email-failed demo watch error: $e'),
-      );
-    } catch (e) {
-      debugPrint('Email-failed demo watch failed: $e');
-    }
+    _reportsSub?.cancel();
+    _reportsSub = FirebaseFirestore.instance
+        .collection('support_reports')
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .listen(
+          (snap) {
+        if (!mounted) return;
+        setState(() => _pendingReportCount = snap.docs.length);
+      },
+      onError: (e) => debugPrint('⚠️ support_reports sub error: $e'),
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -395,6 +362,7 @@ class AdminDashboardState extends State<AdminDashboard>
       _loading = false;
       _error = null;
       _initialLoadDone = true;
+      _pendingReportCount = 0; // 🆕 demo shows no pending
     });
   }
 
@@ -409,8 +377,7 @@ class AdminDashboardState extends State<AdminDashboard>
     _empSub?.cancel();
     _attendanceSub?.cancel();
     _locSub?.cancel();
-    _demoReqSub?.cancel();
-    _demoReqFailedSub?.cancel();
+    _reportsSub?.cancel(); // 🆕
     _searchCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -461,24 +428,6 @@ class AdminDashboardState extends State<AdminDashboard>
     setState(() {
       _tab = index;
       _search = '';
-      _selectedPayrollEmployee = null;
-      if (_showCreateLeave) _showCreateLeave = false;
-      if (index == 16) {
-        // Reset filter + force refresh
-        _demoReqInitialFilter = 'pending';
-        _demoReqScreenRefreshKey++;
-      }
-    });
-  }
-
-  // 🆕 Open Demo Requests tab with specific filter pre-selected
-  void _openDemoRequestsWithFilter(String filter) {
-    setState(() {
-      _demoReqInitialFilter = filter;
-      _demoReqScreenRefreshKey++;
-      _tab = 16;
-      _search = '';
-      _searchCtrl.clear();
       _selectedPayrollEmployee = null;
       if (_showCreateLeave) _showCreateLeave = false;
     });
@@ -1582,45 +1531,6 @@ class AdminDashboardState extends State<AdminDashboard>
 
         AdminNotificationBell(iconColor: c.accent),
 
-        // 🆕 Email-failed alert icon
-        if (_emailFailedDemoRequests > 0)
-          IconButton(
-            tooltip:
-            '$_emailFailedDemoRequests demo request(s) with email issues',
-            onPressed: () =>
-                _openDemoRequestsWithFilter('emailFailed'),
-            icon: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(
-                  Icons.mark_email_unread_rounded,
-                  size: 21,
-                  color: c.orange,
-                ),
-                Positioned(
-                  right: -6,
-                  top: -4,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 5, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: c.red,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      '$_emailFailedDemoRequests',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
         if (wide) ...[
           IconButton(
             tooltip: 'Send Update to Employees',
@@ -1650,6 +1560,30 @@ class AdminDashboardState extends State<AdminDashboard>
               color: c.accent,
             ),
           ),
+          // 🆕 Quick access Support Reports with badge
+          IconButton(
+            tooltip: _pendingReportCount > 0
+                ? 'Support Reports ($_pendingReportCount pending)'
+                : 'Support Reports',
+            onPressed: () => _handleNavTap(18),
+            icon: Badge(
+              isLabelVisible: _pendingReportCount > 0,
+              label: Text(
+                '$_pendingReportCount',
+                style: const TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
+              backgroundColor: c.red,
+              child: Icon(
+                Icons.support_agent_rounded,
+                size: 21,
+                color: c.accent,
+              ),
+            ),
+          ),
         ],
 
         if (!wide)
@@ -1671,50 +1605,11 @@ class AdminDashboardState extends State<AdminDashboard>
                   context,
                   adminRoute(const NotificationBackupListPage()),
                 );
-              } else if (v == 'email_issues') {
-                _openDemoRequestsWithFilter('emailFailed');
+              } else if (v == 'support_reports') {
+                _handleNavTap(18);
               }
             },
             itemBuilder: (_) => [
-              if (_emailFailedDemoRequests > 0)
-                PopupMenuItem(
-                  value: 'email_issues',
-                  child: Row(children: [
-                    Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        Icon(Icons.mark_email_unread_rounded,
-                            size: 18, color: c.orange),
-                        Positioned(
-                          right: -4,
-                          top: -3,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 4, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: c.red,
-                              borderRadius:
-                              BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              '$_emailFailedDemoRequests',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 8,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      'Email Issues ($_emailFailedDemoRequests)',
-                      style: TextStyle(color: c.text, fontSize: 13),
-                    ),
-                  ]),
-                ),
               PopupMenuItem(
                 value: 'send_update',
                 child: Row(children: [
@@ -1742,6 +1637,21 @@ class AdminDashboardState extends State<AdminDashboard>
                       size: 18, color: c.orange),
                   const SizedBox(width: 10),
                   Text('Notification Backups',
+                      style: TextStyle(color: c.text, fontSize: 13)),
+                ]),
+              ),
+              PopupMenuItem(
+                value: 'support_reports',
+                child: Row(children: [
+                  Badge(
+                    isLabelVisible: _pendingReportCount > 0,
+                    label: Text('$_pendingReportCount'),
+                    backgroundColor: c.red,
+                    child: Icon(Icons.support_agent_rounded,
+                        size: 18, color: c.orange),
+                  ),
+                  const SizedBox(width: 10),
+                  Text('Support Reports',
                       style: TextStyle(color: c.text, fontSize: 13)),
                 ]),
               ),
@@ -1922,6 +1832,9 @@ class AdminDashboardState extends State<AdminDashboard>
   Widget _navTile(_AdminNavItem item) {
     final c = _c;
     final sel = _tab == item.index;
+    // 🆕 badge count (only for Support Reports)
+    final int badge =
+    item.index == 18 && _pendingReportCount > 0 ? _pendingReportCount : 0;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
@@ -1957,20 +1870,22 @@ class AdminDashboardState extends State<AdminDashboard>
                     ),
                   ),
                 ),
-                if (item.index == 16 && _pendingDemoRequests > 0)
+                if (badge > 0)
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 7, vertical: 2),
+                        horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: sel ? Colors.white : c.red,
+                      color: sel
+                          ? Colors.white.withValues(alpha: 0.9)
+                          : c.red,
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      '$_pendingDemoRequests',
+                      '$badge',
                       style: TextStyle(
-                        color: sel ? c.orange : Colors.white,
                         fontSize: 10,
                         fontWeight: FontWeight.w800,
+                        color: sel ? c.orange : Colors.white,
                       ),
                     ),
                   ),
@@ -2052,6 +1967,9 @@ class AdminDashboardState extends State<AdminDashboard>
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   children: _navItems.map((item) {
                     final sel = _tab == item.index;
+                    final int badge = item.index == 18 && _pendingReportCount > 0
+                        ? _pendingReportCount
+                        : 0;
                     return ListTile(
                       leading: Icon(
                         item.icon,
@@ -2067,22 +1985,22 @@ class AdminDashboardState extends State<AdminDashboard>
                           fontSize: 14,
                         ),
                       ),
-                      trailing: (item.index == 16 &&
-                          _pendingDemoRequests > 0)
+                      trailing: badge > 0
                           ? Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 7, vertical: 2),
+                            horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: c.red,
-                          borderRadius:
-                          BorderRadius.circular(10),
+                          color: sel
+                              ? Colors.white.withValues(alpha: 0.9)
+                              : c.red,
+                          borderRadius: BorderRadius.circular(10),
                         ),
                         child: Text(
-                          '$_pendingDemoRequests',
-                          style: const TextStyle(
-                            color: Colors.white,
+                          '$badge',
+                          style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w800,
+                            color: sel ? c.orange : Colors.white,
                           ),
                         ),
                       )
@@ -2269,13 +2187,10 @@ class AdminDashboardState extends State<AdminDashboard>
         );
       case 15:
         return const PasswordChangeRequestsPage();
-      case 16:
-        return AdminDemoRequestsScreen(
-          key: ValueKey('demo_req_$_demoReqScreenRefreshKey'),
-          embedded: true,
-          initialFilter: _demoReqInitialFilter,
-          onBack: () => _handleNavTap(0),
-        );
+      case 17:
+        return const AdminDeviceManagementScreen();
+      case 18: // 🆕 Support Reports
+        return const AdminSupportReportsPage();
       default:
         return const Center(child: Text('View not found'));
     }

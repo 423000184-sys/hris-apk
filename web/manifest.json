@@ -1,35 +1,25 @@
 {
-    "name": "HRIS Biometrics",
-    "short_name": "HRIS",
+    "name": "R.A.C.O.M.A Admin",
+    "short_name": "RACOMA",
     "start_url": "/app/",
     "display": "standalone",
-    "background_color": "#0A0F2E",
+    "background_color": "#F8F9FA",
     "theme_color": "#FF8C00",
     "description": "A next-gen HRIS Biometrics application with smart innovation.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
         {
-            "src": "icons/Icon-192.png",
-            "sizes": "192x192",
-            "type": "image/png"
-        },
-        {
-            "src": "icons/Icon-512.png",
-            "sizes": "512x512",
-            "type": "image/png"
-        },
-        {
-            "src": "icons/Icon-maskable-192.png",
+            "src": "logo1.png",
             "sizes": "192x192",
             "type": "image/png",
-            "purpose": "maskable"
+            "purpose": "any maskable"
         },
         {
-            "src": "icons/Icon-maskable-512.png",
+            "src": "logo1.png",
             "sizes": "512x512",
             "type": "image/png",
-            "purpose": "maskable"
+            "purpose": "any maskable"
         }
     ]
 }

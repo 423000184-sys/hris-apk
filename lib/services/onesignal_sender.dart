@@ -7,7 +7,6 @@ class OneSignalSender {
   OneSignalSender._();
   static final OneSignalSender instance = OneSignalSender._();
 
-  // ✅ DITO NAKA-SAVE ANG API KEY PARA GUMANA AGAD
   static const String _restApiKey =
       'os_v2_app_bsdcvyt65bdnxd46m5aoqlaglr35xo6jvfcew74hy2hgqnjnmgthy4gdtw3llfdwtusxeydyl3gfgv6lkcl5kceog6bgvgg37w7vh6q';
 
@@ -16,7 +15,9 @@ class OneSignalSender {
   static final Uri _endpoint =
   Uri.parse('https://api.onesignal.com/notifications');
 
-  /// Ipadala ang notification sa isang specific employee.
+  // ═══════════════════════════════════════════════════════════════
+  // 📨 Send normal notification to employee
+  // ═══════════════════════════════════════════════════════════════
   Future<bool> sendToEmployee({
     required String employeeId,
     required String title,
@@ -38,7 +39,9 @@ class OneSignalSender {
     );
   }
 
-  /// Ipadala ang notification sa LAHAT ng naka-install na app.
+  // ═══════════════════════════════════════════════════════════════
+  // 📨 Send to all
+  // ═══════════════════════════════════════════════════════════════
   Future<bool> sendToAll({
     required String title,
     required String message,
@@ -52,10 +55,41 @@ class OneSignalSender {
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🆕 REVOKE DEVICE — triggers remote wipe on old phone
+  // ═══════════════════════════════════════════════════════════════
+  Future<bool> revokeEmployeeDevice({
+    required String employeeId,
+    String reason = 'Device revoked by admin',
+  }) async {
+    if (employeeId.trim().isEmpty) {
+      debugPrint('❌ [OneSignal] Cannot revoke: Employee ID is empty.');
+      return false;
+    }
+
+    debugPrint('🚨 [OneSignal] Sending DEVICE_REVOKED to $employeeId');
+
+    return _send(
+      title: '🔒 Device Revoked',
+      message: 'This device has been revoked by admin. '
+          'Open the app to complete the security wipe, then log in again '
+          'on your new device.',
+      type: 'DEVICE_REVOKED',
+      extraData: {'reason': reason},
+      includeAliases: {
+        'external_id': [employeeId.trim()],
+      },
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // CORE _send (with extraData support)
+  // ═══════════════════════════════════════════════════════════════
   Future<bool> _send({
     required String title,
     required String message,
     required String type,
+    Map<String, dynamic>? extraData,
     Map<String, dynamic>? includeAliases,
     List<String>? includedSegments,
   }) async {
@@ -65,20 +99,25 @@ class OneSignalSender {
     }
 
     try {
+      final dataPayload = <String, dynamic>{
+        'type': type,
+        // DEVICE_REVOKED gets no route (just wipe, no navigation)
+        if (type != 'DEVICE_REVOKED') 'route': 'notifications',
+        if (extraData != null) ...extraData,
+      };
+
       final payload = <String, dynamic>{
         'app_id': _appId,
         'headings': {'en': title},
         'contents': {'en': message},
-        'data': {
-          'type': type,
-          'route': 'notifications',
-        },
+        'data': dataPayload,
         'priority': 10,
         'sound': 'default',
         'android_sound': 'default',
         'ios_sound': 'default',
         'ios_badgeType': 'Increase',
         'ios_badgeCount': 1,
+        'android_channel_id': 'employee_notifications_channel',
       };
 
       if (includeAliases != null) {
@@ -88,7 +127,8 @@ class OneSignalSender {
         payload['included_segments'] = includedSegments;
       }
 
-      debugPrint('📤 [OneSignal] Sending to → ${includeAliases ?? includedSegments}');
+      debugPrint(
+          '📤 [OneSignal] Sending type=$type → ${includeAliases ?? includedSegments}');
 
       final res = await http.post(
         _endpoint,
@@ -105,7 +145,9 @@ class OneSignalSender {
         debugPrint('✅ [OneSignal] Success! Recipients: $recipients');
 
         if (recipients == 0) {
-          debugPrint('⚠️ [OneSignal] No devices received the push. Make sure the employee app is logged in on a real phone.');
+          debugPrint(
+              '⚠️ [OneSignal] No devices received the push. '
+                  'Make sure the employee app is logged in on a real phone.');
         }
 
         return true;

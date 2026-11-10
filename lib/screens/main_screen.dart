@@ -1,5 +1,5 @@
 // lib/screens/main_screen.dart
-// v2.2: Added AppPermissionService to request Notification, Location, and Background Location
+// v2.3: 🛠️ Fixed infinite rebuild loops in Network and Fingerprint listeners.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
@@ -22,7 +22,7 @@ import '../services/presence_challenge_service.dart';
 import '../services/demo_mode_service.dart';
 import '../services/overtime_reminder_service.dart';
 import '../services/trusted_time_service.dart';
-import '../services/app_permission_service.dart'; // 🆕 PERMISSIONS
+import '../services/app_permission_service.dart';
 import 'dashboard_screen.dart';
 import 'clock_screen.dart';
 import 'attendance_history_screen.dart';
@@ -138,6 +138,12 @@ class MainScreenState extends State<MainScreen>
           if (!mounted) return;
           final data = snap.data();
           final enrolled = _isEnrolledFromData(data);
+
+          // ✅ FIX: Stop the loop! Only rebuild if status actually changed
+          if (_fingerprintEnrolled == enrolled && _fpStatusLoaded) {
+            return;
+          }
+
           setState(() {
             _fingerprintEnrolled = enrolled;
             _fpStatusLoaded = true;
@@ -600,6 +606,7 @@ class MainScreenState extends State<MainScreen>
       try {
         _networkSub = ConnectivityService.instance.onStatusChange.listen((online) {
           if (!mounted) return;
+          if (_isOnline == online) return; // ✅ FIX
           setState(() => _isOnline = online);
         });
       } catch (e) {}
@@ -610,7 +617,6 @@ class MainScreenState extends State<MainScreen>
     try { SecurityHardeningService.instance.enableSecureScreen(); } catch (_) {}
     LocalNotificationService.instance.init();
 
-    // 🆕 ITO YUNG TAWAG SA PERMISSIONS (Notification, Location, Background Location)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         AppPermissionService.instance.requestAllPermissions(context);
@@ -661,6 +667,10 @@ class MainScreenState extends State<MainScreen>
     try {
       _networkSub = ConnectivityService.instance.onStatusChange.listen((online) {
         if (!mounted) return;
+
+        // ✅ FIX: Stop the loop! Only trigger heavy reloads if online status changed
+        if (_isOnline == online) return;
+
         setState(() => _isOnline = online);
         if (online) {
           _markOnline();

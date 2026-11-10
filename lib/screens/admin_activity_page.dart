@@ -1,5 +1,5 @@
 // lib/screens/admin_activity_page.dart
-// v2.3: 🔗 OneSignal Push Notifications integrated for Leave & Client Meeting Approvals.
+// v2.4: 👁 Leave Details viewer + OneSignal push for Leave & Client Meeting approvals.
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -14,7 +14,7 @@ import '../services/employee_notification_service.dart';
 import '../services/admin_audit_service.dart';
 import '../services/admin_auth_service.dart';
 import '../services/demo_mode_service.dart';
-import '../services/onesignal_sender.dart'; // 🆕 Added for push notifications
+import '../services/onesignal_sender.dart';
 
 class AdminActivityPage extends StatefulWidget {
   final List<Map<String, dynamic>> employees;
@@ -417,7 +417,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
         actions: [
           TextButton(
             onPressed: () {
-              // ✅ FIX: Unfocus bago i-pop ang dialog para maiwasan ang assertion error sa Web
+              // Unfocus before popping the dialog to avoid a Web assertion error.
               FocusScope.of(ctx).unfocus();
               Navigator.pop(ctx);
             },
@@ -430,7 +430,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             ),
             onPressed: () {
               if (formKey.currentState?.validate() != true) return;
-              // ✅ FIX: Unfocus bago i-pop ang dialog
+              // Unfocus before popping the dialog.
               FocusScope.of(ctx).unfocus();
               Navigator.pop(ctx, _sanitize(ctrl.text, maxLen: 300));
             },
@@ -927,7 +927,445 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // APPROVE CLIENT MEETING (With OneSignal Push)
+  // VIEW LEAVE DETAILS (Read-only dialog — tap row or eye icon)
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _openLeaveDetailsDialog({
+    required Map<String, dynamic> item,
+  }) async {
+    final emp = item['employee'] as Map<String, dynamic>;
+    final req = item['request'] as Map<String, dynamic>;
+    final isFromEmployeeCollection =
+        item['isFromEmployeeCollection'] == true;
+    final source = (item['source'] ?? 'admin').toString();
+
+    final empName = _sanitize(
+      item['employeeName'] ?? _empName(emp),
+      maxLen: 80,
+    );
+    final empId = _sanitize(
+      (emp['id'] ?? emp['employeeId'] ?? req['employeeId'] ?? '').toString(),
+      maxLen: 64,
+    );
+    final dept = _sanitize(
+      emp['department'] ?? emp['role'] ?? req['department'] ?? 'N/A',
+      maxLen: 60,
+    );
+    final position = _sanitize(
+      emp['position'] ?? req['position'] ?? 'N/A',
+      maxLen: 60,
+    );
+
+    final leaveTypeDisplay = _leaveTypeDisplay(req['leaveType'] ?? 'Others');
+    final leaveTypeCode = _sanitize(
+      (req['leaveType'] ?? 'Others').toString(),
+      maxLen: 20,
+    );
+    final fromStr = _formatDate(req['dateFrom'] ?? req['startDate']);
+    final toStr = _formatDate(req['dateTo'] ?? req['endDate']);
+
+    final daysVal = req['totalDays'] ?? req['days'] ?? 0;
+    final daysStr = daysVal.toString();
+    final rawHours = req['totalHours'] ?? req['hours'];
+    final hoursNum = rawHours is num
+        ? rawHours.toDouble()
+        : double.tryParse(rawHours?.toString() ?? '') ?? 0.0;
+    final hasHours = hoursNum > 0;
+    final hoursStr = hasHours
+        ? (hoursNum % 1 == 0
+        ? hoursNum.toStringAsFixed(0)
+        : hoursNum.toStringAsFixed(1))
+        : '';
+
+    final reason = _sanitize(
+      req['reason'] ?? '',
+      maxLen: 500,
+    );
+    final status = (req['status'] ?? 'pending').toString().toLowerCase();
+    final createdAt = _toDateTime(req['createdAt']);
+    final submittedStr = createdAt != null
+        ? DateFormat('MMM d, yyyy · h:mm a').format(createdAt)
+        : 'N/A';
+    final sourceLabel = source == 'employee'
+        ? 'Submitted by employee (self-service)'
+        : 'Created by admin';
+
+    final statusColor = status == 'approved'
+        ? tc.green
+        : status == 'rejected'
+        ? tc.red
+        : tc.orange;
+    final statusLabel = status == 'approved'
+        ? 'APPROVED'
+        : status == 'rejected'
+        ? 'REJECTED'
+        : 'PENDING';
+    final isPending = status == 'pending';
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        final dialogTc = AdminTheme.getColors(dialogCtx);
+        return Dialog(
+          backgroundColor: dialogTc.card,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          insetPadding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: 540,
+              maxHeight: 760,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ───── Header ─────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 22,
+                        backgroundColor:
+                        dialogTc.orange.withValues(alpha: 0.15),
+                        child: Text(
+                          _getInitials(empName),
+                          style: TextStyle(
+                            color: dialogTc.orangeText,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              empName.isEmpty ? 'Unknown Staff' : empName,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                color: dialogTc.text,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              [dept, position]
+                                  .where((s) =>
+                              s.isNotEmpty && s != 'N/A')
+                                  .join(' · '),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: dialogTc.muted,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: statusColor.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          statusLabel,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: statusColor,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Divider(color: dialogTc.border, height: 1),
+
+                // ───── Body ─────
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _detailSectionLabel('LEAVE TYPE', dialogTc),
+                        const SizedBox(height: 6),
+                        Text(
+                          '$leaveTypeDisplay ($leaveTypeCode)',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: dialogTc.text,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+
+                        _detailSectionLabel('LEAVE PERIOD', dialogTc),
+                        const SizedBox(height: 6),
+                        _detailBox(dialogTc, children: [
+                          _detailLine(
+                            icon: Icons.calendar_today_rounded,
+                            label: 'From',
+                            value: fromStr,
+                            tc: dialogTc,
+                          ),
+                          const SizedBox(height: 6),
+                          _detailLine(
+                            icon: Icons.event_rounded,
+                            label: 'To',
+                            value: toStr,
+                            tc: dialogTc,
+                          ),
+                          const SizedBox(height: 6),
+                          _detailLine(
+                            icon: Icons.timelapse_rounded,
+                            label: 'Duration',
+                            value:
+                            '$daysStr day${daysStr != '1' ? 's' : ''}'
+                                '${hasHours ? ' · $hoursStr hour${hoursNum != 1 ? 's' : ''}' : ''}',
+                            tc: dialogTc,
+                          ),
+                        ]),
+                        const SizedBox(height: 18),
+
+                        _detailSectionLabel('REASON', dialogTc),
+                        const SizedBox(height: 6),
+                        _detailBox(dialogTc, children: [
+                          Text(
+                            reason.isEmpty
+                                ? 'No reason provided.'
+                                : reason,
+                            style: TextStyle(
+                              fontSize: 12,
+                              height: 1.45,
+                              color: reason.isEmpty
+                                  ? dialogTc.muted
+                                  : dialogTc.text,
+                              fontStyle: reason.isEmpty
+                                  ? FontStyle.italic
+                                  : FontStyle.normal,
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 18),
+
+                        _detailSectionLabel('SUBMISSION INFO', dialogTc),
+                        const SizedBox(height: 6),
+                        _detailBox(dialogTc, children: [
+                          _detailLine(
+                            icon: Icons.person_outline_rounded,
+                            label: 'Employee ID',
+                            value: empId.isEmpty ? 'N/A' : empId,
+                            tc: dialogTc,
+                          ),
+                          const SizedBox(height: 6),
+                          _detailLine(
+                            icon: Icons.source_rounded,
+                            label: 'Source',
+                            value: sourceLabel,
+                            tc: dialogTc,
+                          ),
+                          const SizedBox(height: 6),
+                          _detailLine(
+                            icon: Icons.access_time_rounded,
+                            label: 'Submitted',
+                            value: submittedStr,
+                            tc: dialogTc,
+                          ),
+                        ]),
+                      ],
+                    ),
+                  ),
+                ),
+                Divider(color: dialogTc.border, height: 1),
+
+                // ───── Footer actions ─────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+                  child: Row(
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          FocusScope.of(dialogCtx).unfocus();
+                          Navigator.pop(dialogCtx);
+                        },
+                        child: Text(
+                          'Close',
+                          style: TextStyle(color: dialogTc.muted),
+                        ),
+                      ),
+                      const Spacer(),
+                      if (isPending) ...[
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.pop(dialogCtx);
+                            _rejectLeaveRequest(
+                              context,
+                              req,
+                              emp,
+                              isFromEmployeeCollection,
+                            );
+                          },
+                          icon: Icon(
+                            Icons.close,
+                            size: 14,
+                            color: _isDemo
+                                ? dialogTc.muted
+                                : dialogTc.pillErrTx,
+                          ),
+                          label: Text(
+                            'Reject',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _isDemo
+                                  ? dialogTc.muted
+                                  : dialogTc.pillErrTx,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(
+                              color: (_isDemo
+                                  ? dialogTc.border
+                                  : dialogTc.pillErrTx)
+                                  .withValues(alpha: 0.3),
+                            ),
+                            backgroundColor: _isDemo
+                                ? dialogTc.surface
+                                : dialogTc.pillErrBg,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 10),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        ElevatedButton.icon(
+                          onPressed: () {
+                            Navigator.pop(dialogCtx);
+                            _approveLeaveRequest(
+                              context,
+                              req,
+                              emp,
+                              isFromEmployeeCollection,
+                            );
+                          },
+                          icon: Icon(
+                            Icons.check,
+                            size: 14,
+                            color:
+                            _isDemo ? dialogTc.muted : Colors.white,
+                          ),
+                          label: Text(
+                            'Approve',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color:
+                              _isDemo ? dialogTc.muted : Colors.white,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                            _isDemo ? dialogTc.border : dialogTc.green,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 18, vertical: 10),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            elevation: 0,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ─── Small UI helpers for the details dialog ───
+  Widget _detailSectionLabel(String text, AdminColors dialogTc) {
+    return Text(
+      text,
+      style: TextStyle(
+        fontSize: 10,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 0.6,
+        color: dialogTc.muted,
+      ),
+    );
+  }
+
+  Widget _detailBox(
+      AdminColors dialogTc, {
+        required List<Widget> children,
+      }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: dialogTc.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: dialogTc.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: children,
+      ),
+    );
+  }
+
+  Widget _detailLine({
+    required IconData icon,
+    required String label,
+    required String value,
+    required AdminColors tc,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 13, color: tc.muted),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 90,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: tc.muted,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: tc.text,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // APPROVE CLIENT MEETING (with OneSignal Push)
   // ══════════════════════════════════════════════════════════════
   Future<void> _approveClientMeeting(Map<String, dynamic> meeting) async {
     if (_isDemo) return _demoBlock();
@@ -1007,11 +1445,11 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               priority: 'high',
             );
 
-            // 🆕 ONESIGNAL PUSH NOTIFICATION
             await OneSignalSender.instance.sendToEmployee(
               employeeId: empId,
               title: '✅ Client Meeting Approved',
-              message: 'Your client meeting at ${_sanitize(meeting['location_name'] ?? 'N/A', maxLen: 80)} has been approved.',
+              message:
+              'Your client meeting at ${_sanitize(meeting['location_name'] ?? 'N/A', maxLen: 80)} has been approved.',
               type: 'reminder',
             );
           }
@@ -1032,7 +1470,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // REJECT CLIENT MEETING (With OneSignal Push)
+  // REJECT CLIENT MEETING (with OneSignal Push)
   // ══════════════════════════════════════════════════════════════
   Future<void> _rejectClientMeeting(Map<String, dynamic> meeting) async {
     if (_isDemo) return _demoBlock();
@@ -1044,7 +1482,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     }
     if (_inFlight.contains(id)) return;
     if (!_guard.tryAcquire('reject_cm')) {
-      _toast('Masyadong mabilis. Please wait a moment.', error: true);
+      _toast('Too fast. Please wait a moment.', error: true);
       return;
     }
 
@@ -1090,7 +1528,6 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               priority: 'high',
             );
 
-            // 🆕 ONESIGNAL PUSH NOTIFICATION
             await OneSignalSender.instance.sendToEmployee(
               employeeId: empId,
               title: '❌ Client Meeting Rejected',
@@ -1115,7 +1552,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // APPROVE LEAVE REQUEST (With OneSignal Push)
+  // APPROVE LEAVE REQUEST (with OneSignal Push)
   // ══════════════════════════════════════════════════════════════
   Future<void> _approveLeaveRequest(
       BuildContext context,
@@ -1132,7 +1569,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     }
     if (_inFlight.contains('L_$reqId')) return;
     if (!_guard.tryAcquire('approve_leave')) {
-      _toast('Masyadong mabilis. Please wait.', error: true);
+      _toast('Too fast. Please wait a moment.', error: true);
       return;
     }
 
@@ -1246,11 +1683,11 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             priority: 'high',
           );
 
-          // 🆕 ONESIGNAL PUSH NOTIFICATION
           await OneSignalSender.instance.sendToEmployee(
             employeeId: empId,
             title: '✅ Leave Approved',
-            message: 'Your $leaveType request ($start – $end) has been approved.',
+            message:
+            'Your $leaveType request ($start – $end) has been approved.',
             type: 'reminder',
           );
         }
@@ -1269,7 +1706,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // REJECT LEAVE REQUEST (With OneSignal Push)
+  // REJECT LEAVE REQUEST (with OneSignal Push)
   // ══════════════════════════════════════════════════════════════
   Future<void> _rejectLeaveRequest(
       BuildContext context,
@@ -1286,7 +1723,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     }
     if (_inFlight.contains('L_$reqId')) return;
     if (!_guard.tryAcquire('reject_leave')) {
-      _toast('Masyadong mabilis.', error: true);
+      _toast('Too fast. Please wait a moment.', error: true);
       return;
     }
 
@@ -1372,11 +1809,11 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
             priority: 'high',
           );
 
-          // 🆕 ONESIGNAL PUSH NOTIFICATION
           await OneSignalSender.instance.sendToEmployee(
             employeeId: empId,
             title: '❌ Leave Rejected',
-            message: 'Your $leaveType request ($start – $end) was rejected. Reason: $reason',
+            message:
+            'Your $leaveType request ($start – $end) was rejected. Reason: $reason',
             type: 'reminder',
           );
         }
@@ -2434,7 +2871,8 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               if (hasAssignment)
                 _fraudBadge(
                   icon: Icons.assignment_turned_in_rounded,
-                  label: '📋 ${assignedClient.isEmpty ? 'Assigned' : assignedClient}',
+                  label:
+                  '📋 ${assignedClient.isEmpty ? 'Assigned' : assignedClient}',
                   bg: const Color(0xFF3B82F6).withValues(alpha: 0.12),
                   fg: const Color(0xFF3B82F6),
                 ),
@@ -2774,7 +3212,9 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () => _rejectClientMeeting(m),
-                  icon: Icon(Icons.close, size: 14, color: _isDemo ? tc.muted : tc.pillErrTx),
+                  icon: Icon(Icons.close,
+                      size: 14,
+                      color: _isDemo ? tc.muted : tc.pillErrTx),
                   label: Text('Reject',
                       style: TextStyle(
                           fontSize: 12,
@@ -2782,7 +3222,8 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
                           color: _isDemo ? tc.muted : tc.pillErrTx)),
                   style: OutlinedButton.styleFrom(
                     side: BorderSide(
-                        color: (_isDemo ? tc.border : tc.pillErrTx).withValues(alpha: 0.3)),
+                        color: (_isDemo ? tc.border : tc.pillErrTx)
+                            .withValues(alpha: 0.3)),
                     backgroundColor: _isDemo ? tc.surface : tc.pillErrBg,
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
@@ -2794,7 +3235,9 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
               Expanded(
                 child: ElevatedButton.icon(
                   onPressed: () => _approveClientMeeting(m),
-                  icon: Icon(Icons.check, size: 14, color: _isDemo ? tc.muted : Colors.white),
+                  icon: Icon(Icons.check,
+                      size: 14,
+                      color: _isDemo ? tc.muted : Colors.white),
                   label: Text('Approve',
                       style: TextStyle(
                           fontSize: 12,
@@ -2969,7 +3412,7 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
           _th('DATES', flex: 2),
           _th('DAYS', flex: 1),
           SizedBox(
-            width: 80,
+            width: 100,
             child: Text(
               'ACTIONS',
               textAlign: TextAlign.right,
@@ -3039,142 +3482,160 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     final isFromEmployeeSource = source == 'employee';
     final sourceLabel = isFromEmployeeSource ? 'Self' : 'Admin';
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: tc.border)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 3,
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 16,
-                  backgroundColor: tc.orange.withValues(alpha: 0.15),
-                  child: Text(
-                    _getInitials(empName),
-                    style: TextStyle(
-                        color: tc.orangeText,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openLeaveDetailsDialog(item: item),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: tc.border)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 16,
+                      backgroundColor: tc.orange.withValues(alpha: 0.15),
+                      child: Text(
+                        _getInitials(empName),
+                        style: TextStyle(
+                            color: tc.orangeText,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Flexible(
-                            child: Text(
-                              empName.isEmpty ? 'Unknown Staff' : empName,
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                  color: tc.text),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 4, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: isFromEmployeeSource
-                                  ? tc.pillGreenBg
-                                  : tc.pillBlueBg,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              sourceLabel,
-                              style: TextStyle(
-                                fontSize: 8,
-                                fontWeight: FontWeight.w600,
-                                color: isFromEmployeeSource
-                                    ? tc.pillGreenTx
-                                    : tc.pillBlueTx,
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  empName.isEmpty ? 'Unknown Staff' : empName,
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                      color: tc.text),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                            ),
+                              const SizedBox(width: 4),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 4, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: isFromEmployeeSource
+                                      ? tc.pillGreenBg
+                                      : tc.pillBlueBg,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  sourceLabel,
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w600,
+                                    color: isFromEmployeeSource
+                                        ? tc.pillGreenTx
+                                        : tc.pillBlueTx,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Text(
+                            dept,
+                            style: TextStyle(fontSize: 11, color: tc.muted),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
-                      Text(
-                        dept,
-                        style: TextStyle(fontSize: 11, color: tc.muted),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: tc.surface,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      leaveTypeDisplay,
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: tc.text),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
-              ],
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: tc.surface,
-                  borderRadius: BorderRadius.circular(10),
-                ),
+              ),
+              Expanded(
+                flex: 2,
                 child: Text(
-                  leaveTypeDisplay,
+                  '$fromStr - $toStr',
                   style: TextStyle(
                       fontSize: 11,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.bold,
                       color: tc.text),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              '$fromStr - $toStr',
-              style: TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.bold, color: tc.text),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          Expanded(
-            flex: 1,
-            child: Text(
-              '$daysStr day${daysStr != '1' ? 's' : ''}',
-              style: TextStyle(fontSize: 11, color: tc.muted),
-            ),
-          ),
-          SizedBox(
-            width: 80,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _actionButton(
-                  icon: Icons.check,
-                  bgColor: _isDemo ? tc.surface : tc.pillWarnBg,
-                  iconColor: _isDemo ? tc.muted : tc.pillWarnTx,
-                  onTap: () => _approveLeaveRequest(
-                      context, req, emp, isFromEmployee),
+              Expanded(
+                flex: 1,
+                child: Text(
+                  '$daysStr day${daysStr != '1' ? 's' : ''}',
+                  style: TextStyle(fontSize: 11, color: tc.muted),
                 ),
-                const SizedBox(width: 6),
-                _actionButton(
-                  icon: Icons.close,
-                  bgColor: _isDemo ? tc.surface : tc.pillErrBg,
-                  iconColor: _isDemo ? tc.muted : tc.pillErrTx,
-                  onTap: () => _rejectLeaveRequest(
-                      context, req, emp, isFromEmployee),
+              ),
+              SizedBox(
+                width: 100,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Tooltip(
+                      message: 'View details',
+                      child: _actionButton(
+                        icon: Icons.visibility_outlined,
+                        bgColor: tc.surface,
+                        iconColor: tc.text,
+                        onTap: () => _openLeaveDetailsDialog(item: item),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    _actionButton(
+                      icon: Icons.check,
+                      bgColor: _isDemo ? tc.surface : tc.pillWarnBg,
+                      iconColor: _isDemo ? tc.muted : tc.pillWarnTx,
+                      onTap: () => _approveLeaveRequest(
+                          context, req, emp, isFromEmployee),
+                    ),
+                    const SizedBox(width: 6),
+                    _actionButton(
+                      icon: Icons.close,
+                      bgColor: _isDemo ? tc.surface : tc.pillErrBg,
+                      iconColor: _isDemo ? tc.muted : tc.pillErrTx,
+                      onTap: () => _rejectLeaveRequest(
+                          context, req, emp, isFromEmployee),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -3196,173 +3657,195 @@ class _AdminActivityPageState extends State<AdminActivityPage> {
     final isFromEmployeeSource = source == 'employee';
     final sourceLabel = isFromEmployeeSource ? 'Self' : 'Admin';
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: tc.border)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openLeaveDetailsDialog(item: item),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: tc.border)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                radius: 18,
-                backgroundColor: tc.orange.withValues(alpha: 0.15),
-                child: Text(
-                  _getInitials(empName),
-                  style: TextStyle(
-                      color: tc.orangeText,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundColor: tc.orange.withValues(alpha: 0.15),
+                    child: Text(
+                      _getInitials(empName),
+                      style: TextStyle(
+                          color: tc.orangeText,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Flexible(
-                          child: Text(
-                            empName.isEmpty ? 'Unknown Staff' : empName,
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                                color: tc.text),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: isFromEmployeeSource
-                                ? tc.pillGreenBg
-                                : tc.pillBlueBg,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            sourceLabel,
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w600,
-                              color: isFromEmployeeSource
-                                  ? tc.pillGreenTx
-                                  : tc.pillBlueTx,
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                empName.isEmpty ? 'Unknown Staff' : empName,
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    color: tc.text),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                          ),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 5, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isFromEmployeeSource
+                                    ? tc.pillGreenBg
+                                    : tc.pillBlueBg,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                sourceLabel,
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w600,
+                                  color: isFromEmployeeSource
+                                      ? tc.pillGreenTx
+                                      : tc.pillBlueTx,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          dept,
+                          style: TextStyle(fontSize: 11, color: tc.muted),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      dept,
-                      style: TextStyle(fontSize: 11, color: tc.muted),
+                  ),
+                  Tooltip(
+                    message: 'View details',
+                    child: IconButton(
+                      onPressed: () => _openLeaveDetailsDialog(item: item),
+                      icon: Icon(Icons.info_outline_rounded,
+                          size: 18, color: tc.orange),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Container(
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: tc.surface,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      leaveTypeDisplay,
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: tc.text),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '$daysStr day${daysStr != '1' ? 's' : ''}',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: tc.muted,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(Icons.calendar_today_outlined,
+                      size: 12, color: tc.muted),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '$fromStr - $toStr',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: tc.text),
                       overflow: TextOverflow.ellipsis,
                     ),
-                  ],
-                ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _rejectLeaveRequest(
+                          context, req, emp, isFromEmployee),
+                      icon: Icon(Icons.close,
+                          size: 14,
+                          color: _isDemo ? tc.muted : tc.pillErrTx),
+                      label: Text(
+                        'Reject',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: _isDemo ? tc.muted : tc.pillErrTx),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(
+                            color: (_isDemo ? tc.border : tc.pillErrTx)
+                                .withValues(alpha: 0.3)),
+                        backgroundColor:
+                        _isDemo ? tc.surface : tc.pillErrBg,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _approveLeaveRequest(
+                          context, req, emp, isFromEmployee),
+                      icon: Icon(Icons.check,
+                          size: 14,
+                          color: _isDemo ? tc.muted : Colors.white),
+                      label: Text(
+                        'Approve',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: _isDemo ? tc.muted : Colors.white),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _isDemo ? tc.border : tc.green,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        elevation: 0,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: tc.surface,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  leaveTypeDisplay,
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: tc.text),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '$daysStr day${daysStr != '1' ? 's' : ''}',
-                style: TextStyle(
-                    fontSize: 11,
-                    color: tc.muted,
-                    fontWeight: FontWeight.w600),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Icon(Icons.calendar_today_outlined, size: 12, color: tc.muted),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  '$fromStr - $toStr',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: tc.text),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _rejectLeaveRequest(
-                      context, req, emp, isFromEmployee),
-                  icon: Icon(Icons.close, size: 14, color: _isDemo ? tc.muted : tc.pillErrTx),
-                  label: Text(
-                    'Reject',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: _isDemo ? tc.muted : tc.pillErrTx),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(
-                        color: (_isDemo ? tc.border : tc.pillErrTx).withValues(alpha: 0.3)),
-                    backgroundColor: _isDemo ? tc.surface : tc.pillErrBg,
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _approveLeaveRequest(
-                      context, req, emp, isFromEmployee),
-                  icon: Icon(Icons.check, size: 14, color: _isDemo ? tc.muted : Colors.white),
-                  label: Text(
-                    'Approve',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: _isDemo ? tc.muted : Colors.white),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isDemo ? tc.border : tc.green,
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    elevation: 0,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }

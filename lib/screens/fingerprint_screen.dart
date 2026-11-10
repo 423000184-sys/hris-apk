@@ -1,14 +1,14 @@
 // lib/screens/fingerprint_screen.dart
-// v4.2: 🛡️ FIXED ASYNC WRITE ERROR & OFFLINE LOCK FALLBACK
-//       • Added catchError to Firestore lock write to prevent unhandled async errors.
-//       • Replaced empty-return setStates in _checkFingerprintRegistration with offline check fallback.
+// v4.3: 🛠️ Remote admin actions (unlock / re-register / clear-lockout)
+//       applied in real-time + on resume. English UI strings.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
-import 'package:flutter/services.dart' show PlatformException, MethodChannel, MissingPluginException;
+import 'package:flutter/services.dart'
+    show PlatformException, MethodChannel, MissingPluginException;
 import 'package:local_auth/local_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -112,6 +112,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   static const String _kLastReportKey = 'last_fp_report_time';
   static const Duration _reportCooldown = Duration(minutes: 3);
 
+  // 🆕 Markers so admin actions are applied exactly once
+  static const String _kLastAdminUnlockKey = 'fp_last_admin_unlock_ms';
+  static const String _kLastAdminResetKey = 'fp_last_admin_reset_ms';
+  static const String _kLastLockoutClearKey = 'fp_last_lockout_clear_ms';
+
   _NetworkState _networkState = _NetworkState.online;
   String _networkErrorMessage = 'No internet connection.';
   bool _showOfflineOverlay = false;
@@ -121,6 +126,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   Timer? _navTimer;
   StreamSubscription<bool>? _connectivitySub;
   StreamSubscription<int>? _pendingSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _adminActionSub;
 
   static const String _logoAsset = 'assets/images/logo.png';
 
@@ -273,7 +279,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           (_activeBackoff != null && _activeBackoff! > Duration.zero);
 
   bool get _isRegistering =>
-      !_fingerprintRegistered && _regPhase != _RegPhase.completed && !_fingerprintLocked;
+      !_fingerprintRegistered &&
+          _regPhase != _RegPhase.completed &&
+          !_fingerprintLocked;
 
   bool get _isOffline => _networkState == _NetworkState.offline;
 
@@ -357,6 +365,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         if (mounted) {
           setState(() => _registrationCheckComplete = true);
         }
+        // 🆕 After registration status is known, wire up live admin listener
+        if (mounted) _setupAdminActionListener();
       }
     });
     _verifyPreAuth();
@@ -450,12 +460,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   static const List<({String key, String label})> _reportCategories = [
     (key: 'fingerprint_not_recognized', label: 'Fingerprint not recognized'),
-    (key: 'sensor_error',               label: 'Sensor problem'),
-    (key: 'lockout_issue',              label: 'Locked out'),
-    (key: 'no_enrollment',              label: 'No fingerprint registered'),
-    (key: 'geofence_issue',             label: 'Location issue'),
-    (key: 'security_issue',             label: 'Security error'),
-    (key: 'other',                      label: 'Other'),
+    (key: 'sensor_error', label: 'Sensor problem'),
+    (key: 'lockout_issue', label: 'Locked out'),
+    (key: 'no_enrollment', label: 'No fingerprint registered'),
+    (key: 'geofence_issue', label: 'Location issue'),
+    (key: 'security_issue', label: 'Security error'),
+    (key: 'other', label: 'Other'),
   ];
 
   void _showInfoSnack(String msg) {
@@ -464,10 +474,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
+          content: Text(msg,
+              style: const TextStyle(fontWeight: FontWeight.w600)),
           backgroundColor: const Color(0xFF27272A),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           margin: const EdgeInsets.all(16),
           duration: const Duration(seconds: 3),
         ),
@@ -477,13 +489,22 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   String _defaultReportCategory() {
     if (_fingerprintLocked) return 'security_issue';
     if (!_fingerprintRegistered) return 'no_enrollment';
+
     final err = (_errorMessage ?? '').toLowerCase();
+
+    // 🔑 Unahin ang fingerprint errors
     if (err.contains('lock')) return 'lockout_issue';
     if (err.contains('sensor') || err.contains('hardware')) return 'sensor_error';
-    if (err.contains('match') || err.contains('recognized')) return 'fingerprint_not_recognized';
+    if (err.contains('match') || err.contains('recognized') || err.contains('finger')) {
+      return 'fingerprint_not_recognized';
+    }
     if (err.contains('compromised') || err.contains('security')) return 'security_issue';
-    if (err.contains('geofence') || err.contains('location')) return 'geofence_issue';
-    return 'other';
+    if (err.contains('geofence') || err.contains('location') || err.contains('zone')) {
+      return 'geofence_issue';
+    }
+
+    // 🔑 Default fallback kung walang match: fingerprint issue pa rin
+    return 'fingerprint_not_recognized';
   }
 
   String _labelForReportCategory(String c) {
@@ -492,9 +513,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         .label;
   }
 
-  String _buildReportMessage({required String category, required String notes}) {
+  String _buildReportMessage(
+      {required String category, required String notes}) {
     final buf = StringBuffer();
-    buf.writeln('Employee reported a fingerprint issue: ${_labelForReportCategory(category)}.');
+    buf.writeln(
+        'Employee reported a fingerprint issue: ${_labelForReportCategory(category)}.');
     if (_errorMessage != null && _errorMessage!.isNotEmpty) {
       buf.writeln('Error shown: ${_errorMessage!.replaceAll('\n', ' ')}');
     }
@@ -516,7 +539,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           final mins = remaining.inMinutes;
           final secs = remaining.inSeconds % 60;
           final timeStr = mins > 0 ? '${mins}m ${secs}s' : '${secs}s';
-          _showInfoSnack('⚠️ Mag-antay muna ng $timeStr bago mag-send muli.');
+          _showInfoSnack(
+              '⚠️ Please wait $timeStr before sending again.');
           return false;
         }
       }
@@ -529,11 +553,13 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   Future<void> _markReportSent() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_kLastReportKey, DateTime.now().millisecondsSinceEpoch);
+      await prefs.setInt(
+          _kLastReportKey, DateTime.now().millisecondsSinceEpoch);
     } catch (_) {}
   }
 
-  Future<bool> _sendAdminReport({required String category, required String notes}) async {
+  Future<bool> _sendAdminReport(
+      {required String category, required String notes}) async {
     if (_isDemo) return false;
     if (_sendingAdminReport) return false;
 
@@ -562,9 +588,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       if (!mounted) return result.ok;
 
       if (result.ok && result.queuedOffline) {
-        _showInfoSnack('📥 Saved. Your report will reach Admin once you\'re back online.');
+        _showInfoSnack(
+            '📥 Saved. Your report will reach Admin once you\'re back online.');
       } else if (result.ok) {
-        _showInfoSnack('📨 Report sent. Admin will contact you shortly.');
+        _showInfoSnack(
+            '📨 Report sent. Admin will reach out shortly — you can try scanning again after they respond.');
         await _markReportSent();
       } else {
         _showInfoSnack('⚠️ Could not send report. Please try again.');
@@ -572,7 +600,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       return result.ok;
     } catch (e) {
       _secureLog('⚠️ _sendAdminReport failed: $e');
-      if (mounted) _showInfoSnack('⚠️ Could not send report. Please try again.');
+      if (mounted) {
+        _showInfoSnack('⚠️ Could not send report. Please try again.');
+      }
       return false;
     } finally {
       if (mounted) setState(() => _sendingAdminReport = false);
@@ -587,13 +617,15 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (_sendingAdminReport) return;
 
     final notesCtrl = TextEditingController();
-    String category = _defaultReportCategory();
+    // 🔑 Sa FingerprintScreen, default ay fingerprint_not_recognized
+    String category = 'fingerprint_not_recognized';
     bool sending = false;
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final sheetBg = isDark ? const Color(0xFF1C1C1F) : Colors.white;
     final textCol = isDark ? Colors.white : const Color(0xFF111111);
-    final mutedCol = isDark ? const Color(0xFFA1A1AA) : const Color(0xFF6B7280);
+    final mutedCol =
+    isDark ? const Color(0xFFA1A1AA) : const Color(0xFF6B7280);
 
     await showModalBottomSheet<void>(
       context: context,
@@ -619,18 +651,28 @@ class _FingerprintScreenState extends State<FingerprintScreen>
               onTap: sending ? null : () => setSheet(() => category = c.key),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: active ? _orange : (isDark ? Colors.white.withValues(alpha: 0.06) : const Color(0xFFF4F4F5)),
+                  color: active
+                      ? _orange
+                      : (isDark
+                      ? Colors.white.withValues(alpha: 0.06)
+                      : const Color(0xFFF4F4F5)),
                   borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: active ? _orange : mutedCol.withValues(alpha: 0.25), width: 1),
+                  border: Border.all(
+                      color: active
+                          ? _orange
+                          : mutedCol.withValues(alpha: 0.25),
+                      width: 1),
                 ),
                 child: Text(
                   c.label,
                   style: TextStyle(
                     color: active ? Colors.white : textCol,
                     fontSize: 11.5,
-                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                    fontWeight:
+                    active ? FontWeight.w800 : FontWeight.w600,
                   ),
                 ),
               ),
@@ -642,69 +684,138 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(width: 62, child: Text(k, style: TextStyle(fontSize: 10, color: mutedCol, fontWeight: FontWeight.w700))),
-                Expanded(child: Text(v, style: TextStyle(fontSize: 10.5, color: textCol, fontWeight: FontWeight.w600))),
+                SizedBox(
+                    width: 62,
+                    child: Text(k,
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: mutedCol,
+                            fontWeight: FontWeight.w700))),
+                Expanded(
+                    child: Text(v,
+                        style: TextStyle(
+                            fontSize: 10.5,
+                            color: textCol,
+                            fontWeight: FontWeight.w600))),
               ],
             ),
           );
 
           return Padding(
-            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+            padding:
+            EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
             child: Container(
-              decoration: BoxDecoration(color: sheetBg, borderRadius: const BorderRadius.vertical(top: Radius.circular(24))),
+              decoration: BoxDecoration(
+                  color: sheetBg,
+                  borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(24))),
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
               child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: mutedCol.withValues(alpha: 0.3), borderRadius: BorderRadius.circular(4)))),
+                    Center(
+                        child: Container(
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                                color: mutedCol.withValues(alpha: 0.3),
+                                borderRadius: BorderRadius.circular(4)))),
                     const SizedBox(height: 14),
                     Row(children: [
-                      Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: _orange.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.support_agent_rounded, color: _orange, size: 20)),
+                      Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                              color: _orange.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(10)),
+                          child: const Icon(Icons.support_agent_rounded,
+                              color: _orange, size: 20)),
                       const SizedBox(width: 10),
-                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('Contact Admin', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: textCol)),
-                        Text('Tell us what went wrong with your fingerprint scan.', style: TextStyle(fontSize: 11.5, color: mutedCol)),
-                      ])),
+                      Expanded(
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Contact Admin',
+                                    style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w800,
+                                        color: textCol)),
+                                Text(
+                                    'Tell us what went wrong with your fingerprint scan.',
+                                    style: TextStyle(
+                                        fontSize: 11.5, color: mutedCol)),
+                              ])),
                     ]),
                     const SizedBox(height: 16),
-                    Text('What went wrong?', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: mutedCol, letterSpacing: 0.5)),
+                    Text('What went wrong?',
+                        style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                            color: mutedCol,
+                            letterSpacing: 0.5)),
                     const SizedBox(height: 8),
-                    Wrap(spacing: 8, runSpacing: 8, children: [for (final c in _reportCategories) chip(c)]),
+                    Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final c in _reportCategories) chip(c)
+                        ]),
                     const SizedBox(height: 16),
                     TextField(
                       controller: notesCtrl,
                       maxLines: 4,
                       maxLength: 500,
                       enabled: !sending,
-                      style: TextStyle(color: textCol, fontSize: 13, height: 1.4),
+                      style:
+                      TextStyle(color: textCol, fontSize: 13, height: 1.4),
                       decoration: InputDecoration(
                         hintText: 'Add details (optional)...',
-                        hintStyle: TextStyle(color: mutedCol, fontSize: 13),
+                        hintStyle:
+                        TextStyle(color: mutedCol, fontSize: 13),
                         filled: true,
-                        fillColor: isDark ? Colors.white.withValues(alpha: 0.04) : const Color(0xFFF4F4F5),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: mutedCol.withValues(alpha: 0.3))),
-                        focusedBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(10)), borderSide: BorderSide(color: _orange, width: 1.5)),
-                        counterStyle: TextStyle(color: mutedCol, fontSize: 10),
+                        fillColor: isDark
+                            ? Colors.white.withValues(alpha: 0.04)
+                            : const Color(0xFFF4F4F5),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(
+                                color: mutedCol.withValues(alpha: 0.3))),
+                        focusedBorder: const OutlineInputBorder(
+                            borderRadius: BorderRadius.all(Radius.circular(10)),
+                            borderSide:
+                            BorderSide(color: _orange, width: 1.5)),
+                        counterStyle:
+                        TextStyle(color: mutedCol, fontSize: 10),
                       ),
                     ),
                     const SizedBox(height: 10),
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: isDark ? Colors.white.withValues(alpha: 0.03) : const Color(0xFFF9F9FB),
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.03)
+                            : const Color(0xFFF9F9FB),
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: mutedCol.withValues(alpha: 0.15)),
+                        border: Border.all(
+                            color: mutedCol.withValues(alpha: 0.15)),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('INCLUDED AUTOMATICALLY', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: mutedCol, letterSpacing: 0.6)),
+                          Text('INCLUDED AUTOMATICALLY',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                  color: mutedCol,
+                                  letterSpacing: 0.6)),
                           const SizedBox(height: 6),
                           ctxRow('Stage', _fpState.name),
                           ctxRow('Mode', 'fingerprint'),
-                          if (_errorMessage != null && _errorMessage!.isNotEmpty) ctxRow('Error', _errorMessage!.replaceAll('\n', ' ')),
+                          if (_errorMessage != null &&
+                              _errorMessage!.isNotEmpty)
+                            ctxRow('Error',
+                                _errorMessage!.replaceAll('\n', ' ')),
                           ctxRow('Device', _deviceModel),
                           ctxRow('Network', _networkState.name),
                         ],
@@ -712,18 +823,43 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                     ),
                     const SizedBox(height: 16),
                     Row(children: [
-                      Expanded(child: OutlinedButton(
-                        onPressed: sending ? null : () => Navigator.pop(ctx),
-                        style: OutlinedButton.styleFrom(side: BorderSide(color: mutedCol.withValues(alpha: 0.4)), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                        child: Text('Cancel', style: TextStyle(color: textCol, fontWeight: FontWeight.w700)),
-                      )),
+                      Expanded(
+                          child: OutlinedButton(
+                            onPressed: sending ? null : () => Navigator.pop(ctx),
+                            style: OutlinedButton.styleFrom(
+                                side: BorderSide(
+                                    color: mutedCol.withValues(alpha: 0.4)),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10))),
+                            child: Text('Cancel',
+                                style: TextStyle(
+                                    color: textCol,
+                                    fontWeight: FontWeight.w700)),
+                          )),
                       const SizedBox(width: 10),
-                      Expanded(flex: 2, child: FilledButton.icon(
-                        onPressed: sending ? null : doSend,
-                        icon: sending ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.send_rounded, size: 16),
-                        label: Text(sending ? 'Sending...' : 'Send to Admin', style: const TextStyle(fontWeight: FontWeight.w700)),
-                        style: FilledButton.styleFrom(backgroundColor: _orange, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                      )),
+                      Expanded(
+                          flex: 2,
+                          child: FilledButton.icon(
+                            onPressed: sending ? null : doSend,
+                            icon: sending
+                                ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white))
+                                : const Icon(Icons.send_rounded, size: 16),
+                            label: Text(sending ? 'Sending...' : 'Send to Admin',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700)),
+                            style: FilledButton.styleFrom(
+                                backgroundColor: _orange,
+                                padding:
+                                const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10))),
+                          )),
                     ]),
                   ],
                 ),
@@ -783,6 +919,160 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     } catch (_) {}
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // 🆕 LIVE ADMIN ACTION LISTENER + PROCESSOR
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _setupAdminActionListener() async {
+    if (_isDemo) return;
+
+    try {
+      final docId = await _resolveEmployeeDocId();
+      if (docId == null || docId.isEmpty) {
+        _secureLog('⚠️ [AdminActions] No employee doc id — listener skipped');
+        return;
+      }
+
+      await _adminActionSub?.cancel();
+      _adminActionSub = FirebaseFirestore.instance
+          .collection('employees')
+          .doc(docId)
+          .snapshots()
+          .listen(
+            (snap) {
+          if (!mounted) return;
+          final data = snap.data();
+          if (data == null) return;
+          unawaited(_processAdminActions(data));
+        },
+        onError: (e) {
+          _secureLog('⚠️ [AdminActions] stream error: $e');
+        },
+      );
+
+      _secureLog('✅ [AdminActions] listener attached to $docId');
+    } catch (e) {
+      _secureLog('⚠️ [AdminActions] setup failed: $e');
+    }
+  }
+
+  Future<void> _processAdminActions(Map<String, dynamic> data) async {
+    if (_isDemo) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      final lastUnlock = prefs.getInt(_kLastAdminUnlockKey) ?? 0;
+      final lastReset = prefs.getInt(_kLastAdminResetKey) ?? 0;
+      final lastLockoutClear = prefs.getInt(_kLastLockoutClearKey) ?? 0;
+
+      final unlockedAt =
+          (data['fingerprintAdminUnlockedAt'] as Timestamp?)
+              ?.millisecondsSinceEpoch ??
+              0;
+      final resetAt =
+          (data['fingerprintAdminResetAt'] as Timestamp?)
+              ?.millisecondsSinceEpoch ??
+              0;
+      final lockoutClearAt =
+          (data['fingerprintLockoutClearedAt'] as Timestamp?)
+              ?.millisecondsSinceEpoch ??
+              0;
+
+      // ── 1. Admin forced re-registration ─────────────────────
+      if (resetAt > lastReset) {
+        _secureLog('🔄 [AdminActions] applying admin re-enroll');
+
+        try {
+          await _secureStorage.delete(key: _credKey(widget.employee.id));
+        } catch (_) {}
+        try {
+          await _secureStorage.delete(key: _lockKey(widget.employee.id));
+        } catch (_) {}
+        try {
+          await prefs.remove(_kAuthAttemptsKey);
+          await prefs.remove(_kAuthLockoutKey);
+          await SecurityHardeningService.instance.resetFailures();
+        } catch (_) {}
+
+        await prefs.setInt(_kLastAdminResetKey, resetAt);
+
+        if (!mounted) return;
+        setState(() {
+          _fingerprintRegistered = false;
+          _fingerprintLocked = false;
+          _fingerprintRegisteredAt = null;
+          _regPhase = _RegPhase.idle;
+          _currentRegStep = 0;
+          _regStepHashes.clear();
+          _authFailedAttempts = 0;
+          _authLockoutUntil = null;
+          _registrationCheckComplete = true;
+        });
+        _resetFirstAttempt();
+        _showInfoSnack(
+            '🔄 Admin reset your fingerprint. Please register again.');
+        return;
+      }
+
+      // ── 2. Admin unlocked (clear local lock) ────────────────
+      if (unlockedAt > lastUnlock) {
+        _secureLog('🔓 [AdminActions] applying admin unlock');
+
+        try {
+          await _secureStorage.delete(key: _lockKey(widget.employee.id));
+        } catch (_) {}
+
+        await prefs.setInt(_kLastAdminUnlockKey, unlockedAt);
+
+        if (!mounted) return;
+        setState(() => _fingerprintLocked = false);
+        _showInfoSnack('🔓 Fingerprint unlocked by Admin.');
+      }
+
+      // ── 3. Admin cleared lockout ────────────────────────────
+      if (lockoutClearAt > lastLockoutClear) {
+        _secureLog('⏱ [AdminActions] clearing local lockout');
+
+        try {
+          await prefs.remove(_kAuthAttemptsKey);
+          await prefs.remove(_kAuthLockoutKey);
+          await SecurityHardeningService.instance.resetFailures();
+        } catch (_) {}
+
+        await prefs.setInt(_kLastLockoutClearKey, lockoutClearAt);
+
+        if (!mounted) return;
+        _authLockoutTimer?.cancel();
+        setState(() {
+          _authLockoutUntil = null;
+          _activeBackoff = null;
+          _authFailedAttempts = 0;
+        });
+        _showInfoSnack('✅ Lockout cleared by Admin. You can scan again.');
+      }
+    } catch (e) {
+      _secureLog('⚠️ [AdminActions] process failed: $e');
+    }
+  }
+
+  /// Manual pull — called on resume in case the socket was dropped.
+  Future<void> _checkAdminActionsNow() async {
+    if (_isDemo) return;
+    try {
+      final docId = await _resolveEmployeeDocId();
+      if (docId == null) return;
+      final doc = await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(docId)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      final data = doc.data();
+      if (data != null) await _processAdminActions(data);
+    } catch (e) {
+      _secureLog('⚠️ [AdminActions] resume check failed: $e');
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final obscure = state == AppLifecycleState.inactive ||
@@ -792,6 +1082,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (obscure != _obscureContent && mounted) {
       setState(() => _obscureContent = obscure);
     }
+
+    // 🆕 Re-apply pending admin actions when the app returns to foreground
+    if (state == AppLifecycleState.resumed && !_isDemo) {
+      unawaited(_checkAdminActionsNow());
+    }
   }
 
   @override
@@ -800,6 +1095,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     _navTimer?.cancel();
     _connectivitySub?.cancel();
     _pendingSub?.cancel();
+    _adminActionSub?.cancel();
     _authLockoutTimer?.cancel();
     _pulseCtrl.dispose();
     _ringCtrl.dispose();
@@ -829,8 +1125,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         await _logSecurityEvent(
           type: 'fp_compromised_device',
           severity: 'critical',
-          details:
-          SecurityHardeningService.instance.integrityIssues.join(','),
+          details: SecurityHardeningService.instance.integrityIssues.join(','),
         );
       }
       if (mounted) setState(() => _deviceCompromised = !ok);
@@ -874,8 +1169,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         if (retries >= maxRetries) rethrow;
         retries++;
 
-        final backoff = (math.pow(2, retries) * 1000).toInt() + math.Random().nextInt(500);
-        _secureLog('⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
+        final backoff = (math.pow(2, retries) * 1000).toInt() +
+            math.Random().nextInt(500);
+        _secureLog(
+            '⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
         await Future.delayed(Duration(milliseconds: backoff));
       }
     }
@@ -1146,7 +1443,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     try {
       final docId = await _resolveEmployeeDocId();
       if (docId == null || docId.isEmpty) {
-        await _checkRegistrationOffline(); // 🛡️ FIX 2
+        await _checkRegistrationOffline();
         return;
       }
 
@@ -1181,9 +1478,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       }
 
       if (data == null) {
-        await _checkRegistrationOffline(); // 🛡️ FIX 2
+        await _checkRegistrationOffline();
         return;
       }
+
+      // 🆕 Apply any pending admin actions before reading enrollment state
+      await _processAdminActions(data);
 
       String? lockVal;
       try {
@@ -1256,7 +1556,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       if (mounted) {
         setState(() {
-          _fingerprintLocked = lockedFlag || credStatus == _CredentialStatus.enrollmentChanged;
+          _fingerprintLocked =
+              lockedFlag || credStatus == _CredentialStatus.enrollmentChanged;
           _fingerprintRegistered = enrolled;
           _fingerprintRegisteredAt = enrolledAt;
           _checkingRegistration = false;
@@ -1824,7 +2125,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           'fingerprintLockReason': 'enrollment_changed',
           'fingerprintLockedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true)).catchError(
-                (e) => _secureLog('⚠️ Lock write failed: $e'))); // 🛡️ FIX 1
+                (e) => _secureLog('⚠️ Lock write failed: $e')));
       }
     } catch (_) {}
 
@@ -1962,8 +2263,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
         if (status == _CredentialStatus.enrollmentChanged) {
           final docId = await _resolveEmployeeDocId();
-          if (docId != null) await _resetRegistrationDueToEnrollmentChange(docId);
-          _onFailure('Nagbago ang fingerprints sa phone mo.\n'
+          if (docId != null) {
+            await _resetRegistrationDueToEnrollmentChange(docId);
+          }
+          _onFailure('Your device biometrics have changed.\n'
               'Fingerprint LOCKED. Please use Face Scan or contact Admin.');
           return;
         }
@@ -1983,8 +2286,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         _lastCredentialStatus = localStatus;
         if (localStatus == _CredentialStatus.enrollmentChanged) {
           final docId = await _resolveEmployeeDocId();
-          if (docId != null) await _resetRegistrationDueToEnrollmentChange(docId);
-          _onFailure('Nagbago ang fingerprints sa phone mo.\n'
+          if (docId != null) {
+            await _resetRegistrationDueToEnrollmentChange(docId);
+          }
+          _onFailure('Your device biometrics have changed.\n'
               'Fingerprint LOCKED. Please use Face Scan or contact Admin.');
           return;
         }
@@ -2209,13 +2514,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         _secureLog('📥 [FP-Save] Offline — queued to sync later');
       } else {
         try {
-          await _executeWithLoadBalancer(() =>
-              FirebaseFirestore.instance
-                  .collection('employees')
-                  .doc(docId)
-                  .set(payload, SetOptions(merge: true))
-                  .timeout(const Duration(seconds: 10))
-          );
+          await _executeWithLoadBalancer(() => FirebaseFirestore.instance
+              .collection('employees')
+              .doc(docId)
+              .set(payload, SetOptions(merge: true))
+              .timeout(const Duration(seconds: 10)));
         } catch (e) {
           await OfflineAttendanceService.instance.enqueue(
             collection: 'employees',
@@ -2249,8 +2552,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       } else {
         try {
           await _executeWithLoadBalancer(() =>
-              FirebaseFirestore.instance.collection('activity_logs').add(activityPayload)
-          );
+              FirebaseFirestore.instance
+                  .collection('activity_logs')
+                  .add(activityPayload));
         } catch (_) {
           await OfflineAttendanceService.instance.enqueue(
             collection: 'activity_logs',
@@ -2331,9 +2635,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     if (!_isDemo) {
       final logPayload = <String, dynamic>{
-        'type': _justRegistered
-            ? 'fingerprint_registered'
-            : 'fingerprint_verified',
+        'type':
+        _justRegistered ? 'fingerprint_registered' : 'fingerprint_verified',
         'employeeId': widget.employee.id,
         'employee_id': widget.employee.id,
         'employee_name': widget.employee.fullName,
@@ -2418,23 +2721,56 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
 
     final employeeId = _employeeIdForAttendance;
-    final alreadyClockedIn = await ClockStatusService.instance.isCurrentlyClockedIn(employeeId);
+    final alreadyClockedIn =
+    await ClockStatusService.instance.isCurrentlyClockedIn(employeeId);
 
     if (!alreadyClockedIn) {
-      final hasClockedInToday = await _hasClockedInToday(employeeId);
-      if (hasClockedInToday) {
-        if (mounted) {
-          setState(() {
-            _isCheckingGeofence = false;
-            _fpState = _FpState.error;
-            _errorMessage = 'You have already clocked in today.\nOnly one clock-in is allowed per day.';
-          });
-          _shakeCtrl.forward(from: 0);
-          _successCtrl.reset();
-          _pulseCtrl.repeat(reverse: true);
-          _ringCtrl.repeat();
+      // 🔑 UNAHIN NATIN ANG ADMIN OVERRIDE CHECK
+      bool hasAdminTemporaryAccess = false;
+      try {
+        final docId = await _resolveEmployeeDocId();
+        if (docId != null && _networkState == _NetworkState.online) {
+          final doc = await FirebaseFirestore.instance
+              .collection('employees')
+              .doc(docId)
+              .get();
+          final data = doc.data();
+
+          if (data != null && data['adminClockInOverride'] == true) {
+            hasAdminTemporaryAccess = true;
+            // Bawasin ang token para isang beses lang magamit
+            await FirebaseFirestore.instance
+                .collection('employees')
+                .doc(docId)
+                .update({'adminClockInOverride': FieldValue.delete()});
+
+            _secureLog('🔓 [AdminOverride] Temporary access used and cleared.');
+            _showInfoSnack(
+                '🔓 Admin granted temporary access. Proceeding to clock in...');
+          }
         }
-        return;
+      } catch (e) {
+        _secureLog('⚠️ [AdminOverride] Failed to check temporary access: $e');
+      }
+
+      if (!hasAdminTemporaryAccess) {
+        final hasClockedInToday = await _hasClockedInToday(employeeId);
+        if (hasClockedInToday) {
+          if (mounted) {
+            setState(() {
+              _isCheckingGeofence = false;
+              _fpState = _FpState.error;
+              _errorMessage =
+              'You have already clocked in today.\n'
+                  'Only one clock-in is allowed per day.';
+            });
+            _shakeCtrl.forward(from: 0);
+            _successCtrl.reset();
+            _pulseCtrl.repeat(reverse: true);
+            _ringCtrl.repeat();
+          }
+          return;
+        }
       }
     }
 
@@ -2445,7 +2781,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     _goToClockInSuccess();
   }
-
   Future<bool> _checkGeofence() async {
     if (_isDemo) return true;
 
@@ -2719,7 +3054,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         _secureLog(
             '💾 [FP] Local save: queued=${offlineResult.queued} id=${offlineResult.localId}');
       } catch (e) {
-        _secureLog('❌ [FP] OfflineAttendanceService.logAttendance failed: $e');
+        _secureLog(
+            '❌ [FP] OfflineAttendanceService.logAttendance failed: $e');
         await _logSecurityEvent(
           type: 'attendance_local_save_failed',
           severity: 'critical',
@@ -3368,7 +3704,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                               : 'Step 1: Initial Login')
                               : 'Register Your Fingerprint'),
                           style: TextStyle(
-                              color: _isDemo ? _demoAccent : (_fingerprintLocked ? _error : tc.textDark),
+                              color: _isDemo
+                                  ? _demoAccent
+                                  : (_fingerprintLocked
+                                  ? _error
+                                  : tc.textDark),
                               fontSize: 15,
                               fontWeight: FontWeight.w700)),
                       const SizedBox(height: 20),
@@ -3508,12 +3848,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                   : _checkingRegistration && !_isDemo
                   ? 'Verifying if your fingerprint is already registered...'
                   : (_errorMessage ?? _stateSubtitle),
-              key: ValueKey(
-                  'sub_${_errorMessage ?? _fpState}_'
-                      '$locked-$blocked-$checking-$_checkingRegistration-'
-                      '$_fingerprintRegistered-$_fingerprintLocked-$_currentRegStep-'
-                      '$_showCleanupHint-$_osLockedOut-'
-                      '$_pendingCount-${_networkState.name}-$_isDemo'),
+              key: ValueKey('sub_${_errorMessage ?? _fpState}_'
+                  '$locked-$blocked-$checking-$_checkingRegistration-'
+                  '$_fingerprintRegistered-$_fingerprintLocked-$_currentRegStep-'
+                  '$_showCleanupHint-$_osLockedOut-'
+                  '$_pendingCount-${_networkState.name}-$_isDemo'),
               textAlign: TextAlign.center,
               style: const TextStyle(
                   color: _white70, fontSize: 14, height: 1.4)),
@@ -3721,7 +4060,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                         color: _white.withValues(alpha: 0.5), dashCount: 14),
                   ),
                 ),
-              if (_fpState != _FpState.success && !locked && !_fingerprintLocked)
+              if (_fpState != _FpState.success &&
+                  !locked &&
+                  !_fingerprintLocked)
                 Transform.scale(
                   scale: pulseAnim.value,
                   child: Container(
@@ -3745,8 +4086,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                     borderRadius: BorderRadius.circular(16),
                     border: _fpState == _FpState.success
                         ? Border.all(
-                        color:
-                        _isDemo ? _demoAccent : _successRing,
+                        color: _isDemo ? _demoAccent : _successRing,
                         width: 3)
                         : null,
                     boxShadow: [
@@ -3878,7 +4218,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         decoration: BoxDecoration(
           color: isError ? _white.withValues(alpha: 0.15) : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
-          border: isError ? Border.all(color: _white.withValues(alpha: 0.4), width: 1) : null,
+          border: isError
+              ? Border.all(color: _white.withValues(alpha: 0.4), width: 1)
+              : null,
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -3890,7 +4232,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             ),
             const SizedBox(width: 6),
             Text(
-              isError ? 'Fingerprint issue? Contact Admin' : 'Having trouble? Contact Admin',
+              isError
+                  ? 'Fingerprint issue? Contact Admin'
+                  : 'Having trouble? Contact Admin',
               style: TextStyle(
                 color: isError ? _white : _white.withValues(alpha: 0.72),
                 fontSize: 12,
