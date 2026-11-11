@@ -1,7 +1,5 @@
 // lib/screens/landing_screen.dart
-// v2.6.1: 🎭 TEMPORARY — Demo Mode now goes DIRECT to demo dashboard
-//         → DemoRequestScreen navigation is COMMENTED OUT for now
-//         → Direct navigation to MainScreen with a demo employee
+// v2.6.2: 🧹 Removed Demo Mode button and all related code
 //         🔒 All security features preserved (session lock, hidden admin, etc.)
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -15,11 +13,8 @@ import '../models/employee.dart';
 import '../services/security_hardening_service.dart';
 import '../services/security_service.dart';
 import '../services/session_lock_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 needed for startDemoSession()
 import '../widgets/bootstrap_grid.dart';
 import 'admin_login_screen.dart';
-// 🔕 TEMPORARY: DemoRequestScreen is commented out for direct demo flow
-// import 'demo_request_screen.dart'; // 🆕
 import 'login_screen.dart';
 import 'main_screen.dart';
 
@@ -71,10 +66,6 @@ class _T {
 
   static const Color shieldBg = Color(0xFF0C0C0E);
   static const Color danger = Color(0xFFDC2626);
-
-  // 🎭 DEMO — orange gradient (matches app theme)
-  static const Color demoGradStart = Color(0xFFFF8A00);
-  static const Color demoGradEnd = Color(0xFFF54900);
 }
 
 class _ThemeColors {
@@ -82,16 +73,16 @@ class _ThemeColors {
   const _ThemeColors(this.isDark);
 
   Color get heroBgStart =>
-      isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
+  isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
   Color get heroBgEnd =>
-      isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
+  isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
 
   Color get heroTitle => isDark ? Colors.white : const Color(0xFF000000);
   Color get heroDesc =>
-      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF3F3F46);
+  isDark ? const Color(0xFFB0B0B0) : const Color(0xFF3F3F46);
 
   Color get scaffoldBg =>
-      isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
+  isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
 
   double get watermarkOpacity => isDark ? 0.15 : 0.80;
 }
@@ -103,7 +94,7 @@ class LandingScreen extends StatefulWidget {
 }
 
 class _LandingScreenState extends State<LandingScreen>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
 
@@ -200,11 +191,11 @@ class _LandingScreenState extends State<LandingScreen>
 
     try {
       _connectivitySub =
-          ConnectivityService.instance.onStatusChange.listen((online) {
-            if (!mounted) return;
-            setState(() => _isOnline = online);
-            _secureLog('🔌 Connectivity changed: online=$online');
-          });
+      ConnectivityService.instance.onStatusChange.listen((online) {
+        if (!mounted) return;
+        setState(() => _isOnline = online);
+        _secureLog('🔌 Connectivity changed: online=$online');
+      });
     } catch (e) {
       _secureLog('⚠️ connectivity listen error: $e');
     }
@@ -231,7 +222,7 @@ class _LandingScreenState extends State<LandingScreen>
         await prefs.remove('force_show_landing');
         await prefs.remove('force_show_landing_at');
         _secureLog('🚪 force_show_landing flag SET — '
-            'skipping session restore (snap/forced logout)');
+        'skipping session restore (snap/forced logout)');
         if (mounted) setState(() => _checkingSession = false);
         return;
       }
@@ -244,7 +235,7 @@ class _LandingScreenState extends State<LandingScreen>
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map && args['skipSessionRestore'] == true) {
         _secureLog('🚪 skipSessionRestore argument — '
-            'skipping session restore');
+        'skipping session restore');
         if (mounted) setState(() => _checkingSession = false);
         return;
       }
@@ -264,7 +255,7 @@ class _LandingScreenState extends State<LandingScreen>
       _deviceCompromised = !ok;
       if (!ok) {
         _secureLog('🚨 Device compromised: '
-            '${SecurityHardeningService.instance.integrityIssues.join(",")}');
+        '${SecurityHardeningService.instance.integrityIssues.join(",")}');
       }
     } catch (e) {
       _secureLog('Integrity check failed: $e');
@@ -292,8 +283,8 @@ class _LandingScreenState extends State<LandingScreen>
 
     try {
       _sessionSub = SessionLockService.instance
-          .watchSession(employeeId)
-          .listen((snap) async {
+      .watchSession(employeeId)
+      .listen((snap) async {
         if (!mounted) return;
         final data = snap.data();
         if (data == null) return;
@@ -380,7 +371,7 @@ class _LandingScreenState extends State<LandingScreen>
               ),
               alignment: Alignment.center,
               child: const Icon(Icons.logout_rounded,
-                  color: Colors.red, size: 20),
+                                color: Colors.red, size: 20),
             ),
             const SizedBox(width: 12),
             const Expanded(
@@ -397,11 +388,11 @@ class _LandingScreenState extends State<LandingScreen>
         ),
         content: Text(
           reason.isEmpty
-              ? 'Your session has ended.\n\n'
-              'Another device may have signed in with the same account, '
-              'or an administrator has revoked your access.'
-              : 'Your session has ended.\n\nReason: $reason',
-          style: const TextStyle(fontSize: 13, height: 1.5),
+          ? 'Your session has ended.\n\n'
+        'Another device may have signed in with the same account, '
+        'or an administrator has revoked your access.'
+        : 'Your session has ended.\n\nReason: $reason',
+        style: const TextStyle(fontSize: 13, height: 1.5),
         ),
         actions: [
           SizedBox(
@@ -411,25 +402,25 @@ class _LandingScreenState extends State<LandingScreen>
                 Navigator.of(ctx).pop();
                 if (!mounted) return;
                 Navigator.of(context, rootNavigator: true)
-                    .pushAndRemoveUntil(
+                .pushAndRemoveUntil(
                   MaterialPageRoute(
-                      builder: (_) => const LandingScreen()),
-                      (_) => false,
+                    builder: (_) => const LandingScreen()),
+                    (_) => false,
                 );
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: _T.ctaSolid,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  elevation: 0,
               ),
               child: const Text(
                 'OK',
                 style: TextStyle(
-                    fontWeight: FontWeight.w700, letterSpacing: 0.3),
+                  fontWeight: FontWeight.w700, letterSpacing: 0.3),
               ),
             ),
           ),
@@ -450,8 +441,8 @@ class _LandingScreenState extends State<LandingScreen>
       String? empId;
       try {
         empId = await SecurityHardeningService.instance
-            .getCurrentEmployeeId()
-            .timeout(const Duration(seconds: 5));
+        .getCurrentEmployeeId()
+        .timeout(const Duration(seconds: 5));
       } catch (e) {
         _secureLog('Session token check failed: $e');
       }
@@ -459,122 +450,122 @@ class _LandingScreenState extends State<LandingScreen>
       if (empId == null || empId.isEmpty) {
         try {
           empId = await SecurityService.instance
-              .getCurrentEmployeeId()
-              .timeout(const Duration(seconds: 5));
+          .getCurrentEmployeeId()
+          .timeout(const Duration(seconds: 5));
         } catch (_) {}
       }
 
       if ((empId == null || empId.isEmpty) &&
-          FirebaseAuth.instance.currentUser != null) {
+        FirebaseAuth.instance.currentUser != null) {
         try {
           final authUser = FirebaseAuth.instance.currentUser!;
           final snap = await FirebaseFirestore.instance
-              .collection('employees')
-              .where('authUid', isEqualTo: authUser.uid)
-              .limit(1)
-              .get()
-              .timeout(const Duration(seconds: 5));
+          .collection('employees')
+          .where('authUid', isEqualTo: authUser.uid)
+          .limit(1)
+          .get()
+          .timeout(const Duration(seconds: 5));
           if (snap.docs.isNotEmpty) {
             empId = snap.docs.first.id;
           }
         } catch (_) {}
-      }
-
-      if (empId == null || empId.isEmpty) {
-        _secureLog('❌ No existing session');
-        if (mounted) setState(() => _checkingSession = false);
-        return;
-      }
-
-      _secureLog('✅ Session found: $empId — loading employee');
-      Employee? employee;
-      String status = '';
-      bool? isActive;
-
-      try {
-        final doc = await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(empId)
-            .get()
-            .timeout(const Duration(seconds: 8));
-
-        if (doc.exists) {
-          final data = doc.data();
-          if (data != null) {
-            status = (data['status'] ?? '').toString().toLowerCase().trim();
-            isActive = data['isActive'];
-            employee = _docToEmployee(doc);
-          }
         }
-      } catch (e) {
-        _secureLog('Employee load failed: $e');
-      }
 
-      if (employee == null) {
-        _secureLog('❌ Employee doc not found — clearing session');
+        if (empId == null || empId.isEmpty) {
+          _secureLog('❌ No existing session');
+          if (mounted) setState(() => _checkingSession = false);
+          return;
+        }
+
+        _secureLog('✅ Session found: $empId — loading employee');
+        Employee? employee;
+        String status = '';
+        bool? isActive;
+
         try {
-          await SecurityHardeningService.instance.clearSession();
-        } catch (_) {}
-        if (mounted) setState(() => _checkingSession = false);
-        return;
-      }
+          final doc = await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(empId)
+          .get()
+          .timeout(const Duration(seconds: 8));
 
-      const blocked = {
-        'suspended',
-        'terminated',
-        'deleted',
-        'blocked',
-        'archived',
-      };
+          if (doc.exists) {
+            final data = doc.data();
+            if (data != null) {
+              status = (data['status'] ?? '').toString().toLowerCase().trim();
+              isActive = data['isActive'];
+              employee = _docToEmployee(doc);
+            }
+          }
+        } catch (e) {
+          _secureLog('Employee load failed: $e');
+        }
 
-      if (blocked.contains(status) || isActive == false) {
-        _secureLog('🚫 Account blocked: $status — clearing session');
-        await _logSecurityEvent(
-          type: 'landing_blocked_account',
-          severity: 'high',
-          details: 'Blocked account attempted auto-login: $status',
-        );
-        try {
-          await SecurityHardeningService.instance.clearSession();
-          await FirebaseAuth.instance.signOut();
-        } catch (_) {}
-        if (mounted) setState(() => _checkingSession = false);
-        return;
-      }
-
-      try {
-        final lockCheck = await SessionLockService.instance.checkLock(
-          employeeId: employee.id,
-          deviceBindingOverride: _deviceBinding,
-        );
-
-        if (lockCheck.isLocked) {
-          _secureLog('🔒 Session locked by another device — '
-              'clearing local session');
-          await _logSecurityEvent(
-            type: 'landing_auto_redirect_blocked',
-            severity: 'high',
-            details: 'Auto-redirect blocked: active on '
-                '${lockCheck.otherDeviceModel}',
-          );
+        if (employee == null) {
+          _secureLog('❌ Employee doc not found — clearing session');
           try {
             await SecurityHardeningService.instance.clearSession();
-            await SecurityService.instance.clearSession();
-            await FirebaseAuth.instance.signOut();
-          } catch (_) {}
-          try {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setBool('force_show_landing', true);
           } catch (_) {}
           if (mounted) setState(() => _checkingSession = false);
           return;
         }
-      } catch (e) {
-        _secureLog('⚠️ Session lock check failed: $e — proceeding');
-      }
 
-      if (!mounted) return;
-      _autoRedirecting = true;
+        const blocked = {
+          'suspended',
+          'terminated',
+          'deleted',
+          'blocked',
+          'archived',
+        };
+
+        if (blocked.contains(status) || isActive == false) {
+          _secureLog('🚫 Account blocked: $status — clearing session');
+          await _logSecurityEvent(
+            type: 'landing_blocked_account',
+            severity: 'high',
+            details: 'Blocked account attempted auto-login: $status',
+          );
+          try {
+            await SecurityHardeningService.instance.clearSession();
+            await FirebaseAuth.instance.signOut();
+          } catch (_) {}
+          if (mounted) setState(() => _checkingSession = false);
+          return;
+        }
+
+        try {
+          final lockCheck = await SessionLockService.instance.checkLock(
+            employeeId: employee.id,
+            deviceBindingOverride: _deviceBinding,
+          );
+
+          if (lockCheck.isLocked) {
+            _secureLog('🔒 Session locked by another device — '
+            'clearing local session');
+            await _logSecurityEvent(
+              type: 'landing_auto_redirect_blocked',
+              severity: 'high',
+              details: 'Auto-redirect blocked: active on '
+            '${lockCheck.otherDeviceModel}',
+            );
+            try {
+              await SecurityHardeningService.instance.clearSession();
+              await SecurityService.instance.clearSession();
+              await FirebaseAuth.instance.signOut();
+            } catch (_) {}
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('force_show_landing', true);
+            } catch (_) {}
+            if (mounted) setState(() => _checkingSession = false);
+            return;
+          }
+        } catch (e) {
+          _secureLog('⚠️ Session lock check failed: $e — proceeding');
+        }
+
+        if (!mounted) return;
+        _autoRedirecting = true;
       _secureLog('➡️ Auto-redirecting to dashboard');
 
       _startSessionLockWatch(employee.id);
@@ -623,13 +614,13 @@ class _LandingScreenState extends State<LandingScreen>
       'nfc_tag_id': data['nfcTagId'],
       'is_active': data['status'] == 'active' ? 1 : 0,
       'created_at': (data['createdAt'] as Timestamp?)
-          ?.toDate()
-          .toIso8601String() ??
-          DateTime.now().toIso8601String(),
+      ?.toDate()
+      .toIso8601String() ??
+      DateTime.now().toIso8601String(),
       'updated_at': (data['updatedAt'] as Timestamp?)
-          ?.toDate()
-          .toIso8601String() ??
-          DateTime.now().toIso8601String(),
+      ?.toDate()
+      .toIso8601String() ??
+      DateTime.now().toIso8601String(),
     });
   }
 
@@ -648,8 +639,8 @@ class _LandingScreenState extends State<LandingScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final shouldObscure = state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden;
+    state == AppLifecycleState.paused ||
+    state == AppLifecycleState.hidden;
     if (shouldObscure != _obscureContent && mounted) {
       setState(() => _obscureContent = shouldObscure);
     }
@@ -661,31 +652,31 @@ class _LandingScreenState extends State<LandingScreen>
   void _showOfflineSnack(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.cloud_off_rounded,
-                  color: Colors.white, size: 18),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  message,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: _T.danger,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 3),
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.cloud_off_rounded,
+                       color: Colors.white, size: 18),
+                     const SizedBox(width: 10),
+                     Expanded(
+                       child: Text(
+                         message,
+                         style: const TextStyle(fontWeight: FontWeight.w600),
+                       ),
+                     ),
+          ],
         ),
-      );
+        backgroundColor: _T.danger,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -695,13 +686,13 @@ class _LandingScreenState extends State<LandingScreen>
     final now = DateTime.now();
 
     if (_lastNavAttempt != null &&
-        now.difference(_lastNavAttempt!) < _navCooldown) {
+      now.difference(_lastNavAttempt!) < _navCooldown) {
       _secureLog('Login nav throttled');
-      return;
-    }
+    return;
+      }
 
-    if (_isNavigating) return;
-    _isNavigating = true;
+      if (_isNavigating) return;
+      _isNavigating = true;
     _lastNavAttempt = now;
 
     try {
@@ -711,7 +702,7 @@ class _LandingScreenState extends State<LandingScreen>
 
       if (!online) {
         _showOfflineSnack(
-            'Internet connection is required to log in.');
+          'Internet connection is required to log in.');
         return;
       }
 
@@ -726,158 +717,6 @@ class _LandingScreenState extends State<LandingScreen>
     } finally {
       if (mounted) _isNavigating = false;
     }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🎭 DEMO MODE — DIRECT NAVIGATION (TEMPORARY)
-  //
-  // 🔕 NOTE: Date, nagre-require ng admin-approved access code via
-  //          DemoRequestScreen. Temporarily COMMENTED OUT para mabilis
-  //          ang demo flow during development/testing.
-  //
-  //   When ready to restore the approval flow, just:
-  //     1. Uncomment `import 'demo_request_screen.dart';` sa taas
-  //     2. Uncomment ang navigation block sa `_openDemoMode()` sa baba
-  //     3. Remove / comment out ang `_startDemoDirect()` call
-  // ═══════════════════════════════════════════════════════════════════════
-  Future<void> _openDemoMode() async {
-    if (_isNavigating) return;
-    final now = DateTime.now();
-    if (_lastNavAttempt != null &&
-        now.difference(_lastNavAttempt!) < _navCooldown) {
-      _secureLog('🎭 Demo nav throttled');
-      return;
-    }
-
-    final online = _isOnlineSafely();
-    _secureLog('🎭 Demo tap — online=$online');
-
-    if (!online) {
-      _showOfflineSnack(
-          'Internet connection is required for Demo Mode.');
-      _secureLog('🎭 Demo BLOCKED — no internet connection');
-      return;
-    }
-
-    _isNavigating = true;
-    _lastNavAttempt = now;
-
-    try {
-      if (!kIsWeb) {
-        try {
-          HapticFeedback.mediumImpact();
-        } catch (_) {}
-      }
-
-      try {
-        await _logSecurityEvent(
-          type: 'demo_mode_started',
-          severity: 'info',
-          details: 'User started demo mode (direct — no approval gate)',
-        );
-      } catch (_) {}
-
-      if (!mounted) return;
-
-      // 🔕 ORIGINAL FLOW (COMMENTED OUT) — admin-approved access code
-      // await Navigator.of(context, rootNavigator: true).push(
-      //   MaterialPageRoute(
-      //     builder: (_) => const DemoRequestScreen(),
-      //     settings: const RouteSettings(name: '/demo-request'),
-      //   ),
-      // );
-
-      // ✅ TEMPORARY DIRECT FLOW — go straight to demo dashboard
-      await _startDemoDirect();
-    } catch (e) {
-      _secureLog('Demo nav error: $e');
-    } finally {
-      if (mounted) _isNavigating = false;
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🎭 DIRECT DEMO START (TEMPORARY — bypasses DemoRequestScreen)
-  //
-  //   TODO: Kapag ready na ang DemoModeService, palitan ito ng:
-  //     final demoEmployee =
-  //         await DemoModeService.instance.startDemoSession();
-  //     ...navigate to MainScreen(demoEmployee)...
-  //
-  //   For now, nag-build lang tayo ng local demo employee para
-  //   direkta na makapasok sa dashboard without any Firestore call.
-  // ═══════════════════════════════════════════════════════════════════════
-  Future<void> _startDemoDirect() async {
-    try {
-      // 🎭 CRITICAL: Enable DemoModeService BEFORE navigation so that
-      //    downstream screens (LoginScreen, ClockScreen, BiometricMethodScreen,
-      //    etc.) recognize we're in demo mode. Without this, LoginScreen
-      //    falls back to REAL PIN validation and errors on any 4-digit PIN.
-      try {
-        await DemoModeService.instance.startDemoSession();
-        _secureLog('🎭 DemoModeService.startDemoSession() OK '
-            '(isEnabled=${DemoModeService.instance.isEnabled})');
-      } catch (e) {
-        _secureLog('⚠️ DemoModeService.startDemoSession failed: $e');
-      }
-
-      if (!mounted) return;
-
-      // 🎭 FIX: Go through LoginScreen — the user still needs to "log in"
-      //    (tap Use PIN → any 4-digit works in demo, or tap Key Fob, etc.)
-      //    instead of skipping straight to the dashboard.
-      //
-      //    Flow: LandingScreen → LoginScreen (demo) →
-      //          BiometricMethodScreen → MainScreen (Dashboard)
-      _secureLog('🎭 Demo — navigating to LoginScreen (demo mode active)');
-
-      await Navigator.of(context, rootNavigator: true).push(
-        MaterialPageRoute<void>(
-          builder: (_) => const LoginScreen(),
-          settings: const RouteSettings(name: '/demo-login'),
-        ),
-      );
-
-      _secureLog('🎭 Demo session ended — returned to landing');
-    } catch (e) {
-      _secureLog('⚠️ Demo start failed: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Unable to start demo. Please try again.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
-
-  /// 🎭 Local-only demo employee (no Firestore dependency).
-  ///    Fields mirror the shape produced by `_docToEmployee()` so
-  ///    downstream screens parse it consistently.
-  Employee _buildDemoEmployee() {
-    final now = DateTime.now().toIso8601String();
-    return Employee.fromMap({
-      'id': 'demo_employee_local',
-      'employee_id': 'DEMO-0001',
-      'first_name': 'John',
-      'last_name': 'Howard',
-      'full_name': 'John Howard',
-      'email': 'demo@racoma.local',
-      'role': 'Employee',
-      'department': 'Demo',
-      'position': 'Demo User',
-      'phone': null,
-      'photo_path': null,
-      'photo_url': null,
-      'face_embedding': null,
-      'fingerprint_hash': null,
-      'pin_hash': null,
-      'pin_salt': null,
-      'nfc_tag_id': null,
-      'is_active': 1,
-      'created_at': now,
-      'updated_at': now,
-    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -911,24 +750,24 @@ class _LandingScreenState extends State<LandingScreen>
     final now = DateTime.now();
 
     if (_firstLogoTapTime != null &&
-        now.difference(_firstLogoTapTime!) > _logoTapResetWindow) {
+      now.difference(_firstLogoTapTime!) > _logoTapResetWindow) {
       _logoTapCount = 0;
-      _firstLogoTapTime = null;
-    }
+    _firstLogoTapTime = null;
+      }
 
-    if (_logoTapCount == 0) {
-      _firstLogoTapTime = now;
-    }
+      if (_logoTapCount == 0) {
+        _firstLogoTapTime = now;
+      }
 
-    _logoTapCount++;
-    _secureLog('👆 Logo tap $_logoTapCount/$_logoTapRequired');
+      _logoTapCount++;
+      _secureLog('👆 Logo tap $_logoTapCount/$_logoTapRequired');
 
-    if (_logoTapCount >= _logoTapRequired) {
-      _logoTapCount = 0;
-      _firstLogoTapTime = null;
-      _secureLog('🎯 5-tap secret triggered — opening admin login');
-      unawaited(_openAdminLogin());
-    }
+      if (_logoTapCount >= _logoTapRequired) {
+        _logoTapCount = 0;
+        _firstLogoTapTime = null;
+        _secureLog('🎯 5-tap secret triggered — opening admin login');
+        unawaited(_openAdminLogin());
+      }
   }
 
   Future<Duration?> _checkAdminLockout() async {
@@ -957,7 +796,7 @@ class _LandingScreenState extends State<LandingScreen>
       if (count >= _maxAdminAttemptsBeforeLockout) {
         final until = DateTime.now().add(_adminLockoutDuration);
         await prefs.setInt(
-            _kAdminLockoutUntil, until.millisecondsSinceEpoch);
+          _kAdminLockoutUntil, until.millisecondsSinceEpoch);
         _secureLog('🚨 Admin lockout triggered after $count attempts');
 
         await _logSecurityEvent(
@@ -976,11 +815,11 @@ class _LandingScreenState extends State<LandingScreen>
 
     final now = DateTime.now();
     if (_lastAdminAttempt != null &&
-        now.difference(_lastAdminAttempt!) < _adminCooldown) {
+      now.difference(_lastAdminAttempt!) < _adminCooldown) {
       return;
-    }
+      }
 
-    final lockout = await _checkAdminLockout();
+      final lockout = await _checkAdminLockout();
     if (lockout != null) {
       _secureLog('Admin access locked out');
       _handleAdminHoldEnd();
@@ -1017,8 +856,8 @@ class _LandingScreenState extends State<LandingScreen>
       final uid = FirebaseAuth.instance.currentUser?.uid ?? 'anonymous';
 
       await FirebaseFirestore.instance
-          .collection('security_events')
-          .add({
+      .collection('security_events')
+      .add({
         'type': 'admin_access_attempt',
         'severity': 'medium',
         'details': 'Hidden admin login triggered from landing screen',
@@ -1042,8 +881,8 @@ class _LandingScreenState extends State<LandingScreen>
     try {
       if (!_isOnlineSafely()) return;
       await FirebaseFirestore.instance
-          .collection('security_events')
-          .add({
+      .collection('security_events')
+      .add({
         'type': type,
         'severity': severity,
         'details': details,
@@ -1172,14 +1011,14 @@ class _LandingScreenState extends State<LandingScreen>
                     children: [
                       _buildNavbar(useDesktop: useDesktop),
                       if (!_isOnline) _buildOfflineBanner(),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          physics: const BouncingScrollPhysics(),
-                          child: useDesktop
-                              ? _buildDesktopBody()
-                              : _buildMobileBody(tc),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            physics: const BouncingScrollPhysics(),
+                            child: useDesktop
+                            ? _buildDesktopBody()
+                            : _buildMobileBody(tc),
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ),
@@ -1209,7 +1048,7 @@ class _LandingScreenState extends State<LandingScreen>
           SizedBox(width: 8),
           Flexible(
             child: Text(
-              'No internet — connection required to log in or use demo',
+              'No internet — connection required to log in',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 12,
@@ -1335,13 +1174,13 @@ class _LandingScreenState extends State<LandingScreen>
                   child: const Row(
                     children: [
                       Icon(Icons.warning_amber_rounded,
-                          color: Colors.red, size: 12),
-                      SizedBox(width: 4),
-                      Text('UNSAFE DEVICE',
-                          style: TextStyle(
-                              color: Colors.red,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800)),
+                           color: Colors.red, size: 12),
+                           SizedBox(width: 4),
+                           Text('UNSAFE DEVICE',
+                                style: TextStyle(
+                                  color: Colors.red,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800)),
                     ],
                   ),
                 ),
@@ -1396,7 +1235,7 @@ class _LandingScreenState extends State<LandingScreen>
                   ),
                   alignment: Alignment.center,
                   child: const Icon(Icons.back_hand_rounded,
-                      color: _T.white, size: 20),
+                                    color: _T.white, size: 20),
                 ),
               ),
               const SizedBox(width: 8),
@@ -1478,16 +1317,16 @@ class _LandingScreenState extends State<LandingScreen>
             mainAxisSize: MainAxisSize.min,
             children: const [
               Icon(Icons.verified_user_rounded,
-                  color: _T.desktopBadge, size: 16),
-              SizedBox(width: 8),
-              Text(
-                'Verified Location Tracking',
-                style: TextStyle(
-                  color: _T.desktopBadge,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+                   color: _T.desktopBadge, size: 16),
+                   SizedBox(width: 8),
+                   Text(
+                     'Verified Location Tracking',
+                     style: TextStyle(
+                       color: _T.desktopBadge,
+                       fontSize: 14,
+                       fontWeight: FontWeight.w500,
+                     ),
+                   ),
             ],
           ),
         ),
@@ -1520,20 +1359,20 @@ class _LandingScreenState extends State<LandingScreen>
           width: 576,
           child: Text(
             'Seamless, location-based time tracking for modern teams. '
-                'Automatically verify when you are on-site and ready to work, '
-                'ensuring accurate logs and eliminating guesswork.',
-            style: TextStyle(
-              color: _T.desktopMuted,
-              fontSize: 18,
-              height: 1.55,
-            ),
+          'Automatically verify when you are on-site and ready to work, '
+          'ensuring accurate logs and eliminating guesswork.',
+          style: TextStyle(
+            color: _T.desktopMuted,
+            fontSize: 18,
+            height: 1.55,
+          ),
           ),
         ),
         const SizedBox(height: 48),
         Row(
           children: const [
             Icon(Icons.location_on_rounded,
-                color: _T.workZoneIcon, size: 20),
+                 color: _T.workZoneIcon, size: 20),
             SizedBox(width: 8),
             Text(
               'The Working Zone',
@@ -1550,23 +1389,18 @@ class _LandingScreenState extends State<LandingScreen>
           width: 576,
           child: Text(
             'Authorized working zones are defined geographical areas '
-                'designated for your workplace. Once you enter the perimeter, '
-                'our Live GPS system authenticates your location, enabling the '
-                'Clock In feature securely.',
-            style: TextStyle(
-              color: _T.desktopMuted,
-              fontSize: 16,
-              height: 1.55,
-            ),
+          'designated for your workplace. Once you enter the perimeter, '
+          'our Live GPS system authenticates your location, enabling the '
+          'Clock In feature securely.',
+          style: TextStyle(
+            color: _T.desktopMuted,
+            fontSize: 16,
+            height: 1.55,
+          ),
           ),
         ),
         const SizedBox(height: 32),
         _buildDesktopCTA(),
-        const SizedBox(height: 16),
-        SizedBox(
-          width: 340,
-          child: _buildDemoModeButton(),
-        ),
       ],
     );
   }
@@ -1603,7 +1437,7 @@ class _LandingScreenState extends State<LandingScreen>
               ),
               SizedBox(width: 8),
               Icon(Icons.arrow_forward_rounded,
-                  color: Colors.black, size: 18),
+                   color: Colors.black, size: 18),
             ],
           ),
         ),
@@ -1762,16 +1596,16 @@ class _LandingScreenState extends State<LandingScreen>
               mainAxisSize: MainAxisSize.min,
               children: const [
                 Icon(Icons.verified_user_rounded,
-                    color: _T.white, size: 16),
-                SizedBox(width: 8),
-                Text(
-                  'Verified Location Tracking',
-                  style: TextStyle(
-                    color: _T.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+                     color: _T.white, size: 16),
+                     SizedBox(width: 8),
+                     Text(
+                       'Verified Location Tracking',
+                       style: TextStyle(
+                         color: _T.white,
+                         fontSize: 13,
+                         fontWeight: FontWeight.w500,
+                       ),
+                     ),
               ],
             ),
           ),
@@ -1812,19 +1646,17 @@ class _LandingScreenState extends State<LandingScreen>
             alignment: Alignment.centerLeft,
             child: Text(
               'Seamless, location-based time tracking for modern teams. '
-                  'Automatically verify when you are on-site and ready to work, '
-                  'ensuring accurate logs and eliminating guesswork.',
-              style: TextStyle(
-                color: tc.heroDesc,
-                fontSize: 13.5,
-                height: 1.6,
-              ),
+            'Automatically verify when you are on-site and ready to work, '
+            'ensuring accurate logs and eliminating guesswork.',
+            style: TextStyle(
+              color: tc.heroDesc,
+              fontSize: 13.5,
+              height: 1.6,
+            ),
             ),
           ),
           const SizedBox(height: 20),
           _buildMobileCTAButton(),
-          const SizedBox(height: 12),
-          _buildDemoModeButton(),
           const SizedBox(height: 16),
         ],
       ),
@@ -1864,75 +1696,8 @@ class _LandingScreenState extends State<LandingScreen>
               ),
               SizedBox(width: 8),
               Icon(Icons.arrow_forward_rounded,
-                  color: Colors.black, size: 18),
+                   color: Colors.black, size: 18),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🎭 DEMO MODE BUTTON — dimmed kapag offline
-  // ═══════════════════════════════════════════════════════════════════════
-  Widget _buildDemoModeButton() {
-    final canTap = _isOnline;
-
-    return SizedBox(
-      width: double.infinity,
-      child: GestureDetector(
-        onTap: _openDemoMode,
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 250),
-          opacity: canTap ? 1.0 : 0.55,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            decoration: BoxDecoration(
-              gradient: canTap
-                  ? const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [_T.demoGradStart, _T.demoGradEnd],
-              )
-                  : const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF6B6B6B), Color(0xFF3F3F3F)],
-              ),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: canTap
-                  ? [
-                BoxShadow(
-                  color: _T.demoGradStart.withValues(alpha: 0.35),
-                  blurRadius: 20,
-                  offset: const Offset(0, 8),
-                ),
-              ]
-                  : [],
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  canTap
-                      ? Icons.science_rounded
-                      : Icons.cloud_off_rounded,
-                  color: Colors.white,
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  canTap ? '🎭 Try Demo Mode' : 'Demo (offline)',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                    letterSpacing: 0.3,
-                  ),
-                ),
-              ],
-            ),
           ),
         ),
       ),
@@ -1948,7 +1713,7 @@ class _LandingScreenState extends State<LandingScreen>
           Row(
             children: [
               const Icon(Icons.location_on_rounded,
-                  color: _T.workZoneIcon, size: 20),
+                         color: _T.workZoneIcon, size: 20),
               const SizedBox(width: 8),
               Text(
                 'The Working Zone',
@@ -1963,13 +1728,13 @@ class _LandingScreenState extends State<LandingScreen>
           const SizedBox(height: 10),
           Text(
             'Authorized working zones are defined geographical areas designated '
-                'for your workplace. Once you enter the perimeter, our Live GPS '
-                'system authenticates your location, enabling the Clock In feature securely.',
-            style: TextStyle(
-              color: tc.heroDesc,
-              fontSize: 13,
-              height: 1.6,
-            ),
+          'for your workplace. Once you enter the perimeter, our Live GPS '
+          'system authenticates your location, enabling the Clock In feature securely.',
+          style: TextStyle(
+            color: tc.heroDesc,
+            fontSize: 13,
+            height: 1.6,
+          ),
           ),
         ],
       ),
@@ -2179,7 +1944,7 @@ class _LandingScreenState extends State<LandingScreen>
                       shape: BoxShape.circle,
                       color: _T.iconCircleBg,
                       border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.05)),
+                        color: Colors.white.withValues(alpha: 0.05)),
                     ),
                     alignment: Alignment.center,
                     child: const Text('🏢', style: TextStyle(fontSize: 16)),
@@ -2252,7 +2017,7 @@ class _LandingScreenState extends State<LandingScreen>
                       color: Colors.black.withValues(alpha: 0.1),
                     ),
                     child: const Icon(Icons.arrow_forward_rounded,
-                        color: _T.white, size: 16),
+                                      color: _T.white, size: 16),
                   ),
                 ],
               ),
