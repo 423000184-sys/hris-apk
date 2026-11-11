@@ -817,7 +817,7 @@ class _AdminPayrollPageState extends State<AdminPayrollPage> {
                             strokeWidth: 2, color: tc.orange),
                       ),
                       const SizedBox(width: 10),
-                      Text('Kinukuha ang attendance at hours logs...',
+                      Text('Getting attendance and hours logs..',
                           style: TextStyle(fontSize: 12, color: tc.muted)),
                     ],
                   ),

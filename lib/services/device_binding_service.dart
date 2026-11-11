@@ -130,6 +130,7 @@ class DeviceBindingService {
     debugPrint('🔗 [DeviceBinding] Bound $deviceId to $employeeId');
   }
 
+
   Future<void> revokeBinding(String employeeId) async {
     await FirebaseFirestore.instance
         .collection('employees')

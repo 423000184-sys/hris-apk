@@ -1,5 +1,3 @@
-// lib/screens/admin_employees_page.dart
-// v2.2: 🎭 Demo Mode Mock Data — Actual employee records are hidden
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File;
@@ -24,9 +22,8 @@ import '../widgets/bootstrap_grid.dart';
 import '../services/face_matcher.dart';
 import '../services/admin_notification_service.dart';
 import '../services/admin_employee_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added for Demo Mode
+import '../services/demo_mode_service.dart';
 
-// ─── CONSTANTS ───
 const int kAdminAnnualLeaveTotal = 18;
 const int kAdminSickLeaveTotal = 18;
 const int kCurrentFaceVersion = 4;
@@ -46,7 +43,6 @@ double _allowancesForRole(String r) =>
 double _parseMoneyStr(String s) =>
     double.tryParse(s.replaceAll(',', '').replaceAll('₱', '').trim()) ?? 0.0;
 
-// ─── SCROLL BEHAVIOR ───
 class CustomAppScrollBehavior extends MaterialScrollBehavior {
   @override
   Set<PointerDeviceKind> get dragDevices => {
@@ -57,9 +53,6 @@ class CustomAppScrollBehavior extends MaterialScrollBehavior {
   };
 }
 
-// ══════════════════════════════════════════════════════════════
-// MAIN PAGE
-// ══════════════════════════════════════════════════════════════
 class PendingEditRestore {
   static String? docId;
   static String? newPin;
@@ -89,7 +82,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   final _scrollController = ScrollController();
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -103,7 +95,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           'unknown';
   String get _actorUid => FirebaseAuth.instance.currentUser?.uid ?? 'unknown';
 
-  // ─── EDIT CONTROLLERS ───
   final _editFirstCtrl = TextEditingController();
   final _editLastCtrl = TextEditingController();
   final _editFullNameCtrl = TextEditingController();
@@ -127,7 +118,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   String? _editPositionDropdown;
   bool _editSaving = false;
   bool _isEditingEmployee = false;
-  bool _editWfhAccess = false;
   String _editOriginalEmployeeId = '';
   String _editGender = 'male';
   bool _editPinVisible = false;
@@ -151,7 +141,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     'Operation': ['Manager', 'Broker'],
   };
 
-  // ─── ADD CONTROLLERS ───
   final _addFirstCtrl = TextEditingController();
   final _addLastCtrl = TextEditingController();
   final _addEmailCtrl = TextEditingController();
@@ -170,14 +159,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   String _addGender = 'male';
   static const List<String> _genderOptions = ['male', 'female'];
 
-  // ─── FILTERS ───
   final _filterCtrl = TextEditingController();
   String _filterText = '';
   String _department = 'All Departments';
   String _position = 'All Positions';
   String _sort = 'A-Z';
   String _fpFilter = 'All';
-  String _faceFilter = 'All'; // 🆕
+  String _faceFilter = 'All';
   int _page = 0;
   static const int _pageSize = 6;
 
@@ -189,7 +177,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   @override
   void initState() {
     super.initState();
-    debugPrint('🟢 [AdminEmployeesPage] initState — State CREATED');
+    debugPrint('[AdminEmployeesPage] initState - State CREATED');
     _filterCtrl.text = widget.searchQuery;
     _filterText = widget.searchQuery;
     _addPinCtrl.text = AdminEmployeeService.generatePin();
@@ -201,7 +189,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     }
   }
 
-  // 🎭 MOCK EMPLOYEES DATA FOR DEMO MODE
   List<Map<String, dynamic>> _getMockEmployees() {
     return [
       {
@@ -219,7 +206,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'fingerprintEnrolled': true,
         'faceEmbeddingVersion': 4,
         'faceEmbeddingsCount': 3,
-        'wfhAccess': true,
         'basicSalary': 45000.0,
         'allowances': 5000.0,
       },
@@ -238,7 +224,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'fingerprintEnrolled': false,
         'faceEmbeddingVersion': 1,
         'faceEmbeddingsCount': 0,
-        'wfhAccess': false,
         'basicSalary': 25000.0,
         'allowances': 3000.0,
       },
@@ -257,7 +242,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'fingerprintEnrolled': true,
         'faceEmbeddingVersion': 4,
         'faceEmbeddingsCount': 2,
-        'wfhAccess': false,
         'basicSalary': 16000.0,
         'allowances': 1500.0,
       },
@@ -276,7 +260,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'fingerprintEnrolled': false,
         'faceEmbeddingVersion': 4,
         'faceEmbeddingsCount': 3,
-        'wfhAccess': true,
         'basicSalary': 22000.0,
         'allowances': 2000.0,
       },
@@ -288,7 +271,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final docId = PendingEditRestore.docId;
     if (docId == null) return;
 
-    // 🎭 Use mock data if in Demo Mode, otherwise use actual widget.employees
     final source = _isDemo ? _getMockEmployees() : widget.employees;
 
     Map<String, dynamic> emp = {};
@@ -310,7 +292,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     setState(() {
       _selectedProfileEmp = emp;
       _isEditingEmployee = true;
-      _editWfhAccess = _isWfhEnabled(emp);
       _editPhotoXFile = null;
       _editPhotoBytes = null;
       if (PendingEditRestore.newPin != null) {
@@ -320,8 +301,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         _editPinSaving = false;
       }
     });
-    debugPrint('🔧 Restored edit view for $docId '
-        '(PIN: ${PendingEditRestore.newPin})');
+    debugPrint('Restored edit view for $docId (PIN: ${PendingEditRestore.newPin})');
 
     PendingEditRestore.shouldRestore = false;
     PendingEditRestore.docId = null;
@@ -342,7 +322,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
   @override
   void dispose() {
-    debugPrint('🔴 [AdminEmployeesPage] dispose — State DESTROYED');
+    debugPrint('[AdminEmployeesPage] dispose - State DESTROYED');
     _scrollController.dispose();
     for (final c in [
       _editFirstCtrl,
@@ -378,9 +358,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     super.dispose();
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // HELPERS
-  // ══════════════════════════════════════════════════════════════
   String _s(dynamic v, [String f = '—']) {
     if (v == null) return f;
     final str = v.toString().trim();
@@ -461,17 +438,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     return false;
   }
 
-  bool _isWfhEnabled(Map<String, dynamic> e) {
-    final v = e['wfhAccess'];
-    if (v is bool) return v;
-    return _s(v).toLowerCase() == 'true';
-  }
-
-  bool _canUseWfh(Map<String, dynamic> e) {
-    final r = _s(e['role'], '').toLowerCase();
-    return !(r.contains('driver') || r.contains('drayber'));
-  }
-
   bool _hasProfilePhoto(Map<String, dynamic> e) {
     final u = _s(e['photoUrl'], '');
     return u.isNotEmpty && u != '—';
@@ -484,7 +450,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   bool _hasCurrentFaceVersion(Map<String, dynamic> e) =>
       _faceVersionOf(e) == kCurrentFaceVersion && _faceCountOf(e) > 0;
 
-  // 🆕 Face enrollment helpers
   bool _isFaceEnrolled(Map<String, dynamic> e) => _hasCurrentFaceVersion(e);
 
   DateTime? _faceEnrolledAt(Map<String, dynamic> e) =>
@@ -493,9 +458,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   String _faceSourceOf(Map<String, dynamic> e) =>
       _s(e['faceEmbeddingSource'], '—');
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔐 FINGERPRINT HELPERS
-  // ═══════════════════════════════════════════════════════════════
   bool _isFingerprintEnrolled(Map<String, dynamic> e) {
     final v = e['fingerprintEnrolled'];
     if (v is bool) return v;
@@ -533,7 +495,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // 🎭 Helper to block write actions in Demo Mode
   void _demoBlock() {
     _snack('Action disabled in Demo Mode.', error: true);
   }
@@ -575,9 +536,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _editDailyRateCtrl.text = (b / kWorkingDaysPerMonth).toStringAsFixed(2);
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BUILD
-  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     if (_isEditingEmployee && _selectedProfileEmp != null) {
@@ -590,7 +548,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
     final departments = ['All Departments', ..._departmentOptions];
 
-    // 🎭 INTERCEPT DATA HERE
     final effectiveEmployees = _isDemo ? _getMockEmployees() : widget.employees;
 
     var filtered = effectiveEmployees.where((e) {
@@ -598,12 +555,10 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       final hay =
           '${_nameOf(e)} ${_s(e['role'])} ${_s(e['id'])} ${_s(e['department'])}';
 
-      // 🔐 Fingerprint filter
       final fpEnrolled = _isFingerprintEnrolled(e);
       if (_fpFilter == 'Fingerprint ✓' && !fpEnrolled) return false;
       if (_fpFilter == 'No Fingerprint' && fpEnrolled) return false;
 
-      // 🆕 Face filter
       final faceEnrolled = _isFaceEnrolled(e);
       if (_faceFilter == 'Face ✓' && !faceEnrolled) return false;
       if (_faceFilter == 'No Face' && faceEnrolled) return false;
@@ -648,7 +603,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // 🎭 DEMO BANNER
                       if (_isDemo) ...[
                         _buildDemoBanner(),
                         const SizedBox(height: 20),
@@ -675,9 +629,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🎭 DEMO BANNER
-  // ══════════════════════════════════════════════════════════════
   Widget _buildDemoBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -719,9 +670,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // HEADER
-  // ══════════════════════════════════════════════════════════════
   Widget _header(List<Map<String, dynamic>> currentEmployees) {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -816,7 +764,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
       final addBtn = ElevatedButton.icon(
         onPressed: () {
-          if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+          if (_isDemo) return _demoBlock();
           if (widget.onAddEmployee != null) {
             widget.onAddEmployee!();
           } else {
@@ -846,7 +794,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       );
 
       final wipeBtn = OutlinedButton.icon(
-        onPressed: _isDemo ? null : _confirmWipeAllLogs, // 🎭 Block in Demo
+        onPressed: _isDemo ? null : _confirmWipeAllLogs,
         style: OutlinedButton.styleFrom(
           foregroundColor: _isDemo ? tc.muted : tc.red,
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
@@ -885,9 +833,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FILTER BAR
-  // ══════════════════════════════════════════════════════════════
   Widget _filterBar(List<String> departments) {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -1057,9 +1002,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // DIRECTORY GRID
-  // ══════════════════════════════════════════════════════════════
   Widget _directoryGrid(List<Map<String, dynamic>> items) {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -1087,7 +1029,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ));
         }
       }
-      if (!_isDemo) { // 🎭 Hide Quick Invite in Demo
+      if (!_isDemo) {
         widgets.add(SizedBox(
           width: colW,
           height: cardHeight,
@@ -1106,12 +1048,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final dept = _s(emp['department'], 'General');
     final id = _s(emp['employeeId'], _s(emp['id'], 'N/A'));
     final isActive = _isActive(emp);
-    final wfh = _isWfhEnabled(emp);
-    final canWfh = _canUseWfh(emp);
     final fpEnrolled = _isFingerprintEnrolled(emp);
     final faceEnrolled = _isFaceEnrolled(emp);
-    final genderIcon =
-    _s(emp['gender'], 'male').toLowerCase() == 'female' ? '👩' : '👨';
     final docId = _s(emp['id'], '');
     final isSelected = _selectedEmpIds.contains(docId);
 
@@ -1161,7 +1099,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           Row(children: [
             Flexible(
               child: Text(
-                '$genderIcon $name',
+                name,
                 style: TextStyle(
                   fontSize: isNarrow ? 18 : 22,
                   fontWeight: FontWeight.w700,
@@ -1191,13 +1129,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             const SizedBox(width: 12),
             Expanded(child: _statBlock('EMPLOYEE ID', id)),
           ]),
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: canWfh
-                ? _wfhToggle(wfh, (v) => _setWfh(emp, v))
-                : _wfhNotApplicable(),
-          ),
         ],
       );
 
@@ -1300,12 +1231,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final dept = _s(emp['department'], 'General');
     final email = _s(emp['email'], '—');
     final isActive = _isActive(emp);
-    final wfh = _isWfhEnabled(emp);
-    final canWfh = _canUseWfh(emp);
     final fpEnrolled = _isFingerprintEnrolled(emp);
     final faceEnrolled = _isFaceEnrolled(emp);
-    final genderIcon =
-    _s(emp['gender'], 'male').toLowerCase() == 'female' ? '👩' : '👨';
     final docId = _s(emp['id'], '');
     final isSelected = _selectedEmpIds.contains(docId);
 
@@ -1358,7 +1285,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             ]),
             const SizedBox(height: 14),
             Text(
-              '$genderIcon $name',
+              name,
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
@@ -1380,12 +1307,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             const SizedBox(height: 8),
             _infoRow(Icons.email_outlined, email),
             const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: canWfh
-                  ? _wfhToggle(wfh, (v) => _setWfh(emp, v), compact: true)
-                  : _wfhNotApplicable(compact: true),
-            ),
             const Spacer(),
             Row(children: [
               Expanded(
@@ -1435,7 +1356,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         child: Icon(Icons.more_vert_rounded, color: tc.text, size: 18),
       ),
       onSelected: (v) {
-        // 🎭 Block actions in Demo Mode
         if (_isDemo && v != 'profile') return _demoBlock();
 
         if (v == 'profile') {
@@ -1452,7 +1372,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         _popupItem('profile', Icons.person_outline_rounded, 'View Profile',
             tc.text),
         _popupItem('edit', Icons.edit_outlined, 'Edit Details',
-            _isDemo ? tc.muted : tc.orange), // 🎭 Gray out in Demo
+            _isDemo ? tc.muted : tc.orange),
         if (_isFaceEnrolled(emp))
           _popupItem('reset_face', Icons.face_retouching_off_rounded,
               'Reset Face', _isDemo ? tc.muted : const Color(0xFFF59E0B)),
@@ -1695,66 +1615,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  Widget _wfhToggle(bool enabled, ValueChanged<bool> onChanged,
-      {bool compact = false}) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 10 : 12,
-        vertical: compact ? 4 : 6,
-      ),
-      decoration: BoxDecoration(
-        color: enabled ? const Color(0xFFDCFCE7) : tc.surface,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: enabled ? const Color(0xFF22C55E) : tc.border,
-        ),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(
-          enabled ? Icons.home_work_rounded : Icons.home_outlined,
-          size: compact ? 14 : 15,
-          color: enabled ? const Color(0xFF166534) : tc.muted,
-        ),
-        const SizedBox(width: 6),
-        Text(
-          enabled ? 'WFH: ON' : 'WFH: OFF',
-          style: TextStyle(
-            fontSize: compact ? 11 : 12,
-            fontWeight: FontWeight.w700,
-            color: enabled ? const Color(0xFF166534) : tc.muted,
-          ),
-        ),
-        const SizedBox(width: 4),
-        Transform.scale(
-          scale: compact ? 0.65 : 0.72,
-          child: Switch(
-            value: enabled,
-            onChanged: _isDemo ? null : onChanged, // 🎭 Disable toggle in Demo
-            activeThumbColor: const Color(0xFF22C55E),
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-        ),
-      ]),
-    );
-  }
-
-  Widget _wfhNotApplicable({bool compact = false}) => Container(
-    padding: EdgeInsets.symmetric(
-      horizontal: compact ? 8 : 10,
-      vertical: compact ? 6 : 8,
-    ),
-    decoration: BoxDecoration(
-      color: tc.surface,
-      borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: tc.border),
-    ),
-    child: Icon(
-      Icons.no_transfer_rounded,
-      size: compact ? 14 : 16,
-      color: tc.muted,
-    ),
-  );
-
   Widget _quickInviteCard() => Container(
     decoration: BoxDecoration(
       color: tc.card,
@@ -1891,9 +1751,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ADD EMPLOYEE
-  // ══════════════════════════════════════════════════════════════
   Widget _buildAddPage() {
     return Container(
       color: tc.background,
@@ -1999,7 +1856,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'JPG, PNG — max 2MB',
+                  'JPG, PNG - max 2MB',
                   style: TextStyle(fontSize: 11, color: tc.muted),
                 ),
               ],
@@ -2017,7 +1874,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         ),
         const SizedBox(height: 8),
         Text(
-          'This photo will be converted into a facial template. Kapag nag-scan ang employee sa mobile app, ito ang paghahambingan ng kanilang mukha.',
+          'This photo will be converted into a facial template. When the employee scans in the mobile app, their face will be compared to this.',
           style: TextStyle(fontSize: 13, color: tc.muted, height: 1.5),
         ),
       ],
@@ -2171,7 +2028,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'The 4-digit PIN is auto-generated & stored as a salted hash. Tap "Regenerate" for a new one. It will be saved automatically on submit.',
+                  'The 4-digit PIN is auto-generated and stored as a salted hash. Tap "Regenerate" for a new one. It will be saved automatically on submit.',
                   style: TextStyle(fontSize: 12, color: tc.muted, height: 1.4),
                 ),
               ),
@@ -2191,7 +2048,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
-                  'Fingerprint registration ay gagawin ng employee sa mobile app sa unang pag-login. Hindi kailangang i-set up dito.',
+                  'Fingerprint registration will be done by the employee in the mobile app on their first login. It does not need to be set up here.',
                   style: TextStyle(
                       fontSize: 12,
                       color: Color(0xFF1E40AF),
@@ -2214,7 +2071,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
-                  'Face enrollment ay AWTOMATIKO rin sa mobile app sa unang login. 3 shots + liveness check.',
+                  'Face enrollment is also AUTOMATIC in the mobile app on first login. 3 shots + liveness check.',
                   style: TextStyle(
                       fontSize: 12,
                       color: Color(0xFF166534),
@@ -2284,7 +2141,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   Future<void> _submitAdd() async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final firstName =
     AdminEmployeeService.sanitize(_addFirstCtrl.text, maxLen: 50);
@@ -2301,12 +2158,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     }
     final emailErr = AdminEmployeeService.validateEmail(email);
     if (emailErr != null) {
-      _snack('❌ $emailErr', error: true);
+      _snack('Error: $emailErr', error: true);
       return;
     }
     final idErr = AdminEmployeeService.validateEmployeeId(empId);
     if (idErr != null) {
-      _snack('❌ $idErr', error: true);
+      _snack('Error: $idErr', error: true);
       return;
     }
     if (_addDepartmentDropdown == null || _addDeptCtrl.text.isEmpty) {
@@ -2343,11 +2200,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       if (!mounted) return;
 
       if (err != null) {
-        _snack('❌ $err', error: true);
+        _snack('Error: $err', error: true);
         return;
       }
 
-      _snack('✅ Employee added. PIN copied to clipboard.');
+      _snack('Employee added. PIN copied to clipboard.');
       await Clipboard.setData(ClipboardData(text: plainPin));
 
       for (final c in [
@@ -2385,7 +2242,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       _addPinJustGenerated = true;
       _addPinVisible = true;
     });
-    _snack('🎲 New PIN generated. Tap 👁 to reveal, then copy.');
+    _snack('New PIN generated. Tap the eye icon to reveal, then copy.');
   }
 
   Widget _input(
@@ -2441,7 +2298,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       VoidCallback onToggle,
       VoidCallback onRegen,
       ) {
-    // 🆕 Para malaman kung may laman ba ang PIN bago i-enable ang 👁 at 📋
     final hasPin = controller.text.trim().isNotEmpty;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
@@ -2532,13 +2388,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             suffixIcon: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 👁 EYE ICON — toggles show/hide.
-                //   Disabled (gray) kapag walang PIN.
                 IconButton(
                   onPressed: hasPin ? onToggle : null,
                   tooltip: hasPin
                       ? (visible ? 'Hide PIN' : 'Show PIN')
-                      : 'No PIN saved — tap Regenerate',
+                      : 'No PIN saved - tap Regenerate',
                   icon: Icon(
                     visible
                         ? Icons.visibility_rounded
@@ -2548,14 +2402,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   ),
                   splashRadius: 18,
                 ),
-                // 📋 COPY ICON — disabled kapag walang PIN.
                 IconButton(
                   onPressed: hasPin
                       ? () {
                     final p = controller.text.trim();
                     if (p.isEmpty) return;
                     Clipboard.setData(ClipboardData(text: p));
-                    _snack('📋 PIN copied to clipboard.');
+                    _snack('PIN copied to clipboard.');
                   }
                       : null,
                   tooltip: hasPin ? 'Copy PIN' : 'No PIN to copy',
@@ -2584,9 +2437,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           child: Text(
             hasPin
                 ? (justGenerated
-                ? 'Bagong PIN — i-tap ang 👁 para makita'
-                : 'Naka-save na PIN — i-tap ang 👁 para makita')
-                : 'Walang naka-save na PIN — i-tap ang Regenerate',
+                ? 'New PIN - tap the eye icon to view'
+                : 'Saved PIN - tap the eye icon to view')
+                : 'No saved PIN - tap Regenerate',
             style: TextStyle(
               fontSize: 10,
               color: hasPin ? tc.orange : tc.muted,
@@ -2633,7 +2486,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             items: _genderOptions
                 .map((g) => DropdownMenuItem<String>(
               value: g,
-              child: Text(g == 'male' ? '👨 Male' : '👩 Female'),
+              child: Text(g == 'male' ? 'Male' : 'Female'),
             ))
                 .toList(),
             onChanged: (v) => setState(() => _addGender = v ?? 'male'),
@@ -2762,17 +2615,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     ]);
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // EDIT EMPLOYEE
-  // ══════════════════════════════════════════════════════════════
   void _openEdit(Map<String, dynamic> emp) {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     _initEditControllers(emp);
     setState(() {
       _selectedProfileEmp = emp;
       _isEditingEmployee = true;
-      _editWfhAccess = _isWfhEnabled(emp);
       _editPhotoXFile = null;
       _editPhotoBytes = null;
     });
@@ -2839,7 +2688,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   Widget _buildEditPage(Map<String, dynamic> emp) {
-    final canWfh = _canUseWfh(emp);
     return Container(
       color: tc.background,
       child: SingleChildScrollView(
@@ -2885,7 +2733,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     const SizedBox(height: 16),
                     _editSalaryCard(),
                     const SizedBox(height: 16),
-                    _editBiometricCard(canWfh),
+                    _editBiometricCard(),
                     const SizedBox(height: 16),
                     _editActions(emp),
                   ]);
@@ -3011,7 +2859,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Profile photo — ginagamit bilang reference para sa facial recognition ng employee.',
+            'Profile photo - used as a reference for the employee\'s facial recognition.',
             style: TextStyle(fontSize: 14, color: tc.muted, height: 1.5),
           ),
           const SizedBox(height: 16),
@@ -3187,7 +3035,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ]),
           const SizedBox(height: 6),
           Text(
-            'Basic & Allowances are bounded to ₱5,000–500,000 basic, ₱0–100,000 allowance.',
+            'Basic & Allowances are bounded to 5,000-500,000 basic, 0-100,000 allowance.',
             style: TextStyle(fontSize: 12, color: tc.muted, height: 1.4),
           ),
           const SizedBox(height: 16),
@@ -3244,7 +3092,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '₱${total.toStringAsFixed(2)}',
+                      'PHP ${total.toStringAsFixed(2)}',
                       style: const TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w800,
@@ -3260,12 +3108,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           LayoutBuilder(builder: (context, c) {
             final narrow = c.maxWidth < 560;
             final f1 = _editMoneyInput(
-              'BASIC SALARY (₱/month)',
+              'BASIC SALARY (/month)',
               _editBasicSalaryCtrl,
               onChanged: () => setState(_recomputeDailyRate),
             );
             final f2 = _editMoneyInput(
-              'ALLOWANCES (₱/month)',
+              'ALLOWANCES (/month)',
               _editAllowancesCtrl,
               onChanged: () => setState(() {}),
             );
@@ -3375,7 +3223,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           Padding(
             padding: const EdgeInsets.only(left: 16),
             child: Text(
-              '₱ ',
+              'PHP ',
               style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
@@ -3419,7 +3267,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Text(
-            'DAILY RATE (₱/day)',
+            'DAILY RATE (/day)',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w700,
@@ -3456,7 +3304,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ),
           child: Row(children: [
             Text(
-              '₱ ',
+              'PHP ',
               style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.bold,
@@ -3557,7 +3405,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               items: _genderOptions
                   .map((g) => DropdownMenuItem<String>(
                 value: g,
-                child: Text(g == 'male' ? '👨 Male' : '👩 Female'),
+                child: Text(g == 'male' ? 'Male' : 'Female'),
               ))
                   .toList(),
               onChanged: (v) => setState(() => _editGender = v ?? 'male'),
@@ -3753,7 +3601,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     ]);
   }
 
-  Widget _editBiometricCard(bool canWfh) {
+  Widget _editBiometricCard() {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -3814,73 +3662,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   maxLen: 60),
             ]);
           }),
-          if (canWfh) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: _editWfhAccess ? const Color(0xFFDCFCE7) : tc.surface,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color:
-                  _editWfhAccess ? const Color(0xFF22C55E) : tc.border,
-                ),
-              ),
-              child: Row(children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: _editWfhAccess
-                        ? const Color(0xFF22C55E)
-                        : tc.muted.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    _editWfhAccess
-                        ? Icons.home_work_rounded
-                        : Icons.home_outlined,
-                    color: _editWfhAccess ? Colors.white : tc.muted,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Work From Home Access',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: tc.text,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _editWfhAccess
-                            ? 'ON — Employee can clock in outside office geofence.'
-                            : 'OFF — Employee must be inside office geofence.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _editWfhAccess
-                              ? const Color(0xFF166534)
-                              : tc.muted,
-                          height: 1.4,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Switch(
-                  value: _editWfhAccess,
-                  onChanged: (v) => setState(() => _editWfhAccess = v),
-                  activeThumbColor: const Color(0xFF22C55E),
-                ),
-              ]),
-            ),
-          ],
           const SizedBox(height: 14),
           _editFingerprintInfoCard(_selectedProfileEmp),
           const SizedBox(height: 12),
@@ -3935,8 +3716,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               const SizedBox(height: 3),
               Text(
                 enrolled
-                    ? '${enrolledAt != null ? _fmtDate(enrolledAt) : "—"} • $deviceModel'
-                    : 'Employee must register sa mobile app.',
+                    ? '${enrolledAt != null ? _fmtDate(enrolledAt) : "—"} - $deviceModel'
+                    : 'Employee must register in the mobile app.',
                 style: TextStyle(
                   fontSize: 11,
                   color: enrolled
@@ -4005,8 +3786,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               const SizedBox(height: 3),
               Text(
                 enrolled
-                    ? 'v$version • $count template${count == 1 ? "" : "s"} • ${enrolledAt != null ? _fmtDate(enrolledAt) : "—"}'
-                    : 'Employee must register sa mobile app.',
+                    ? 'v$version - $count template${count == 1 ? "" : "s"} - ${enrolledAt != null ? _fmtDate(enrolledAt) : "—"}'
+                    : 'Employee must register in the mobile app.',
                 style: TextStyle(
                   fontSize: 11,
                   color: enrolled
@@ -4052,7 +3833,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   Future<void> _confirmResetFingerprint(Map<String, dynamic> emp) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final docId = _s(emp['id'], '');
     if (docId.isEmpty) return;
@@ -4071,8 +3852,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           ),
         ]),
         content: Text(
-          'Mawawala ang registration ng fingerprint ni ${_nameOf(emp)}. '
-              'Kailangan niyang mag-register muli sa susunod na login.',
+          'The fingerprint registration for ${_nameOf(emp)} will be removed. '
+              'They will need to register again on their next login.',
           style: TextStyle(color: tc.text, fontSize: 13, height: 1.4),
         ),
         actions: [
@@ -4119,7 +3900,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       } catch (_) {}
 
       if (!mounted) return;
-      _snack('✅ Fingerprint reset. Employee must re-register.');
+      _snack('Fingerprint reset. Employee must re-register.');
       widget.onRefreshNeeded();
 
       setState(() {
@@ -4133,12 +3914,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       });
     } catch (e) {
       if (!mounted) return;
-      _snack('❌ Failed to reset: $e', error: true);
+      _snack('Failed to reset: $e', error: true);
     }
   }
 
   Future<void> _confirmResetFace(Map<String, dynamic> emp) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final docId = _s(emp['id'], '');
     if (docId.isEmpty) return;
@@ -4165,7 +3946,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Mawawala ang naka-register na mukha ni ${_nameOf(emp)} '
+              'The registered face data for ${_nameOf(emp)} will be removed '
                   '(v$version, $count template${count == 1 ? "" : "s"}).',
               style: TextStyle(color: tc.text, fontSize: 13, height: 1.4),
             ),
@@ -4185,8 +3966,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Sa susunod na login ng employee, awtomatikong '
-                          'sasailalim siya sa 3-shot face enrollment.',
+                      'On their next login, the employee will automatically '
+                          'undergo 3-shot face enrollment.',
                       style: TextStyle(
                           fontSize: 11,
                           color: Color(0xFF854D0E),
@@ -4250,7 +4031,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       } catch (_) {}
 
       if (!mounted) return;
-      _snack('✅ Face data reset. Employee must re-enroll on next login.');
+      _snack('Face data reset. Employee must re-enroll on next login.');
       widget.onRefreshNeeded();
 
       setState(() {
@@ -4268,7 +4049,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       });
     } catch (e) {
       if (!mounted) return;
-      _snack('❌ Failed to reset face: $e', error: true);
+      _snack('Failed to reset face: $e', error: true);
     } finally {
       if (mounted) setState(() => _editFaceResetting = false);
     }
@@ -4325,13 +4106,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       ]);
 
   Future<void> _onGenerateEditPin() async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
     if (_editPinSaving) return;
 
     final emp = _selectedProfileEmp;
     final docId = emp != null ? _s(emp['id'], '') : '';
     if (docId.isEmpty) {
-      _snack('⚠️ Employee doc ID not found.', error: true);
+      _snack('Employee doc ID not found.', error: true);
       return;
     }
 
@@ -4343,8 +4124,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         backgroundColor: tc.card,
         title: Text('Regenerate PIN?', style: TextStyle(color: tc.text)),
         content: Text(
-          'Ang lumang PIN ay hindi na gagana. Ang bagong PIN ay '
-              'ipapakita nang isang beses lamang.',
+          'The old PIN will no longer work. The new PIN will be shown only once.',
           style: TextStyle(color: tc.text, fontSize: 13),
         ),
         actions: [
@@ -4376,7 +4156,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       if (!mounted) return;
 
       if (!snap.exists) {
-        _snack('❌ Employee document not found (id: $docId).', error: true);
+        _snack('Employee document not found (id: $docId).', error: true);
         setState(() => _editPinSaving = false);
         return;
       }
@@ -4414,7 +4194,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'requiresPinChange': true,
       });
 
-      debugPrint('✅ PIN regenerated for $docId — new PIN: $newPin');
+      debugPrint('PIN regenerated for $docId - new PIN: $newPin');
 
       if (!mounted) return;
 
@@ -4436,7 +4216,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
       messenger.showSnackBar(
         SnackBar(
-          content: Text('🎲 New PIN: $newPin\nTap 📋 to copy.'),
+          content: Text('New PIN: $newPin\nTap the copy icon to copy.'),
           backgroundColor: tc.green,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(
@@ -4445,14 +4225,14 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         ),
       );
     } catch (e, st) {
-      debugPrint('❌ regenerate PIN failed: $e\n$st');
+      debugPrint('Regenerate PIN failed: $e\n$st');
       if (!mounted) return;
 
       setState(() => _editPinSaving = false);
 
       messenger.showSnackBar(
         SnackBar(
-          content: Text('❌ Failed to regenerate PIN: $e'),
+          content: Text('Failed to regenerate PIN: $e'),
           backgroundColor: tc.red,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(
@@ -4540,7 +4320,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   Future<void> _submitEdit(Map<String, dynamic> emp) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final docId = _s(emp['id'], '');
     if (docId.isEmpty) {
@@ -4563,12 +4343,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     }
     final emailErr = AdminEmployeeService.validateEmail(email);
     if (emailErr != null) {
-      _snack('❌ $emailErr', error: true);
+      _snack('Error: $emailErr', error: true);
       return;
     }
     final idErr = AdminEmployeeService.validateEmployeeId(newId);
     if (idErr != null) {
-      _snack('❌ $idErr', error: true);
+      _snack('Error: $idErr', error: true);
       return;
     }
 
@@ -4576,7 +4356,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final allow = _parseMoneyStr(_editAllowancesCtrl.text);
     final salaryErr = AdminEmployeeService.validateSalary(basic, allow);
     if (salaryErr != null) {
-      _snack('⚠️ $salaryErr', error: true);
+      _snack('Warning: $salaryErr', error: true);
       return;
     }
 
@@ -4595,8 +4375,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       final daily = basic / kWorkingDaysPerMonth;
       final total = basic + allow;
       final newRole = _editRoleCtrl.text.trim();
-      final canWfh = _canUseWfh(emp);
 
+      // Tinanggal natin ang 'birthday' dito para hindi ma-reject ng service
       final patch = <String, dynamic>{
         'firstName': firstName,
         'lastName': lastName,
@@ -4612,9 +4392,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'nfcTagId': _editKeyfobCtrl.text.trim().toUpperCase(),
         'deviceName':
         AdminEmployeeService.sanitize(_editDeviceNameCtrl.text, maxLen: 60),
-        'wfhAccess': canWfh ? _editWfhAccess : false,
-        if (_editBirthday != null)
-          'birthday': Timestamp.fromDate(_editBirthday!),
         if (uploadedPhoto != null) 'photoUrl': uploadedPhoto,
         'basicSalary': basic,
         'allowances': allow,
@@ -4631,12 +4408,23 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       };
 
       final err = await _svc.updateEmployee(docId: docId, patch: patch);
+
+      // 🆕 DITO NATIN I-SAVE ANG BIRTHDAY DIREKTA SA FIRESTORE PARA MAKALAMPAS SA WHITELIST
+      if (err == null && _editBirthday != null) {
+        try {
+          await AdminDatabase.fs.collection('employees').doc(docId).update({
+            'birthday': Timestamp.fromDate(_editBirthday!),
+          });
+        } catch (e) {
+          debugPrint('Failed to update birthday directly: $e');
+        }
+      }
       if (!mounted) return;
 
       if (err != null) {
-        _snack('❌ $err', error: true);
+        _snack('Error: $err', error: true);
       } else {
-        _snack('✅ Employee profile updated.');
+        _snack('Employee profile updated.');
         setState(() {
           _isEditingEmployee = false;
           _selectedProfileEmp = {...emp, ...patch};
@@ -4761,9 +4549,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PROFILE PAGE
-  // ══════════════════════════════════════════════════════════════
   Widget _buildProfilePage(Map<String, dynamic> emp) {
     final docId = _s(emp['id'], '');
     final name = _nameOf(emp);
@@ -4772,9 +4557,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final email = _s(emp['email'], 'No Email Registered');
     final phone = _s(emp['phone'], _s(emp['mobile'], 'No Phone Registered'));
     final empCode = _s(emp['employeeId'], docId);
-    final genderIcon = _s(emp['gender'], 'male').toLowerCase() == 'female'
-        ? '👩 Female'
-        : '👨 Male';
+    final genderLabel = _s(emp['gender'], 'male').toLowerCase() == 'female'
+        ? 'Female'
+        : 'Male';
     final joining = _fmtDate(
       emp['joiningDate'] ?? emp['createdAt'] ?? emp['created_at'],
       f: 'Not Specified',
@@ -4818,7 +4603,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 ),
                 const SizedBox(height: 24),
                 _profileTop(emp, name, role, dept, email, phone, empCode,
-                    joining, isActive, nfc, hasBio, genderIcon),
+                    joining, isActive, nfc, hasBio, genderLabel),
                 const SizedBox(height: 24),
                 _attendanceAndLeaveSection(docId, emp),
                 const SizedBox(height: 24),
@@ -5030,7 +4815,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           const SizedBox(height: 24),
           Wrap(spacing: 12, runSpacing: 12, children: [
             ElevatedButton.icon(
-              onPressed: _isDemo ? _demoBlock : () => _openEdit(emp), // 🎭 Block in Demo
+              onPressed: _isDemo ? _demoBlock : () => _openEdit(emp),
               style: ElevatedButton.styleFrom(
                 backgroundColor: _isDemo ? tc.border : tc.orange,
                 foregroundColor: Colors.white,
@@ -5107,8 +4892,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
   Widget _securityCard(Map<String, dynamic> emp, String nfc, bool hasBio) {
     final nfcOk = nfc.isNotEmpty && nfc != 'NOT ASSIGNED';
-    final wfh = _isWfhEnabled(emp);
-    final canWfh = _canUseWfh(emp);
     final hasPhoto = _hasProfilePhoto(emp);
     final version = _faceVersionOf(emp);
     final count = _faceCountOf(emp);
@@ -5161,57 +4944,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           _fingerprintStatusCard(emp),
           const SizedBox(height: 12),
           _faceStatusCard(emp),
-          const SizedBox(height: 12),
-          if (canWfh)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: wfh ? const Color(0xFFDCFCE7) : const Color(0xFFEFF4FF),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                    color: wfh ? const Color(0xFF22C55E) : tc.border),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Icon(
-                      wfh ? Icons.home_work_rounded : Icons.home_outlined,
-                      size: 18,
-                      color: wfh ? const Color(0xFF166534) : tc.muted,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'WFH ACCESS',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: wfh ? const Color(0xFF166534) : tc.muted,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ),
-                    Switch(
-                      value: wfh,
-                      onChanged: _isDemo ? null : (v) => _setWfh(emp, v), // 🎭 Block in Demo
-                      activeThumbColor: const Color(0xFF22C55E),
-                    ),
-                  ]),
-                  const SizedBox(height: 4),
-                  Text(
-                    wfh
-                        ? 'Employee can clock in even outside the office geofence.'
-                        : 'Employee must be inside the office geofence to clock in.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: wfh ? const Color(0xFF166534) : tc.muted,
-                      height: 1.4,
-                    ),
-                  ),
-                ],
-              ),
-            ),
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.all(16),
@@ -5379,7 +5111,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             Align(
               alignment: Alignment.centerRight,
               child: OutlinedButton.icon(
-                onPressed: _isDemo ? _demoBlock : () => _confirmResetFingerprint(emp), // 🎭 Block in Demo
+                onPressed: _isDemo ? _demoBlock : () => _confirmResetFingerprint(emp),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFFEF4444),
                   side: const BorderSide(color: Color(0xFFEF4444)),
@@ -5399,8 +5131,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             _fpDetailRow(
               Icons.info_outline_rounded,
               'Status',
-              'Employee must register fingerprint sa mobile app '
-                  'bago maka-clock in.',
+              'Employee must register fingerprint in the mobile app '
+                  'before clocking in.',
             ),
           ],
         ],
@@ -5534,7 +5266,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             Align(
               alignment: Alignment.centerRight,
               child: OutlinedButton.icon(
-                onPressed: _isDemo ? _demoBlock : () => _confirmResetFace(emp), // 🎭 Block in Demo
+                onPressed: _isDemo ? _demoBlock : () => _confirmResetFace(emp),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFFEF4444),
                   side: const BorderSide(color: Color(0xFFEF4444)),
@@ -5554,8 +5286,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             _fpDetailRow(
               Icons.info_outline_rounded,
               'Status',
-              'Employee must enroll face sa mobile app '
-                  'bago maka-clock in.',
+              'Employee must enroll face in the mobile app '
+                  'before clocking in.',
             ),
           ],
         ],
@@ -5680,57 +5412,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     ]);
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // WFH TOGGLE
-  // ══════════════════════════════════════════════════════════════
-  Future<void> _setWfh(Map<String, dynamic> emp, bool enabled) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
-
-    final docId = _s(emp['id'], '');
-    if (docId.isEmpty) {
-      _snack('Employee ID missing.', error: true);
-      return;
-    }
-
-    setState(() {
-      emp['wfhAccess'] = enabled;
-      if (_selectedProfileEmp != null &&
-          _s(_selectedProfileEmp!['id'], '') == docId) {
-        _selectedProfileEmp!['wfhAccess'] = enabled;
-      }
-    });
-
-    final err = await _svc.setWfhAccess(docId, enabled);
-    if (!mounted) return;
-
-    if (err != null) {
-      setState(() {
-        emp['wfhAccess'] = !enabled;
-        if (_selectedProfileEmp != null &&
-            _s(_selectedProfileEmp!['id'], '') == docId) {
-          _selectedProfileEmp!['wfhAccess'] = !enabled;
-        }
-      });
-      _snack('❌ $err', error: true);
-      return;
-    }
-
-    _snack(enabled ? '🏠 WFH ENABLED' : '🏢 WFH DISABLED');
-    try {
-      AdminNotificationService.instance.notifyWfhToggle(
-        employeeId: docId,
-        employeeName: _nameOf(emp),
-        enabled: enabled,
-      );
-    } catch (_) {}
-    widget.onRefreshNeeded();
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // STREAMS
-  // ══════════════════════════════════════════════════════════════
   Stream<List<Map<String, dynamic>>> _attendanceStream(String empId) {
-    // 🎭 In Demo Mode, return an empty stream or mock data
     if (_isDemo) return Stream.value([]);
 
     return AdminDatabase.fs
@@ -5760,7 +5442,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   Stream<List<Map<String, dynamic>>> _leaveStream(String empId) {
-    // 🎭 In Demo Mode, return an empty stream or mock data
     if (_isDemo) return Stream.value([]);
 
     return AdminDatabase.fs
@@ -5787,7 +5468,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   Stream<List<Map<String, dynamic>>> _activityStream(String empId) {
-    // 🎭 In Demo Mode, return an empty stream or mock data
     if (_isDemo) return Stream.value([]);
 
     return AdminDatabase.fs
@@ -5812,9 +5492,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ATTENDANCE UI
-  // ══════════════════════════════════════════════════════════════
   Widget _attendanceAndLeaveSection(String empId, Map<String, dynamic> emp) {
     return LayoutBuilder(builder: (context, c) {
       final stack = !BsResponsive(c.maxWidth).up(BsSize.lg);
@@ -6298,7 +5975,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 Material(
                   color: Colors.transparent,
                   child: InkWell(
-                    onTap: _isDemo ? null : () => _openLeaveCreditsDialog(emp), // 🎭 Block in Demo
+                    onTap: _isDemo ? null : () => _openLeaveCreditsDialog(emp),
                     borderRadius: BorderRadius.circular(6),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -6398,7 +6075,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     ),
                   ),
                   Text(
-                    '${stats['remainingAnnual']}A · ${stats['remainingSick']}S',
+                    '${stats['remainingAnnual']}A • ${stats['remainingSick']}S',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -6458,7 +6135,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                '${_fmtDate(p['startDate'])} – ${_fmtDate(p['endDate'])} • ${_safeInt(p['days'], 1)}d',
+                                '${_fmtDate(p['startDate'])} - ${_fmtDate(p['endDate'])} • ${_safeInt(p['days'], 1)}d',
                                 style: TextStyle(
                                     fontSize: 12, color: tc.muted),
                               ),
@@ -6583,7 +6260,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   }
 
   Future<void> _openLeaveCreditsDialog(Map<String, dynamic> emp) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final docId = _s(emp['id'], '');
     if (docId.isEmpty) return;
@@ -6652,7 +6329,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   a > 60 ||
                   s < 0 ||
                   s > 60) {
-                _snack('Enter numbers 0–60.', error: true);
+                _snack('Enter numbers 0-60.', error: true);
                 return;
               }
               Navigator.pop(context, {'annual': a, 'sick': s});
@@ -6674,7 +6351,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
     if (!mounted) return;
     if (err != null) {
-      _snack('❌ $err', error: true);
+      _snack('Error: $err', error: true);
       return;
     }
 
@@ -6687,7 +6364,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         _selectedProfileEmp!['sickLeaveTotal'] = result['sick'];
       }
     });
-    _snack('✅ Leave credits updated.');
+    _snack('Leave credits updated.');
     widget.onRefreshNeeded();
   }
 
@@ -7060,11 +6737,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     return Icons.settings_outlined;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // TERMINATE
-  // ══════════════════════════════════════════════════════════════
   void _confirmTerminate(String docId, String name) {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final reasonCtrl = TextEditingController();
     showDialog(
@@ -7080,8 +6754,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Ang $name ay ite-terminate (soft delete). Hindi na siya makakapasok, '
-                  'pero ang record ay mananatili para sa audit.',
+              '$name will be terminated (soft delete). They will no longer be able to log in, '
+                  'but the record will remain for audit purposes.',
               style: TextStyle(color: tc.text, fontSize: 13, height: 1.4),
             ),
             const SizedBox(height: 12),
@@ -7119,9 +6793,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               );
               if (!mounted) return;
               if (err != null) {
-                _snack('❌ $err', error: true);
+                _snack('Error: $err', error: true);
               } else {
-                _snack('✅ Employee terminated.');
+                _snack('Employee terminated.');
                 setState(() => _selectedProfileEmp = null);
                 widget.onRefreshNeeded();
               }
@@ -7145,9 +6819,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PDF
-  // ══════════════════════════════════════════════════════════════
   Future<void> _downloadPdf(Map<String, dynamic> emp) async {
     final pdf = pw.Document();
     final name = _nameOf(emp);
@@ -7165,9 +6836,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
     final nfc = _s(emp['nfcTagId'], 'NOT ASSIGNED');
     final status = _isActive(emp) ? 'ACTIVE' : 'INACTIVE';
-    final wfh = _canUseWfh(emp)
-        ? (_isWfhEnabled(emp) ? 'ENABLED' : 'DISABLED')
-        : 'N/A';
     final face = _hasCurrentFaceVersion(emp)
         ? 'ENROLLED (v$kCurrentFaceVersion)'
         : 'NOT ENROLLED';
@@ -7237,7 +6905,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             _pdfRow('Fingerprint', fpStatus),
             _pdfRow('NFC/Keyfob', nfc),
             _pdfRow('Device', device),
-            _pdfRow('WFH Access', wfh),
           ],
         ),
       ),
@@ -7258,11 +6925,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     ]),
   );
 
-  // ══════════════════════════════════════════════════════════════
-  // CLEAR ALL LOGS
-  // ══════════════════════════════════════════════════════════════
   void _confirmWipeAllLogs() {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final selections = <String, bool>{
       'All Activity Logs': true,
@@ -7422,7 +7086,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   if (err != null) {
                     _snack('Wipe failed: $err', error: true);
                   } else {
-                    _snack('✅ Selected data cleared.');
+                    _snack('Selected data cleared.');
                     widget.onRefreshNeeded();
                   }
                 }
@@ -7471,9 +7135,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   );
 }
 
-// ══════════════════════════════════════════════════════════════
-// DASHED BORDER
-// ══════════════════════════════════════════════════════════════
 class _DashedBorderPainter extends CustomPainter {
   final Color color;
   final double radius;

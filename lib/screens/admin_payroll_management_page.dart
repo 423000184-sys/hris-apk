@@ -225,7 +225,7 @@ class _AdminPayrollManagementPageState
   }
 
   double get _autoGrossPay {
-    return _b.basicSalary + _b.otherIncomeAllowance + _autoOvertimePay;
+    return _b.basicSalary + _b.otherIncomeAllowance + _autoOvertimePay + _b.nightDiffAmount;
   }
 
   double get _autoNetPay {
@@ -516,212 +516,265 @@ class _AdminPayrollManagementPageState
     }
   }
 
+  // Local helper para siguradong may Peso sign
+  String _pdfPeso(double amount) {
+    final format = NumberFormat('#,##0.00');
+    return '₱${format.format(amount)}';
+  }
+
+  String _pdfHrs(double hours) {
+    return hours.toStringAsFixed(2);
+  }
+
   Future<Uint8List> _generatePdf() async {
+    // Load custom font para gumana ang Peso sign (₱)
+    final fontRegular = await PdfGoogleFonts.robotoRegular();
+    final fontBold = await PdfGoogleFonts.robotoBold();
+
     final pdf = pw.Document(
-      title: 'Payslip',
-      author: 'HRIS System',
-      creator: 'HRIS',
-      subject: 'Employee Payslip',
+      title: 'Payroll Slip',
+      theme: pw.ThemeData.withFont(
+        base: fontRegular,
+        bold: fontBold,
+      ),
     );
 
     pdf.addPage(
-      pw.MultiPage(
+      pw.Page(
         pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(36),
-        build: (pw.Context ctx) => [
-          pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        margin: const pw.EdgeInsets.all(40),
+        build: (pw.Context ctx) {
+          return pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
+              // --- HEADER ---
+              pw.Center(
+                child: pw.Column(
+                  children: [
+                    pw.Text('Jumbo Worldwide Express Logistics Inc.',
+                        style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                    pw.Text('Unit 12N, 8 Adriatico Tower, Padre Faura Street, Ermita, Manila',
+                        style: const pw.TextStyle(fontSize: 9)),
+                    pw.SizedBox(height: 16),
+                    pw.Text('Payroll Slip',
+                        style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                    pw.SizedBox(height: 6),
+                    pw.Text('For the period of $_periodLabel',
+                        style: const pw.TextStyle(fontSize: 10)),
+                    pw.SizedBox(height: 20),
+                  ],
+                ),
+              ),
+
+              // --- EMPLOYEE INFO ---
+              pw.Row(
                 children: [
-                  pw.Text('PAYSLIP',
-                      style: pw.TextStyle(
-                          fontSize: 26, fontWeight: pw.FontWeight.bold)),
-                  pw.SizedBox(height: 2),
-                  pw.Text('Employee Disbursement Statement',
-                      style: pw.TextStyle(
-                          fontSize: 10, color: PdfColors.grey700)),
+                  pw.Text('Employee Code: ', style: const pw.TextStyle(fontSize: 10)),
+                  pw.Text(_employeeId, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
                 ],
               ),
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.end,
+              pw.SizedBox(height: 2),
+              pw.Row(
                 children: [
-                  pw.Text('Period: $_periodLabel',
-                      style: pw.TextStyle(
-                          fontSize: 11, fontWeight: pw.FontWeight.bold)),
-                  pw.SizedBox(height: 2),
-                  pw.Text(
-                      'Generated: ${DateFormat('MMM d, yyyy • HH:mm').format(DateTime.now())}',
-                      style: pw.TextStyle(
-                          fontSize: 9, color: PdfColors.grey700)),
+                  pw.Text('Employee Name: ', style: const pw.TextStyle(fontSize: 10)),
+                  pw.Text(_name.toUpperCase(), style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
+              pw.SizedBox(height: 20),
+
+              // --- REGULAR PAY HEADER ---
+              pw.Row(
+                children: [
+                  pw.Expanded(
+                      child: pw.Text('Regular Pay:', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
+                  pw.SizedBox(
+                      width: 70, child: pw.Text('Hrs.', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
+                  pw.SizedBox(
+                      width: 90, child: pw.Text('Amount', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
+                ],
+              ),
+              pw.SizedBox(height: 10),
+
+              // --- TABLE ROWS (REGULAR PAY) ---
+              _pdfRow('Basic Pay', _pdfHrs(_b.basicHours), _pdfPeso(_b.basicSalary)),
+              _pdfRow('Absent', _pdfHrs(_b.absentHours), '-${_pdfPeso(_b.absentAmount)}'),
+              _pdfRow('Late', _pdfHrs(_b.lateHours), '-${_pdfPeso(_b.lateAmount)}'),
+              _pdfRow('Undertime', _pdfHrs(_b.undertimeHours), '-${_pdfPeso(_b.undertimeAmount)}'),
+              _pdfRow('Dayoff OT', _pdfHrs(_b.dayOffOtHours), _pdfPeso(_b.dayOffOtAmount)),
+              _pdfRow('Overtime', _pdfHrs(_b.overtimeHours), _pdfPeso(_b.overtimeAmount)),
+              // IDINAGDAG ANG NIGHT DIFF
+              _pdfRow('Night Diff.', _pdfHrs(_b.nightDiffHours), _pdfPeso(_b.nightDiffAmount)),
+              _pdfRow('Holiday', '', _pdfPeso(_b.holidayAmount)),
+              _pdfRow('Other Income-Allowance', '', _pdfPeso(_b.otherIncomeAllowance)),
+              _pdfRow('Total Adjustments Made', '', _pdfPeso(_b.totalAdjustmentsMade)),
+
+              pw.Divider(color: PdfColors.black, thickness: 1),
+              pw.SizedBox(height: 4),
+
+              // TOTAL REGULAR PAY
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text('Total:', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                  pw.Text(_pdfPeso(_b.regularPay), style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
+              pw.SizedBox(height: 20),
+
+              // --- DEDUCTIONS ---
+              _pdfRowDeduction('SSS', _pdfPeso(_b.sss)),
+              _pdfRowDeduction('Phil. Health', _pdfPeso(_b.philhealth)),
+              _pdfRowDeduction('Pag-Ibig', _pdfPeso(_b.pagibig)),
+              _pdfRowDeduction('Taxable Income & Tax Withhe', _pdfPeso(_b.taxWithheld), hrs: _pdfHrs(_b.taxableIncome)),
+              _pdfRowDeduction('Total Loan Deductions', _pdfPeso(_b.totalLoanDeductions)),
+
+              pw.Divider(color: PdfColors.black, thickness: 1),
+              pw.SizedBox(height: 4),
+
+              // TOTAL DEDUCTIONS
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text('Total:', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                  pw.Text(_pdfPeso(_b.totalDeductions), style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
+              pw.SizedBox(height: 10),
+
+              // NET PAY
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text('NET PAY:', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                  pw.Text(_pdfPeso(_autoNetPay), style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
+              pw.SizedBox(height: 30),
+
+              // --- LEAVE & OTHER INCOME ---
+              pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text('LEAVE', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                        pw.SizedBox(height: 8),
+                        pw.Row(
+                          children: [
+                            pw.Expanded(child: pw.Text('Sick Leave', style: const pw.TextStyle(fontSize: 10))),
+                            pw.Text(_b.sickLeaveBalance.toStringAsFixed(2), style: const pw.TextStyle(fontSize: 10)),
+                          ],
+                        ),
+                        pw.SizedBox(height: 4),
+                        pw.Row(
+                          children: [
+                            pw.Expanded(child: pw.Text('Vacation Leave', style: const pw.TextStyle(fontSize: 10))),
+                            pw.Text(_b.vacationLeaveBalance.toStringAsFixed(2), style: const pw.TextStyle(fontSize: 10)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  pw.SizedBox(width: 40),
+                  pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text('OTHER INCOME', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                        pw.SizedBox(height: 8),
+                        pw.Row(
+                          children: [
+                            pw.Expanded(child: pw.Text('Rice Allowance', style: const pw.TextStyle(fontSize: 10))),
+                            pw.Text(_pdfPeso(_b.riceAllowance), style: const pw.TextStyle(fontSize: 10)),
+                          ],
+                        ),
+                        pw.SizedBox(height: 4),
+                        pw.Row(
+                          children: [
+                            pw.Expanded(child: pw.Text('Total', style: const pw.TextStyle(fontSize: 10))),
+                            pw.Text(_pdfPeso(_b.riceAllowance), style: const pw.TextStyle(fontSize: 10)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+              pw.SizedBox(height: 40),
+
+              // --- FOOTER ---
+              pw.Text('Received thru: ATM', style: const pw.TextStyle(fontSize: 10)),
+              pw.SizedBox(height: 30),
+              pw.Row(
+                children: [
+                  pw.Text('Received by: ', style: const pw.TextStyle(fontSize: 10)),
+                  pw.Expanded(
+                    child: pw.Container(
+                      margin: const pw.EdgeInsets.only(left: 10),
+                      decoration: const pw.BoxDecoration(
+                        border: pw.Border(bottom: pw.BorderSide(width: 1)),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ],
-          ),
-          pw.SizedBox(height: 12),
-          pw.Container(height: 2, color: PdfColors.orange800),
-          pw.SizedBox(height: 16),
-          pw.Container(
-            padding: const pw.EdgeInsets.all(12),
-            decoration: pw.BoxDecoration(
-              color: PdfColors.grey100,
-              borderRadius: pw.BorderRadius.circular(6),
-            ),
-            child: pw.Row(
-              children: [
-                pw.Expanded(
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text('EMPLOYEE',
-                          style: pw.TextStyle(
-                              fontSize: 8, color: PdfColors.grey700)),
-                      pw.SizedBox(height: 4),
-                      pw.Text(_name,
-                          style: pw.TextStyle(
-                              fontSize: 13,
-                              fontWeight: pw.FontWeight.bold)),
-                    ],
-                  ),
-                ),
-                pw.Expanded(
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text('EMPLOYEE ID',
-                          style: pw.TextStyle(
-                              fontSize: 8, color: PdfColors.grey700)),
-                      pw.SizedBox(height: 4),
-                      pw.Text(_employeeId,
-                          style: pw.TextStyle(fontSize: 11)),
-                    ],
-                  ),
-                ),
-                pw.Expanded(
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text('DEPARTMENT',
-                          style: pw.TextStyle(
-                              fontSize: 8, color: PdfColors.grey700)),
-                      pw.SizedBox(height: 4),
-                      pw.Text(_department,
-                          style: pw.TextStyle(fontSize: 11)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          pw.SizedBox(height: 20),
-          _pdfSection('WORK HOURS', [
-            _pdfRow('Total Raw Hours', _hours.rawDisplay),
-            if (_hours.totalLunchDeductedMinutes > 0)
-              _pdfRow('Lunch Deducted', '-${_hours.lunchDisplay}'),
-            _pdfRow('Net Hours Worked', _hours.netDisplay, bold: true),
-            if (_hours.totalOvertimeMinutes > 0)
-              _pdfRow('Overtime', '+${_hours.overtimeDisplay}'),
-          ]),
-          pw.SizedBox(height: 14),
-          _pdfSection('EARNINGS', [
-            _pdfRow('Basic Salary', PayrollCalculator.peso(_b.basicSalary)),
-            _pdfRow('Allowances',
-                PayrollCalculator.peso(_b.otherIncomeAllowance)),
-            if (_autoOvertimePay > 0)
-              _pdfRow('Overtime Pay (auto)',
-                  PayrollCalculator.peso(_autoOvertimePay)),
-            _pdfRow('Total Gross', PayrollCalculator.peso(_autoGrossPay),
-                bold: true),
-          ]),
-          pw.SizedBox(height: 14),
-          _pdfSection('DEDUCTIONS', [
-            if (_b.absentDays > 0)
-              _pdfRow('Absences (${_b.absentDays} day/s)',
-                  '-${PayrollCalculator.peso(_b.absentAmount)}'),
-            _pdfRow('SSS', '-${PayrollCalculator.peso(_b.sss)}'),
-            _pdfRow('PhilHealth', '-${PayrollCalculator.peso(_b.philhealth)}'),
-            _pdfRow('Pag-IBIG', '-${PayrollCalculator.peso(_b.pagibig)}'),
-            _pdfRow('Total Deductions',
-                '-${PayrollCalculator.peso(_b.totalDeductions)}',
-                bold: true),
-          ]),
-          pw.SizedBox(height: 24),
-          pw.Container(
-            padding: const pw.EdgeInsets.all(16),
-            decoration: pw.BoxDecoration(
-              color: PdfColors.orange50,
-              borderRadius: pw.BorderRadius.circular(6),
-              border: pw.Border.all(color: PdfColors.orange800, width: 1.5),
-            ),
-            child: pw.Row(
-              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-              children: [
-                pw.Text('NET PAY',
-                    style: pw.TextStyle(
-                        fontSize: 16, fontWeight: pw.FontWeight.bold)),
-                pw.Text(PayrollCalculator.peso(_autoNetPay),
-                    style: pw.TextStyle(
-                        fontSize: 20,
-                        fontWeight: pw.FontWeight.bold,
-                        color: PdfColors.orange800)),
-              ],
-            ),
-          ),
-          pw.SizedBox(height: 20),
-          pw.Divider(color: PdfColors.grey400),
-          pw.SizedBox(height: 6),
-          pw.Text(
-            'This is a system-generated payslip. No signature required.',
-            style: pw.TextStyle(
-                fontSize: 8,
-                color: PdfColors.grey600,
-                fontStyle: pw.FontStyle.italic),
-          ),
-        ],
+          );
+        },
       ),
     );
 
     return pdf.save();
   }
 
-  pw.Widget _pdfSection(String title, List<pw.Widget> rows) {
-    return pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        pw.Text(title,
-            style: pw.TextStyle(
-                fontSize: 10,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.orange800,
-                letterSpacing: 0.5)),
-        pw.SizedBox(height: 6),
-        pw.Container(
-          padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-          decoration: pw.BoxDecoration(
-            border: pw.Border.all(color: PdfColors.grey300),
-            borderRadius: pw.BorderRadius.circular(4),
-          ),
-          child: pw.Column(children: rows),
-        ),
-      ],
-    );
-  }
-
-  pw.Widget _pdfRow(String label, String value, {bool bold = false}) {
-    final style = pw.TextStyle(
-      fontSize: 10.5,
-      fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
-    );
+  // Helper para sa Regular Pay rows
+  pw.Widget _pdfRow(String label, String hrs, String amount) {
     return pw.Padding(
-      padding: const pw.EdgeInsets.symmetric(vertical: 3.5),
+      padding: const pw.EdgeInsets.symmetric(vertical: 2),
       child: pw.Row(
-        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-        children: [pw.Text(label, style: style), pw.Text(value, style: style)],
+        children: [
+          pw.Expanded(
+            child: pw.Text(label, style: const pw.TextStyle(fontSize: 10)),
+          ),
+          pw.SizedBox(
+            width: 70,
+            child: pw.Text(hrs, textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 10)),
+          ),
+          pw.SizedBox(
+            width: 90,
+            child: pw.Text(amount, textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 10)),
+          ),
+        ],
       ),
     );
   }
+
+  // Helper para sa Deductions rows
+  pw.Widget _pdfRowDeduction(String label, String amount, {String? hrs}) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 2),
+      child: pw.Row(
+        children: [
+          pw.Expanded(
+            child: pw.Text(label, style: const pw.TextStyle(fontSize: 10)),
+          ),
+          pw.SizedBox(
+            width: 70,
+            child: pw.Text(hrs ?? '', textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 10)),
+          ),
+          pw.SizedBox(
+            width: 90,
+            child: pw.Text(amount, textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 10)),
+          ),
+        ],
+      ),
+    );
+  }
+
+
 
   Future<void> _handlePrint() async {
     if (_isDemo) return _demoBlock();
@@ -1368,6 +1421,9 @@ class _AdminPayrollManagementPageState
               : PayrollCalculator.peso(0),
           false,
         ),
+        if (_b.nightDiffAmount > 0)
+          _item('Night Differential', 'Additional pay for night hours',
+              PayrollCalculator.peso(_b.nightDiffAmount), false),
         Divider(color: tc.border, height: 20),
         _item('Total Gross', 'Sum of earnings',
             PayrollCalculator.peso(_autoGrossPay), false,

@@ -1,5 +1,5 @@
 // lib/screens/admin_attendance_page.dart
-// v2.1: 🎭 Demo Mode Support (Mock Logs & Action Blocking)
+// v2.2: Added STATUS column (Pending, Approved, Flagged) with color-coding.
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -13,7 +13,7 @@ import 'admin_dashboard.dart';
 import 'admin_database.dart';
 import 'admin_theme.dart';
 import '../services/admin_employee_service.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/demo_mode_service.dart';
 import '../utils/file_download.dart';
 import '../widgets/bootstrap_grid.dart';
 
@@ -22,7 +22,6 @@ const int kMaxCsvExportRows = 5000;
 const int kMaxVisiblePages = 7;
 const int kMaxBase64PhotoBytes = 2 * 1024 * 1024; // 2MB
 
-/// Fields never exported to CSV in plaintext.
 const Set<String> _csvSensitiveFields = {
   'email',
   'photo_url',
@@ -60,7 +59,6 @@ class AdminAttendancePage extends StatefulWidget {
 class _AdminAttendancePageState extends State<AdminAttendancePage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -85,7 +83,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   DateTime? _lastExportAt;
   static const Duration _exportCooldown = Duration(seconds: 5);
 
-  // ─── Filter application (prevents rebuild spam) ───
+  // ─── Filter application ───
   String? _appliedEventType;
   String? _appliedDepartment;
   String? _appliedPosition;
@@ -117,7 +115,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     _localEmployees = widget.employees;
     _buildEmployeeLookup();
 
-    // 🎭 Only listen to real employees if NOT in demo mode
     if (!_isDemo) {
       _listenToEmployees();
     }
@@ -141,12 +138,10 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     super.dispose();
   }
 
-  // 🎭 DEMO BLOCK HELPER
   void _demoBlock() {
     _showSnack('Action disabled in Demo Mode.', error: true);
   }
 
-  // 🎭 MOCK LOGS GENERATION
   List<Map<String, dynamic>> _getMockLogs() {
     final now = DateTime.now();
     return [
@@ -159,6 +154,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         'department': 'Operation',
         'position': 'Manager',
         'registeredDevice': 'iPhone 14 Pro',
+        'reviewStatus': 'flagged', // Demo Flag
       },
       {
         'id': 'demo_log_2',
@@ -169,6 +165,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         'department': 'Accounting',
         'position': 'Accountant',
         'registeredDevice': 'Samsung Galaxy S23',
+        'reviewStatus': 'approved', // Demo Approved
       },
       {
         'id': 'demo_log_3',
@@ -179,6 +176,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         'department': 'Operation',
         'position': 'Manager',
         'registeredDevice': 'iPhone 14 Pro',
+        'reviewStatus': 'pending', // Demo Pending
       },
       {
         'id': 'demo_log_4',
@@ -203,9 +201,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     ];
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // EMPLOYEE STREAM (bounded)
-  // ══════════════════════════════════════════════════════════════
   void _listenToEmployees() {
     _empSub = AdminDatabase.streamEmployees()
         .timeout(const Duration(seconds: 30))
@@ -281,9 +276,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return null;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // RESOLVERS (all sanitized)
-  // ══════════════════════════════════════════════════════════════
   String _resolveDepartment(Map<String, dynamic> log) {
     final fromLog =
     _sanitizeKey(log['department'] ?? log['dept'] ?? log['section']);
@@ -403,9 +395,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return null;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FILTER OPTIONS
-  // ══════════════════════════════════════════════════════════════
   List<String> get _departments {
     final depts = <String>{..._predefinedDeptRoles.keys};
 
@@ -455,9 +444,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return ['All Years', ...sorted.map((y) => y.toString())];
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FILTERING
-  // ══════════════════════════════════════════════════════════════
   List<Map<String, dynamic>> get _filteredLogs {
     final eventType = _appliedEventType ?? _selectedEventType;
     final department = _appliedDepartment ?? _selectedDepartment;
@@ -465,7 +451,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     final year = _appliedYear ?? _selectedYear;
     final dateRange = _appliedDateRange ?? _selectedDateRange;
 
-    // 🎭 Use mock data if in Demo Mode
     final sourceLogs = _isDemo ? _getMockLogs() : widget.logs;
 
     var filtered = sourceLogs.where((log) {
@@ -536,9 +521,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   int get _totalPages => (_filteredLogs.length / _rowsPerPage).ceil();
 
-  // ══════════════════════════════════════════════════════════════
-  // DATE HELPERS
-  // ══════════════════════════════════════════════════════════════
   String _fmtTime(dynamic ts) {
     final dt = _toDateTime(ts);
     if (dt == null) return '--:--';
@@ -560,11 +542,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return null;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // CSV EXPORT
-  // ══════════════════════════════════════════════════════════════
   Future<void> _exportLogsToCsv() async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
     if (_exporting) return;
 
     if (_lastExportAt != null) {
@@ -740,9 +719,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return v;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // SNACKBAR HELPER
-  // ══════════════════════════════════════════════════════════════
   void _showSnack(String msg, {bool error = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -755,9 +731,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // DATE RANGE PICKER
-  // ══════════════════════════════════════════════════════════════
   Future<void> _pickDateRange() async {
     DateTimeRange? tempRange = _selectedDateRange;
 
@@ -918,9 +891,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // APPLY FILTERS
-  // ══════════════════════════════════════════════════════════════
   void _applyFilters() {
     setState(() {
       _appliedEventType = _selectedEventType;
@@ -933,9 +903,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     _showSnack('Filters applied.');
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // OPEN VERIFICATION
-  // ══════════════════════════════════════════════════════════════
   void _openVerification(Map<String, dynamic> log) {
     final enrichedLog = Map<String, dynamic>.from(log);
 
@@ -963,11 +930,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // APPROVE / FLAG — with audit logging
-  // ══════════════════════════════════════════════════════════════
   Future<void> _approveLog(Map<String, dynamic> log) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final logId = (log['id'] ?? '').toString();
     if (logId.isEmpty) {
@@ -1010,7 +974,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   }
 
   Future<void> _flagLog(Map<String, dynamic> log) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final logId = (log['id'] ?? '').toString();
     if (logId.isEmpty) {
@@ -1114,9 +1078,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BUILD
-  // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1128,7 +1089,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 🎭 DEMO BANNER
               if (_isDemo) ...[
                 _buildDemoBanner(),
                 const SizedBox(height: 24),
@@ -1148,9 +1108,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🎭 DEMO BANNER
-  // ══════════════════════════════════════════════════════════════
   Widget _buildDemoBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1192,7 +1149,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ─── HEADER ───
   Widget _buildPageHeader() {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -1269,7 +1225,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     });
   }
 
-  // ─── FILTER BAR ───
   Widget _buildFilterBar() {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -1454,7 +1409,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ─── TABLE ───
   Widget _buildTable() {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -1494,10 +1448,11 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       ),
       child: Row(children: [
         _th('EMPLOYEE', flex: 3),
-        _th('CONTACT', flex: 3),
+        _th('CONTACT', flex: 2),
         _th('DATE', flex: 1),
         _th('TIME', flex: 1),
         _th('EVENT', flex: 1),
+        _th('STATUS', flex: 2),
         _th('ACTIONS', flex: 1, align: TextAlign.right),
       ]),
     );
@@ -1528,7 +1483,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ─── AVATAR ───
   Widget _buildAvatarWidget({
     required String? photoUrl,
     required String initials,
@@ -1634,10 +1588,10 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return parts[0][0].toUpperCase();
   }
 
-  // ─── DESKTOP ROW ───
   Widget _buildRow(Map<String, dynamic> log) {
     final type = (log['type'] ?? 'IN').toString().toUpperCase();
     final isLogin = type == 'IN' || type == 'LOGIN';
+    final reviewStatus = log['reviewStatus']?.toString();
 
     final name = _resolveName(log);
     final email = _resolveEmail(log);
@@ -1662,6 +1616,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: tc.border, width: 0.5)),
+        color: reviewStatus == 'flagged' ? tc.pillErrBg.withValues(alpha: 0.1) : null,
       ),
       child: Row(children: [
         Expanded(
@@ -1704,7 +1659,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           ]),
         ),
         Expanded(
-          flex: 3,
+          flex: 2,
           child: Text(
             displayEmail,
             style: TextStyle(fontSize: 13, color: tc.text),
@@ -1725,15 +1680,16 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           ),
         ),
         Expanded(flex: 1, child: _buildEventPill(isLogin)),
+        Expanded(flex: 2, child: _buildStatusPill(reviewStatus)),
         Expanded(flex: 1, child: _buildActions(log)),
       ]),
     );
   }
 
-  // ─── MOBILE CARD ───
   Widget _buildMobileCard(Map<String, dynamic> log) {
     final type = (log['type'] ?? 'IN').toString().toUpperCase();
     final isLogin = type == 'IN' || type == 'LOGIN';
+    final reviewStatus = log['reviewStatus']?.toString();
 
     final name = _resolveName(log);
     final email = _resolveEmail(log);
@@ -1758,6 +1714,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: tc.border, width: 0.5)),
+        color: reviewStatus == 'flagged' ? tc.pillErrBg.withValues(alpha: 0.1) : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1820,6 +1777,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             ),
             const Spacer(),
             _buildEventPill(isLogin, compact: true),
+            const SizedBox(width: 6),
+            _buildStatusPill(reviewStatus),
           ]),
         ],
       ),
@@ -1840,6 +1799,46 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           fontSize: 11,
           fontWeight: FontWeight.w700,
           color: isLogin ? tc.pillGreenTx : tc.pillBlueTx,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusPill(String? status) {
+    final s = (status ?? 'pending').toLowerCase();
+    Color bg;
+    Color fg;
+    String label;
+
+    if (s == 'approved') {
+      bg = tc.pillGreenBg;
+      fg = tc.pillGreenTx;
+      label = 'APPROVED';
+    } else if (s == 'flagged') {
+      bg = tc.pillErrBg;
+      fg = tc.pillErrTx;
+      label = 'FLAGGED';
+    } else {
+      bg = tc.surface;
+      fg = tc.muted;
+      label = 'PENDING';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: fg.withValues(alpha: 0.3)),
+      ),
+      child: Text(
+        label,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          color: fg,
+          letterSpacing: 0.5,
         ),
       ),
     );
@@ -1916,7 +1915,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ─── PAGINATION (bounded to prevent massive renders) ───
   Widget _buildPagination() {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -2032,7 +2030,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return out;
   }
 
-  // ─── BOTTOM CARDS ───
   Widget _buildBottomCards() {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -2192,7 +2189,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  // ─── HELPERS ───
   Widget _buildFilterField({required String label, required Widget child}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
