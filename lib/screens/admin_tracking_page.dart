@@ -23,7 +23,6 @@ import 'admin_theme.dart';
 import '../utils/geo_utils.dart';
 import '../services/geofence_service.dart';
 import '../services/employee_notification_service.dart';
-import '../services/admin_auth_service.dart';
 import '../services/demo_mode_service.dart';
 import '../widgets/bootstrap_grid.dart';
 
@@ -85,11 +84,11 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   void _safeInvalidateCache() {
     final now = DateTime.now();
     if (_lastCacheInvalidation != null &&
-        now.difference(_lastCacheInvalidation!) <
-            const Duration(seconds: 1)) {
+      now.difference(_lastCacheInvalidation!) <
+      const Duration(seconds: 1)) {
       return;
-    }
-    _lastCacheInvalidation = now;
+      }
+      _lastCacheInvalidation = now;
     try {
       GeofenceService.instance.invalidateCache();
     } catch (_) {}
@@ -177,7 +176,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     s = s.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'), '');
     s = s.replaceAll(RegExp(r'[\r\n\t]+'), ' ');
     s = s.replaceAll(
-        RegExp(r'[\u200B-\u200F\u202A-\u202E\u2066-\u2069]'), '');
+      RegExp(r'[\u200B-\u200F\u202A-\u202E\u2066-\u2069]'), '');
     if (s.length > maxLen) s = '${s.substring(0, maxLen)}…';
     return s.trim();
   }
@@ -242,15 +241,15 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   void _listenToLocations() {
     _locSub?.cancel();
     _locSub = FirebaseFirestore.instance
-        .collection('locations')
-        .orderBy('createdAt', descending: false)
-        .snapshots()
-        .listen(
-          (snap) {
+    .collection('locations')
+    .orderBy('createdAt', descending: false)
+    .snapshots()
+    .listen(
+      (snap) {
         if (!_safe) return;
         final list = snap.docs
-            .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
-            .toList();
+        .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
+        .toList();
         _safeSetState(() {
           _zones = list;
           _loadingZones = false;
@@ -270,9 +269,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   Future<void> _loadSettingsFromFirestore() async {
     try {
       final doc = await FirebaseFirestore.instance
-          .collection('settings')
-          .doc('geofence_config')
-          .get();
+      .collection('settings')
+      .doc('geofence_config')
+      .get();
 
       if (!_safe) return;
 
@@ -281,7 +280,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         _safeSetState(() {
           _autoClockOut = (data['autoClockOut'] as bool?) ?? false;
           _geofenceViolation =
-              (data['geofenceViolation'] as bool?) ?? false;
+          (data['geofenceViolation'] as bool?) ?? false;
           _entryReminders = (data['entryReminders'] as bool?) ?? false;
           _eventAndHoliday = (data['eventAndHoliday'] as bool?) ?? false;
 
@@ -313,9 +312,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       final admin = await _currentAdmin();
       if (!_safe) return;
       await FirebaseFirestore.instance
-          .collection('settings')
-          .doc('geofence_config')
-          .set({
+      .collection('settings')
+      .doc('geofence_config')
+      .set({
         'autoClockOut': _autoClockOut,
         'geofenceViolation': _geofenceViolation,
         'entryReminders': _entryReminders,
@@ -338,7 +337,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     if (_isDemo) return _demoBlock();
     if (_inFlight.contains('force_save')) return;
     if (!_guard.tryAcquire('force_save')) {
-      _snack('Masyadong mabilis. Please wait a moment.', error: true);
+      _snack('Too fast. Please wait a moment.', error: true);
       return;
     }
 
@@ -359,9 +358,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       final admin = await _currentAdmin();
       if (!_safe) return;
       await FirebaseFirestore.instance
-          .collection('settings')
-          .doc('geofence_config')
-          .set({
+      .collection('settings')
+      .doc('geofence_config')
+      .set({
         'autoClockOut': _autoClockOut,
         'geofenceViolation': _geofenceViolation,
         'entryReminders': _entryReminders,
@@ -394,7 +393,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     if (_isDemo) return _demoBlock();
     if (_notifyingAll) return;
     if (!_guard.tryAcquire('holiday_notify')) {
-      _snack('Masyadong mabilis.', error: true);
+      _snack('Too fast.', error: true);
       return;
     }
 
@@ -410,25 +409,25 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: tc.card,
         title: Text('Send to ALL employees?',
-            style: TextStyle(color: tc.text)),
-        content: Text(
-          'Ipapadala ang holiday/event announcement sa LAHAT ng empleyado. Sigurado ka ba?',
-          style: TextStyle(color: tc.text),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancel', style: TextStyle(color: tc.muted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: tc.orange,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Send to All'),
-          ),
-        ],
+                    style: TextStyle(color: tc.text)),
+                    content: Text(
+                      'The holiday/event announcement will be sent to ALL employees. Are you sure?',
+                      style: TextStyle(color: tc.text),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: Text('Cancel', style: TextStyle(color: tc.muted)),
+                      ),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: tc.orange,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('Send to All'),
+                      ),
+                    ],
       ),
     );
     if (!_safe) return;
@@ -480,8 +479,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       context: context,
       builder: (_) => _LocationDialog(
         defaultLat: _currentLat,
-        defaultLng: _currentLng,
-        defaultRadius: _currentRadius,
+          defaultLng: _currentLng,
+            defaultRadius: _currentRadius,
       ),
     );
     if (!_safe) return;
@@ -530,7 +529,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
     if (_inFlight.contains('del_$id')) return;
     if (!_guard.tryAcquire('delete_location')) {
-      _snack('Masyadong mabilis.', error: true);
+      _snack('Too fast.', error: true);
       return;
     }
 
@@ -550,9 +549,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         title: Text('Delete Location?', style: TextStyle(color: tc.text)),
         content: Text(
-          'Sigurado ka bang gusto mong i-delete ang "$name"?\n'
-              'Hindi na ito magiging valid clock-in zone.',
-          style: TextStyle(color: tc.text),
+          'Are you sure you want to delete "$name"?\n'
+        'It will no longer be a valid clock-in zone.',
+        style: TextStyle(color: tc.text),
         ),
         actions: [
           TextButton(
@@ -563,7 +562,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
             style: ElevatedButton.styleFrom(
               backgroundColor: tc.red,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
+                shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8)),
             ),
             onPressed: () => Navigator.pop(ctx, true),
@@ -580,9 +579,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       final admin = await _currentAdmin();
       if (!_safe) return;
       await FirebaseFirestore.instance
-          .collection('locations')
-          .doc(id)
-          .delete();
+      .collection('locations')
+      .doc(id)
+      .delete();
 
       _safeInvalidateCache();
 
@@ -612,7 +611,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
     if (_inFlight.contains('tog_$id')) return;
     if (!_guard.tryAcquire('toggle_location')) {
-      _snack('Masyadong mabilis.', error: true);
+      _snack('Too fast.', error: true);
       return;
     }
 
@@ -629,9 +628,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       final admin = await _currentAdmin();
       if (!_safe) return;
       await FirebaseFirestore.instance
-          .collection('locations')
-          .doc(id)
-          .update({
+      .collection('locations')
+      .doc(id)
+      .update({
         'active': !current,
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': admin?.uid,
@@ -766,22 +765,22 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 color: _isDemo ? tc.border : tc.green.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
-                    color: _isDemo
-                        ? tc.border
-                        : tc.green.withValues(alpha: 0.3)),
+                  color: _isDemo
+                  ? tc.border
+                  : tc.green.withValues(alpha: 0.3)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(Icons.cloud_done_rounded,
-                      size: 11, color: _isDemo ? tc.muted : tc.green),
-                  const SizedBox(width: 4),
-                  Text(_isDemo ? 'AUTO-SAVE OFF' : 'AUTO-SAVE ON',
-                      style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800,
-                          color: _isDemo ? tc.muted : tc.green,
-                          letterSpacing: 0.5)),
+                       size: 11, color: _isDemo ? tc.muted : tc.green),
+                       const SizedBox(width: 4),
+                       Text(_isDemo ? 'AUTO-SAVE OFF' : 'AUTO-SAVE ON',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                              color: _isDemo ? tc.muted : tc.green,
+                              letterSpacing: 0.5)),
                 ],
               ),
             ),
@@ -862,8 +861,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
 
     if (circles.isEmpty &&
-        _isValidLat(_currentLat) &&
-        _isValidLng(_currentLng)) {
+      _isValidLat(_currentLat) &&
+      _isValidLng(_currentLng)) {
       circles.add(CircleMarker(
         point: centerPoint,
         radius: _currentRadius,
@@ -872,115 +871,115 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         borderColor: tc.orange,
         borderStrokeWidth: 2.5,
       ));
-      markers.add(Marker(
-        point: centerPoint,
-        width: 40,
-        height: 40,
-        child: Icon(Icons.location_on, color: tc.orange, size: 38),
-      ));
-    }
+    markers.add(Marker(
+      point: centerPoint,
+      width: 40,
+      height: 40,
+      child: Icon(Icons.location_on, color: tc.orange, size: 38),
+    ));
+      }
 
-    return Container(
-      height: 380,
-      decoration: BoxDecoration(
-        color: tc.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: tc.border),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Stack(
-          children: [
-            FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: centerPoint,
-                initialZoom: 15.5,
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate:
-                  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.hris.biometrics',
+      return Container(
+        height: 380,
+        decoration: BoxDecoration(
+          color: tc.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: tc.border),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Stack(
+            children: [
+              FlutterMap(
+                mapController: _mapController,
+                options: MapOptions(
+                  initialCenter: centerPoint,
+                  initialZoom: 15.5,
                 ),
-                CircleLayer(circles: circles),
-                MarkerLayer(markers: markers),
-              ],
-            ),
-            Positioned(
-              top: 16,
-              left: 16,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      color: tc.card,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: tc.border),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        InkWell(
-                          onTap: () {
-                            if (!_safe) return;
-                            try {
-                              _mapController.move(
-                                  _mapController.camera.center,
-                                  _mapController.camera.zoom + 0.5);
-                            } catch (_) {}
-                          },
-                          child: SizedBox(
-                            width: 32,
-                            height: 32,
-                            child:
-                            Icon(Icons.add, size: 16, color: tc.text),
-                          ),
-                        ),
-                        Container(height: 1, width: 32, color: tc.border),
-                        InkWell(
-                          onTap: () {
-                            if (!_safe) return;
-                            try {
-                              _mapController.move(
-                                  _mapController.camera.center,
-                                  _mapController.camera.zoom - 0.5);
-                            } catch (_) {}
-                          },
-                          child: SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: Icon(Icons.remove,
-                                size: 16, color: tc.text),
-                          ),
-                        ),
-                      ],
-                    ),
+                  TileLayer(
+                    urlTemplate:
+                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.hris.biometrics',
                   ),
-                  const SizedBox(height: 8),
-                  InkWell(
-                    onTap: () =>
-                        _moveMapToPosition(_currentLat, _currentLng),
-                    child: Container(
-                      width: 32,
-                      height: 32,
+                  CircleLayer(circles: circles),
+                  MarkerLayer(markers: markers),
+                ],
+              ),
+              Positioned(
+                top: 16,
+                left: 16,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
                       decoration: BoxDecoration(
                         color: tc.card,
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: tc.border),
                       ),
-                      child:
-                      Icon(Icons.my_location, size: 14, color: tc.text),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          InkWell(
+                            onTap: () {
+                              if (!_safe) return;
+                              try {
+                                _mapController.move(
+                                  _mapController.camera.center,
+                                  _mapController.camera.zoom + 0.5);
+                              } catch (_) {}
+                            },
+                            child: SizedBox(
+                              width: 32,
+                              height: 32,
+                              child:
+                              Icon(Icons.add, size: 16, color: tc.text),
+                            ),
+                          ),
+                          Container(height: 1, width: 32, color: tc.border),
+                          InkWell(
+                            onTap: () {
+                              if (!_safe) return;
+                              try {
+                                _mapController.move(
+                                  _mapController.camera.center,
+                                  _mapController.camera.zoom - 0.5);
+                              } catch (_) {}
+                            },
+                            child: SizedBox(
+                              width: 32,
+                              height: 32,
+                              child: Icon(Icons.remove,
+                                          size: 16, color: tc.text),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 8),
+                    InkWell(
+                      onTap: () =>
+                      _moveMapToPosition(_currentLat, _currentLng),
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: tc.card,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: tc.border),
+                        ),
+                        child:
+                        Icon(Icons.my_location, size: 14, color: tc.text),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-    );
+      );
   }
 
   Widget _buildActiveLocationsPanel() {
@@ -1000,10 +999,10 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 child: Text(
                   'Active Locations',
                   style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: tc.text),
-                  overflow: TextOverflow.ellipsis,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: tc.text),
+                    overflow: TextOverflow.ellipsis,
                 ),
               ),
               const SizedBox(width: 8),
@@ -1019,7 +1018,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       shape: BoxShape.circle,
                     ),
                     child: Icon(Icons.add,
-                        color: _isDemo ? tc.muted : Colors.white, size: 18),
+                                color: _isDemo ? tc.muted : Colors.white, size: 18),
                   ),
                 ),
               ),
@@ -1034,123 +1033,123 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   width: 20,
                   height: 20,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2, color: tc.orange),
+                    strokeWidth: 2, color: tc.orange),
                 ),
               ),
             )
-          else if (_zones.isEmpty)
-            _buildEmptyLocations()
-          else
-            Column(
-              children: _zones.asMap().entries.map((entry) {
-                final index = entry.key;
-                final loc = entry.value;
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index == _zones.length - 1 ? 0 : 12,
-                  ),
-                  child: _buildLocationCard(loc, index),
-                );
-              }).toList(),
-            ),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.only(top: 16),
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: tc.border)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'GLOBAL DEFAULT RADIUS',
-                        style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            color: tc.muted,
-                            letterSpacing: 0.5),
+            else if (_zones.isEmpty)
+              _buildEmptyLocations()
+              else
+                Column(
+                  children: _zones.asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final loc = entry.value;
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: index == _zones.length - 1 ? 0 : 12,
                       ),
-                    ),
-                    Icon(Icons.cloud_done_rounded,
-                        size: 11, color: _isDemo ? tc.muted : tc.green),
-                    const SizedBox(width: 4),
-                    Text(_isDemo ? 'off' : 'auto',
-                        style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                            color: _isDemo ? tc.muted : tc.green)),
-                  ],
+                      child: _buildLocationCard(loc, index),
+                    );
+                  }).toList(),
                 ),
-                const SizedBox(height: 8),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 6,
-                    activeTrackColor: _isDemo ? tc.muted : tc.orange,
-                    inactiveTrackColor: tc.border,
-                    thumbColor: _isDemo ? tc.muted : tc.card,
-                    thumbShape: const RoundSliderThumbShape(
-                        enabledThumbRadius: 8, elevation: 2),
-                    overlayColor:
-                    (_isDemo ? tc.muted : tc.orange)
-                        .withValues(alpha: 0.2),
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.only(top: 16),
+                  decoration: BoxDecoration(
+                    border: Border(top: BorderSide(color: tc.border)),
                   ),
-                  child: Slider(
-                    value: _currentRadius.clamp(50.0, 2000.0),
-                    min: 50.0,
-                    max: 2000.0,
-                    onChanged: _isDemo
-                        ? null
-                        : (val) {
-                      _safeSetState(() => _currentRadius = val);
-                      _radiusDebounce?.cancel();
-                      _radiusDebounce = Timer(
-                        const Duration(milliseconds: 800),
-                            () {
-                          if (!_safe) return;
-                          _autoSaveConfig();
-                        },
-                      );
-                    },
-                    onChangeEnd: _isDemo
-                        ? null
-                        : (_) {
-                      _radiusDebounce?.cancel();
-                      _autoSaveConfig();
-                    },
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'GLOBAL DEFAULT RADIUS',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: tc.muted,
+                                letterSpacing: 0.5),
+                            ),
+                          ),
+                          Icon(Icons.cloud_done_rounded,
+                               size: 11, color: _isDemo ? tc.muted : tc.green),
+                               const SizedBox(width: 4),
+                               Text(_isDemo ? 'off' : 'auto',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700,
+                                      color: _isDemo ? tc.muted : tc.green)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 6,
+                          activeTrackColor: _isDemo ? tc.muted : tc.orange,
+                          inactiveTrackColor: tc.border,
+                          thumbColor: _isDemo ? tc.muted : tc.card,
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 8, elevation: 2),
+                            overlayColor:
+                            (_isDemo ? tc.muted : tc.orange)
+                            .withValues(alpha: 0.2),
+                        ),
+                        child: Slider(
+                          value: _currentRadius.clamp(50.0, 2000.0),
+                          min: 50.0,
+                          max: 2000.0,
+                          onChanged: _isDemo
+                          ? null
+                          : (val) {
+                            _safeSetState(() => _currentRadius = val);
+                            _radiusDebounce?.cancel();
+                            _radiusDebounce = Timer(
+                              const Duration(milliseconds: 800),
+                              () {
+                                if (!_safe) return;
+                                _autoSaveConfig();
+                              },
+                            );
+                          },
+                          onChangeEnd: _isDemo
+                          ? null
+                          : (_) {
+                            _radiusDebounce?.cancel();
+                            _autoSaveConfig();
+                          },
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text('50m',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w600,
+                                          color: tc.muted)),
+                          ),
+                          Text(
+                            'Current: ${_currentRadius.toInt()}m',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: _isDemo ? tc.muted : tc.orange),
+                          ),
+                          Expanded(
+                            child: Text('2000m',
+                                        textAlign: TextAlign.right,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w600,
+                                          color: tc.muted)),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text('50m',
-                          style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              color: tc.muted)),
-                    ),
-                    Text(
-                      'Current: ${_currentRadius.toInt()}m',
-                      style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: _isDemo ? tc.muted : tc.orange),
-                    ),
-                    Expanded(
-                      child: Text('2000m',
-                          textAlign: TextAlign.right,
-                          style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              color: tc.muted)),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -1169,27 +1168,27 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         children: [
           Icon(Icons.location_off_rounded, size: 32, color: tc.muted),
           const SizedBox(height: 8),
-          Text('Wala pang locations.',
-              style: TextStyle(color: tc.text, fontSize: 13),
-              textAlign: TextAlign.center),
-          const SizedBox(height: 4),
-          Text(
-            'I-tap ang (+) button para mag-add ng clock-in zone.',
-            style: TextStyle(color: tc.muted, fontSize: 11),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: _isDemo ? _demoBlock : _openAddLocationDialog,
-            icon: const Icon(Icons.add_location_alt_rounded, size: 14),
-            label: const Text('Add First Location'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _isDemo ? tc.muted : tc.orange,
-              side: BorderSide(color: _isDemo ? tc.border : tc.orange),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-          ),
+          Text('No locations yet.',
+               style: TextStyle(color: tc.text, fontSize: 13),
+               textAlign: TextAlign.center),
+               const SizedBox(height: 4),
+               Text(
+                 'Tap the (+) button to add a clock-in zone.',
+                 style: TextStyle(color: tc.muted, fontSize: 11),
+                 textAlign: TextAlign.center,
+               ),
+               const SizedBox(height: 12),
+               OutlinedButton.icon(
+                 onPressed: _isDemo ? _demoBlock : _openAddLocationDialog,
+                 icon: const Icon(Icons.add_location_alt_rounded, size: 14),
+                 label: const Text('Add First Location'),
+                 style: OutlinedButton.styleFrom(
+                   foregroundColor: _isDemo ? tc.muted : tc.orange,
+                     side: BorderSide(color: _isDemo ? tc.border : tc.orange),
+                     shape: RoundedRectangleBorder(
+                       borderRadius: BorderRadius.circular(8)),
+                 ),
+               ),
         ],
       ),
     );
@@ -1205,7 +1204,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     final double lat = (loc['lat'] as num?)?.toDouble() ?? widget.officeLat;
     final double lng = (loc['lng'] as num?)?.toDouble() ?? widget.officeLng;
     final double radius =
-        (loc['radius'] as num?)?.toDouble() ?? _currentRadius;
+    (loc['radius'] as num?)?.toDouble() ?? _currentRadius;
 
     return GestureDetector(
       onTap: () {
@@ -1225,10 +1224,10 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected
-                ? (_isDemo ? tc.border : tc.orange)
-                : (!isActive
-                ? tc.border.withValues(alpha: 0.5)
-                : tc.border),
+            ? (_isDemo ? tc.border : tc.orange)
+            : (!isActive
+            ? tc.border.withValues(alpha: 0.5)
+            : tc.border),
             width: isSelected ? 1.5 : 1,
           ),
         ),
@@ -1241,26 +1240,26 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   child: Text(
                     title,
                     style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: isActive ? tc.text : tc.muted),
-                    overflow: TextOverflow.ellipsis,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isActive ? tc.text : tc.muted),
+                      overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 const SizedBox(width: 6),
                 if (!isActive)
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: tc.pillErrBg,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text('OFF',
-                        style: TextStyle(
-                            fontSize: 8,
-                            fontWeight: FontWeight.w800,
-                            color: tc.pillErrTx)),
+                      horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: tc.pillErrBg,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text('OFF',
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w800,
+                                    color: tc.pillErrTx)),
                   ),
                 const SizedBox(width: 4),
                 Container(
@@ -1269,28 +1268,28 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: isSelected
-                        ? (_isDemo ? tc.border : tc.orange)
-                        : Colors.transparent,
+                    ? (_isDemo ? tc.border : tc.orange)
+                    : Colors.transparent,
                     border: Border.all(
                       color: isSelected
-                          ? (_isDemo ? tc.border : tc.orange)
-                          : tc.muted,
+                      ? (_isDemo ? tc.border : tc.orange)
+                      : tc.muted,
                     ),
                   ),
                   child: isSelected
-                      ? Icon(Icons.check,
-                      size: 10,
-                      color: _isDemo ? tc.muted : Colors.white)
-                      : null,
+                  ? Icon(Icons.check,
+                         size: 10,
+                         color: _isDemo ? tc.muted : Colors.white)
+                  : null,
                 ),
               ],
             ),
             if (address.isNotEmpty) ...[
               const SizedBox(height: 2),
               Text(address,
-                  style: TextStyle(fontSize: 11, color: tc.muted),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1),
+                   style: TextStyle(fontSize: 11, color: tc.muted),
+                   overflow: TextOverflow.ellipsis,
+                   maxLines: 1),
             ],
             const SizedBox(height: 12),
             Row(
@@ -1301,16 +1300,16 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('RADIUS',
-                          style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w800,
-                              color: tc.muted)),
-                      const SizedBox(height: 2),
-                      Text('${radius.toInt()}m',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: tc.text)),
+                           style: TextStyle(
+                             fontSize: 9,
+                             fontWeight: FontWeight.w800,
+                             color: tc.muted)),
+                             const SizedBox(height: 2),
+                             Text('${radius.toInt()}m',
+                             style: TextStyle(
+                               fontSize: 12,
+                               fontWeight: FontWeight.w700,
+                               color: tc.text)),
                     ],
                   ),
                 ),
@@ -1320,19 +1319,19 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('COORDINATES',
-                          style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w800,
-                              color: tc.muted)),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}',
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: tc.text),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                           style: TextStyle(
+                             fontSize: 9,
+                             fontWeight: FontWeight.w800,
+                             color: tc.muted)),
+                             const SizedBox(height: 2),
+                             Text(
+                               '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}',
+                               style: TextStyle(
+                                 fontSize: 11,
+                                 fontWeight: FontWeight.w600,
+                                 color: tc.text),
+                                  overflow: TextOverflow.ellipsis,
+                             ),
                     ],
                   ),
                 ),
@@ -1344,11 +1343,11 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
               children: [
                 _miniBtn(
                   icon: isActive
-                      ? Icons.toggle_off_rounded
-                      : Icons.toggle_on_rounded,
+                  ? Icons.toggle_off_rounded
+                  : Icons.toggle_on_rounded,
                   color: _isDemo
-                      ? tc.muted
-                      : (isActive ? tc.muted : tc.green),
+                  ? tc.muted
+                  : (isActive ? tc.muted : tc.green),
                   tooltip: isActive ? 'Disable' : 'Enable',
                   onTap: () => _toggleLocationActive(loc),
                 ),
@@ -1413,16 +1412,16 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           Row(
             children: [
               Icon(Icons.notifications_none_rounded,
-                  color: tc.orange, size: 20),
+                   color: tc.orange, size: 20),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   'Automation & Notifications',
                   style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: tc.text),
-                  overflow: TextOverflow.ellipsis,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: tc.text),
+                    overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -1430,8 +1429,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           const SizedBox(height: 16),
           LayoutBuilder(builder: (context, constraints) {
             final w = constraints.maxWidth.isFinite
-                ? constraints.maxWidth
-                : 800.0;
+            ? constraints.maxWidth
+            : 800.0;
 
             const double gap = 16;
             final int cols;
@@ -1492,8 +1491,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
               spacing: gap,
               runSpacing: gap,
               children: cards
-                  .map((c) => SizedBox(width: itemWidth, child: c))
-                  .toList(),
+              .map((c) => SizedBox(width: itemWidth, child: c))
+              .toList(),
             );
           }),
         ],
@@ -1514,8 +1513,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: value
-              ? (_isDemo ? tc.border : tc.orange.withValues(alpha: 0.5))
-              : tc.border,
+          ? (_isDemo ? tc.border : tc.orange.withValues(alpha: 0.5))
+          : tc.border,
           width: value ? 1.5 : 1,
         ),
       ),
@@ -1528,10 +1527,10 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 Text(
                   title,
                   style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: tc.text),
-                  overflow: TextOverflow.ellipsis,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: tc.text),
+                     overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
                 Row(
@@ -1542,20 +1541,20 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: value
-                            ? (_isDemo ? tc.muted : tc.green)
-                            : tc.muted,
+                        ? (_isDemo ? tc.muted : tc.green)
+                        : tc.muted,
                       ),
                     ),
                     const SizedBox(width: 4),
                     Text(
                       value ? 'ON' : 'OFF',
                       style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800,
-                          color: value
-                              ? (_isDemo ? tc.muted : tc.green)
-                              : tc.muted,
-                          letterSpacing: 0.3),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: value
+                        ? (_isDemo ? tc.muted : tc.green)
+                        : tc.muted,
+                        letterSpacing: 0.3),
                     ),
                     const SizedBox(width: 6),
                     Expanded(
@@ -1597,13 +1596,13 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           style: OutlinedButton.styleFrom(
             backgroundColor: tc.card,
             foregroundColor: tc.text,
-            side: BorderSide(color: tc.border),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              side: BorderSide(color: tc.border),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
           child: const Text('Reload from Server',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
         );
 
         final addBtn = ElevatedButton.icon(
@@ -1613,34 +1612,34 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           style: ElevatedButton.styleFrom(
             backgroundColor: _isDemo ? tc.border : tc.green,
             foregroundColor: _isDemo ? tc.muted : Colors.white,
-            elevation: 2,
-            shadowColor:
-            (_isDemo ? tc.border : tc.green).withValues(alpha: 0.3),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 2,
+              shadowColor:
+              (_isDemo ? tc.border : tc.green).withValues(alpha: 0.3),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         );
 
         final saveBtn = ElevatedButton.icon(
           onPressed: (_isDemo || _isSaving) ? null : _saveConfigToFirestore,
           icon: _isSaving
-              ? const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(
-                  strokeWidth: 2, color: Colors.white))
-              : const Icon(Icons.refresh_rounded, size: 16),
+          ? const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2, color: Colors.white))
+          : const Icon(Icons.refresh_rounded, size: 16),
           label: Text(_isSaving ? 'Saving...' : 'Force Sync Now'),
           style: ElevatedButton.styleFrom(
             backgroundColor: _isDemo ? tc.border : tc.orange,
             foregroundColor: _isDemo ? tc.muted : Colors.white,
-            elevation: 2,
-            shadowColor:
-            (_isDemo ? tc.border : tc.orange).withValues(alpha: 0.3),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 2,
+              shadowColor:
+              (_isDemo ? tc.border : tc.orange).withValues(alpha: 0.3),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         );
 
@@ -1768,27 +1767,27 @@ class _LocationDialogState extends State<_LocationDialog> {
     final e = widget.existing ?? {};
 
     final initLat =
-        (e['lat'] as num?)?.toDouble() ?? widget.defaultLat ?? 14.598050;
+    (e['lat'] as num?)?.toDouble() ?? widget.defaultLat ?? 14.598050;
     final initLng =
-        (e['lng'] as num?)?.toDouble() ?? widget.defaultLng ?? 120.989170;
+    (e['lng'] as num?)?.toDouble() ?? widget.defaultLng ?? 120.989170;
     if (GeoUtils.isValidLat(initLat) && GeoUtils.isValidLng(initLng)) {
       _pickedPoint = LatLng(initLat, initLng);
     }
 
     _nameCtrl = TextEditingController(
-        text: _sanitize(e['name'] ?? '', maxLen: 60));
+      text: _sanitize(e['name'] ?? '', maxLen: 60));
     _addressCtrl = TextEditingController(
-        text: _sanitize(e['address'] ?? '', maxLen: 150));
+      text: _sanitize(e['address'] ?? '', maxLen: 150));
     _latCtrl = TextEditingController(
-        text: _isValidLat(initLat) ? initLat.toStringAsFixed(6) : '14.598050');
+      text: _isValidLat(initLat) ? initLat.toStringAsFixed(6) : '14.598050');
     _lngCtrl = TextEditingController(
-        text:
-        _isValidLng(initLng) ? initLng.toStringAsFixed(6) : '120.989170');
+      text:
+      _isValidLng(initLng) ? initLng.toStringAsFixed(6) : '120.989170');
 
     final r =
-        ((e['radius'] as num?)?.toDouble()) ?? widget.defaultRadius ?? 100;
+    ((e['radius'] as num?)?.toDouble()) ?? widget.defaultRadius ?? 100;
     _radiusCtrl = TextEditingController(
-        text: (_isValidRadius(r) ? r : 100).toStringAsFixed(0));
+      text: (_isValidRadius(r) ? r : 100).toStringAsFixed(0));
 
     _addressCtrl.addListener(_onAddressChanged);
   }
@@ -1814,7 +1813,7 @@ class _LocationDialogState extends State<_LocationDialog> {
     s = s.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'), '');
     s = s.replaceAll(RegExp(r'[\r\n\t]+'), ' ');
     s = s.replaceAll(
-        RegExp(r'[\u200B-\u200F\u202A-\u202E\u2066-\u2069]'), '');
+      RegExp(r'[\u200B-\u200F\u202A-\u202E\u2066-\u2069]'), '');
     if (s.length > maxLen) s = '${s.substring(0, maxLen)}…';
     return s.trim();
   }
@@ -1824,1041 +1823,1041 @@ class _LocationDialogState extends State<_LocationDialog> {
   static bool _isValidRadius(double v) => GeoUtils.isValidRadius(v);
 
   double _haversineMeters(
-      double lat1, double lng1, double lat2, double lng2) {
+    double lat1, double lng1, double lat2, double lng2) {
     const R = 6371000.0;
     final dLat = (lat2 - lat1) * math.pi / 180;
     final dLng = (lng2 - lng1) * math.pi / 180;
     final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(lat1 * math.pi / 180) *
-            math.cos(lat2 * math.pi / 180) *
-            math.sin(dLng / 2) *
-            math.sin(dLng / 2);
+    math.cos(lat1 * math.pi / 180) *
+    math.cos(lat2 * math.pi / 180) *
+    math.sin(dLng / 2) *
+    math.sin(dLng / 2);
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-  }
-
-  void _onAddressChanged() {
-    if (!_safe) return;
-    final q = _addressCtrl.text.trim();
-    _addressDebounce?.cancel();
-
-    if (q.length < 5) {
-      if (_statusText != null) {
-        _safeSetState(() {
-          _statusText = null;
-          _autoFilled = false;
-        });
-      }
-      return;
     }
 
-    _addressDebounce = Timer(const Duration(milliseconds: 900), () {
+    void _onAddressChanged() {
       if (!_safe) return;
-      _runAutoPipeline(q);
-    });
+      final q = _addressCtrl.text.trim();
+      _addressDebounce?.cancel();
 
-    _safeSetState(() {
-      _statusText = '⏳ Type more... auto-detect will start in a moment';
-      _statusIsError = false;
-    });
-  }
-
-  bool _geocodeRateOk() {
-    final now = DateTime.now();
-    _geocodeCalls
-        .removeWhere((t) => now.difference(t) > const Duration(minutes: 1));
-    if (_geocodeCalls.length >= _maxGeocodePerMinute) return false;
-    _geocodeCalls.add(now);
-    return true;
-  }
-
-  Future<void> _runAutoPipeline(String rawQuery) async {
-    if (!_safe) return;
-    final cleanQuery = _sanitize(rawQuery, maxLen: 150);
-    if (cleanQuery.length < 5) return;
-
-    final myGen = ++_pipelineGeneration;
-
-    _safeSetState(() {
-      _searching = true;
-      _detecting = false;
-      _statusText = '🔍 Searching: "$cleanQuery"...';
-      _statusIsError = false;
-    });
-
-    final latLng = await _geocodeAddress(cleanQuery);
-
-    if (!_safe || myGen != _pipelineGeneration) return;
-
-    if (latLng == null) {
-      _safeSetState(() {
-        _searching = false;
-        _detecting = false;
-        _statusText = '❌ Address not found. Try a more specific one.';
-        _statusIsError = true;
-      });
-      return;
-    }
-
-    _latCtrl.text = latLng.latitude.toStringAsFixed(6);
-    _lngCtrl.text = latLng.longitude.toStringAsFixed(6);
-    _pickedPoint = latLng;
-    _safeMoveMap(latLng, 17.0);
-
-    _safeSetState(() {
-      _searching = false;
-      _detecting = true;
-      _statusText = '🏢 Building found — detecting size...';
-      _statusIsError = false;
-    });
-
-    final building = await _detectBuildingAt(latLng);
-
-    if (!_safe || myGen != _pipelineGeneration) return;
-
-    if (building != null) {
-      _latCtrl.text = building.center.latitude.toStringAsFixed(6);
-      _lngCtrl.text = building.center.longitude.toStringAsFixed(6);
-      _radiusCtrl.text = building.radiusMeters.toStringAsFixed(0);
-
-      _safeSetState(() {
-        _pickedPoint = building.center;
-        _detectedBuilding = building;
-        _autoFilled = true;
-        _detecting = false;
-        _statusText = '✅ ${building.widthMeters.toStringAsFixed(0)}m × '
-            '${building.heightMeters.toStringAsFixed(0)}m — '
-            'radius auto-set to ${building.radiusMeters.toStringAsFixed(0)}m';
-        _statusIsError = false;
-      });
-
-      _safeMoveMap(building.center, 17.0);
-    } else {
-      _radiusCtrl.text = '100';
-      _safeSetState(() {
-        _detectedBuilding = null;
-        _autoFilled = false;
-        _detecting = false;
-        _statusText = '⚠️ Building not in OSM — default 100m applied. '
-            'Adjust radius manually if needed.';
-        _statusIsError = true;
-      });
-    }
-  }
-
-  Future<LatLng?> _geocodeAddress(String query) async {
-    final key = query.toLowerCase().trim();
-    if (_geocodeCache.containsKey(key)) return _geocodeCache[key];
-
-    if (!_geocodeRateOk()) {
-      if (_safe) {
-        _safeSetState(() {
-          _searching = false;
-          _statusText = '⚠️ Too many lookups. Wait 1 minute.';
-          _statusIsError = true;
-        });
-      }
-      return null;
-    }
-
-    try {
-      final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
-        'q': query,
-        'format': 'json',
-        'addressdetails': '1',
-        'limit': '1',
-      });
-
-      final headers = <String, String>{'Accept': 'application/json'};
-      if (!kIsWeb) headers['User-Agent'] = 'RACOMA-HRIS/1.0';
-
-      final response = await http
-          .get(uri, headers: headers)
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode != 200) {
-        _geocodeCache[key] = null;
-        return null;
-      }
-
-      final decoded = jsonDecode(response.body);
-      final List<dynamic> list = decoded is List ? decoded : <dynamic>[];
-      if (list.isEmpty) {
-        _geocodeCache[key] = null;
-        return null;
-      }
-
-      final first = list.first;
-      if (first is! Map) {
-        _geocodeCache[key] = null;
-        return null;
-      }
-
-      final lat = double.tryParse((first['lat'] ?? '').toString());
-      final lon = double.tryParse((first['lon'] ?? '').toString());
-      if (lat == null || lon == null) {
-        _geocodeCache[key] = null;
-        return null;
-      }
-      if (!_isValidLat(lat) || !_isValidLng(lon)) {
-        _geocodeCache[key] = null;
-        return null;
-      }
-
-      final result = LatLng(lat, lon);
-      _geocodeCache[key] = result;
-      return result;
-    } catch (e) {
-      debugPrint('❌ [Geocode] error: $e');
-      _geocodeCache[key] = null;
-      return null;
-    }
-  }
-
-  Future<_BuildingInfo?> _detectBuildingAt(LatLng point) async {
-    final cacheKey =
-        '${point.latitude.toStringAsFixed(5)},${point.longitude.toStringAsFixed(5)}';
-    if (_buildingCache.containsKey(cacheKey)) {
-      return _buildingCache[cacheKey];
-    }
-
-    try {
-      final query = '''
-[out:json][timeout:12];
-(
-  way(around:60,${point.latitude},${point.longitude})["building"];
-);
-out geom;
-''';
-
-      final response = await http
-          .post(
-        Uri.parse('https://overpass-api.de/api/interpreter'),
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'data=${Uri.encodeComponent(query)}',
-      )
-          .timeout(const Duration(seconds: 15));
-
-      if (response.statusCode != 200) {
-        _buildingCache[cacheKey] = null;
-        return null;
-      }
-
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      final elements = json['elements'] as List?;
-      if (elements == null || elements.isEmpty) {
-        _buildingCache[cacheKey] = null;
-        return null;
-      }
-
-      _BuildingInfo? nearest;
-      double nearestDist = double.infinity;
-
-      for (final el in elements) {
-        final geometry = el['geometry'] as List?;
-        if (geometry == null || geometry.length < 3) continue;
-
-        final points = <LatLng>[];
-        double minLat = double.infinity, maxLat = -double.infinity;
-        double minLng = double.infinity, maxLng = -double.infinity;
-
-        for (final node in geometry) {
-          if (node is! Map) continue;
-          final lat = (node['lat'] as num?)?.toDouble();
-          final lng = (node['lon'] as num?)?.toDouble();
-          if (lat == null || lng == null) continue;
-
-          points.add(LatLng(lat, lng));
-          if (lat < minLat) minLat = lat;
-          if (lat > maxLat) maxLat = lat;
-          if (lng < minLng) minLng = lng;
-          if (lng > maxLng) maxLng = lng;
+      if (q.length < 5) {
+        if (_statusText != null) {
+          _safeSetState(() {
+            _statusText = null;
+            _autoFilled = false;
+          });
         }
-
-        if (points.isEmpty) continue;
-
-        final centerLat = (minLat + maxLat) / 2;
-        final centerLng = (minLng + maxLng) / 2;
-        final center = LatLng(centerLat, centerLng);
-
-        final dist = _haversineMeters(
-            point.latitude, point.longitude, centerLat, centerLng);
-
-        final midLat = (minLat + maxLat) / 2;
-        final midLng = (minLng + maxLng) / 2;
-
-        final widthM = _haversineMeters(midLat, minLng, midLat, maxLng);
-        final heightM = _haversineMeters(minLat, midLng, maxLat, midLng);
-
-        final halfDiag =
-            math.sqrt(widthM * widthM + heightM * heightM) / 2;
-        final radius = (halfDiag + 10).clamp(30.0, 2000.0);
-
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearest = _BuildingInfo(
-            center: center,
-            radiusMeters: radius,
-            widthMeters: widthM,
-            heightMeters: heightM,
-            outline: points,
-          );
-        }
-      }
-
-      _buildingCache[cacheKey] = nearest;
-      return nearest;
-    } catch (e) {
-      debugPrint('❌ [Overpass] error: $e');
-      _buildingCache[cacheKey] = null;
-      return null;
-    }
-  }
-
-  Future<void> _onMapTapped(LatLng tapPos) async {
-    if (!_safe) return;
-    if (!GeoUtils.isValidLat(tapPos.latitude) ||
-        !GeoUtils.isValidLng(tapPos.longitude)) {
-      return;
-    }
-
-    final myGen = ++_pipelineGeneration;
-
-    _safeSetState(() {
-      _pickedPoint = tapPos;
-      _latCtrl.text = tapPos.latitude.toStringAsFixed(6);
-      _lngCtrl.text = tapPos.longitude.toStringAsFixed(6);
-      _detectedBuilding = null;
-      _detecting = true;
-      _statusText = '🏢 Detecting building at tapped point...';
-      _statusIsError = false;
-    });
-
-    final building = await _detectBuildingAt(tapPos);
-
-    if (!_safe || myGen != _pipelineGeneration) return;
-
-    if (building != null) {
-      _latCtrl.text = building.center.latitude.toStringAsFixed(6);
-      _lngCtrl.text = building.center.longitude.toStringAsFixed(6);
-      _radiusCtrl.text = building.radiusMeters.toStringAsFixed(0);
-
-      _safeSetState(() {
-        _pickedPoint = building.center;
-        _detectedBuilding = building;
-        _autoFilled = true;
-        _detecting = false;
-        _statusText = '✅ ${building.widthMeters.toStringAsFixed(0)}m × '
-            '${building.heightMeters.toStringAsFixed(0)}m — '
-            'radius auto-set to ${building.radiusMeters.toStringAsFixed(0)}m';
-        _statusIsError = false;
-      });
-
-      _safeMoveMap(building.center, 17.0);
-    } else {
-      _safeSetState(() {
-        _detectedBuilding = null;
-        _autoFilled = false;
-        _detecting = false;
-        _statusText = '⚠️ No building here — adjust radius manually.';
-        _statusIsError = true;
-      });
-    }
-  }
-
-  Future<void> _save() async {
-    if (!_safe) return;
-    if (_saving) return;
-    if (!_formKey.currentState!.validate()) return;
-
-    final admin = FirebaseAuth.instance.currentUser;
-    if (admin == null) {
-      _showError('Session expired.');
-      return;
-    }
-
-    final lat = double.tryParse(_latCtrl.text.trim());
-    final lng = double.tryParse(_lngCtrl.text.trim());
-    final radius = double.tryParse(_radiusCtrl.text.trim());
-
-    if (lat == null || !_isValidLat(lat)) {
-      _showError('Invalid latitude (-90 to 90).');
-      return;
-    }
-    if (lng == null || !_isValidLng(lng)) {
-      _showError('Invalid longitude (-180 to 180).');
-      return;
-    }
-    if (radius == null || !_isValidRadius(radius)) {
-      _showError('Invalid radius (20-5000m).');
-      return;
-    }
-
-    _safeSetState(() => _saving = true);
-    try {
-      final name = _sanitize(_nameCtrl.text.trim(), maxLen: 60);
-      final address = _sanitize(_addressCtrl.text.trim(), maxLen: 150);
-
-      if (name.isEmpty) {
-        _showError('Location name required.');
-        _safeSetState(() => _saving = false);
         return;
       }
 
-      final data = <String, dynamic>{
-        'name': name,
-        'address': address,
-        'lat': lat,
-        'lng': lng,
-        'radius': radius,
-        'active': widget.existing?['active'] ?? true,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'updatedBy': admin.uid,
-      };
+      _addressDebounce = Timer(const Duration(milliseconds: 900), () {
+        if (!_safe) return;
+        _runAutoPipeline(q);
+      });
 
-      if (_detectedBuilding != null) {
-        data['buildingWidthM'] = _detectedBuilding!.widthMeters;
-        data['buildingHeightM'] = _detectedBuilding!.heightMeters;
-        data['autoSizedRadius'] = true;
-      } else {
-        data['autoSizedRadius'] = false;
+      _safeSetState(() {
+        _statusText = '⏳ Type more... auto-detect will start in a moment';
+      _statusIsError = false;
+      });
+    }
+
+    bool _geocodeRateOk() {
+      final now = DateTime.now();
+      _geocodeCalls
+      .removeWhere((t) => now.difference(t) > const Duration(minutes: 1));
+      if (_geocodeCalls.length >= _maxGeocodePerMinute) return false;
+      _geocodeCalls.add(now);
+      return true;
+    }
+
+    Future<void> _runAutoPipeline(String rawQuery) async {
+      if (!_safe) return;
+      final cleanQuery = _sanitize(rawQuery, maxLen: 150);
+      if (cleanQuery.length < 5) return;
+
+      final myGen = ++_pipelineGeneration;
+
+      _safeSetState(() {
+        _searching = true;
+        _detecting = false;
+        _statusText = '🔍 Searching: "$cleanQuery"...';
+      _statusIsError = false;
+      });
+
+      final latLng = await _geocodeAddress(cleanQuery);
+
+      if (!_safe || myGen != _pipelineGeneration) return;
+
+      if (latLng == null) {
+        _safeSetState(() {
+          _searching = false;
+          _detecting = false;
+          _statusText = '❌ Address not found. Try a more specific one.';
+        _statusIsError = true;
+        });
+        return;
       }
 
-      if (widget.existing == null) {
-        final ref = await FirebaseFirestore.instance
-            .collection('locations')
-            .add({
-          ...data,
-          'createdAt': FieldValue.serverTimestamp(),
-          'createdBy': admin.uid,
+      _latCtrl.text = latLng.latitude.toStringAsFixed(6);
+      _lngCtrl.text = latLng.longitude.toStringAsFixed(6);
+      _pickedPoint = latLng;
+      _safeMoveMap(latLng, 17.0);
+
+      _safeSetState(() {
+        _searching = false;
+        _detecting = true;
+        _statusText = '🏢 Building found — detecting size...';
+      _statusIsError = false;
+      });
+
+      final building = await _detectBuildingAt(latLng);
+
+      if (!_safe || myGen != _pipelineGeneration) return;
+
+      if (building != null) {
+        _latCtrl.text = building.center.latitude.toStringAsFixed(6);
+        _lngCtrl.text = building.center.longitude.toStringAsFixed(6);
+        _radiusCtrl.text = building.radiusMeters.toStringAsFixed(0);
+
+        _safeSetState(() {
+          _pickedPoint = building.center;
+          _detectedBuilding = building;
+          _autoFilled = true;
+          _detecting = false;
+          _statusText = '✅ ${building.widthMeters.toStringAsFixed(0)}m × '
+        '${building.heightMeters.toStringAsFixed(0)}m — '
+        'radius auto-set to ${building.radiusMeters.toStringAsFixed(0)}m';
+        _statusIsError = false;
         });
 
-        unawaited(_auditFromDialog(
-          action: 'add_location',
-          targetId: ref.id,
-          metadata: {
-            'name': name,
-            'address': address,
-            'radius': radius,
-            'autoSized': _detectedBuilding != null,
-          },
-          actorUid: admin.uid,
-        ));
+        _safeMoveMap(building.center, 17.0);
       } else {
-        final id = widget.existing!['id'].toString();
-        if (id.isEmpty || id.length > 1500 || id.contains('/')) {
-          _showError('Invalid location reference.');
+        _radiusCtrl.text = '100';
+        _safeSetState(() {
+          _detectedBuilding = null;
+          _autoFilled = false;
+          _detecting = false;
+          _statusText = '⚠️ Building not in OSM — default 100m applied. '
+        'Adjust radius manually if needed.';
+        _statusIsError = true;
+        });
+      }
+    }
+
+    Future<LatLng?> _geocodeAddress(String query) async {
+      final key = query.toLowerCase().trim();
+      if (_geocodeCache.containsKey(key)) return _geocodeCache[key];
+
+      if (!_geocodeRateOk()) {
+        if (_safe) {
+          _safeSetState(() {
+            _searching = false;
+            _statusText = '⚠️ Too many lookups. Wait 1 minute.';
+          _statusIsError = true;
+          });
+        }
+        return null;
+      }
+
+      try {
+        final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+          'q': query,
+          'format': 'json',
+          'addressdetails': '1',
+          'limit': '1',
+        });
+
+        final headers = <String, String>{'Accept': 'application/json'};
+        if (!kIsWeb) headers['User-Agent'] = 'RACOMA-HRIS/1.0';
+
+        final response = await http
+        .get(uri, headers: headers)
+        .timeout(const Duration(seconds: 10));
+
+        if (response.statusCode != 200) {
+          _geocodeCache[key] = null;
+          return null;
+        }
+
+        final decoded = jsonDecode(response.body);
+        final List<dynamic> list = decoded is List ? decoded : <dynamic>[];
+        if (list.isEmpty) {
+          _geocodeCache[key] = null;
+          return null;
+        }
+
+        final first = list.first;
+        if (first is! Map) {
+          _geocodeCache[key] = null;
+          return null;
+        }
+
+        final lat = double.tryParse((first['lat'] ?? '').toString());
+        final lon = double.tryParse((first['lon'] ?? '').toString());
+        if (lat == null || lon == null) {
+          _geocodeCache[key] = null;
+          return null;
+        }
+        if (!_isValidLat(lat) || !_isValidLng(lon)) {
+          _geocodeCache[key] = null;
+          return null;
+        }
+
+        final result = LatLng(lat, lon);
+        _geocodeCache[key] = result;
+        return result;
+      } catch (e) {
+        debugPrint('❌ [Geocode] error: $e');
+        _geocodeCache[key] = null;
+        return null;
+      }
+    }
+
+    Future<_BuildingInfo?> _detectBuildingAt(LatLng point) async {
+      final cacheKey =
+      '${point.latitude.toStringAsFixed(5)},${point.longitude.toStringAsFixed(5)}';
+      if (_buildingCache.containsKey(cacheKey)) {
+        return _buildingCache[cacheKey];
+      }
+
+      try {
+        final query = '''
+        [out:json][timeout:12];
+        (
+          way(around:60,${point.latitude},${point.longitude})["building"];
+          );
+          out geom;
+          ''';
+
+          final response = await http
+          .post(
+            Uri.parse('https://overpass-api.de/api/interpreter'),
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'data=${Uri.encodeComponent(query)}',
+          )
+          .timeout(const Duration(seconds: 15));
+
+          if (response.statusCode != 200) {
+            _buildingCache[cacheKey] = null;
+            return null;
+          }
+
+          final json = jsonDecode(response.body) as Map<String, dynamic>;
+          final elements = json['elements'] as List?;
+          if (elements == null || elements.isEmpty) {
+            _buildingCache[cacheKey] = null;
+            return null;
+          }
+
+          _BuildingInfo? nearest;
+          double nearestDist = double.infinity;
+
+          for (final el in elements) {
+            final geometry = el['geometry'] as List?;
+            if (geometry == null || geometry.length < 3) continue;
+
+            final points = <LatLng>[];
+            double minLat = double.infinity, maxLat = -double.infinity;
+            double minLng = double.infinity, maxLng = -double.infinity;
+
+            for (final node in geometry) {
+              if (node is! Map) continue;
+              final lat = (node['lat'] as num?)?.toDouble();
+              final lng = (node['lon'] as num?)?.toDouble();
+              if (lat == null || lng == null) continue;
+
+              points.add(LatLng(lat, lng));
+              if (lat < minLat) minLat = lat;
+              if (lat > maxLat) maxLat = lat;
+              if (lng < minLng) minLng = lng;
+              if (lng > maxLng) maxLng = lng;
+            }
+
+            if (points.isEmpty) continue;
+
+            final centerLat = (minLat + maxLat) / 2;
+            final centerLng = (minLng + maxLng) / 2;
+            final center = LatLng(centerLat, centerLng);
+
+            final dist = _haversineMeters(
+              point.latitude, point.longitude, centerLat, centerLng);
+
+            final midLat = (minLat + maxLat) / 2;
+            final midLng = (minLng + maxLng) / 2;
+
+            final widthM = _haversineMeters(midLat, minLng, midLat, maxLng);
+            final heightM = _haversineMeters(minLat, midLng, maxLat, midLng);
+
+            final halfDiag =
+            math.sqrt(widthM * widthM + heightM * heightM) / 2;
+            final radius = (halfDiag + 10).clamp(30.0, 2000.0);
+
+            if (dist < nearestDist) {
+              nearestDist = dist;
+              nearest = _BuildingInfo(
+                center: center,
+                radiusMeters: radius,
+                widthMeters: widthM,
+                heightMeters: heightM,
+                outline: points,
+              );
+            }
+          }
+
+          _buildingCache[cacheKey] = nearest;
+          return nearest;
+      } catch (e) {
+        debugPrint('❌ [Overpass] error: $e');
+        _buildingCache[cacheKey] = null;
+        return null;
+      }
+    }
+
+    Future<void> _onMapTapped(LatLng tapPos) async {
+      if (!_safe) return;
+      if (!GeoUtils.isValidLat(tapPos.latitude) ||
+        !GeoUtils.isValidLng(tapPos.longitude)) {
+        return;
+        }
+
+        final myGen = ++_pipelineGeneration;
+
+      _safeSetState(() {
+        _pickedPoint = tapPos;
+        _latCtrl.text = tapPos.latitude.toStringAsFixed(6);
+        _lngCtrl.text = tapPos.longitude.toStringAsFixed(6);
+        _detectedBuilding = null;
+        _detecting = true;
+        _statusText = '🏢 Detecting building at tapped point...';
+      _statusIsError = false;
+      });
+
+      final building = await _detectBuildingAt(tapPos);
+
+      if (!_safe || myGen != _pipelineGeneration) return;
+
+      if (building != null) {
+        _latCtrl.text = building.center.latitude.toStringAsFixed(6);
+        _lngCtrl.text = building.center.longitude.toStringAsFixed(6);
+        _radiusCtrl.text = building.radiusMeters.toStringAsFixed(0);
+
+        _safeSetState(() {
+          _pickedPoint = building.center;
+          _detectedBuilding = building;
+          _autoFilled = true;
+          _detecting = false;
+          _statusText = '✅ ${building.widthMeters.toStringAsFixed(0)}m × '
+        '${building.heightMeters.toStringAsFixed(0)}m — '
+        'radius auto-set to ${building.radiusMeters.toStringAsFixed(0)}m';
+        _statusIsError = false;
+        });
+
+        _safeMoveMap(building.center, 17.0);
+      } else {
+        _safeSetState(() {
+          _detectedBuilding = null;
+          _autoFilled = false;
+          _detecting = false;
+          _statusText = '⚠️ No building here — adjust radius manually.';
+        _statusIsError = true;
+        });
+      }
+    }
+
+    Future<void> _save() async {
+      if (!_safe) return;
+      if (_saving) return;
+      if (!_formKey.currentState!.validate()) return;
+
+      final admin = FirebaseAuth.instance.currentUser;
+      if (admin == null) {
+        _showError('Session expired.');
+        return;
+      }
+
+      final lat = double.tryParse(_latCtrl.text.trim());
+      final lng = double.tryParse(_lngCtrl.text.trim());
+      final radius = double.tryParse(_radiusCtrl.text.trim());
+
+      if (lat == null || !_isValidLat(lat)) {
+        _showError('Invalid latitude (-90 to 90).');
+        return;
+      }
+      if (lng == null || !_isValidLng(lng)) {
+        _showError('Invalid longitude (-180 to 180).');
+        return;
+      }
+      if (radius == null || !_isValidRadius(radius)) {
+        _showError('Invalid radius (20-5000m).');
+        return;
+      }
+
+      _safeSetState(() => _saving = true);
+      try {
+        final name = _sanitize(_nameCtrl.text.trim(), maxLen: 60);
+        final address = _sanitize(_addressCtrl.text.trim(), maxLen: 150);
+
+        if (name.isEmpty) {
+          _showError('Location name required.');
           _safeSetState(() => _saving = false);
           return;
         }
 
-        await FirebaseFirestore.instance
-            .collection('locations')
-            .doc(id)
-            .update(data);
+        final data = <String, dynamic>{
+          'name': name,
+          'address': address,
+          'lat': lat,
+          'lng': lng,
+          'radius': radius,
+          'active': widget.existing?['active'] ?? true,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedBy': admin.uid,
+        };
 
-        unawaited(_auditFromDialog(
-          action: 'edit_location',
-          targetId: id,
-          metadata: {
-            'name': name,
-            'address': address,
-            'radius': radius,
-            'autoSized': _detectedBuilding != null,
-          },
-          actorUid: admin.uid,
-        ));
+        if (_detectedBuilding != null) {
+          data['buildingWidthM'] = _detectedBuilding!.widthMeters;
+          data['buildingHeightM'] = _detectedBuilding!.heightMeters;
+          data['autoSizedRadius'] = true;
+        } else {
+          data['autoSizedRadius'] = false;
+        }
+
+        if (widget.existing == null) {
+          final ref = await FirebaseFirestore.instance
+          .collection('locations')
+          .add({
+            ...data,
+            'createdAt': FieldValue.serverTimestamp(),
+            'createdBy': admin.uid,
+          });
+
+          unawaited(_auditFromDialog(
+            action: 'add_location',
+            targetId: ref.id,
+            metadata: {
+              'name': name,
+              'address': address,
+              'radius': radius,
+              'autoSized': _detectedBuilding != null,
+            },
+            actorUid: admin.uid,
+          ));
+        } else {
+          final id = widget.existing!['id'].toString();
+          if (id.isEmpty || id.length > 1500 || id.contains('/')) {
+            _showError('Invalid location reference.');
+            _safeSetState(() => _saving = false);
+            return;
+          }
+
+          await FirebaseFirestore.instance
+          .collection('locations')
+          .doc(id)
+          .update(data);
+
+          unawaited(_auditFromDialog(
+            action: 'edit_location',
+            targetId: id,
+            metadata: {
+              'name': name,
+              'address': address,
+              'radius': radius,
+              'autoSized': _detectedBuilding != null,
+            },
+            actorUid: admin.uid,
+          ));
+        }
+
+        if (!_safe) return;
+        Navigator.of(context).pop(true);
+      } catch (e) {
+        if (!_safe) return;
+        _safeSetState(() => _saving = false);
+        _showError(kDebugMode ? 'Failed: $e' : 'Failed to save. Try again.');
       }
-
-      if (!_safe) return;
-      Navigator.of(context).pop(true);
-    } catch (e) {
-      if (!_safe) return;
-      _safeSetState(() => _saving = false);
-      _showError(kDebugMode ? 'Failed: $e' : 'Failed to save. Try again.');
     }
-  }
 
-  Future<void> _auditFromDialog({
-    required String action,
-    required String targetId,
-    required Map<String, dynamic> metadata,
-    required String actorUid,
-  }) async {
-    try {
-      await FirebaseFirestore.instance.collection('security_events').add({
-        'type': 'admin_action',
-        'action': action,
-        'targetId': targetId,
-        'targetType': 'location',
-        'actorUid': actorUid,
-        'metadata': metadata,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      if (kDebugMode) debugPrint('⚠️ dialog audit failed: $e');
+    Future<void> _auditFromDialog({
+      required String action,
+      required String targetId,
+      required Map<String, dynamic> metadata,
+      required String actorUid,
+    }) async {
+      try {
+        await FirebaseFirestore.instance.collection('security_events').add({
+          'type': 'admin_action',
+          'action': action,
+          'targetId': targetId,
+          'targetType': 'location',
+          'actorUid': actorUid,
+          'metadata': metadata,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        if (kDebugMode) debugPrint('⚠️ dialog audit failed: $e');
+      }
     }
-  }
 
-  void _showError(String msg) {
-    if (!_safe) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_sanitize(msg, maxLen: 200)),
-        backgroundColor: Colors.red,
-      ),
-    );
-  }
-
-  Widget _buildMapPicker(AdminColors tc) {
-    final center = _pickedPoint ?? const LatLng(14.598050, 120.989170);
-    final radius =
-        double.tryParse(_radiusCtrl.text.trim())?.clamp(20.0, 5000.0) ?? 100.0;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(Icons.touch_app_rounded, size: 12, color: tc.orange),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Text(
-                'I-tap ang mapa para i-override — auto-detect pa rin ang building.',
-                style: TextStyle(fontSize: 10.5, color: tc.muted),
-              ),
-            ),
-          ],
+    void _showError(String msg) {
+      if (!_safe) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_sanitize(msg, maxLen: 200)),
+          backgroundColor: Colors.red,
         ),
-        const SizedBox(height: 6),
-        Container(
-          height: 240,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: tc.border),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Stack(
-              children: [
-                FlutterMap(
-                  mapController: _dialogMapCtrl,
-                  options: MapOptions(
-                    initialCenter: center,
-                    initialZoom: 17.0,
-                    onTap: (tapPos, latLng) => _onMapTapped(latLng),
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.hris.biometrics',
-                    ),
-                    if (_detectedBuilding != null)
-                      PolygonLayer(
-                        polygons: [
-                          Polygon(
-                            points: _detectedBuilding!.outline,
-                            color: Colors.blue.withValues(alpha: 0.20),
-                            borderColor: Colors.blue,
-                            borderStrokeWidth: 2,
-                          ),
-                        ],
-                      ),
-                    if (_pickedPoint != null)
-                      CircleLayer(
-                        circles: [
-                          CircleMarker(
-                            point: _pickedPoint!,
-                            radius: radius,
-                            useRadiusInMeter: true,
-                            color: tc.orange.withValues(alpha: 0.18),
-                            borderColor: tc.orange,
-                            borderStrokeWidth: 2,
-                          ),
-                        ],
-                      ),
-                    if (_pickedPoint != null)
-                      MarkerLayer(
-                        markers: [
-                          Marker(
-                            point: _pickedPoint!,
-                            width: 40,
-                            height: 40,
-                            child: Icon(Icons.location_on,
-                                color: tc.orange, size: 38),
-                          ),
-                        ],
-                      ),
-                  ],
+      );
+    }
+
+    Widget _buildMapPicker(AdminColors tc) {
+      final center = _pickedPoint ?? const LatLng(14.598050, 120.989170);
+      final radius =
+      double.tryParse(_radiusCtrl.text.trim())?.clamp(20.0, 5000.0) ?? 100.0;
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.touch_app_rounded, size: 12, color: tc.orange),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'Tap the map to override — the building will still be auto-detected.',
+                  style: TextStyle(fontSize: 10.5, color: tc.muted),
                 ),
-                if (_searching || _detecting)
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.3),
-                      child: Center(
-                        child: Card(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 12),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2),
-                                ),
-                                const SizedBox(width: 10),
-                                Text(
-                                  _searching
-                                      ? 'Searching address...'
-                                      : 'Detecting building...',
-                                  style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Container(
+            height: 240,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: tc.border),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Stack(
+                children: [
+                  FlutterMap(
+                    mapController: _dialogMapCtrl,
+                    options: MapOptions(
+                      initialCenter: center,
+                      initialZoom: 17.0,
+                      onTap: (tapPos, latLng) => _onMapTapped(latLng),
+                    ),
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.hris.biometrics',
+                      ),
+                      if (_detectedBuilding != null)
+                        PolygonLayer(
+                          polygons: [
+                            Polygon(
+                              points: _detectedBuilding!.outline,
+                              color: Colors.blue.withValues(alpha: 0.20),
+                              borderColor: Colors.blue,
+                              borderStrokeWidth: 2,
+                            ),
+                          ],
+                        ),
+                        if (_pickedPoint != null)
+                          CircleLayer(
+                            circles: [
+                              CircleMarker(
+                                point: _pickedPoint!,
+                                radius: radius,
+                                useRadiusInMeter: true,
+                                color: tc.orange.withValues(alpha: 0.18),
+                                borderColor: tc.orange,
+                                borderStrokeWidth: 2,
+                              ),
+                            ],
+                          ),
+                          if (_pickedPoint != null)
+                            MarkerLayer(
+                              markers: [
+                                Marker(
+                                  point: _pickedPoint!,
+                                  width: 40,
+                                  height: 40,
+                                  child: Icon(Icons.location_on,
+                                              color: tc.orange, size: 38),
                                 ),
                               ],
+                            ),
+                    ],
+                  ),
+                  if (_searching || _detecting)
+                    Positioned.fill(
+                      child: Container(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        child: Center(
+                          child: Card(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 12),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Text(
+                                      _searching
+                                      ? 'Searching address...'
+                                    : 'Detecting building...',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600),
+                                    ),
+                                  ],
+                                ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 6),
-        _buildStatusLine(tc),
-        const SizedBox(height: 4),
-        Row(
-          children: [
-            TextButton.icon(
-              onPressed: () {
-                if (!_safe) return;
-                if (_pickedPoint == null) return;
-                _safeMoveMap(_pickedPoint!, 18.0);
-              },
-              icon: const Icon(Icons.my_location, size: 14),
-              label:
-              const Text('Recenter', style: TextStyle(fontSize: 11)),
-              style: TextButton.styleFrom(
-                foregroundColor: tc.orange,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 32),
+                ],
               ),
             ),
-            if (_detectedBuilding != null) ...[
-              const SizedBox(width: 4),
+          ),
+          const SizedBox(height: 6),
+          _buildStatusLine(tc),
+          const SizedBox(height: 4),
+          Row(
+            children: [
               TextButton.icon(
                 onPressed: () {
                   if (!_safe) return;
-                  _safeSetState(() {
-                    _detectedBuilding = null;
-                    _statusText = null;
-                  });
+                  if (_pickedPoint == null) return;
+                  _safeMoveMap(_pickedPoint!, 18.0);
                 },
-                icon: const Icon(Icons.clear, size: 14),
-                label: const Text('Clear outline',
-                    style: TextStyle(fontSize: 11)),
+                icon: const Icon(Icons.my_location, size: 14),
+                label:
+                const Text('Recenter', style: TextStyle(fontSize: 11)),
                 style: TextButton.styleFrom(
-                  foregroundColor: tc.muted,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: const Size(0, 32),
+                  foregroundColor: tc.orange,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 32),
                 ),
               ),
+              if (_detectedBuilding != null) ...[
+                const SizedBox(width: 4),
+                TextButton.icon(
+                  onPressed: () {
+                    if (!_safe) return;
+                    _safeSetState(() {
+                      _detectedBuilding = null;
+                      _statusText = null;
+                    });
+                  },
+                  icon: const Icon(Icons.clear, size: 14),
+                  label: const Text('Clear outline',
+                                    style: TextStyle(fontSize: 11)),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: tc.muted,
+                                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                                        minimumSize: const Size(0, 32),
+                                    ),
+                ),
+              ],
             ],
-          ],
-        ),
-      ],
-    );
-  }
+          ),
+        ],
+      );
+    }
 
-  Widget _buildStatusLine(AdminColors tc) {
-    final text = _statusText;
-    if (text == null) {
+    Widget _buildStatusLine(AdminColors tc) {
+      final text = _statusText;
+      if (text == null) {
+        return Row(
+          children: [
+            Icon(Icons.auto_awesome_rounded, size: 12, color: tc.orange),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                'AUTO-DETECT: Type an address → radius is auto-set.',
+                style: TextStyle(fontSize: 10.5, color: tc.muted),
+              ),
+            ),
+          ],
+        );
+      }
+
       return Row(
         children: [
-          Icon(Icons.auto_awesome_rounded, size: 12, color: tc.orange),
+          Icon(
+            _statusIsError
+            ? Icons.warning_amber_rounded
+            : Icons.check_circle_outline,
+            size: 12,
+            color: _statusIsError ? tc.orange : tc.green,
+          ),
           const SizedBox(width: 4),
           Expanded(
             child: Text(
-              'AUTO-DETECT: I-type ang address → radius auto-set.',
-              style: TextStyle(fontSize: 10.5, color: tc.muted),
+              _sanitize(text, maxLen: 200),
+              style: TextStyle(
+                fontSize: 10.5,
+                color: _statusIsError ? tc.orange : tc.green,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
       );
     }
 
-    return Row(
-      children: [
-        Icon(
-          _statusIsError
-              ? Icons.warning_amber_rounded
-              : Icons.check_circle_outline,
-          size: 12,
-          color: _statusIsError ? tc.orange : tc.green,
-        ),
-        const SizedBox(width: 4),
-        Expanded(
-          child: Text(
-            _sanitize(text, maxLen: 200),
-            style: TextStyle(
-              fontSize: 10.5,
-              color: _statusIsError ? tc.orange : tc.green,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+    @override
+    Widget build(BuildContext context) {
+      final tc = AdminTheme.getColors(context);
+      final isEdit = widget.existing != null;
 
-  @override
-  Widget build(BuildContext context) {
-    final tc = AdminTheme.getColors(context);
-    final isEdit = widget.existing != null;
-
-    return Dialog(
-      backgroundColor: tc.card,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 500),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.location_on_rounded,
-                        color: tc.orange, size: 22),
-                    const SizedBox(width: 10),
-                    Text(
-                      isEdit ? 'Edit Location' : 'Add Location',
-                      style: TextStyle(
+      return Dialog(
+        backgroundColor: tc.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 500),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.location_on_rounded,
+                           color: tc.orange, size: 22),
+                      const SizedBox(width: 10),
+                      Text(
+                        isEdit ? 'Edit Location' : 'Add Location',
+                        style: TextStyle(
                           color: tc.text,
                           fontSize: 18,
                           fontWeight: FontWeight.w800),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'I-type ang address — auto-detect ang building at radius.',
-                  style: TextStyle(color: tc.muted, fontSize: 12),
-                ),
-                const SizedBox(height: 20),
-
-                _label('LOCATION NAME', tc),
-                _field(_nameCtrl, 'e.g. Head Office / SM Mall',
-                    maxLength: 60,
-                    validator: (v) {
-                      final t = (v ?? '').trim();
-                      if (t.isEmpty) return 'Required';
-                      if (t.length > 60) return 'Max 60 chars';
-                      return null;
-                    }),
-
-                const SizedBox(height: 14),
-
-                _label('ADDRESS (AUTO-DETECT)', tc),
-                _buildAddressField(tc),
-
-                const SizedBox(height: 16),
-
-                _label('MAP PREVIEW', tc),
-                _buildMapPicker(tc),
-                const SizedBox(height: 14),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              _label('LATITUDE', tc),
-                              if (_autoFilled) ...[
-                                const SizedBox(width: 4),
-                                _autoBadge(tc),
-                              ],
-                            ],
-                          ),
-                          _field(_latCtrl, '14.598050',
-                              keyboardType:
-                              const TextInputType.numberWithOptions(
-                                  decimal: true, signed: true),
-                              validator: (v) {
-                                final n = double.tryParse((v ?? '').trim());
-                                if (n == null) return 'Invalid';
-                                if (n < -90 || n > 90) return '-90 to 90';
-                                return null;
-                              }),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              _label('LONGITUDE', tc),
-                              if (_autoFilled) ...[
-                                const SizedBox(width: 4),
-                                _autoBadge(tc),
-                              ],
-                            ],
-                          ),
-                          _field(_lngCtrl, '120.989170',
-                              keyboardType:
-                              const TextInputType.numberWithOptions(
-                                  decimal: true, signed: true),
-                              validator: (v) {
-                                final n = double.tryParse((v ?? '').trim());
-                                if (n == null) return 'Invalid';
-                                if (n < -180 || n > 180) return '-180 to 180';
-                                return null;
-                              }),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 14),
-
-                Row(
-                  children: [
-                    Expanded(child: _label('RADIUS (meters)', tc)),
-                    if (_detectedBuilding != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: tc.green.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.auto_awesome_rounded,
-                                size: 9, color: tc.green),
-                            const SizedBox(width: 2),
-                            Text('AUTO',
-                                style: TextStyle(
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.w800,
-                                    color: tc.green,
-                                    letterSpacing: 0.5)),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-                _field(_radiusCtrl, '100',
-                    keyboardType: TextInputType.number,
-                    maxLength: 5,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    validator: (v) {
-                      final n = double.tryParse((v ?? '').trim());
-                      if (n == null) return 'Enter a number';
-                      if (n < 20 || n > 5000) return '20 - 5000 only';
-                      return null;
-                    }),
-
-                if (_detectedBuilding != null) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(8),
-                      border:
-                      Border.all(color: Colors.blue.withValues(alpha: 0.3)),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.business_rounded,
-                            size: 14, color: Colors.blue),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Building: '
-                                '${_detectedBuilding!.widthMeters.toStringAsFixed(0)}m × '
-                                '${_detectedBuilding!.heightMeters.toStringAsFixed(0)}m '
-                                '(longest ${math.max(_detectedBuilding!.widthMeters, _detectedBuilding!.heightMeters).toStringAsFixed(0)}m)',
-                            style: const TextStyle(
-                                color: Color(0xFF1565C0),
-                                fontSize: 11,
-                                height: 1.4,
-                                fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-
-                const SizedBox(height: 12),
-
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: tc.orange.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(8),
-                    border:
-                    Border.all(color: tc.orange.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline, size: 14, color: tc.orange),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'WFH at Company Drivers ay exempted sa geofence.',
-                          style: TextStyle(
-                              color: tc.text, fontSize: 11, height: 1.4),
-                        ),
                       ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Type the address — the building and radius are auto-detected.',
+                    style: TextStyle(color: tc.muted, fontSize: 12),
+                  ),
+                  const SizedBox(height: 20),
 
-                const SizedBox(height: 24),
+                  _label('LOCATION NAME', tc),
+                  _field(_nameCtrl, 'e.g. Head Office / SM Mall',
+                         maxLength: 60,
+                         validator: (v) {
+                           final t = (v ?? '').trim();
+                           if (t.isEmpty) return 'Required';
+                  if (t.length > 60) return 'Max 60 chars';
+                  return null;
+                         }),
 
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed:
-                      _saving ? null : () => Navigator.of(context).pop(),
-                      child:
-                      Text('Cancel', style: TextStyle(color: tc.muted)),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      onPressed: _saving ? null : _save,
-                      icon: _saving
-                          ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.check_rounded, size: 16),
-                      label: Text(isEdit ? 'Save' : 'Add'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: tc.orange,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                         const SizedBox(height: 14),
+
+                         _label('ADDRESS (AUTO-DETECT)', tc),
+                         _buildAddressField(tc),
+
+                         const SizedBox(height: 16),
+
+                         _label('MAP PREVIEW', tc),
+                         _buildMapPicker(tc),
+                         const SizedBox(height: 14),
+
+                         Row(
+                           children: [
+                             Expanded(
+                               child: Column(
+                                 crossAxisAlignment: CrossAxisAlignment.start,
+                                 children: [
+                                   Row(
+                                     children: [
+                                       _label('LATITUDE', tc),
+                                       if (_autoFilled) ...[
+                                         const SizedBox(width: 4),
+                                         _autoBadge(tc),
+                                       ],
+                                     ],
+                                   ),
+                                   _field(_latCtrl, '14.598050',
+                                          keyboardType:
+                                          const TextInputType.numberWithOptions(
+                                            decimal: true, signed: true),
+                                          validator: (v) {
+                                            final n = double.tryParse((v ?? '').trim());
+                                            if (n == null) return 'Invalid';
+                                   if (n < -90 || n > 90) return '-90 to 90';
+                                   return null;
+                                          }),
+                                 ],
+                               ),
+                             ),
+                             const SizedBox(width: 10),
+                             Expanded(
+                               child: Column(
+                                 crossAxisAlignment: CrossAxisAlignment.start,
+                                 children: [
+                                   Row(
+                                     children: [
+                                       _label('LONGITUDE', tc),
+                                       if (_autoFilled) ...[
+                                         const SizedBox(width: 4),
+                                         _autoBadge(tc),
+                                       ],
+                                     ],
+                                   ),
+                                   _field(_lngCtrl, '120.989170',
+                                          keyboardType:
+                                          const TextInputType.numberWithOptions(
+                                            decimal: true, signed: true),
+                                          validator: (v) {
+                                            final n = double.tryParse((v ?? '').trim());
+                                            if (n == null) return 'Invalid';
+                                   if (n < -180 || n > 180) return '-180 to 180';
+                                   return null;
+                                          }),
+                                 ],
+                               ),
+                             ),
+                           ],
+                         ),
+
+                         const SizedBox(height: 14),
+
+                         Row(
+                           children: [
+                             Expanded(child: _label('RADIUS (meters)', tc)),
+                             if (_detectedBuilding != null)
+                               Container(
+                                 padding: const EdgeInsets.symmetric(
+                                   horizontal: 6, vertical: 2),
+                                   decoration: BoxDecoration(
+                                     color: tc.green.withValues(alpha: 0.15),
+                                     borderRadius: BorderRadius.circular(4),
+                                   ),
+                                   child: Row(
+                                     mainAxisSize: MainAxisSize.min,
+                                     children: [
+                                       Icon(Icons.auto_awesome_rounded,
+                                            size: 9, color: tc.green),
+                                            const SizedBox(width: 2),
+                                            Text('AUTO',
+                                                 style: TextStyle(
+                                                   fontSize: 8,
+                                                   fontWeight: FontWeight.w800,
+                                                   color: tc.green,
+                                                   letterSpacing: 0.5)),
+                                     ],
+                                   ),
+                               ),
+                           ],
+                         ),
+                         _field(_radiusCtrl, '100',
+                                keyboardType: TextInputType.number,
+                                maxLength: 5,
+                                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                validator: (v) {
+                                  final n = double.tryParse((v ?? '').trim());
+                                  if (n == null) return 'Enter a number';
+                         if (n < 20 || n > 5000) return '20 - 5000 only';
+                         return null;
+                                }),
+
+                            if (_detectedBuilding != null) ...[
+                              const SizedBox(height: 8),
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border:
+                                  Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.business_rounded,
+                                               size: 14, color: Colors.blue),
+                                           const SizedBox(width: 8),
+                                           Expanded(
+                                             child: Text(
+                                               'Building: '
+                                             '${_detectedBuilding!.widthMeters.toStringAsFixed(0)}m × '
+                                             '${_detectedBuilding!.heightMeters.toStringAsFixed(0)}m '
+                                             '(longest ${math.max(_detectedBuilding!.widthMeters, _detectedBuilding!.heightMeters).toStringAsFixed(0)}m)',
+                                             style: const TextStyle(
+                                               color: Color(0xFF1565C0),
+                                               fontSize: 11,
+                                               height: 1.4,
+                                               fontWeight: FontWeight.w600),
+                                             ),
+                                           ),
+                                  ],
+                                ),
+                              ),
+                            ],
+
+                            const SizedBox(height: 12),
+
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: tc.orange.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(8),
+                                border:
+                                Border.all(color: tc.orange.withValues(alpha: 0.3)),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.info_outline, size: 14, color: tc.orange),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'WFH and Company Drivers are exempted from geofencing.',
+                                      style: TextStyle(
+                                        color: tc.text, fontSize: 11, height: 1.4),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            const SizedBox(height: 24),
+
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                TextButton(
+                                  onPressed:
+                                  _saving ? null : () => Navigator.of(context).pop(),
+                                  child:
+                                  Text('Cancel', style: TextStyle(color: tc.muted)),
+                                ),
+                                const SizedBox(width: 8),
+                                ElevatedButton.icon(
+                                  onPressed: _saving ? null : _save,
+                                  icon: _saving
+                                  ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.white))
+                                  : const Icon(Icons.check_rounded, size: 16),
+                                  label: Text(isEdit ? 'Save' : 'Add'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: tc.orange,
+                                    foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8)),
+                                        elevation: 0,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 20, vertical: 12),
+                                  ),
+                                ),
+                              ],
+                            ),
+                ],
+              ),
             ),
           ),
         ),
+      );
+    }
+
+    Widget _autoBadge(AdminColors tc) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: tc.green.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(4),
       ),
+      child: Text('AUTO',
+                  style: TextStyle(
+                    fontSize: 7,
+                    fontWeight: FontWeight.w800,
+                    color: tc.green,
+                    letterSpacing: 0.5)),
     );
-  }
 
-  Widget _autoBadge(AdminColors tc) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-    decoration: BoxDecoration(
-      color: tc.green.withValues(alpha: 0.15),
-      borderRadius: BorderRadius.circular(4),
-    ),
-    child: Text('AUTO',
-        style: TextStyle(
-            fontSize: 7,
-            fontWeight: FontWeight.w800,
-            color: tc.green,
-            letterSpacing: 0.5)),
-  );
-
-  Widget _buildAddressField(AdminColors tc) {
-    return TextFormField(
-      controller: _addressCtrl,
-      maxLength: 150,
-      style: TextStyle(color: tc.text, fontSize: 14),
-      cursorColor: tc.orange,
-      decoration: InputDecoration(
-        hintText: 'e.g. SM Mall of Asia, Pasay City',
-        hintStyle: TextStyle(color: tc.muted, fontSize: 13),
-        counterText: '',
-        filled: true,
-        fillColor: tc.surface,
-        suffixIcon: (_searching || _detecting)
-            ? Padding(
-          padding: const EdgeInsets.only(right: 12),
-          child: SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(
+    Widget _buildAddressField(AdminColors tc) {
+      return TextFormField(
+        controller: _addressCtrl,
+        maxLength: 150,
+        style: TextStyle(color: tc.text, fontSize: 14),
+        cursorColor: tc.orange,
+        decoration: InputDecoration(
+          hintText: 'e.g. SM Mall of Asia, Pasay City',
+          hintStyle: TextStyle(color: tc.muted, fontSize: 13),
+          counterText: '',
+          filled: true,
+          fillColor: tc.surface,
+          suffixIcon: (_searching || _detecting)
+          ? Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
                 strokeWidth: 2, color: tc.orange),
+            ),
+          )
+          : (_addressCtrl.text.trim().isNotEmpty
+          ? IconButton(
+            icon:
+            Icon(Icons.close_rounded, size: 16, color: tc.muted),
+            onPressed: () {
+              if (!_safe) return;
+              _addressCtrl.clear();
+              _addressDebounce?.cancel();
+              _pipelineGeneration++;
+              _safeSetState(() {
+                _statusText = null;
+                _autoFilled = false;
+                _detectedBuilding = null;
+                _searching = false;
+                _detecting = false;
+              });
+            },
+          )
+          : null),
+          contentPadding:
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: tc.border),
           ),
-        )
-            : (_addressCtrl.text.trim().isNotEmpty
-            ? IconButton(
-          icon:
-          Icon(Icons.close_rounded, size: 16, color: tc.muted),
-          onPressed: () {
-            if (!_safe) return;
-            _addressCtrl.clear();
-            _addressDebounce?.cancel();
-            _pipelineGeneration++;
-            _safeSetState(() {
-              _statusText = null;
-              _autoFilled = false;
-              _detectedBuilding = null;
-              _searching = false;
-              _detecting = false;
-            });
-          },
-        )
-            : null),
-        contentPadding:
-        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: tc.border),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: tc.border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: tc.orange, width: 1.5),
+          ),
         ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: tc.border),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: tc.orange, width: 1.5),
-        ),
-      ),
+      );
+    }
+
+    Widget _label(String text, AdminColors tc) => Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(text,
+                  style: TextStyle(
+                    color: tc.muted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5)),
     );
-  }
 
-  Widget _label(String text, AdminColors tc) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: Text(text,
-        style: TextStyle(
-            color: tc.muted,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5)),
-  );
-
-  Widget _field(
+    Widget _field(
       TextEditingController c,
       String hint, {
         TextInputType? keyboardType,
@@ -2866,42 +2865,42 @@ out geom;
         int? maxLength,
         List<TextInputFormatter>? inputFormatters,
       }) {
-    final tc = AdminTheme.getColors(context);
-    return TextFormField(
-      controller: c,
-      keyboardType: keyboardType,
-      validator: validator,
-      maxLength: maxLength,
-      inputFormatters: inputFormatters,
-      style: TextStyle(color: tc.text, fontSize: 14),
-      cursorColor: tc.orange,
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(color: tc.muted, fontSize: 13),
-        counterText: '',
-        filled: true,
-        fillColor: tc.surface,
-        contentPadding:
-        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: tc.border),
+      final tc = AdminTheme.getColors(context);
+      return TextFormField(
+        controller: c,
+        keyboardType: keyboardType,
+        validator: validator,
+        maxLength: maxLength,
+        inputFormatters: inputFormatters,
+        style: TextStyle(color: tc.text, fontSize: 14),
+        cursorColor: tc.orange,
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(color: tc.muted, fontSize: 13),
+          counterText: '',
+          filled: true,
+          fillColor: tc.surface,
+          contentPadding:
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: tc.border),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: tc.border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: tc.orange, width: 1.5),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: tc.red, width: 1.2),
+          ),
         ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: tc.border),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: tc.orange, width: 1.5),
-        ),
-        errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: tc.red, width: 1.2),
-        ),
-      ),
-    );
-  }
+      );
+      }
 }
 
 // ═══════════════════════════════════════════════════════════════════

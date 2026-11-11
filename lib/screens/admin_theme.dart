@@ -233,9 +233,9 @@
         appBarTheme: AppBarTheme(
           backgroundColor: base.topBarBg,
           foregroundColor: base.accent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            surfaceTintColor: Colors.transparent,
         ),
       );
     }
@@ -321,21 +321,21 @@
 
     // Pills
     Color get pillGreenBg =>
-        isDark ? const Color(0xFF14361F) : const Color(0xFFDCFCE7);
+    isDark ? const Color(0xFF14361F) : const Color(0xFFDCFCE7);
     Color get pillGreenTx =>
-        isDark ? const Color(0xFF4CE346) : const Color(0xFF166534);
+    isDark ? const Color(0xFF4CE346) : const Color(0xFF166534);
     Color get pillWarnBg =>
-        isDark ? const Color(0xFF3A2A0F) : const Color(0xFFFEF3C7);
+    isDark ? const Color(0xFF3A2A0F) : const Color(0xFFFEF3C7);
     Color get pillWarnTx =>
-        isDark ? const Color(0xFFFFB77D) : const Color(0xFF92400E);
+    isDark ? const Color(0xFFFFB77D) : const Color(0xFF92400E);
     Color get pillBlueBg =>
-        isDark ? const Color(0xFF1E293B) : const Color(0xFFDBEAFE);
+    isDark ? const Color(0xFF1E293B) : const Color(0xFFDBEAFE);
     Color get pillBlueTx =>
-        isDark ? const Color(0xFF93C5FD) : const Color(0xFF1E40AF);
+    isDark ? const Color(0xFF93C5FD) : const Color(0xFF1E40AF);
     Color get pillErrBg =>
-        isDark ? const Color(0xFF3B1212) : const Color(0xFFFEE2E2);
+    isDark ? const Color(0xFF3B1212) : const Color(0xFFFEE2E2);
     Color get pillErrTx =>
-        isDark ? const Color(0xFFFFB4AB) : const Color(0xFFDC2626);
+    isDark ? const Color(0xFFFFB4AB) : const Color(0xFFDC2626);
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -360,7 +360,7 @@
 
     ThemeData get theme => AdminTheme.themeData(_isDark);
     AdminColors get colors =>
-        _isDark ? AdminTheme.darkColors : AdminTheme.lightColors;
+    _isDark ? AdminTheme.darkColors : AdminTheme.lightColors;
   }
 
   Route<T> adminRoute<T>(Widget page) {

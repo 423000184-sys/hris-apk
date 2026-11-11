@@ -1,6 +1,7 @@
 // lib/screens/fingerprint_screen.dart
-// v4.3: 🛠️ Remote admin actions (unlock / re-register / clear-lockout)
-//       applied in real-time + on resume. English UI strings.
+// v5.1: Uses device biometrics directly — no app-level registration.
+//       Standalone mode bypasses fingerprint scan if device has no biometrics,
+//       so clock-in still works even without registered fingerprint.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -8,12 +9,10 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:flutter/services.dart'
-    show PlatformException, MethodChannel, MissingPluginException;
+    show PlatformException, MissingPluginException;
 import 'package:local_auth/local_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import '../models/employee.dart';
 import '../widgets/bootstrap_grid.dart';
 import '../widgets/skeleton_screens.dart';
@@ -59,16 +58,7 @@ class _ThemeColors {
 
 enum _NetworkState { online, offline, checking }
 
-enum _CredentialStatus {
-  ok,
-  missing,
-  employeeMismatch,
-  deviceMismatch,
-  enrollmentChanged,
-  tampered,
-}
-
-enum _RegPhase { idle, capturingStep, completed }
+enum _FpState { idle, scanning, success, error }
 
 class FingerprintScreen extends StatefulWidget {
   final Employee employee;
@@ -90,13 +80,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   final LocalAuthentication _localAuth = LocalAuthentication();
 
-  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-    iOptions: IOSOptions(
-      accessibility: KeychainAccessibility.first_unlock_this_device,
-    ),
-  );
-
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
   _FpState _fpState = _FpState.idle;
@@ -106,13 +89,14 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   bool _isNavigating = false;
   bool _noBiometricHardware = false;
   bool _hardwareChecked = false;
+  bool _biometricAvailable = false;
+  bool _biometricCheckDone = false;
 
   bool _sendingAdminReport = false;
 
   static const String _kLastReportKey = 'last_fp_report_time';
   static const Duration _reportCooldown = Duration(minutes: 3);
 
-  // 🆕 Markers so admin actions are applied exactly once
   static const String _kLastAdminUnlockKey = 'fp_last_admin_unlock_ms';
   static const String _kLastAdminResetKey = 'fp_last_admin_reset_ms';
   static const String _kLastLockoutClearKey = 'fp_last_lockout_clear_ms';
@@ -142,31 +126,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   bool _lastMockLocationDetected = false;
   bool _geofenceVerifiedOffline = false;
 
-  bool _fingerprintRegistered = false;
   bool _fingerprintLocked = false;
-  bool _checkingRegistration = true;
+  bool _initialLockSynced = false;
 
   String? _resolvedDocId;
-  bool _registrationCheckComplete = false;
-  bool _justRegistered = false;
-  DateTime? _fingerprintRegisteredAt;
-
-  _CredentialStatus _lastCredentialStatus = _CredentialStatus.ok;
 
   int _pendingCount = 0;
-
-  static const int _totalRegSteps = 1;
-  static const List<String> _regStepNames = ['SCAN'];
-  static const List<String> _regStepInstructions = [
-    'Place your registered finger\non the sensor',
-  ];
-  static const List<IconData> _regStepIcons = [
-    Icons.fingerprint_rounded,
-  ];
-
-  _RegPhase _regPhase = _RegPhase.idle;
-  int _currentRegStep = 0;
-  final List<String> _regStepHashes = [];
 
   static const int _maxAuthAttempts = 3;
   static const int _authRateLimitMs = 2000;
@@ -181,9 +146,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   static const int _maxSessionFails = 3;
   static const int _consecutiveFailsToShowCleanup = 2;
-
-  static String _credKey(String employeeId) => 'fp_cred_$employeeId';
-  static String _lockKey(String employeeId) => 'fp_locked_$employeeId';
 
   int _authFailedAttempts = 0;
   DateTime? _authLockoutUntil;
@@ -244,48 +206,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   static const _demoAccent = Color(0xFFFF8A00);
   static const _demoAccentDark = Color(0xFFF54900);
 
-  static const _guard = MethodChannel('app/biometric_guard');
-  String get _guardAlias => 'fp_guard_${widget.employee.id}';
-
-  Future<bool> _createEnrollmentGuard() async {
-    if (kIsWeb || _isDemo) return true;
-    try {
-      return await _guard.invokeMethod<bool>(
-          'createKey', {'alias': _guardAlias}) ??
-          false;
-    } on MissingPluginException {
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<String> _guardState() async {
-    if (kIsWeb || _isDemo) return 'valid';
-    try {
-      return await _guard.invokeMethod<String>(
-          'isKeyValid', {'alias': _guardAlias}) ??
-          'valid';
-    } on MissingPluginException {
-      return 'valid';
-    } catch (_) {
-      return 'valid';
-    }
-  }
-
   bool get _isAuthLockedOut =>
       (_authLockoutUntil != null &&
           _authLockoutUntil!.isAfter(DateTime.now())) ||
           (_activeBackoff != null && _activeBackoff! > Duration.zero);
 
-  bool get _isRegistering =>
-      !_fingerprintRegistered &&
-          _regPhase != _RegPhase.completed &&
-          !_fingerprintLocked;
-
   bool get _isOffline => _networkState == _NetworkState.offline;
-
-  bool get _canAuthenticateOffline => true;
 
   @override
   void initState() {
@@ -315,8 +241,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         .animate(CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut));
     _shakeAnim = Tween<double>(begin: 0, end: 12)
         .animate(CurvedAnimation(parent: _shakeCtrl, curve: Curves.elasticIn));
-    _successAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(parent: _successCtrl, curve: Curves.elasticOut));
+    _successAnim = Tween<double>(begin: 0.0, end: 1.0)
+        .animate(CurvedAnimation(parent: _successCtrl, curve: Curves.elasticOut));
 
     _pulseCtrl.repeat(reverse: true);
     _ringCtrl.repeat();
@@ -324,10 +250,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     if (_isDemo) {
       _preAuthVerified = true;
-      _fingerprintRegistered = true;
-      _checkingRegistration = false;
-      _registrationCheckComplete = true;
-      _regPhase = _RegPhase.completed;
+      _biometricAvailable = true;
+      _biometricCheckDone = true;
       _deviceModel = 'Demo Device';
       _deviceBinding = 'demo-binding';
       _deviceFingerprint = 'demo-fingerprint';
@@ -346,8 +270,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       try {
         final online = ConnectivityService.instance.isOnline;
-        _networkState =
-        online ? _NetworkState.online : _NetworkState.offline;
+        _networkState = online ? _NetworkState.online : _NetworkState.offline;
       } catch (_) {}
 
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -359,20 +282,15 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     _bootstrapSecurity();
     _loadSecurityState();
-    _loadDeviceFingerprint().then((_) async {
-      if (mounted) {
-        await _checkFingerprintRegistration();
-        if (mounted) {
-          setState(() => _registrationCheckComplete = true);
-        }
-        // 🆕 After registration status is known, wire up live admin listener
-        if (mounted) _setupAdminActionListener();
-      }
-    });
+    _loadDeviceFingerprint();
     _verifyPreAuth();
     _loadDeviceModel();
     _determineRole();
     _subscribePendingCount();
+
+    _checkBiometricAvailability().then((_) {
+      if (mounted) _setupAdminActionListener();
+    });
 
     try {
       _connectivitySub =
@@ -382,8 +300,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             if (!online) {
               setState(() {
                 _networkState = _NetworkState.offline;
-                _networkErrorMessage =
-                'No internet connection.\n\n'
+                _networkErrorMessage = 'No internet connection.\n\n'
                     'You can still clock in — records will be saved locally '
                     'and synced automatically when you\'re back online.';
                 _showOfflineOverlay = false;
@@ -404,6 +321,49 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     });
   }
 
+  Future<void> _checkBiometricAvailability() async {
+    if (_isDemo) {
+      if (mounted) {
+        setState(() {
+          _biometricAvailable = true;
+          _biometricCheckDone = true;
+        });
+      }
+      return;
+    }
+
+    if (kIsWeb) {
+      if (mounted) {
+        setState(() {
+          _biometricAvailable = false;
+          _biometricCheckDone = true;
+        });
+      }
+      return;
+    }
+
+    bool available = false;
+    try {
+      final isSupported = await _localAuth.isDeviceSupported();
+      final canCheck = await _localAuth.canCheckBiometrics;
+      if (isSupported && canCheck) {
+        final enrolled = await _localAuth.getAvailableBiometrics();
+        available = enrolled.isNotEmpty;
+      }
+    } catch (e) {
+      _secureLog('⚠️ [FP] biometric availability check failed: $e');
+    }
+
+    if (mounted) {
+      setState(() {
+        _biometricAvailable = available;
+        _biometricCheckDone = true;
+        _hardwareChecked = true;
+        _noBiometricHardware = !available;
+      });
+    }
+  }
+
   bool _isSameDay(DateTime a, DateTime b) {
     return a.year == b.year && a.month == b.month && a.day == b.day;
   }
@@ -415,8 +375,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   DateTime get _effectiveAttendanceTime {
     final now = DateTime.now();
 
-    if (widget.arrivalTime != null &&
-        _isSameDay(widget.arrivalTime!, now)) {
+    if (widget.arrivalTime != null && _isSameDay(widget.arrivalTime!, now)) {
       return widget.arrivalTime!;
     }
 
@@ -435,13 +394,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         SnackBar(
           content: Row(
             children: [
-              const Icon(Icons.cloud_off_rounded,
-                  color: Colors.white, size: 18),
+              const Icon(Icons.cloud_off_rounded, color: Colors.white, size: 18),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  custom ??
-                      'Internet connection is required to verify.',
+                  custom ?? 'Internet connection is required to verify.',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
@@ -474,12 +431,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(msg,
-              style: const TextStyle(fontWeight: FontWeight.w600)),
+          content:
+          Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
           backgroundColor: const Color(0xFF27272A),
           behavior: SnackBarBehavior.floating,
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12)),
           margin: const EdgeInsets.all(16),
           duration: const Duration(seconds: 3),
         ),
@@ -488,22 +445,27 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   String _defaultReportCategory() {
     if (_fingerprintLocked) return 'security_issue';
-    if (!_fingerprintRegistered) return 'no_enrollment';
 
     final err = (_errorMessage ?? '').toLowerCase();
 
-    // 🔑 Unahin ang fingerprint errors
     if (err.contains('lock')) return 'lockout_issue';
-    if (err.contains('sensor') || err.contains('hardware')) return 'sensor_error';
-    if (err.contains('match') || err.contains('recognized') || err.contains('finger')) {
+    if (err.contains('sensor') || err.contains('hardware')) {
+      return 'sensor_error';
+    }
+    if (err.contains('match') ||
+        err.contains('recognized') ||
+        err.contains('finger')) {
       return 'fingerprint_not_recognized';
     }
-    if (err.contains('compromised') || err.contains('security')) return 'security_issue';
-    if (err.contains('geofence') || err.contains('location') || err.contains('zone')) {
+    if (err.contains('compromised') || err.contains('security')) {
+      return 'security_issue';
+    }
+    if (err.contains('geofence') ||
+        err.contains('location') ||
+        err.contains('zone')) {
       return 'geofence_issue';
     }
 
-    // 🔑 Default fallback kung walang match: fingerprint issue pa rin
     return 'fingerprint_not_recognized';
   }
 
@@ -539,8 +501,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           final mins = remaining.inMinutes;
           final secs = remaining.inSeconds % 60;
           final timeStr = mins > 0 ? '${mins}m ${secs}s' : '${secs}s';
-          _showInfoSnack(
-              '⚠️ Please wait $timeStr before sending again.');
+          _showInfoSnack('⚠️ Please wait $timeStr before sending again.');
           return false;
         }
       }
@@ -617,7 +578,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (_sendingAdminReport) return;
 
     final notesCtrl = TextEditingController();
-    // 🔑 Sa FingerprintScreen, default ay fingerprint_not_recognized
     String category = 'fingerprint_not_recognized';
     bool sending = false;
 
@@ -661,9 +621,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                       : const Color(0xFFF4F4F5)),
                   borderRadius: BorderRadius.circular(999),
                   border: Border.all(
-                      color: active
-                          ? _orange
-                          : mutedCol.withValues(alpha: 0.25),
+                      color:
+                      active ? _orange : mutedCol.withValues(alpha: 0.25),
                       width: 1),
                 ),
                 child: Text(
@@ -758,29 +717,26 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                     Wrap(
                         spacing: 8,
                         runSpacing: 8,
-                        children: [
-                          for (final c in _reportCategories) chip(c)
-                        ]),
+                        children: [for (final c in _reportCategories) chip(c)]),
                     const SizedBox(height: 16),
                     TextField(
                       controller: notesCtrl,
                       maxLines: 4,
                       maxLength: 500,
                       enabled: !sending,
-                      style:
-                      TextStyle(color: textCol, fontSize: 13, height: 1.4),
+                      style: TextStyle(
+                          color: textCol, fontSize: 13, height: 1.4),
                       decoration: InputDecoration(
                         hintText: 'Add details (optional)...',
-                        hintStyle:
-                        TextStyle(color: mutedCol, fontSize: 13),
+                        hintStyle: TextStyle(color: mutedCol, fontSize: 13),
                         filled: true,
                         fillColor: isDark
                             ? Colors.white.withValues(alpha: 0.04)
                             : const Color(0xFFF4F4F5),
                         border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: BorderSide(
-                                color: mutedCol.withValues(alpha: 0.3))),
+                            borderSide:
+                            BorderSide(color: mutedCol.withValues(alpha: 0.3))),
                         focusedBorder: const OutlineInputBorder(
                             borderRadius: BorderRadius.all(Radius.circular(10)),
                             borderSide:
@@ -847,8 +803,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                                 width: 14,
                                 height: 14,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white))
+                                    strokeWidth: 2, color: Colors.white))
                                 : const Icon(Icons.send_rounded, size: 16),
                             label: Text(sending ? 'Sending...' : 'Send to Admin',
                                 style: const TextStyle(
@@ -919,9 +874,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     } catch (_) {}
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🆕 LIVE ADMIN ACTION LISTENER + PROCESSOR
-  // ══════════════════════════════════════════════════════════════
   Future<void> _setupAdminActionListener() async {
     if (_isDemo) return;
 
@@ -977,85 +929,69 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           (data['fingerprintLockoutClearedAt'] as Timestamp?)
               ?.millisecondsSinceEpoch ??
               0;
+      final serverLocked = data['fingerprintLocked'] == true;
 
-      // ── 1. Admin forced re-registration ─────────────────────
-      if (resetAt > lastReset) {
-        _secureLog('🔄 [AdminActions] applying admin re-enroll');
-
-        try {
-          await _secureStorage.delete(key: _credKey(widget.employee.id));
-        } catch (_) {}
-        try {
-          await _secureStorage.delete(key: _lockKey(widget.employee.id));
-        } catch (_) {}
-        try {
-          await prefs.remove(_kAuthAttemptsKey);
-          await prefs.remove(_kAuthLockoutKey);
-          await SecurityHardeningService.instance.resetFailures();
-        } catch (_) {}
-
-        await prefs.setInt(_kLastAdminResetKey, resetAt);
-
-        if (!mounted) return;
-        setState(() {
-          _fingerprintRegistered = false;
-          _fingerprintLocked = false;
-          _fingerprintRegisteredAt = null;
-          _regPhase = _RegPhase.idle;
-          _currentRegStep = 0;
-          _regStepHashes.clear();
-          _authFailedAttempts = 0;
-          _authLockoutUntil = null;
-          _registrationCheckComplete = true;
-        });
-        _resetFirstAttempt();
-        _showInfoSnack(
-            '🔄 Admin reset your fingerprint. Please register again.');
-        return;
+      if (!_initialLockSynced) {
+        _initialLockSynced = true;
+        if (serverLocked && mounted) {
+          setState(() => _fingerprintLocked = true);
+        }
       }
 
-      // ── 2. Admin unlocked (clear local lock) ────────────────
+      if (resetAt > lastReset) {
+        _secureLog('🔄 [AdminActions] applying admin reset (lockout clear)');
+        await prefs.setInt(_kLastAdminResetKey, resetAt);
+        await _clearLockoutState(prefs);
+        if (mounted) {
+          _showInfoSnack('✅ Admin reset your fingerprint state. Try again.');
+        }
+      }
+
       if (unlockedAt > lastUnlock) {
         _secureLog('🔓 [AdminActions] applying admin unlock');
-
-        try {
-          await _secureStorage.delete(key: _lockKey(widget.employee.id));
-        } catch (_) {}
-
         await prefs.setInt(_kLastAdminUnlockKey, unlockedAt);
-
-        if (!mounted) return;
-        setState(() => _fingerprintLocked = false);
-        _showInfoSnack('🔓 Fingerprint unlocked by Admin.');
+        await _clearLockoutState(prefs);
+        if (mounted) {
+          setState(() => _fingerprintLocked = false);
+          _showInfoSnack('🔓 Fingerprint unlocked by Admin.');
+        }
       }
 
-      // ── 3. Admin cleared lockout ────────────────────────────
       if (lockoutClearAt > lastLockoutClear) {
         _secureLog('⏱ [AdminActions] clearing local lockout');
-
-        try {
-          await prefs.remove(_kAuthAttemptsKey);
-          await prefs.remove(_kAuthLockoutKey);
-          await SecurityHardeningService.instance.resetFailures();
-        } catch (_) {}
-
         await prefs.setInt(_kLastLockoutClearKey, lockoutClearAt);
+        await _clearLockoutState(prefs);
+        if (mounted) {
+          _showInfoSnack('✅ Lockout cleared by Admin. You can scan again.');
+        }
+      }
 
-        if (!mounted) return;
-        _authLockoutTimer?.cancel();
-        setState(() {
-          _authLockoutUntil = null;
-          _activeBackoff = null;
-          _authFailedAttempts = 0;
-        });
-        _showInfoSnack('✅ Lockout cleared by Admin. You can scan again.');
+      if (unlockedAt <= lastUnlock &&
+          serverLocked != _fingerprintLocked &&
+          mounted) {
+        setState(() => _fingerprintLocked = serverLocked);
       }
     } catch (e) {
       _secureLog('⚠️ [AdminActions] process failed: $e');
     }
   }
 
-  /// Manual pull — called on resume in case the socket was dropped.
+  Future<void> _clearLockoutState(SharedPreferences prefs) async {
+    try {
+      await prefs.remove(_kAuthAttemptsKey);
+      await prefs.remove(_kAuthLockoutKey);
+      await SecurityHardeningService.instance.resetFailures();
+    } catch (_) {}
+    _authLockoutTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _authLockoutUntil = null;
+        _activeBackoff = null;
+        _authFailedAttempts = 0;
+      });
+    }
+  }
+
   Future<void> _checkAdminActionsNow() async {
     if (_isDemo) return;
     try {
@@ -1083,7 +1019,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       setState(() => _obscureContent = obscure);
     }
 
-    // 🆕 Re-apply pending admin actions when the app returns to foreground
     if (state == AppLifecycleState.resumed && !_isDemo) {
       unawaited(_checkAdminActionsNow());
     }
@@ -1125,7 +1060,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         await _logSecurityEvent(
           type: 'fp_compromised_device',
           severity: 'critical',
-          details: SecurityHardeningService.instance.integrityIssues.join(','),
+          details:
+          SecurityHardeningService.instance.integrityIssues.join(','),
         );
       }
       if (mounted) setState(() => _deviceCompromised = !ok);
@@ -1153,29 +1089,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     final rand = math.Random.secure();
     final bytes = List<int>.generate(16, (_) => rand.nextInt(256));
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  }
-
-  Future<T> _executeWithLoadBalancer<T>(Future<T> Function() operation) async {
-    int retries = 0;
-    const maxRetries = 3;
-
-    final jitter = math.Random().nextInt(800) + 100;
-    await Future.delayed(Duration(milliseconds: jitter));
-
-    while (true) {
-      try {
-        return await operation();
-      } catch (e) {
-        if (retries >= maxRetries) rethrow;
-        retries++;
-
-        final backoff = (math.pow(2, retries) * 1000).toInt() +
-            math.Random().nextInt(500);
-        _secureLog(
-            '⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
-        await Future.delayed(Duration(milliseconds: backoff));
-      }
-    }
   }
 
   Future<void> _loadDeviceFingerprint() async {
@@ -1237,383 +1150,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
 
     return null;
-  }
-
-  Future<List<String>> _captureEnrollmentSnapshot() async {
-    if (_isDemo) return const ['demo'];
-
-    try {
-      if (kIsWeb) return const [];
-      final list = await _localAuth.getAvailableBiometrics();
-      final names = list.map((b) {
-        switch (b) {
-          case BiometricType.face:
-            return 'face';
-          case BiometricType.fingerprint:
-            return 'fingerprint';
-          case BiometricType.iris:
-            return 'iris';
-          case BiometricType.strong:
-            return 'strong';
-          case BiometricType.weak:
-            return 'weak';
-        }
-      }).toList()
-        ..sort();
-      return names;
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  String _sha256Hex(String input) =>
-      sha256.convert(utf8.encode(input)).toString();
-
-  String _buildStepHash(int step, String enrollmentSnapshot) {
-    final rand = math.Random.secure();
-    final nonceBytes = List<int>.generate(16, (_) => rand.nextInt(256));
-    final nonce =
-    nonceBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return _sha256Hex(
-        'step=$step|nonce=$nonce|emp=${widget.employee.id}|snap=$enrollmentSnapshot');
-  }
-
-  Future<
-      ({
-      String json,
-      String hash,
-      List<String> snapshot,
-      List<String> stepHashes
-      })> _buildAndStoreCredential() async {
-    if (_isDemo) {
-      return (
-      json: '{}',
-      hash: 'demo-hash',
-      snapshot: const ['demo'],
-      stepHashes: const <String>[],
-      );
-    }
-
-    final rand = math.Random.secure();
-    final nonceBytes = List<int>.generate(32, (_) => rand.nextInt(256));
-    final nonce =
-    nonceBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-    final snapshot = await _captureEnrollmentSnapshot();
-
-    final credMap = <String, dynamic>{
-      'employee_id': widget.employee.id,
-      'device_binding': _deviceBinding,
-      'device_fingerprint': _deviceFingerprint,
-      'nonce': nonce,
-      'enrollment_snapshot': snapshot,
-      'registration_steps': _totalRegSteps,
-      'step_hashes': _regStepHashes,
-      'registered_at': DateTime.now().toUtc().toIso8601String(),
-      'v': 2,
-    };
-
-    final jsonStr = jsonEncode(credMap);
-    final hash = _sha256Hex(jsonStr);
-
-    try {
-      await _secureStorage.write(
-        key: _credKey(widget.employee.id),
-        value: jsonStr,
-      );
-    } catch (_) {}
-
-    return (
-    json: jsonStr,
-    hash: hash,
-    snapshot: snapshot,
-    stepHashes: _regStepHashes,
-    );
-  }
-
-  Future<Map<String, dynamic>?> _readCredential() async {
-    if (_isDemo) return null;
-
-    try {
-      final raw = await _secureStorage.read(key: _credKey(widget.employee.id));
-      if (raw == null || raw.isEmpty) return null;
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map<String, dynamic>) return null;
-      return decoded;
-    } catch (e) {
-      _secureLog('❌ readCredential: $e');
-      return null;
-    }
-  }
-
-  Future<_CredentialStatus> _verifyCredential({
-    required String? storedHashFromFirestore,
-  }) async {
-    if (_isDemo) return _CredentialStatus.ok;
-
-    final g = await _guardState();
-    if (g == 'invalid') return _CredentialStatus.enrollmentChanged;
-    if (g == 'missing') {
-      await _createEnrollmentGuard();
-    }
-
-    final cred = await _readCredential();
-    if (cred == null) return _CredentialStatus.missing;
-
-    if (cred['employee_id'] != widget.employee.id) {
-      return _CredentialStatus.employeeMismatch;
-    }
-
-    if (cred['device_binding'] != _deviceBinding) {
-      return _CredentialStatus.deviceMismatch;
-    }
-
-    final savedSnapshot =
-        (cred['enrollment_snapshot'] as List?)?.cast<String>() ?? const [];
-    final currentSnapshot = await _captureEnrollmentSnapshot();
-    if (savedSnapshot.length != currentSnapshot.length ||
-        !_listEq(savedSnapshot, currentSnapshot)) {
-      return _CredentialStatus.enrollmentChanged;
-    }
-
-    if (storedHashFromFirestore != null &&
-        storedHashFromFirestore.isNotEmpty) {
-      final recomputed = _sha256Hex(jsonEncode(cred));
-      if (recomputed != storedHashFromFirestore) {
-        return _CredentialStatus.tampered;
-      }
-    }
-
-    return _CredentialStatus.ok;
-  }
-
-  bool _listEq(List<String> a, List<String> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
-
-  Future<void> _refreshCredentialInBackground() async {
-    if (_isDemo) return;
-    if (_networkState != _NetworkState.online) return;
-
-    try {
-      final cred = await _buildAndStoreCredential();
-      final docId = await _resolveEmployeeDocId();
-      if (docId == null) return;
-
-      await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(docId)
-          .set({
-        'fingerprintCredentialHash': cred.hash,
-        'fingerprintEnrollmentSnapshot': cred.snapshot,
-        'fingerprintCredentialRefreshedAt': FieldValue.serverTimestamp(),
-        'fingerprintInvalidReason': FieldValue.delete(),
-        'fingerprintInvalidatedAt': FieldValue.delete(),
-      }, SetOptions(merge: true));
-    } catch (e) {
-      _secureLog('⚠️ Self-heal failed: $e');
-    }
-  }
-
-  Future<void> _checkFingerprintRegistration() async {
-    if (_isDemo) {
-      if (mounted) {
-        setState(() {
-          _fingerprintRegistered = true;
-          _checkingRegistration = false;
-          _registrationCheckComplete = true;
-          _regPhase = _RegPhase.completed;
-        });
-      }
-      return;
-    }
-
-    if (!mounted) return;
-    setState(() => _checkingRegistration = true);
-
-    if (_networkState == _NetworkState.offline) {
-      await _checkRegistrationOffline();
-      return;
-    }
-
-    try {
-      final docId = await _resolveEmployeeDocId();
-      if (docId == null || docId.isEmpty) {
-        await _checkRegistrationOffline();
-        return;
-      }
-
-      DocumentSnapshot<Map<String, dynamic>>? doc;
-      try {
-        doc = await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(docId)
-            .get()
-            .timeout(const Duration(seconds: 8));
-      } catch (e) {
-        _secureLog('⚠️ [FP] Primary doc read failed: $e');
-      }
-
-      Map<String, dynamic>? data = doc?.data();
-
-      if (data == null) {
-        final empId = _employeeIdForAttendance;
-        if (empId.isNotEmpty) {
-          try {
-            final q = await FirebaseFirestore.instance
-                .collection('employees')
-                .where('employeeId', isEqualTo: empId)
-                .limit(1)
-                .get()
-                .timeout(const Duration(seconds: 6));
-            if (q.docs.isNotEmpty) {
-              data = q.docs.first.data();
-            }
-          } catch (_) {}
-        }
-      }
-
-      if (data == null) {
-        await _checkRegistrationOffline();
-        return;
-      }
-
-      // 🆕 Apply any pending admin actions before reading enrollment state
-      await _processAdminActions(data);
-
-      String? lockVal;
-      try {
-        lockVal = await _secureStorage.read(key: _lockKey(widget.employee.id));
-      } catch (_) {}
-      final localLocked = lockVal == '1';
-      final serverFresh = doc != null &&
-          !doc.metadata.isFromCache &&
-          !doc.metadata.hasPendingWrites;
-      final serverLocked = data['fingerprintLocked'] == true;
-
-      if (localLocked && !serverLocked && serverFresh) {
-        try {
-          await _secureStorage.delete(key: _lockKey(widget.employee.id));
-        } catch (_) {}
-      }
-      final lockedFlag =
-          serverLocked || (localLocked && !(serverFresh && !serverLocked));
-
-      final enrolledFlag = data['fingerprintEnrolled'] == true;
-      final savedBinding = data['fingerprintDeviceBinding']?.toString();
-      final currentBinding = _deviceBinding;
-      final storedHash = data['fingerprintCredentialHash']?.toString();
-
-      bool bindingMatches = true;
-      if (savedBinding != null &&
-          savedBinding.isNotEmpty &&
-          currentBinding != null &&
-          currentBinding.isNotEmpty) {
-        bindingMatches = savedBinding == currentBinding;
-
-        if (!bindingMatches && !lockedFlag) {
-          _secureLog('⚠️ [FP] Device binding mismatch. Auto-healing...');
-          if (docId.isNotEmpty) {
-            unawaited(FirebaseFirestore.instance
-                .collection('employees')
-                .doc(docId)
-                .update({
-              'fingerprintDeviceBinding': currentBinding,
-              'fingerprintDeviceFingerprint': _deviceFingerprint,
-            }).catchError((e) => _secureLog('Auto-heal failed: $e')));
-          }
-          bindingMatches = true;
-        }
-      }
-
-      bool enrolled = enrolledFlag && bindingMatches && !lockedFlag;
-
-      DateTime? enrolledAt;
-      final rawEnrolledAt = data['fingerprintEnrolledAt'];
-      if (rawEnrolledAt is Timestamp) {
-        enrolledAt = rawEnrolledAt.toDate();
-      }
-
-      _CredentialStatus credStatus = _CredentialStatus.ok;
-      if (enrolled) {
-        credStatus = await _verifyCredential(
-          storedHashFromFirestore: storedHash,
-        );
-      }
-
-      if (credStatus == _CredentialStatus.enrollmentChanged) {
-        await _resetRegistrationDueToEnrollmentChange(docId);
-        enrolled = false;
-      } else if (credStatus != _CredentialStatus.ok) {
-        unawaited(_refreshCredentialInBackground());
-      }
-
-      await _cacheEnrollmentStatus(enrolled, enrolledAt);
-
-      if (mounted) {
-        setState(() {
-          _fingerprintLocked =
-              lockedFlag || credStatus == _CredentialStatus.enrollmentChanged;
-          _fingerprintRegistered = enrolled;
-          _fingerprintRegisteredAt = enrolledAt;
-          _checkingRegistration = false;
-          _lastCredentialStatus = credStatus;
-          _regPhase = enrolled ? _RegPhase.completed : _RegPhase.idle;
-        });
-      }
-    } catch (e) {
-      _secureLog('❌ [FP] Check registration error: $e');
-      await _checkRegistrationOffline();
-    }
-  }
-
-  Future<void> _checkRegistrationOffline() async {
-    if (_isDemo) return;
-
-    try {
-      final cred = await _readCredential();
-      String? lockVal;
-      try {
-        lockVal = await _secureStorage.read(key: _lockKey(widget.employee.id));
-      } catch (_) {}
-      final localLocked = lockVal == '1';
-      final enrolled = !localLocked &&
-          cred != null &&
-          cred['employee_id'] == widget.employee.id;
-
-      if (mounted) {
-        setState(() {
-          _fingerprintLocked = localLocked;
-          _fingerprintRegistered = enrolled;
-          _checkingRegistration = false;
-          _regPhase = enrolled ? _RegPhase.completed : _RegPhase.idle;
-        });
-      }
-    } catch (e) {
-      _secureLog('❌ [FP-offline] $e');
-      if (mounted) {
-        setState(() {
-          _fingerprintRegistered = false;
-          _checkingRegistration = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _cacheEnrollmentStatus(bool enrolled, DateTime? at) async {
-    if (_isDemo) return;
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('fp_cached_enrolled', enrolled);
-      if (at != null) {
-        await prefs.setInt('fp_cached_enrolled_at', at.millisecondsSinceEpoch);
-      }
-    } catch (_) {}
   }
 
   Future<void> _verifyPreAuth() async {
@@ -1899,8 +1435,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (!hasNet) {
       setState(() {
         _networkState = _NetworkState.offline;
-        _networkErrorMessage =
-        'No internet connection.\n\n'
+        _networkErrorMessage = 'No internet connection.\n\n'
             'You can still clock in — records will be saved locally '
             'and synced automatically when you\'re back online.';
         _showOfflineOverlay = false;
@@ -1925,40 +1460,26 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     await _checkNetworkAndProceed();
   }
 
+  // ✅ FIX 1: Standalone mode proceeds kahit walang biometrics
   Future<void> _checkHardwareAndProceed() async {
     if (_isDemo) return;
 
     if (!mounted) return;
-    final hasHardware = await _hasBiometricHardware();
+    if (!_biometricCheckDone) {
+      await _checkBiometricAvailability();
+    }
     if (!mounted) return;
-    _hardwareChecked = true;
-    _noBiometricHardware = !hasHardware;
 
-    if (!hasHardware) {
+    _hardwareChecked = true;
+    _noBiometricHardware = !_biometricAvailable;
+
+    if (!_biometricAvailable) {
       if (widget.standaloneMode) {
-        if (mounted) {
-          setState(() {
-            _errorMessage =
-            'No fingerprint sensor on this device.\n'
-                'Please go back and select Facial Recognition.';
-          });
-        }
+        _secureLog(
+            '⏭️ [FP] Standalone mode + no biometrics → ready to proceed');
         return;
       }
       _navigateToFacialRecognition();
-    }
-  }
-
-  Future<bool> _hasBiometricHardware() async {
-    if (_isDemo) return true;
-    if (kIsWeb) return false;
-
-    try {
-      final isSupported = await _localAuth.isDeviceSupported();
-      final canCheck = await _localAuth.canCheckBiometrics;
-      return isSupported && canCheck;
-    } catch (_) {
-      return true;
     }
   }
 
@@ -1966,7 +1487,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (!mounted) return;
 
     if (_fingerprintLocked) {
-      _onFailure('Security Lockdown: Biometric changes detected.\n'
+      _onFailure('Fingerprint access blocked by Admin.\n'
           'Please use Face Recognition or contact Admin.');
       return;
     }
@@ -1982,8 +1503,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (_isDemo) {
       final online = _isOnlineSafely();
       if (!online) {
-        _showOfflineSnack(
-            'Internet connection is required for Demo Mode.');
+        _showOfflineSnack('Internet connection is required for Demo Mode.');
         return;
       }
 
@@ -2019,7 +1539,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       if (!mounted) return;
       setState(() {
         _fpState = _FpState.success;
-        _justRegistered = false;
         _errorMessage = null;
       });
       _pulseCtrl.stop();
@@ -2035,8 +1554,33 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       return;
     }
 
-    if (!_registrationCheckComplete) {
-      _onFailure('Please wait — verifying registration status...');
+    if (!_biometricCheckDone) {
+      _onFailure('Please wait — checking device...');
+      return;
+    }
+
+    // ✅ FIX 2: Standalone + no biometrics → bypass scan, tuloy sa clock-in
+    if (!_biometricAvailable && !kIsWeb) {
+      if (widget.standaloneMode) {
+        _secureLog(
+            '⏭️ [FP] Bypass scan (standalone, no biometrics) → clock-in');
+
+        setState(() {
+          _fpState = _FpState.success;
+          _errorMessage = null;
+        });
+        _pulseCtrl.stop();
+        _ringCtrl.stop();
+        _successCtrl.forward();
+
+        await Future.delayed(const Duration(milliseconds: 1000));
+        if (!mounted) return;
+        await _handleClockIn();
+        return;
+      }
+      await _autoProceedToFaceScan(
+          'No fingerprint sensor on this device.\n'
+              'Proceeding to facial recognition...');
       return;
     }
 
@@ -2075,71 +1619,13 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       return;
     }
 
-    if (!_hardwareChecked) {
-      final hasHardware = await _hasBiometricHardware();
-      _hardwareChecked = true;
-      _noBiometricHardware = !hasHardware;
-    }
-
-    if (_noBiometricHardware) {
-      if (widget.standaloneMode) {
-        _onFailure('No fingerprint sensor on this device.');
-        return;
-      }
-      _navigateToFacialRecognition();
-      return;
-    }
-
     setState(() {
       _fpState = _FpState.scanning;
       _errorMessage = null;
       _showCleanupHint = false;
-      if (_isRegistering) {
-        _regPhase = _RegPhase.capturingStep;
-      }
     });
 
     await _authenticateNative();
-  }
-
-  Future<void> _resetRegistrationDueToEnrollmentChange(String docId) async {
-    unawaited(_logSecurityEvent(
-      type: 'fp_enrollment_changed',
-      severity: 'high',
-      details: 'Device biometric enrollment changed — fingerprint locked',
-    ));
-
-    try {
-      await _secureStorage.write(key: _lockKey(widget.employee.id), value: '1');
-    } catch (_) {}
-    await _secureStorage.delete(key: _credKey(widget.employee.id));
-
-    try {
-      if (docId.isNotEmpty) {
-        unawaited(FirebaseFirestore.instance
-            .collection('employees')
-            .doc(docId)
-            .set({
-          'fingerprintEnrolled': false,
-          'fingerprintLocked': true,
-          'fingerprintLockReason': 'enrollment_changed',
-          'fingerprintLockedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true)).catchError(
-                (e) => _secureLog('⚠️ Lock write failed: $e')));
-      }
-    } catch (_) {}
-
-    await _cacheEnrollmentStatus(false, null);
-
-    if (mounted) {
-      setState(() {
-        _fingerprintRegistered = false;
-        _fingerprintLocked = true;
-        _regPhase = _RegPhase.idle;
-        _currentRegStep = 0;
-        _regStepHashes.clear();
-      });
-    }
   }
 
   Future<void> _authenticateNative() async {
@@ -2167,17 +1653,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         return;
       }
 
-      String reason;
-      if (_fingerprintRegistered) {
-        reason = 'Scan your registered fingerprint to verify';
-      } else {
-        final stepName = _regStepNames[_currentRegStep];
-        reason = 'Step ${_currentRegStep + 1} of $_totalRegSteps: $stepName';
-      }
-
       final authenticated = await _localAuth
           .authenticate(
-        localizedReason: reason,
+        localizedReason:
+        'Scan your device fingerprint to verify your identity',
         options: const AuthenticationOptions(
           biometricOnly: true,
           stickyAuth: true,
@@ -2203,8 +1682,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           type: 'fp_failed',
           severity: _authFailedAttempts >= 2 ? 'high' : 'medium',
           details: 'Failed attempt #$_authFailedAttempts '
-              'sessionFail=$_sessionFailCount '
-              '${_isRegistering ? "step=${_currentRegStep + 1}" : ""}',
+              'sessionFail=$_sessionFailCount',
         );
 
         if (_sessionFailCount >= _maxSessionFails) {
@@ -2242,92 +1720,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         return;
       }
 
-      if (_fingerprintRegistered && _networkState == _NetworkState.online) {
-        String? storedHash;
-        try {
-          final docId = await _resolveEmployeeDocId();
-          if (docId != null) {
-            final doc = await FirebaseFirestore.instance
-                .collection('employees')
-                .doc(docId)
-                .get()
-                .timeout(const Duration(seconds: 6));
-            storedHash = doc.data()?['fingerprintCredentialHash']?.toString();
-          }
-        } catch (_) {}
-
-        final status = await _verifyCredential(
-          storedHashFromFirestore: storedHash,
-        );
-        _lastCredentialStatus = status;
-
-        if (status == _CredentialStatus.enrollmentChanged) {
-          final docId = await _resolveEmployeeDocId();
-          if (docId != null) {
-            await _resetRegistrationDueToEnrollmentChange(docId);
-          }
-          _onFailure('Your device biometrics have changed.\n'
-              'Fingerprint LOCKED. Please use Face Scan or contact Admin.');
-          return;
-        }
-
-        if (status != _CredentialStatus.ok) {
-          unawaited(_logSecurityEvent(
-            type: 'fp_credential_soft_warning',
-            severity: 'low',
-            details: 'Status=$status durationMs=$durationMs (proceeding)',
-          ));
-          unawaited(_refreshCredentialInBackground());
-        }
-      } else if (_fingerprintRegistered) {
-        final localStatus = await _verifyCredential(
-          storedHashFromFirestore: null,
-        );
-        _lastCredentialStatus = localStatus;
-        if (localStatus == _CredentialStatus.enrollmentChanged) {
-          final docId = await _resolveEmployeeDocId();
-          if (docId != null) {
-            await _resetRegistrationDueToEnrollmentChange(docId);
-          }
-          _onFailure('Your device biometrics have changed.\n'
-              'Fingerprint LOCKED. Please use Face Scan or contact Admin.');
-          return;
-        }
-      }
-
       await _resetAuthAttempts();
       _sessionFailCount = 0;
-
-      if (_isRegistering) {
-        final snapshot = await _captureEnrollmentSnapshot();
-        final stepHash = _buildStepHash(_currentRegStep, snapshot.join(','));
-
-        _regStepHashes.add(stepHash);
-
-        await _logSecurityEvent(
-          type: 'fp_reg_step_captured',
-          severity: 'info',
-          details: 'Step ${_currentRegStep + 1}/$_totalRegSteps '
-              '(${_regStepNames[_currentRegStep]}) in ${durationMs}ms',
-        );
-
-        _currentRegStep++;
-
-        if (_currentRegStep >= _totalRegSteps) {
-          _regPhase = _RegPhase.completed;
-          await _onSuccess();
-        } else {
-          if (!mounted) return;
-          setState(() {
-            _fpState = _FpState.idle;
-            _errorMessage = null;
-          });
-          _pulseCtrl.repeat(reverse: true);
-          _ringCtrl.repeat();
-          await Future.delayed(const Duration(milliseconds: 400));
-        }
-        return;
-      }
 
       await _logSecurityEvent(
         type: 'fp_success',
@@ -2455,129 +1849,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     _navigateToFacialRecognition();
   }
 
-  Future<bool> _saveFingerprintRegistration() async {
-    if (_isDemo) {
-      _secureLog('🎭 [DemoMode] Skipping fingerprint save');
-      return true;
-    }
-
-    if (_fingerprintLocked) {
-      _secureLog('❌ [FP-Save] Locked — ABORT');
-      return false;
-    }
-
-    try {
-      final guardOk = await _createEnrollmentGuard();
-      if (!guardOk) {
-        _secureLog('❌ [FP-Save] Guard creation failed — ABORT');
-        return false;
-      }
-
-      final docId = await _resolveEmployeeDocId();
-      if (docId == null || docId.isEmpty) {
-        _secureLog('❌ [FP-Save] Cannot resolve doc ID — ABORT');
-        return false;
-      }
-
-      final employeeId = _employeeIdForAttendance;
-      if (employeeId.isEmpty) {
-        _secureLog('❌ [FP-Save] employeeId empty — ABORT');
-        return false;
-      }
-
-      final cred = await _buildAndStoreCredential();
-      final now = FieldValue.serverTimestamp();
-
-      final payload = <String, dynamic>{
-        'fingerprintEnrolled': true,
-        'fingerprintEnrolledAt': now,
-        'fingerprintDeviceModel': _deviceModel,
-        'fingerprintDeviceBinding': _deviceBinding,
-        'fingerprintDeviceFingerprint': _deviceFingerprint,
-        'fingerprintCredentialHash': cred.hash,
-        'fingerprintEnrollmentSnapshot': cred.snapshot,
-        'fingerprintRegistrationSteps': _totalRegSteps,
-        'fingerprintStepHashes': _regStepHashes,
-        'fingerprintRegistrationMethod': 'single_confirm_local_auth',
-        'fingerprintRegisteredBy': widget.employee.id,
-        'fingerprintMethod': 'local_auth_v2',
-        'employeeId': employeeId,
-        'updatedAt': now,
-      };
-
-      if (_networkState != _NetworkState.online) {
-        await OfflineAttendanceService.instance.enqueue(
-          collection: 'employees',
-          docId: docId,
-          data: payload,
-        );
-        _secureLog('📥 [FP-Save] Offline — queued to sync later');
-      } else {
-        try {
-          await _executeWithLoadBalancer(() => FirebaseFirestore.instance
-              .collection('employees')
-              .doc(docId)
-              .set(payload, SetOptions(merge: true))
-              .timeout(const Duration(seconds: 10)));
-        } catch (e) {
-          await OfflineAttendanceService.instance.enqueue(
-            collection: 'employees',
-            docId: docId,
-            data: payload,
-          );
-        }
-      }
-
-      final activityPayload = <String, dynamic>{
-        'type': 'fingerprint_registered',
-        'action': 'Fingerprint Registered (Single Confirm)',
-        'employeeId': docId,
-        'employee_id': employeeId,
-        'employee_name': widget.employee.fullName,
-        'email': widget.employee.email,
-        'verification_method': 'fingerprint',
-        'registration_steps': _totalRegSteps,
-        'device': _deviceModel,
-        'device_binding': _deviceBinding,
-        'session_nonce': _sessionNonce,
-        'platform': kIsWeb ? 'web' : 'mobile',
-        'timestamp': now,
-      };
-
-      if (_networkState != _NetworkState.online) {
-        await OfflineAttendanceService.instance.enqueue(
-          collection: 'activity_logs',
-          data: activityPayload,
-        );
-      } else {
-        try {
-          await _executeWithLoadBalancer(() =>
-              FirebaseFirestore.instance
-                  .collection('activity_logs')
-                  .add(activityPayload));
-        } catch (_) {
-          await OfflineAttendanceService.instance.enqueue(
-            collection: 'activity_logs',
-            data: activityPayload,
-          );
-        }
-      }
-
-      await _cacheEnrollmentStatus(true, DateTime.now());
-      await _logSecurityEvent(
-        type: 'fp_registered',
-        severity: 'info',
-        details: 'Single-confirm fingerprint registration for '
-            '${widget.employee.fullName} on $_deviceModel',
-      );
-
-      return true;
-    } catch (e, st) {
-      _secureLog('❌ [FP-Save] EXCEPTION: $e\n$st');
-      return false;
-    }
-  }
-
   Future<void> _onSuccess() async {
     if (!mounted) return;
     setState(() {
@@ -2592,51 +1863,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     _consecutiveFailsForCleanup = 0;
     _showCleanupHint = false;
 
-    if (_isDemo) {
-      _justRegistered = false;
-    } else if (!_fingerprintRegistered) {
-      final ok = await _saveFingerprintRegistration();
-      if (!mounted) return;
-
-      if (ok) {
-        _justRegistered = true;
-        setState(() {
-          _fingerprintRegistered = true;
-          _fingerprintRegisteredAt = DateTime.now();
-          _regPhase = _RegPhase.completed;
-        });
-        _resolvedDocId = null;
-      } else {
-        setState(() {
-          _fpState = _FpState.error;
-          _errorMessage = 'Failed to save registration.\n'
-              'Please check your internet and try again.';
-          _currentRegStep = 0;
-          _regStepHashes.clear();
-          _regPhase = _RegPhase.idle;
-        });
-        _shakeCtrl.forward(from: 0);
-        _successCtrl.reset();
-        _pulseCtrl.repeat(reverse: true);
-        _ringCtrl.repeat();
-
-        await Future.delayed(const Duration(seconds: 3));
-        if (mounted && _fpState == _FpState.error) {
-          setState(() {
-            _fpState = _FpState.idle;
-            _errorMessage = null;
-          });
-        }
-        return;
-      }
-    } else {
-      _justRegistered = false;
-    }
-
     if (!_isDemo) {
       final logPayload = <String, dynamic>{
-        'type':
-        _justRegistered ? 'fingerprint_registered' : 'fingerprint_verified',
+        'type': 'fingerprint_verified',
         'employeeId': widget.employee.id,
         'employee_id': widget.employee.id,
         'employee_name': widget.employee.fullName,
@@ -2645,8 +1874,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         'device_binding': _deviceBinding,
         'mode': widget.standaloneMode ? 'standalone' : 'login',
         'stage': 'fingerprint',
-        'is_first_registration': _justRegistered,
-        'registration_steps': _justRegistered ? _totalRegSteps : null,
         'timestamp': FieldValue.serverTimestamp(),
         'device': kIsWeb ? 'Web Browser' : _deviceModel,
       };
@@ -2725,7 +1952,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     await ClockStatusService.instance.isCurrentlyClockedIn(employeeId);
 
     if (!alreadyClockedIn) {
-      // 🔑 UNAHIN NATIN ANG ADMIN OVERRIDE CHECK
       bool hasAdminTemporaryAccess = false;
       try {
         final docId = await _resolveEmployeeDocId();
@@ -2738,7 +1964,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
           if (data != null && data['adminClockInOverride'] == true) {
             hasAdminTemporaryAccess = true;
-            // Bawasin ang token para isang beses lang magamit
             await FirebaseFirestore.instance
                 .collection('employees')
                 .doc(docId)
@@ -2760,8 +1985,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             setState(() {
               _isCheckingGeofence = false;
               _fpState = _FpState.error;
-              _errorMessage =
-              'You have already clocked in today.\n'
+              _errorMessage = 'You have already clocked in today.\n'
                   'Only one clock-in is allowed per day.';
             });
             _shakeCtrl.forward(from: 0);
@@ -2781,6 +2005,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     _goToClockInSuccess();
   }
+
   Future<bool> _checkGeofence() async {
     if (_isDemo) return true;
 
@@ -3583,7 +2808,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                             _isDemo
                                 ? 'Real biometric prompt — always pass'
                                 : (widget.standaloneMode
-                                ? 'Fingerprint verification'
+                                ? 'Device fingerprint verification'
                                 : 'Select your initial verification method'),
                             style:
                             const TextStyle(color: _white, fontSize: 14)),
@@ -3595,8 +2820,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 10, vertical: 4),
                                 decoration: BoxDecoration(
-                                  color:
-                                  Colors.white.withValues(alpha: 0.25),
+                                  color: Colors.white.withValues(alpha: 0.25),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: const Row(
@@ -3695,14 +2919,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                           _isDemo
                               ? 'Demo Mode'
                               : (_fingerprintLocked
-                              ? 'Security Lockdown'
-                              : _checkingRegistration
-                              ? 'Checking registration...'
-                              : _fingerprintRegistered
-                              ? (widget.standaloneMode
+                              ? 'Access Blocked by Admin'
+                              : (widget.standaloneMode
                               ? 'Fingerprint Verification'
-                              : 'Step 1: Initial Login')
-                              : 'Register Your Fingerprint'),
+                              : 'Step 1: Initial Login')),
                           style: TextStyle(
                               color: _isDemo
                                   ? _demoAccent
@@ -3778,6 +2998,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     final blocked = _deviceCompromised && !_isDemo;
     final checking = _isCheckingGeofence && !_isDemo;
 
+    // ✅ FIX 4: Sa standalone, huwag i-flag as no biometrics
+    final noBiometrics = !_biometricAvailable &&
+        _biometricCheckDone &&
+        !_isDemo &&
+        !widget.standaloneMode;
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       width: double.infinity,
@@ -3802,8 +3028,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         ],
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        if (_isRegistering && _registrationCheckComplete && !_isDemo)
-          _buildRegProgressIndicator(),
         _buildIcon(locked: locked || blocked),
         const SizedBox(height: 24),
         AnimatedSwitcher(
@@ -3812,17 +3036,17 @@ class _FingerprintScreenState extends State<FingerprintScreen>
               blocked
                   ? 'Device Blocked'
                   : _fingerprintLocked
-                  ? 'Fingerprint Locked'
+                  ? 'Access Locked'
                   : locked
                   ? 'Locked Out'
                   : checking
                   ? 'Verifying\nLocation...'
-                  : _checkingRegistration && !_isDemo
-                  ? 'Checking...'
+                  : noBiometrics
+                  ? 'No Biometrics'
                   : _stateTitle,
-              key: ValueKey('$locked-$blocked-$checking-'
-                  '$_checkingRegistration-$_fpState-'
-                  '$_fingerprintRegistered-$_fingerprintLocked-$_currentRegStep-$_isDemo'),
+              key: ValueKey('title-$locked-$blocked-$checking-'
+                  '$noBiometrics-$_fpState-'
+                  '$_fingerprintLocked-$_isDemo'),
               textAlign: TextAlign.center,
               style: const TextStyle(
                   color: _white,
@@ -3838,19 +3062,20 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                   ? 'This device failed the security integrity check.\n'
                   'Please contact your administrator.'
                   : _fingerprintLocked
-                  ? 'Biometric enrollment changed on this device.\n'
+                  ? 'Fingerprint access has been blocked by Admin.\n'
                   'Please use Face Recognition or contact Admin.'
                   : locked
                   ? 'Too many failed attempts.\nTry again in '
                   '${_remainingLockoutText()}'
                   : checking
                   ? 'Checking your role and location...'
-                  : _checkingRegistration && !_isDemo
-                  ? 'Verifying if your fingerprint is already registered...'
+                  : noBiometrics
+                  ? 'This device does not have an enrolled '
+                  'fingerprint.\nPlease use Face '
+                  'Recognition instead.'
                   : (_errorMessage ?? _stateSubtitle),
-              key: ValueKey('sub_${_errorMessage ?? _fpState}_'
-                  '$locked-$blocked-$checking-$_checkingRegistration-'
-                  '$_fingerprintRegistered-$_fingerprintLocked-$_currentRegStep-'
+              key: ValueKey('sub-${_errorMessage ?? _fpState}'
+                  '-$locked-$blocked-$checking-$noBiometrics-'
                   '$_showCleanupHint-$_osLockedOut-'
                   '$_pendingCount-${_networkState.name}-$_isDemo'),
               textAlign: TextAlign.center,
@@ -3907,12 +3132,13 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           ),
         ],
         const SizedBox(height: 28),
+        // ✅ FIX 4: Cancel button visible kahit standalone + no biometrics
         if (!kIsWeb &&
-            !_noBiometricHardware &&
             !locked &&
             !blocked &&
+            !_fingerprintLocked &&
             !checking &&
-            (!_checkingRegistration || _isDemo) &&
+            (_biometricAvailable || widget.standaloneMode) &&
             (_fpState == _FpState.idle || _fpState == _FpState.error))
           _buildCancelButton(),
 
@@ -3953,53 +3179,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     );
   }
 
-  Widget _buildRegProgressIndicator() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: List.generate(_totalRegSteps, (i) {
-              final done = i < _currentRegStep;
-              final active = i == _currentRegStep;
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  width: active ? 40 : 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: done
-                        ? _success
-                        : active
-                        ? _white
-                        : _white.withValues(alpha: 0.3),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: done
-                      ? const Icon(Icons.check_rounded,
-                      color: Colors.white, size: 12)
-                      : null,
-                ),
-              );
-            }),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Step ${_currentRegStep + 1} of $_totalRegSteps',
-            style: const TextStyle(
-              color: _white,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.4,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildIcon({required bool locked}) {
     Color iconColor;
     if (_isDemo) {
@@ -4024,15 +3203,16 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     final successAnim = _successAnim ?? const AlwaysStoppedAnimation(0.0);
     final shakeAnim = _shakeAnim ?? const AlwaysStoppedAnimation(0.0);
 
+    // ✅ FIX 3: Pwedeng i-tap kahit standalone + no biometrics
     final canTap = _isDemo
         ? (_fpState == _FpState.idle || _fpState == _FpState.error)
         : (!locked &&
         !_deviceCompromised &&
         !_fingerprintLocked &&
         !_isCheckingGeofence &&
-        !_checkingRegistration &&
-        _registrationCheckComplete &&
         !_osLockedOut &&
+        _biometricCheckDone &&
+        (_biometricAvailable || widget.standaloneMode) &&
         (_fpState == _FpState.idle || _fpState == _FpState.error));
 
     return AnimatedBuilder(
@@ -4049,9 +3229,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             behavior: HitTestBehavior.opaque,
             onTap: canTap ? _authenticate : null,
             child: Stack(alignment: Alignment.center, children: [
-              if (_fpState == _FpState.scanning ||
-                  _isCheckingGeofence ||
-                  (_checkingRegistration && !_isDemo))
+              if (_fpState == _FpState.scanning || _isCheckingGeofence)
                 Transform.rotate(
                   angle: ringAnim.value * 2 * math.pi,
                   child: CustomPaint(
@@ -4114,10 +3292,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   }
 
   Widget _buildCurrentIcon(Color iconColor) {
-    if (_checkingRegistration && !_isDemo) {
-      return Icon(Icons.hourglass_top_rounded, color: iconColor, size: 48);
-    }
-
     if (_isDemo) {
       return Stack(
         alignment: Alignment.center,
@@ -4142,38 +3316,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       );
     }
 
-    if (_isRegistering) {
-      final icon =
-      _regStepIcons[_currentRegStep.clamp(0, _regStepIcons.length - 1)];
-      return Stack(
-        alignment: Alignment.center,
-        children: [
-          Icon(Icons.fingerprint_rounded,
-              color: iconColor.withValues(alpha: 0.3), size: 48),
-          Positioned(
-            bottom: 8,
-            right: 8,
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: _modalGradTop,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 2),
-              ),
-              child: Icon(icon, color: Colors.white, size: 16),
-            ),
-          ),
-        ],
-      );
-    }
-
-    return Icon(
-      _fingerprintRegistered
-          ? Icons.fingerprint_rounded
-          : Icons.app_registration_rounded,
-      color: iconColor,
-      size: 48,
-    );
+    return Icon(Icons.fingerprint_rounded, color: iconColor, size: 48);
   }
 
   Widget _buildCancelButton() {
@@ -4248,19 +3391,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   }
 
   String _buildCancelLabel() {
-    if (_fingerprintLocked) return 'Close';
-    if (_isRegistering) {
-      if (_currentRegStep > 0) {
-        return 'Cancel Registration ($_currentRegStep/$_totalRegSteps)';
-      }
-      return 'Cancel Registration';
-    }
-    if (widget.standaloneMode) {
-      return _fingerprintRegistered
-          ? 'Cancel Verification'
-          : 'Cancel Registration';
-    }
-    return 'Cancel Authentication';
+    return widget.standaloneMode
+        ? 'Cancel Verification'
+        : 'Cancel Authentication';
   }
 
   void _onCancelTapped() async {
@@ -4302,21 +3435,13 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
 
     if (_deviceCompromised) return 'Device Blocked';
-    if (_checkingRegistration) return 'Checking...';
     switch (_fpState) {
       case _FpState.idle:
-        if (_isRegistering) {
-          if (_currentRegStep == 0) return 'Register\nFingerprint';
-          return 'Step ${_currentRegStep + 1} of $_totalRegSteps';
-        }
-        return 'Fingerprint Required';
+        return 'Fingerprint\nRequired';
       case _FpState.scanning:
-        if (_isRegistering) {
-          return 'Scanning ${_regStepNames[_currentRegStep]}...';
-        }
         return 'Scanning\nFingerprint...';
       case _FpState.success:
-        return _justRegistered ? 'Registered!' : 'Verified!';
+        return 'Verified!';
       case _FpState.error:
         return 'Try Again';
     }
@@ -4324,7 +3449,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   String get _stateSubtitle {
     if (_fingerprintLocked) {
-      return 'Security Lockdown: Biometric changes detected.\n'
+      return 'Fingerprint access has been blocked by Admin.\n'
           'Please use Face Scan or contact Admin.';
     }
     if (_isDemo) {
@@ -4360,9 +3485,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (_deviceCompromised) {
       return 'Device integrity check failed.\nAccess blocked.';
     }
-    if (_checkingRegistration) {
-      return 'Verifying if your fingerprint is already registered...';
-    }
 
     if (_showCleanupHint) {
       return '⚠️ Fingerprint sensor might be dirty.\n'
@@ -4375,25 +3497,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           'Wait 30 seconds before retrying.';
     }
 
-    if (_isRegistering) {
-      switch (_fpState) {
-        case _FpState.idle:
-          if (_currentRegStep == 0) {
-            return 'We will scan your finger $_totalRegSteps time.\n\n'
-                'Use the finger you registered in\n'
-                'your phone\'s Settings.\n\n'
-                'Tap to start.';
-          }
-          return _regStepInstructions[_currentRegStep];
-        case _FpState.scanning:
-          return 'Hold your finger steady on the sensor...';
-        case _FpState.success:
-          return _justRegistered
-              ? 'Fingerprint registered successfully!'
-              : 'Step ${_currentRegStep + 1} complete!';
-        case _FpState.error:
-          return 'Fingerprint not recognized.\nTap to try again.';
-      }
+    // ✅ Standalone + no biometrics → custom message
+    if (!_biometricAvailable && _biometricCheckDone && widget.standaloneMode) {
+      return 'No fingerprint sensor on this device.\n\n'
+          'Tap the scanner to proceed to\n'
+          'Clock In / Clock Out.';
     }
 
     switch (_fpState) {
@@ -4404,9 +3512,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
               'Your attendance will be saved locally\n'
               'and synced automatically when online.';
         }
-        return 'Tap the scanner icon to proceed.\n\n'
-            '⚠️ Use the SAME finger you registered\n'
-            'in your device Settings.\n\n'
+        return 'Tap the scanner icon to verify.\n\n'
+            'Use the fingerprint you set up in\n'
+            'your device Settings.\n\n'
             'Wipe the sensor if it feels dirty.';
       case _FpState.scanning:
         return kIsWeb
@@ -4419,8 +3527,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
   }
 }
-
-enum _FpState { idle, scanning, success, error }
 
 class _DashRingPainter extends CustomPainter {
   final Color color;

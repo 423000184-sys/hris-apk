@@ -1,5 +1,8 @@
 // lib/screens/admin_create_leave_request_page.dart
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'admin_theme.dart';
@@ -19,113 +22,54 @@ class AdminCreateLeaveRequestPage extends StatefulWidget {
 
   @override
   State<AdminCreateLeaveRequestPage> createState() =>
-      _AdminCreateLeaveRequestPageState();
+  _AdminCreateLeaveRequestPageState();
 }
 
 class _AdminCreateLeaveRequestPageState
-    extends State<AdminCreateLeaveRequestPage> {
-  // ══════════════════════════════════════════════════════════════
-  // DEMO MODE
-  // TRUE = hides real employees + blocks real Firestore writes.
-  // Tap the eye icon in the heading to toggle at runtime.
-  // ══════════════════════════════════════════════════════════════
-  bool _demoMode = true;
+extends State<AdminCreateLeaveRequestPage> {
 
-  // ── Sample employees (demo only) ──────────────────────────────
-  static const List<Map<String, dynamic>> _demoEmployees = [
-    {
-      'id': 'demo-001',
-      'name': 'Juan Dela Cruz',
-      'position': 'Sales Associate',
-      'department': 'Sales',
-      'employeeId': 'EMP-0012',
-      'email': 'juan.delacruz@example.com',
-    },
-    {
-      'id': 'demo-002',
-      'name': 'Maria Santos',
-      'position': 'Cashier',
-      'department': 'Finance',
-      'employeeId': 'EMP-0034',
-      'email': 'maria.santos@example.com',
-    },
-    {
-      'id': 'demo-003',
-      'name': 'Pedro Reyes',
-      'position': 'Warehouse Staff',
-      'department': 'Logistics',
-      'employeeId': 'EMP-0056',
-      'email': 'pedro.reyes@example.com',
-    },
-  ];
-
-  // ── Effective employee list (respects demo mode) ──────────────
-  List<Map<String, dynamic>> get _effectiveEmployees =>
-      _demoMode ? _demoEmployees : widget.employees;
-
-  // ══════════════════════════════════════════════════════════════
-  // THEME ACCESSOR
-  // ══════════════════════════════════════════════════════════════
   AdminColors get tc => AdminTheme.getColors(context);
+  String get _actorEmail => FirebaseAuth.instance.currentUser?.email ?? 'admin';
 
-  // ══════════════════════════════════════════════════════════════
-  // TEXT CONTROLLERS
-  // ══════════════════════════════════════════════════════════════
+  // ── Controllers ──
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _positionController = TextEditingController();
   final TextEditingController _departmentController = TextEditingController();
   final TextEditingController _relieverController = TextEditingController();
   final TextEditingController _fromDateController = TextEditingController();
   final TextEditingController _toDateController = TextEditingController();
-  final TextEditingController _daysController =
-  TextEditingController(text: "0");
-  final TextEditingController _hoursController =
-  TextEditingController(text: "0");
+  final TextEditingController _daysController = TextEditingController(text: "0");
+  final TextEditingController _hoursController = TextEditingController(text: "0");
   final TextEditingController _returnDateController = TextEditingController();
   final TextEditingController _returnTimeController = TextEditingController();
   final TextEditingController _reasonController = TextEditingController();
 
-  // ══════════════════════════════════════════════════════════════
-  // DATE / TIME VALUES
-  // ══════════════════════════════════════════════════════════════
+  // ── Values ──
   DateTime? _dateFrom;
   DateTime? _dateTo;
   DateTime? _returnDate;
   TimeOfDay? _returnTime;
   double _totalDays = 0;
   double _totalHours = 0;
+  String? _selectedEmployeeId;
+  bool _isSubmitting = false;
 
-  // ══════════════════════════════════════════════════════════════
-  // LEAVE TYPES
-  // ══════════════════════════════════════════════════════════════
+  Map<String, dynamic> _employeeBalances = {};
+
   final List<Map<String, String>> _leaveTypes = const [
     {"code": "SL", "desc": "Sick Leave"},
     {"code": "VL", "desc": "Vacation Leave"},
     {"code": "EL", "desc": "Emergency"},
-    {"code": "BL", "desc": "Bereavement"},
-    {"code": "ML", "desc": "Maternity/Paternity"},
-    {"code": "Others", "desc": "Specify below"},
+    {"code": "ML / PL", "desc": "Maternity/Paternity"},
   ];
   String _selectedLeaveType = "SL";
 
-  // ══════════════════════════════════════════════════════════════
-  // EMPLOYEE
-  // ══════════════════════════════════════════════════════════════
-  String? _selectedEmployeeId;
-  bool _isSubmitting = false;
-
-  // ══════════════════════════════════════════════════════════════
-  // EMPLOYEE NAME HELPER
-  // ══════════════════════════════════════════════════════════════
   String _empName(Map<String, dynamic> employee) {
     final dynamic name = employee['name'];
-    if (name != null && name.toString().trim().isNotEmpty) {
-      return name.toString().trim();
-    }
+    if (name != null && name.toString().trim().isNotEmpty) return name.toString().trim();
     final String first = (employee['firstName'] ?? '').toString().trim();
     final String last = (employee['lastName'] ?? '').toString().trim();
-    final String fullName = '$first $last'.trim();
-    return fullName.isEmpty ? 'Unknown' : fullName;
+    return '$first $last'.trim().isEmpty ? 'Unknown' : '$first $last'.trim();
   }
 
   @override
@@ -145,7 +89,172 @@ class _AdminCreateLeaveRequestPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // BUILD
+  // AUTO-CALCULATE DAYS & HOURS
+  // ══════════════════════════════════════════════════════════════
+  void _calculateDaysAndHours() {
+    if (_dateFrom == null || _dateTo == null) return;
+
+    // Normalize dates to midnight (12:00 AM) to avoid time discrepancies
+    final start = DateTime(_dateFrom!.year, _dateFrom!.month, _dateFrom!.day);
+    final end = DateTime(_dateTo!.year, _dateTo!.month, _dateTo!.day);
+
+    if (end.isBefore(start)) {
+      setState(() {
+        _totalDays = 0;
+        _totalHours = 0;
+        _daysController.text = "0";
+        _hoursController.text = "0";
+      });
+      return;
+    }
+
+    int days = end.difference(start).inDays + 1; // +1 for inclusive dates
+    double hours = days * 8.0; // Standard 8 hours per day
+
+    setState(() {
+      _totalDays = days.toDouble();
+      _totalHours = hours;
+      _daysController.text = days.toString();
+      _hoursController.text = hours.toStringAsFixed(0);
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // HR OVERRIDE PASSWORD
+  // ══════════════════════════════════════════════════════════════
+  String _sha256Hash(String input) => sha256.convert(utf8.encode(input)).toString();
+
+  Future<bool> _verifyHrOverridePassword() async {
+    final pwdCtrl = TextEditingController();
+    bool obscure = true;
+
+    final submitted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: tc.card,
+          title: Row(children: [
+            Icon(Icons.lock_outline_rounded, color: tc.orange, size: 22),
+            const SizedBox(width: 10),
+            Text('HR Override Required', style: TextStyle(color: tc.text)),
+          ]),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Enter password to save this leave request.',
+                   style: TextStyle(color: tc.textMuted, fontSize: 13)),
+                   const SizedBox(height: 16),
+                   TextField(
+                     controller: pwdCtrl,
+                     obscureText: obscure,
+                     autofocus: true,
+                     style: TextStyle(color: tc.text),
+                     decoration: _inputDecoration(
+                       'Override Password',
+                       suffixIcon: IconButton(
+                         icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, size: 18, color: tc.muted),
+                         onPressed: () => setDlgState(() => obscure = !obscure),
+                       ),
+                     ),
+                   ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel', style: TextStyle(color: tc.muted))),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: tc.orange, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Verify'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (submitted != true) return false;
+    if (pwdCtrl.text.trim().isEmpty) return false;
+
+    try {
+      final cfg = await FirebaseFirestore.instance.collection('system_config').doc('attendance_override').get();
+      final storedHash = (cfg.data()?['passwordHash'] ?? '').toString().toLowerCase();
+      if (!cfg.exists || storedHash.isEmpty) {
+        _showError('Override password not configured.');
+        return false;
+      }
+      return _sha256Hash(pwdCtrl.text.trim()).toLowerCase() == storedHash;
+    } catch (e) {
+      _showError('Verification failed.');
+      return false;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // EMPLOYEE PICKER & BALANCE FETCH
+  // ══════════════════════════════════════════════════════════════
+  Future<void> _showEmployeePicker() async {
+    final searchCtrl = TextEditingController();
+    String query = '';
+
+    final selected = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) {
+          final filtered = widget.employees.where((e) {
+            final name = _empName(e).toLowerCase();
+            final id = (e['employeeId'] ?? e['employee_id'] ?? e['id'] ?? '').toString().toLowerCase();
+            return name.contains(query) || id.contains(query);
+          }).toList();
+
+          return AlertDialog(
+            backgroundColor: tc.card,
+            title: Text('Select Employee', style: TextStyle(color: tc.text)),
+            content: SizedBox(
+              width: 400, height: 450,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: searchCtrl,
+                    decoration: _inputDecoration("Search by name or ID...", suffixIcon: Icon(Icons.search, color: tc.muted)),
+                    onChanged: (v) => setDlg(() => query = v.toLowerCase()),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: filtered.length,
+                      itemBuilder: (_, i) {
+                        final emp = filtered[i];
+                        return ListTile(
+                          title: Text(_empName(emp), style: TextStyle(color: tc.text)),
+                          subtitle: Text((emp['department'] ?? emp['dept'] ?? 'N/A').toString(), style: TextStyle(color: tc.muted)),
+                          onTap: () => Navigator.pop(ctx, emp),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    if (selected != null) {
+      setState(() {
+        _selectedEmployeeId = (selected['id'] ?? selected['employeeId'] ?? '').toString();
+        _nameController.text = _empName(selected);
+        _positionController.text = (selected['position'] ?? selected['role'] ?? selected['jobTitle'] ?? 'N/A').toString();
+        _departmentController.text = (selected['department'] ?? selected['dept'] ?? selected['section'] ?? 'N/A').toString();
+
+        _employeeBalances = Map<String, dynamic>.from(selected['leaveBalances'] ?? {});
+      });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // UI BUILD
   // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
@@ -164,10 +273,6 @@ class _AdminCreateLeaveRequestPageState
                 _buildBackLink(),
                 const SizedBox(height: 8),
                 _buildPageHeading(),
-                if (_demoMode) ...[
-                  const SizedBox(height: 12),
-                  _buildDemoBanner(),
-                ],
                 const SizedBox(height: 24),
                 _buildFormCard(),
               ],
@@ -178,42 +283,6 @@ class _AdminCreateLeaveRequestPageState
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // DEMO BANNER
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildDemoBanner() {
-    return Container(
-      width: double.infinity,
-      padding:
-      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: tc.orange.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: tc.orange.withValues(alpha: 0.4)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.visibility_off_rounded,
-              size: 16, color: tc.orange),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              "DEMO MODE — sample employees only; submissions are not saved.",
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: tc.orange,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // BACK LINK
-  // ══════════════════════════════════════════════════════════════
   Widget _buildBackLink() {
     return InkWell(
       onTap: widget.onBack ?? () => Navigator.of(context).maybePop(),
@@ -222,187 +291,72 @@ class _AdminCreateLeaveRequestPageState
         children: [
           Icon(Icons.arrow_back, size: 14, color: tc.orange),
           const SizedBox(width: 6),
-          Text(
-            "Back to Activity & Leave",
-            style: TextStyle(
-              color: tc.orange,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          Text("Back to Activity & Leave", style: TextStyle(color: tc.orange, fontSize: 14, fontWeight: FontWeight.w600)),
         ],
       ),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PAGE HEADING — with demo toggle icon
-  // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeading() {
-    return LayoutBuilder(builder: (_, c) {
-      final r = BsResponsive(c.maxWidth);
-      return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text("Create Leave Request", style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: tc.text)),
+        const SizedBox(height: 2),
+        Text("Application for Leave of Absence", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: tc.orange)),
+      ],
+    );
+  }
+
+  Widget _buildFormCard() {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: tc.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: tc.border),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 12, offset: const Offset(0, 4))],
+      ),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        "Create Leave Request",
-                        style: TextStyle(
-                          fontSize: r.responsive<double>(
-                            xs: 22, sm: 26, md: 28, lg: 32,
-                          ),
-                          fontWeight: FontWeight.w700,
-                          color: tc.text,
-                          letterSpacing: -0.3,
-                        ),
-                      ),
-                    ),
-                    if (_demoMode) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: tc.orange.withValues(alpha: 0.18),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          "DEMO",
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                            color: tc.orange,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  "Application for Leave of Absence",
-                  style: TextStyle(
-                    fontSize: r.responsive<double>(xs: 13, md: 16),
-                    fontWeight: FontWeight.w500,
-                    color: tc.orange,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            tooltip: _demoMode
-                ? "Demo mode ON — sample data only"
-                : "Demo mode OFF — real data",
-            onPressed: _toggleDemo,
-            icon: Icon(
-              _demoMode
-                  ? Icons.visibility_off_rounded
-                  : Icons.visibility_rounded,
-              color: _demoMode ? tc.orange : tc.muted,
-              size: 20,
-            ),
-          ),
+          _buildInstructionBox(),
+          const SizedBox(height: 24),
+          _sectionLabel("EMPLOYEE INFORMATION"),
+          const SizedBox(height: 16),
+          _buildEmployeeInformation(),
+          const SizedBox(height: 32),
+          _sectionLabel("LEAVE DETAILS"),
+          const SizedBox(height: 16),
+          _buildLeaveDetails(),
+          const SizedBox(height: 20),
+          _buildReturnToWork(),
+          const SizedBox(height: 32),
+          _sectionLabel("LEAVE APPLIED FOR"),
+          const SizedBox(height: 16),
+          _buildLeaveTypes(),
+          const SizedBox(height: 20),
+          _buildReasonField(),
+          const SizedBox(height: 28),
+          _buildApprovalWorkflow(),
+          const SizedBox(height: 24),
+          _buildActionButtons(),
         ],
-      );
-    });
+      ),
+    );
   }
 
-  void _toggleDemo() {
-    setState(() {
-      _demoMode = !_demoMode;
-      // Reset employee selection so it doesn't carry across modes
-      _selectedEmployeeId = null;
-    });
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // FORM CARD — responsive padding
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildFormCard() {
-    return LayoutBuilder(builder: (_, c) {
-      final r = BsResponsive(c.maxWidth);
-      final padding = r.responsive<double>(
-        xs: 16, sm: 20, md: 24, lg: 32,
-      );
-
-      return Container(
-        padding: EdgeInsets.all(padding),
-        decoration: BoxDecoration(
-          color: tc.card,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: tc.border),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildInstructionBox(),
-            const SizedBox(height: 24),
-            _sectionLabel("EMPLOYEE INFORMATION"),
-            const SizedBox(height: 16),
-            _buildEmployeeInformation(),
-            const SizedBox(height: 32),
-            _sectionLabel("LEAVE DETAILS"),
-            const SizedBox(height: 16),
-            _buildLeaveDetails(),
-            const SizedBox(height: 20),
-            _buildReturnToWork(),
-            const SizedBox(height: 32),
-            _sectionLabel("LEAVE APPLIED FOR"),
-            const SizedBox(height: 16),
-            _buildLeaveTypes(),
-            const SizedBox(height: 20),
-            _buildReasonField(),
-            const SizedBox(height: 28),
-            _buildApprovalWorkflow(),
-            const SizedBox(height: 24),
-            _buildActionButtons(),
-          ],
-        ),
-      );
-    });
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // INSTRUCTION BOX
-  // ══════════════════════════════════════════════════════════════
   Widget _buildInstructionBox() {
     return Container(
-      width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
       decoration: BoxDecoration(
         color: tc.orange.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(8),
-        border: Border(
-          left: BorderSide(color: tc.orange, width: 4),
-        ),
+        border: Border(left: BorderSide(color: tc.orange, width: 4)),
       ),
       child: Text(
-        "INSTRUCTION: This form should be filled out BEFORE an "
-            "employee goes on leave. In case of emergency or illness, "
-            "this form must be filled out IMMEDIATELY upon return for "
-            "work. Sick leave applications will only be honored "
-            "provided it is a duty certified by licensed Physician.",
-        style: TextStyle(
-          fontSize: 12,
-          height: 1.5,
-          color: tc.text,
-          fontWeight: FontWeight.w500,
-        ),
+        "INSTRUCTION: This form should be filled out BEFORE an employee goes on leave. In case of emergency or illness, this form must be filled out IMMEDIATELY upon return for work.",
+        style: TextStyle(fontSize: 12, height: 1.5, color: tc.text, fontWeight: FontWeight.w500),
       ),
     );
   }
@@ -411,140 +365,96 @@ class _AdminCreateLeaveRequestPageState
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: tc.border, width: 1),
-        ),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          color: tc.orange,
-          letterSpacing: 0.5,
-        ),
-      ),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: tc.border, width: 1))),
+      child: Text(text, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: tc.orange, letterSpacing: 0.5)),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // RESPONSIVE GRID HELPER
-  // ══════════════════════════════════════════════════════════════
   Widget _responsiveGrid({required List<Widget> children}) {
     return LayoutBuilder(builder: (_, c) {
-      final r = BsResponsive(c.maxWidth);
-      final narrow = !r.up(BsSize.md);
-
-      if (narrow) {
-        return Column(
-          children: children
-              .map((child) => Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: child,
-          ))
-              .toList(),
-        );
+      if (c.maxWidth < 768) {
+        return Column(children: children.map((child) => Padding(padding: const EdgeInsets.only(bottom: 16), child: child)).toList());
       }
       return Wrap(
         spacing: 20,
         runSpacing: 20,
-        children: children
-            .map((child) => SizedBox(
-          width: (c.maxWidth - 20) / 2,
-          child: child,
-        ))
-            .toList(),
+        children: children.map((child) => SizedBox(width: (c.maxWidth - 20) / 2, child: child)).toList(),
       );
     });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // EMPLOYEE INFORMATION
-  // ══════════════════════════════════════════════════════════════
   Widget _buildEmployeeInformation() {
     return _responsiveGrid(
       children: [
-        _labeledField("Name of Employee", _buildNameField()),
-        _labeledField("Designation / Position",
-            _textField(_positionController, "Enter job title")),
-        _labeledField("Section / Department",
-            _textField(_departmentController, "Enter department")),
-        _labeledField("Name of Reliever (Optional)",
-            _textField(_relieverController, "Who will cover your duties?")),
+        _labeledField(
+          "Name of Employee",
+          TextField(
+            controller: _nameController,
+            readOnly: true,
+            onTap: _showEmployeePicker,
+            style: TextStyle(fontSize: 16, color: tc.text, fontWeight: FontWeight.bold),
+            decoration: _inputDecoration("Click to select employee", suffixIcon: Icon(Icons.search, color: tc.orange)),
+          ),
+        ),
+        _labeledField(
+          "Designation / Position",
+          TextField(
+            controller: _positionController,
+            readOnly: true,
+            style: TextStyle(fontSize: 16, color: tc.textMuted),
+            decoration: _inputDecoration("Auto-filled"),
+          ),
+        ),
+        _labeledField(
+          "Section / Department",
+          TextField(
+            controller: _departmentController,
+            readOnly: true,
+            style: TextStyle(fontSize: 16, color: tc.textMuted),
+            decoration: _inputDecoration("Auto-filled"),
+          ),
+        ),
+        _labeledField(
+          "Name of Reliever (Optional)",
+          TextField(controller: _relieverController, decoration: _inputDecoration("Who will cover your duties?")),
+        ),
       ],
     );
   }
 
-  Widget _buildNameField() {
-    return TextField(
-      controller: _nameController,
-      style: TextStyle(fontSize: 16, color: tc.text),
-      decoration: _inputDecoration("Enter full name"),
-      onChanged: _tryFindEmployee,
+  // 👇 BAGONG DATE PICKER UI (Hindi na TextField, Clickable Box na)
+  Widget _buildDatePickerBox({
+    required String hint,
+    required String value,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14), // Kaparehas ng TextField height
+        decoration: BoxDecoration(
+          color: tc.card,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: tc.border),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              value.isEmpty ? hint : value,
+              style: TextStyle(
+                color: value.isEmpty ? tc.muted : tc.text,
+                fontSize: 14,
+              ),
+            ),
+            Icon(Icons.calendar_today, color: tc.muted, size: 18),
+          ],
+        ),
+      ),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // FLEXIBLE NAME MATCHING (uses _effectiveEmployees)
-  // ══════════════════════════════════════════════════════════════
-  void _tryFindEmployee(String value) {
-    final String typedName = value.trim().toLowerCase();
-    if (typedName.isEmpty) {
-      if (_selectedEmployeeId != null) {
-        setState(() => _selectedEmployeeId = null);
-      }
-      return;
-    }
-
-    final List<Map<String, dynamic>> source = _effectiveEmployees;
-
-    // 1️⃣ Exact match muna
-    for (final employee in source) {
-      final String employeeName = _empName(employee).trim().toLowerCase();
-      if (employeeName == typedName) {
-        final id = (employee['id'] ?? '').toString();
-        if (_selectedEmployeeId != id) {
-          setState(() => _selectedEmployeeId = id);
-        }
-        return;
-      }
-    }
-
-    // 2️⃣ Starts-with match
-    for (final employee in source) {
-      final String employeeName = _empName(employee).trim().toLowerCase();
-      if (employeeName.startsWith(typedName)) {
-        final id = (employee['id'] ?? '').toString();
-        if (_selectedEmployeeId != id) {
-          setState(() => _selectedEmployeeId = id);
-        }
-        return;
-      }
-    }
-
-    // 3️⃣ Contains match — unique only
-    final matches = source.where((e) {
-      final name = _empName(e).trim().toLowerCase();
-      return name.contains(typedName);
-    }).toList();
-
-    if (matches.length == 1) {
-      final id = (matches.first['id'] ?? '').toString();
-      if (_selectedEmployeeId != id) {
-        setState(() => _selectedEmployeeId = id);
-      }
-      return;
-    }
-
-    if (_selectedEmployeeId != null) {
-      setState(() => _selectedEmployeeId = null);
-    }
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // LEAVE DETAILS
-  // ══════════════════════════════════════════════════════════════
   Widget _buildLeaveDetails() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -557,48 +467,53 @@ class _AdminCreateLeaveRequestPageState
         children: [
           _labeledField(
             "Inclusive Dates",
-            LayoutBuilder(builder: (_, c) {
-              final veryNarrow = c.maxWidth < 320;
-              final fromField = _editableDateField(
-                label: "From",
-                controller: _fromDateController,
-                onDateSelected: (date) {
-                  setState(() {
-                    _dateFrom = date;
-                    _fromDateController.text = _fmtDate(date);
-                  });
-                  _calculateTotalDays();
-                },
-              );
-              final toField = _editableDateField(
-                label: "To",
-                controller: _toDateController,
-                onDateSelected: (date) {
-                  setState(() {
-                    _dateTo = date;
-                    _toDateController.text = _fmtDate(date);
-                  });
-                  _calculateTotalDays();
-                },
-              );
-
-              if (veryNarrow) {
-                return Column(
-                  children: [
-                    fromField,
-                    const SizedBox(height: 10),
-                    toField,
-                  ],
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(child: fromField),
-                  const SizedBox(width: 10),
-                  Expanded(child: toField),
-                ],
-              );
-            }),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildDatePickerBox(
+                    hint: "From",
+                    value: _fromDateController.text,
+                    onTap: () async {
+                      final d = await showDatePicker(
+                        context: context,
+                        initialDate: _dateFrom ?? DateTime.now(),
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2100)
+                      );
+                      if (d != null) {
+                        setState(() {
+                          _dateFrom = d;
+                          _fromDateController.text = DateFormat('MM/dd/yyyy').format(d);
+                        });
+                        _calculateDaysAndHours(); // Auto-compute
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _buildDatePickerBox(
+                    hint: "To",
+                    value: _toDateController.text,
+                    onTap: () async {
+                      final d = await showDatePicker(
+                        context: context,
+                        initialDate: _dateTo ?? _dateFrom ?? DateTime.now(),
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2100)
+                      );
+                      if (d != null) {
+                        setState(() {
+                          _dateTo = d;
+                          _toDateController.text = DateFormat('MM/dd/yyyy').format(d);
+                        });
+                        _calculateDaysAndHours(); // Auto-compute
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
           ),
           _labeledField(
             "Total Time Out",
@@ -608,22 +523,16 @@ class _AdminCreateLeaveRequestPageState
                   child: _numberField(
                     "Days",
                     _daysController,
-                    onChanged: (value) {
-                      setState(
-                              () => _totalDays = double.tryParse(value) ?? 0);
-                    },
-                  ),
+                    readOnly: true, // Read-only
+                  )
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: _numberField(
                     "Hours",
                     _hoursController,
-                    onChanged: (value) {
-                      setState(
-                              () => _totalHours = double.tryParse(value) ?? 0);
-                    },
-                  ),
+                    readOnly: true, // Read-only
+                  )
                 ),
               ],
             ),
@@ -633,294 +542,121 @@ class _AdminCreateLeaveRequestPageState
     );
   }
 
-  Widget _editableDateField({
-    required String label,
-    required TextEditingController controller,
-    required void Function(DateTime) onDateSelected,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: tc.muted)),
-        const SizedBox(height: 4),
-        TextField(
-          controller: controller,
-          keyboardType: TextInputType.datetime,
-          style: TextStyle(fontSize: 16, color: tc.text),
-          decoration: _inputDecoration(
-            "mm/dd/yyyy",
-            suffixIcon: IconButton(
-              tooltip: "Select date",
-              icon: Icon(Icons.calendar_today_outlined,
-                  size: 18, color: tc.muted),
-              onPressed: () => _pickDate(onDateSelected),
-            ),
-          ),
-          onChanged: (value) {
-            final date = _parseDate(value);
-            if (date != null) {
-              if (controller == _fromDateController) _dateFrom = date;
-              if (controller == _toDateController) _dateTo = date;
-              _calculateTotalDays();
-            }
-          },
-        ),
-      ],
-    );
-  }
-
-  Future<void> _pickDate(void Function(DateTime) onPicked) async {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2100),
-      builder: (ctx, child) => Theme(
-        data: AdminTheme.themeData(isDark),
-        child: child!,
-      ),
-    );
-    if (picked != null) onPicked(picked);
-  }
-
-  DateTime? _parseDate(String value) {
-    final input = value.trim();
-    if (input.isEmpty) return null;
-    final regex = RegExp(r'^(\d{1,2})/(\d{1,2})/(\d{4})$');
-    final match = regex.firstMatch(input);
-    if (match == null) return null;
-    final month = int.tryParse(match.group(1)!);
-    final day = int.tryParse(match.group(2)!);
-    final year = int.tryParse(match.group(3)!);
-    if (month == null || day == null || year == null) return null;
-    try {
-      final date = DateTime(year, month, day);
-      if (date.year != year || date.month != month || date.day != day) {
-        return null;
-      }
-      return date;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  void _calculateTotalDays() {
-    if (_dateFrom == null || _dateTo == null) return;
-    if (_dateTo!.isBefore(_dateFrom!)) {
-      setState(() {
-        _totalDays = 0;
-        _daysController.text = "0";
-      });
-      return;
-    }
-    final days = _dateTo!.difference(_dateFrom!).inDays + 1;
-    setState(() {
-      _totalDays = days.toDouble();
-      _daysController.text = days.toString();
-    });
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // RETURN TO WORK
-  // ══════════════════════════════════════════════════════════════
   Widget _buildReturnToWork() {
     return _responsiveGrid(
       children: [
-        _labeledField("Return to Work Date", _buildReturnDateField()),
-        _labeledField("Return to Work Time", _buildReturnTimeField()),
-      ],
-    );
-  }
-
-  Widget _buildReturnDateField() {
-    return TextField(
-      controller: _returnDateController,
-      keyboardType: TextInputType.datetime,
-      style: TextStyle(fontSize: 16, color: tc.text),
-      decoration: _inputDecoration(
-        "mm/dd/yyyy",
-        suffixIcon: IconButton(
-          tooltip: "Select date",
-          icon: Icon(Icons.calendar_today_outlined,
-              size: 18, color: tc.muted),
-          onPressed: () => _pickDate((date) {
-            setState(() {
-              _returnDate = date;
-              _returnDateController.text = _fmtDate(date);
-            });
-          }),
+        _labeledField(
+          "Return to Work Date",
+          _buildDatePickerBox(
+            hint: "mm/dd/yyyy",
+            value: _returnDateController.text,
+            onTap: () async {
+              final d = await showDatePicker(
+                context: context,
+                initialDate: _returnDate ?? DateTime.now(),
+                firstDate: DateTime(2020),
+                lastDate: DateTime(2100)
+              );
+              if (d != null) setState(() { _returnDate = d; _returnDateController.text = DateFormat('MM/dd/yyyy').format(d); });
+            },
+          ),
         ),
-      ),
-      onChanged: (value) => _returnDate = _parseDate(value),
-    );
-  }
-
-  Widget _buildReturnTimeField() {
-    return TextField(
-      controller: _returnTimeController,
-      keyboardType: TextInputType.datetime,
-      style: TextStyle(fontSize: 16, color: tc.text),
-      decoration: _inputDecoration(
-        "--:--",
-        suffixIcon: IconButton(
-          tooltip: "Select time",
-          icon: Icon(Icons.access_time_outlined,
-              size: 18, color: tc.muted),
-          onPressed: _pickTime,
-        ),
-      ),
-      onChanged: (value) => _returnTime = _parseTime(value),
-    );
-  }
-
-  Future<void> _pickTime() async {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-      builder: (ctx, child) => Theme(
-        data: AdminTheme.themeData(isDark),
-        child: child!,
-      ),
-    );
-    if (picked != null) {
-      setState(() {
-        _returnTime = picked;
-        _returnTimeController.text = picked.format(context);
-      });
-    }
-  }
-
-  TimeOfDay? _parseTime(String value) {
-    final input = value.trim().toLowerCase();
-    if (input.isEmpty) return null;
-    final regex =
-    RegExp(r'^(\d{1,2}):(\d{2})(?:\s*(am|pm))?$', caseSensitive: false);
-    final match = regex.firstMatch(input);
-    if (match == null) return null;
-    int hour = int.tryParse(match.group(1)!) ?? -1;
-    final minute = int.tryParse(match.group(2)!) ?? -1;
-    final period = match.group(3)?.toLowerCase();
-    if (minute < 0 || minute > 59) return null;
-    if (period != null) {
-      if (hour < 1 || hour > 12) return null;
-      if (period == "pm" && hour != 12) hour += 12;
-      if (period == "am" && hour == 12) hour = 0;
-    } else {
-      if (hour < 0 || hour > 23) return null;
-    }
-    return TimeOfDay(hour: hour, minute: minute);
-  }
-
-  Widget _numberField(
-      String label,
-      TextEditingController controller, {
-        required void Function(String) onChanged,
-      }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: tc.muted)),
-        const SizedBox(height: 4),
-        TextField(
-          controller: controller,
-          keyboardType:
-          const TextInputType.numberWithOptions(decimal: true),
-          style: TextStyle(fontSize: 16, color: tc.text),
-          decoration: _inputDecoration("0"),
-          onChanged: onChanged,
-        ),
-      ],
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // LEAVE TYPES
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildLeaveTypes() {
-    return LayoutBuilder(builder: (_, c) {
-      final r = BsResponsive(c.maxWidth);
-      final chipWidth = r.responsive<double>(
-        xs: (c.maxWidth - 24) / 2,
-        sm: 130,
-        md: 130,
-        lg: 130,
-      );
-
-      return Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        children: _leaveTypes.map((type) {
-          final selected = _selectedLeaveType == type["code"];
-          return InkWell(
-            onTap: () =>
-                setState(() => _selectedLeaveType = type["code"]!),
-            borderRadius: BorderRadius.circular(12),
+        _labeledField(
+          "Return to Work Time",
+          InkWell(
+            onTap: () async {
+              final t = await showTimePicker(context: context, initialTime: _returnTime ?? TimeOfDay.now());
+              if (t != null) setState(() { _returnTime = t; _returnTimeController.text = t.format(context); });
+            },
+            borderRadius: BorderRadius.circular(8),
             child: Container(
-              width: chipWidth,
-              padding:
-              const EdgeInsets.symmetric(vertical: 11, horizontal: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
               decoration: BoxDecoration(
-                color:
-                selected ? tc.orange.withValues(alpha: 0.12) : tc.card,
-                border: Border.all(
-                    color: selected ? tc.orange : tc.border),
-                borderRadius: BorderRadius.circular(12),
+                color: tc.card,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: tc.border),
               ),
-              child: Column(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    type["code"]!,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: tc.text,
-                    ),
+                    _returnTimeController.text.isEmpty ? "--:--" : _returnTimeController.text,
+                    style: TextStyle(color: _returnTimeController.text.isEmpty ? tc.muted : tc.text, fontSize: 14),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    type["desc"]!,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: tc.muted,
-                        fontWeight: FontWeight.w500),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  Icon(Icons.access_time, color: tc.muted, size: 18),
                 ],
               ),
             ),
-          );
-        }).toList(),
-      );
-    });
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLeaveTypes() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: _leaveTypes.map((type) {
+            final selected = _selectedLeaveType == type["code"];
+            return InkWell(
+              onTap: () => setState(() => _selectedLeaveType = type["code"]!),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                width: 130,
+                padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 10),
+                decoration: BoxDecoration(
+                  color: selected ? tc.orange.withValues(alpha: 0.12) : tc.card,
+                  border: Border.all(color: selected ? tc.orange : tc.border),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Text(type["code"]!, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: tc.text)),
+                    const SizedBox(height: 2),
+                    Text(type["desc"]!, style: TextStyle(fontSize: 12, color: tc.muted)),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+        if (_selectedEmployeeId != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: tc.green.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: tc.green.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.account_balance_wallet_outlined, size: 16, color: tc.green),
+                const SizedBox(width: 8),
+                Text(
+                  "Available Balance: ${_employeeBalances[_selectedLeaveType] ?? '0'} Day(s)",
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: tc.green),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
   }
 
   Widget _buildReasonField() {
     return _labeledField(
       "Reason",
-      TextField(
-        controller: _reasonController,
-        maxLines: 4,
-        style: TextStyle(fontSize: 16, color: tc.text),
-        decoration: _inputDecoration(
-            "Please provide specific details regarding your leave request..."),
-      ),
+      TextField(controller: _reasonController, maxLines: 4, decoration: _inputDecoration("Please provide specific details regarding your leave request...")),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // APPROVAL WORKFLOW
-  // ══════════════════════════════════════════════════════════════
   Widget _buildApprovalWorkflow() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -932,80 +668,9 @@ class _AdminCreateLeaveRequestPageState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "Approval Workflow (Automatic Routing)",
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: tc.text,
-            ),
-          ),
+          Text("Approval Workflow (Automatic Routing)", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: tc.text)),
           const SizedBox(height: 16),
-
-          LayoutBuilder(builder: (_, c) {
-            final narrow = c.maxWidth < 400;
-            final sigInfo = Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "Digital Signature",
-                  style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: tc.text),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  "Will be attached upon submission",
-                  style: TextStyle(fontSize: 12, color: tc.muted),
-                ),
-              ],
-            );
-            final dateInfo = Column(
-              crossAxisAlignment: narrow
-                  ? CrossAxisAlignment.start
-                  : CrossAxisAlignment.end,
-              children: [
-                Text("Date",
-                    style: TextStyle(fontSize: 12, color: tc.muted)),
-                const SizedBox(height: 2),
-                Text(
-                  DateFormat('MMM d, yyyy').format(DateTime.now()),
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: tc.text),
-                ),
-              ],
-            );
-
-            return Container(
-              padding: const EdgeInsets.only(top: 16, bottom: 12),
-              decoration: BoxDecoration(
-                border: Border(
-                  top: BorderSide(color: tc.border, width: 1),
-                ),
-              ),
-              child: narrow
-                  ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  sigInfo,
-                  const SizedBox(height: 12),
-                  dateInfo,
-                ],
-              )
-                  : Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Flexible(child: sigInfo),
-                  const SizedBox(width: 16),
-                  dateInfo,
-                ],
-              ),
-            );
-          }),
-
+          Divider(color: tc.border),
           _buildApprovalItem("Section Head", "Pending Recommendation"),
           _buildApprovalItem("Department Head", "Pending Approval"),
         ],
@@ -1018,352 +683,143 @@ class _AdminCreateLeaveRequestPageState
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 16,
-            backgroundColor: tc.blue.withValues(alpha: 0.15),
-            child: Icon(Icons.person_outline, size: 16, color: tc.blue),
-          ),
+          CircleAvatar(backgroundColor: tc.blue.withValues(alpha: 0.15), child: Icon(Icons.person_outline, size: 16, color: tc.blue)),
           const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: tc.text),
-                ),
-                Text(
-                  status,
-                  style: TextStyle(fontSize: 12, color: tc.muted),
-                ),
-              ],
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: tc.text)),
+              Text(status, style: TextStyle(fontSize: 12, color: tc.muted)),
+            ],
           ),
         ],
       ),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ACTION BUTTONS
-  // ══════════════════════════════════════════════════════════════
   Widget _buildActionButtons() {
-    return LayoutBuilder(builder: (_, c) {
-      final r = BsResponsive(c.maxWidth);
-      final narrow = !r.up(BsSize.sm);
-
-      final cancelBtn = OutlinedButton(
-        onPressed:
-        widget.onBack ?? () => Navigator.of(context).maybePop(),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: tc.text,
-          side: BorderSide(color: tc.border),
-          padding:
-          const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8)),
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        OutlinedButton(
+          onPressed: widget.onBack ?? () => Navigator.pop(context),
+          style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14)),
+          child: const Text("Cancel"),
         ),
-        child: const Text(
-          "Cancel",
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        const SizedBox(width: 16),
+        ElevatedButton(
+          onPressed: _isSubmitting ? null : _submitLeaveRequest,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: tc.orange,
+            foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+          ),
+          child: _isSubmitting
+          ? const CircularProgressIndicator(color: Colors.white)
+          : const Text("Submit Request", style: TextStyle(fontWeight: FontWeight.bold)),
         ),
-      );
-
-      final submitBtn = ElevatedButton(
-        onPressed: _isSubmitting
-            ? null
-            : () {
-          FocusScope.of(context).unfocus();
-          _submitLeaveRequest();
-        },
-        style: ElevatedButton.styleFrom(
-          backgroundColor: tc.orange,
-          foregroundColor: Colors.white,
-          disabledBackgroundColor: tc.orange.withValues(alpha: 0.6),
-          padding:
-          const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8)),
-          elevation: 0,
-        ),
-        child: _isSubmitting
-            ? const SizedBox(
-          width: 20,
-          height: 20,
-          child: CircularProgressIndicator(
-              strokeWidth: 2, color: Colors.white),
-        )
-            : const Text(
-          "Submit Request",
-          style:
-          TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        ),
-      );
-
-      if (narrow) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            submitBtn,
-            const SizedBox(height: 12),
-            cancelBtn,
-          ],
-        );
-      }
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          cancelBtn,
-          const SizedBox(width: 16),
-          submitBtn,
-        ],
-      );
-    });
+      ],
+    );
   }
 
   // ══════════════════════════════════════════════════════════════
-  // SUBMIT — demo mode short-circuits BEFORE touching Firestore
+  // SUBMIT WITH DEDUCTION & OVERRIDE
   // ══════════════════════════════════════════════════════════════
   Future<void> _submitLeaveRequest() async {
-    final parsedFrom = _parseDate(_fromDateController.text);
-    final parsedTo = _parseDate(_toDateController.text);
-    final parsedReturnDate = _parseDate(_returnDateController.text);
-    final parsedReturnTime = _parseTime(_returnTimeController.text);
-
-    _dateFrom = parsedFrom;
-    _dateTo = parsedTo;
-    _returnDate = parsedReturnDate;
-    _returnTime = parsedReturnTime;
-
-    _tryFindEmployee(_nameController.text);
-
-    if (_nameController.text.trim().isEmpty) {
-      _showError("Please enter the employee name.");
-      return;
+    if (_selectedEmployeeId == null || _nameController.text.isEmpty) {
+      return _showError("Please select an employee from the list.");
     }
-    if (_selectedEmployeeId == null || _selectedEmployeeId!.isEmpty) {
-      _showError(
-          "Employee name was not found. Please type the exact employee name.");
-      return;
-    }
-    if (_dateFrom == null) {
-      _showError("Please enter a valid From date.");
-      return;
-    }
-    if (_dateTo == null) {
-      _showError("Please enter a valid To date.");
-      return;
-    }
-    if (_dateTo!.isBefore(_dateFrom!)) {
-      _showError("The To date cannot be earlier than the From date.");
-      return;
+    if (_dateFrom == null || _dateTo == null) {
+      return _showError("Please select the Inclusive Dates.");
     }
 
-    _totalDays = _dateTo!.difference(_dateFrom!).inDays + 1;
-    _totalHours = double.tryParse(_hoursController.text.trim()) ?? 0;
-    _daysController.text = _totalDays.toString();
-
-    // ═══════════════════════════════════════════════════════════
-    // DEMO MODE — fake success, no Firestore write
-    // ═══════════════════════════════════════════════════════════
-    if (_demoMode) {
-      if (!mounted) return;
-      setState(() => _isSubmitting = true);
-
-      await Future.delayed(const Duration(milliseconds: 600));
-
-      if (!mounted) return;
-      setState(() => _isSubmitting = false);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text(
-              "🧪 Demo mode — request NOT saved (sample data only)."),
-          backgroundColor: tc.orange,
-        ),
-      );
-
-      // Reset form so demo can be repeated cleanly
-      _resetForm();
-      return;
+    final available = double.tryParse(_employeeBalances[_selectedLeaveType]?.toString() ?? '0') ?? 0;
+    if (_totalDays > available) {
+      return _showError("Insufficient leave balance. Available: $available, Requested: $_totalDays");
     }
 
-    if (!mounted) return;
+    // HR OVERRIDE DITO
+    final authorized = await _verifyHrOverridePassword();
+    if (!authorized) return;
+
     setState(() => _isSubmitting = true);
-
     try {
-      // ⭐ Use effective employee list (real path)
-      Map<String, dynamic> selectedEmp = {};
-      try {
-        selectedEmp = _effectiveEmployees.firstWhere(
-              (e) => (e['id'] ?? '').toString() == _selectedEmployeeId,
-        );
-      } catch (_) {
-        selectedEmp = {};
-      }
+      final empDocRef = FirebaseFirestore.instance.collection('employees').doc(_selectedEmployeeId);
 
-      final typedId = (selectedEmp['employeeId'] ??
-          selectedEmp['employee_id'] ??
-          '')
-          .toString()
-          .trim();
-      final authUid = (selectedEmp['authUid'] ??
-          selectedEmp['auth_uid'] ??
-          selectedEmp['uid'] ??
-          '')
-          .toString()
-          .trim();
-      final empEmail = (selectedEmp['email'] ?? '')
-          .toString()
-          .trim()
-          .toLowerCase();
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final empSnapshot = await transaction.get(empDocRef);
 
-      final leaveData = <String, dynamic>{
-        // ─── TARGET EMPLOYEE IDs (multi-identifier) ───
-        'employeeId': _selectedEmployeeId,
-        'employee_id': _selectedEmployeeId,
-        'employeeDocId': _selectedEmployeeId,
-        if (typedId.isNotEmpty) 'employeeCode': typedId,
-        if (authUid.isNotEmpty) 'employeeAuthUid': authUid,
-        if (empEmail.isNotEmpty) 'employeeEmail': empEmail,
+        if (empSnapshot.exists) {
+          Map<String, dynamic> currentBalances = Map<String, dynamic>.from(empSnapshot.data()!['leaveBalances'] ?? {});
+          double currentBal = double.tryParse(currentBalances[_selectedLeaveType]?.toString() ?? '0') ?? 0;
 
-        // ─── DISPLAY ───
-        'employeeName': _nameController.text.trim(),
-        'employee_name': _nameController.text.trim(),
-        'position': _positionController.text.trim(),
-        'department': _departmentController.text.trim(),
-        'reliever': _relieverController.text.trim(),
+          if (currentBal < _totalDays) {
+            throw Exception("Insufficient balance in Firestore.");
+          }
 
-        // ─── LEAVE DETAILS ───
-        'leaveType': _selectedLeaveType,
-        'startDate': _dateFrom!.toIso8601String(),
-        'endDate': _dateTo!.toIso8601String(),
-        'days': _totalDays.toInt(),
-        'hours': _totalHours,
-        'returnDate': _returnDate?.toIso8601String(),
-        'returnTime': _returnTime != null
-            ? "${_returnTime!.hour.toString().padLeft(2, '0')}:${_returnTime!.minute.toString().padLeft(2, '0')}"
-            : null,
-        'reason': _reasonController.text.trim(),
+          currentBalances[_selectedLeaveType] = currentBal - _totalDays;
+          transaction.update(empDocRef, {'leaveBalances': currentBalances});
+        }
 
-        // ─── STATUS ───
-        'status': 'pending',
-        'createdAt': FieldValue.serverTimestamp(),
-        'createdBy': 'admin',
-        'source': 'admin',
-      };
-
-      final docRef = await FirebaseFirestore.instance
-          .collection('leave_applications')
-          .add(leaveData);
-
-      debugPrint('═══════════════════════════════════════════');
-      debugPrint('✅ [AdminCreateLeave] Saved: ${docRef.id}');
-      debugPrint('   Employee:     ${_nameController.text.trim()}');
-      debugPrint('   employeeId:   $_selectedEmployeeId');
-      debugPrint('   employeeCode: $typedId');
-      debugPrint('   authUid:      $authUid');
-      debugPrint('   email:        $empEmail');
-      debugPrint('   Leave: $_selectedLeaveType, ${_totalDays.toInt()} day(s)');
-      debugPrint('═══════════════════════════════════════════');
-
-      try {
-        await FirebaseFirestore.instance.collection('activity logs').add({
-          'type': 'leave_created_by_admin',
+        final newLeaveRef = FirebaseFirestore.instance.collection('leave_applications').doc();
+        transaction.set(newLeaveRef, {
           'employeeId': _selectedEmployeeId,
-          'employee_name': _nameController.text.trim(),
+          'employeeName': _nameController.text.trim(),
+          'position': _positionController.text.trim(),
+          'department': _departmentController.text.trim(),
           'leaveType': _selectedLeaveType,
+          'startDate': Timestamp.fromDate(_dateFrom!),
+          'endDate': Timestamp.fromDate(_dateTo!),
           'days': _totalDays.toInt(),
-          'leaveDocId': docRef.id,
-          'timestamp': FieldValue.serverTimestamp(),
+          'hours': _totalHours,
+          'reason': _reasonController.text.trim(),
+          'status': 'pending',
+          'source': 'admin',
+          'createdAt': FieldValue.serverTimestamp(),
+          'createdBy': _actorEmail,
         });
-      } catch (e) {
-        debugPrint('⚠️ Activity log warning: $e');
-      }
+      });
 
       if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text("Leave request submitted successfully!"),
-          backgroundColor: tc.green,
-        ),
-      );
-
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Leave saved & Balance deducted!"), backgroundColor: Colors.green));
       widget.onSuccess?.call();
-      Navigator.of(context).maybePop(true);
       widget.onBack?.call();
+
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Failed to submit: ${e.toString()}"),
-          backgroundColor: tc.red,
-        ),
-      );
+      _showError("Error: $e");
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
-  // ── Reset form (used in demo mode for repeatability) ──────────
-  void _resetForm() {
-    _nameController.clear();
-    _positionController.clear();
-    _departmentController.clear();
-    _relieverController.clear();
-    _fromDateController.clear();
-    _toDateController.clear();
-    _returnDateController.clear();
-    _returnTimeController.clear();
-    _reasonController.clear();
-    _daysController.text = "0";
-    _hoursController.text = "0";
-    setState(() {
-      _dateFrom = null;
-      _dateTo = null;
-      _returnDate = null;
-      _returnTime = null;
-      _totalDays = 0;
-      _totalHours = 0;
-      _selectedEmployeeId = null;
-      _selectedLeaveType = "SL";
-    });
-  }
-
-  void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: tc.red),
-    );
-  }
-
-  Widget _textField(TextEditingController controller, String hint,
-      {TextInputType? keyboardType}) {
-    return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      style: TextStyle(fontSize: 16, color: tc.text),
-      decoration: _inputDecoration(hint),
-    );
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
   Widget _labeledField(String label, Widget field) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: tc.text,
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: tc.text)),
         const SizedBox(height: 6),
         field,
+      ],
+    );
+  }
+
+  Widget _numberField(String label, TextEditingController controller, {bool readOnly = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(fontSize: 12, color: tc.muted)),
+        const SizedBox(height: 4),
+        TextField(
+          controller: controller,
+          readOnly: readOnly,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          style: TextStyle(fontSize: 16, color: readOnly ? tc.textMuted : tc.text),
+          decoration: _inputDecoration("0"),
+        ),
       ],
     );
   }
@@ -1375,24 +831,10 @@ class _AdminCreateLeaveRequestPageState
       suffixIcon: suffixIcon,
       filled: true,
       fillColor: tc.card,
-      contentPadding:
-      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: tc.border),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: tc.border),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: tc.orange, width: 1.2),
-      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: tc.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: tc.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: tc.orange, width: 1.2)),
     );
-  }
-
-  String _fmtDate(DateTime date) {
-    return "${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}/${date.year}";
   }
 }

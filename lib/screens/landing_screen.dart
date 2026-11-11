@@ -1,6 +1,6 @@
 // lib/screens/landing_screen.dart
-// v2.6.2: 🧹 Removed Demo Mode button and all related code
-//         🔒 All security features preserved (session lock, hidden admin, etc.)
+// v2.7: Auto-redirect only if employee is currently clocked in.
+//       Killed app after clock-out will stay on landing screen.
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -73,16 +73,16 @@ class _ThemeColors {
   const _ThemeColors(this.isDark);
 
   Color get heroBgStart =>
-  isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
+      isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
   Color get heroBgEnd =>
-  isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
+      isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
 
   Color get heroTitle => isDark ? Colors.white : const Color(0xFF000000);
   Color get heroDesc =>
-  isDark ? const Color(0xFFB0B0B0) : const Color(0xFF3F3F46);
+      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF3F3F46);
 
   Color get scaffoldBg =>
-  isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
+      isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFF2EA);
 
   double get watermarkOpacity => isDark ? 0.15 : 0.80;
 }
@@ -94,37 +94,31 @@ class LandingScreen extends StatefulWidget {
 }
 
 class _LandingScreenState extends State<LandingScreen>
-with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
 
   static const String _logoAsset = 'assets/images/logo.png';
   static const double _desktopBreakpoint = 992.0;
 
-  // 🔒 Navigation state
+  // Navigation state
   bool _isNavigating = false;
   DateTime? _lastNavAttempt;
   static const Duration _navCooldown = Duration(milliseconds: 1200);
 
   bool _obscureContent = false;
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🔒 SESSION CHECK — auto-redirect kung naka-login na
-  // ═══════════════════════════════════════════════════════════════════════
+  // Session check
   bool _checkingSession = true;
   bool _autoRedirecting = false;
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🔐 SESSION LOCK — one device one login
-  // ═══════════════════════════════════════════════════════════════════════
+  // Session lock — one device, one login
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sessionSub;
   Timer? _heartbeatTimer;
   String? _activeEmployeeId;
   bool _revokeDialogShown = false;
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🔒 HIDDEN ADMIN — hardened
-  // ═══════════════════════════════════════════════════════════════════════
+  // Hidden admin
   Timer? _adminHoldTimer;
   bool _adminHoldActive = false;
   bool _adminNavigating = false;
@@ -139,17 +133,16 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
 
   DateTime? _lastAdminAttempt;
 
-  // ✅ 5-tap secret on the logo
   int _logoTapCount = 0;
   DateTime? _firstLogoTapTime;
   static const int _logoTapRequired = 5;
   static const Duration _logoTapResetWindow = Duration(seconds: 3);
 
-  // 🔒 Device binding
+  // Device binding
   String? _deviceBinding;
   bool _deviceCompromised = false;
 
-  // 🔌 Offline banner state
+  // Offline banner
   StreamSubscription<bool>? _connectivitySub;
   bool _isOnline = true;
 
@@ -179,9 +172,6 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
     _bootstrapSecurityAndCheckSession();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🔌 CONNECTIVITY LISTENER
-  // ═══════════════════════════════════════════════════════════════════════
   void _initConnectivityListener() {
     try {
       _isOnline = ConnectivityService.instance.isOnline;
@@ -191,13 +181,13 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
 
     try {
       _connectivitySub =
-      ConnectivityService.instance.onStatusChange.listen((online) {
-        if (!mounted) return;
-        setState(() => _isOnline = online);
-        _secureLog('🔌 Connectivity changed: online=$online');
-      });
+          ConnectivityService.instance.onStatusChange.listen((online) {
+            if (!mounted) return;
+            setState(() => _isOnline = online);
+            _secureLog('Connectivity changed: online=$online');
+          });
     } catch (e) {
-      _secureLog('⚠️ connectivity listen error: $e');
+      _secureLog('connectivity listen error: $e');
     }
   }
 
@@ -211,31 +201,31 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🔒 BOOTSTRAP
+  // BOOTSTRAP
   // ═══════════════════════════════════════════════════════════════════════
   Future<void> _bootstrapSecurityAndCheckSession() async {
-    // ✅ STEP 0: CHECK kung galing sa snap logout o forced logout
+    // STEP 0: Check if forced to show landing (after snap logout or forced logout)
     try {
       final prefs = await SharedPreferences.getInstance();
       final forceShow = prefs.getBool('force_show_landing') ?? false;
       if (forceShow) {
         await prefs.remove('force_show_landing');
         await prefs.remove('force_show_landing_at');
-        _secureLog('🚪 force_show_landing flag SET — '
-        'skipping session restore (snap/forced logout)');
+        _secureLog('force_show_landing flag SET — '
+            'skipping session restore (snap/forced logout)');
         if (mounted) setState(() => _checkingSession = false);
         return;
       }
     } catch (e) {
-      _secureLog('⚠️ flag check failed: $e');
+      _secureLog('flag check failed: $e');
     }
 
-    // ✅ STEP 0b: Check din ang route arguments
+    // STEP 0b: Check route arguments
     try {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map && args['skipSessionRestore'] == true) {
-        _secureLog('🚪 skipSessionRestore argument — '
-        'skipping session restore');
+        _secureLog('skipSessionRestore argument — '
+            'skipping session restore');
         if (mounted) setState(() => _checkingSession = false);
         return;
       }
@@ -254,8 +244,8 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
       await SecurityHardeningService.instance.checkDeviceIntegrity();
       _deviceCompromised = !ok;
       if (!ok) {
-        _secureLog('🚨 Device compromised: '
-        '${SecurityHardeningService.instance.integrityIssues.join(",")}');
+        _secureLog('Device compromised: '
+            '${SecurityHardeningService.instance.integrityIssues.join(",")}');
       }
     } catch (e) {
       _secureLog('Integrity check failed: $e');
@@ -272,7 +262,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🔐 SESSION LOCK — real-time listener + heartbeat
+  // SESSION LOCK — real-time listener + heartbeat
   // ═══════════════════════════════════════════════════════════════════════
   void _startSessionLockWatch(String employeeId) {
     _activeEmployeeId = employeeId;
@@ -283,14 +273,14 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
 
     try {
       _sessionSub = SessionLockService.instance
-      .watchSession(employeeId)
-      .listen((snap) async {
+          .watchSession(employeeId)
+          .listen((snap) async {
         if (!mounted) return;
         final data = snap.data();
         if (data == null) return;
 
         if (!snap.exists) {
-          _secureLog('ℹ️ Session doc deleted');
+          _secureLog('Session doc deleted');
           return;
         }
 
@@ -298,7 +288,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
         if (!revoked) return;
 
         final reason = (data['revokedReason'] ?? '').toString();
-        _secureLog('🚨 Session revoked: $reason');
+        _secureLog('Session revoked: $reason');
 
         _sessionSub?.cancel();
         _sessionSub = null;
@@ -325,10 +315,10 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
 
         _showSessionRevokedDialog(reason);
       }, onError: (e) {
-        _secureLog('⚠️ session watch error: $e');
+        _secureLog('session watch error: $e');
       });
     } catch (e) {
-      _secureLog('⚠️ session watch failed: $e');
+      _secureLog('session watch failed: $e');
     }
 
     _heartbeatTimer = Timer.periodic(const Duration(minutes: 2), (_) {
@@ -371,7 +361,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
               ),
               alignment: Alignment.center,
               child: const Icon(Icons.logout_rounded,
-                                color: Colors.red, size: 20),
+                  color: Colors.red, size: 20),
             ),
             const SizedBox(width: 12),
             const Expanded(
@@ -388,11 +378,11 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
         ),
         content: Text(
           reason.isEmpty
-          ? 'Your session has ended.\n\n'
-        'Another device may have signed in with the same account, '
-        'or an administrator has revoked your access.'
-        : 'Your session has ended.\n\nReason: $reason',
-        style: const TextStyle(fontSize: 13, height: 1.5),
+              ? 'Your session has ended.\n\n'
+              'Another device may have signed in with the same account, '
+              'or an administrator has revoked your access.'
+              : 'Your session has ended.\n\nReason: $reason',
+          style: const TextStyle(fontSize: 13, height: 1.5),
         ),
         actions: [
           SizedBox(
@@ -402,25 +392,24 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
                 Navigator.of(ctx).pop();
                 if (!mounted) return;
                 Navigator.of(context, rootNavigator: true)
-                .pushAndRemoveUntil(
-                  MaterialPageRoute(
-                    builder: (_) => const LandingScreen()),
-                    (_) => false,
+                    .pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const LandingScreen()),
+                      (_) => false,
                 );
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: _T.ctaSolid,
                 foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  elevation: 0,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                elevation: 0,
               ),
               child: const Text(
                 'OK',
                 style: TextStyle(
-                  fontWeight: FontWeight.w700, letterSpacing: 0.3),
+                    fontWeight: FontWeight.w700, letterSpacing: 0.3),
               ),
             ),
           ),
@@ -430,19 +419,19 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🔒 SESSION CHECK + AUTO-REDIRECT
+  // SESSION CHECK + AUTO-REDIRECT
   // ═══════════════════════════════════════════════════════════════════════
   Future<void> _checkExistingSession() async {
     if (_autoRedirecting) return;
 
     try {
-      _secureLog('🔍 Checking existing session...');
+      _secureLog('Checking existing session...');
 
       String? empId;
       try {
         empId = await SecurityHardeningService.instance
-        .getCurrentEmployeeId()
-        .timeout(const Duration(seconds: 5));
+            .getCurrentEmployeeId()
+            .timeout(const Duration(seconds: 5));
       } catch (e) {
         _secureLog('Session token check failed: $e');
       }
@@ -450,123 +439,147 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
       if (empId == null || empId.isEmpty) {
         try {
           empId = await SecurityService.instance
-          .getCurrentEmployeeId()
-          .timeout(const Duration(seconds: 5));
+              .getCurrentEmployeeId()
+              .timeout(const Duration(seconds: 5));
         } catch (_) {}
       }
 
       if ((empId == null || empId.isEmpty) &&
-        FirebaseAuth.instance.currentUser != null) {
+          FirebaseAuth.instance.currentUser != null) {
         try {
           final authUser = FirebaseAuth.instance.currentUser!;
           final snap = await FirebaseFirestore.instance
-          .collection('employees')
-          .where('authUid', isEqualTo: authUser.uid)
-          .limit(1)
-          .get()
-          .timeout(const Duration(seconds: 5));
+              .collection('employees')
+              .where('authUid', isEqualTo: authUser.uid)
+              .limit(1)
+              .get()
+              .timeout(const Duration(seconds: 5));
           if (snap.docs.isNotEmpty) {
             empId = snap.docs.first.id;
           }
         } catch (_) {}
-        }
+      }
 
-        if (empId == null || empId.isEmpty) {
-          _secureLog('❌ No existing session');
-          if (mounted) setState(() => _checkingSession = false);
-          return;
-        }
+      if (empId == null || empId.isEmpty) {
+        _secureLog('No existing session');
+        if (mounted) setState(() => _checkingSession = false);
+        return;
+      }
 
-        _secureLog('✅ Session found: $empId — loading employee');
-        Employee? employee;
-        String status = '';
-        bool? isActive;
+      _secureLog('Session found: $empId — loading employee');
+      Employee? employee;
+      String status = '';
+      bool? isActive;
 
-        try {
-          final doc = await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(empId)
-          .get()
-          .timeout(const Duration(seconds: 8));
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(empId)
+            .get()
+            .timeout(const Duration(seconds: 8));
 
-          if (doc.exists) {
-            final data = doc.data();
-            if (data != null) {
-              status = (data['status'] ?? '').toString().toLowerCase().trim();
-              isActive = data['isActive'];
-              employee = _docToEmployee(doc);
-            }
+        if (doc.exists) {
+          final data = doc.data();
+          if (data != null) {
+            status = (data['status'] ?? '').toString().toLowerCase().trim();
+            isActive = data['isActive'];
+            employee = _docToEmployee(doc);
           }
-        } catch (e) {
-          _secureLog('Employee load failed: $e');
         }
+      } catch (e) {
+        _secureLog('Employee load failed: $e');
+      }
 
-        if (employee == null) {
-          _secureLog('❌ Employee doc not found — clearing session');
-          try {
-            await SecurityHardeningService.instance.clearSession();
-          } catch (_) {}
-          if (mounted) setState(() => _checkingSession = false);
-          return;
-        }
+      if (employee == null) {
+        _secureLog('Employee doc not found — clearing session');
+        try {
+          await SecurityHardeningService.instance.clearSession();
+        } catch (_) {}
+        if (mounted) setState(() => _checkingSession = false);
+        return;
+      }
 
-        const blocked = {
-          'suspended',
-          'terminated',
-          'deleted',
-          'blocked',
-          'archived',
-        };
+      const blocked = {
+        'suspended',
+        'terminated',
+        'deleted',
+        'blocked',
+        'archived',
+      };
 
-        if (blocked.contains(status) || isActive == false) {
-          _secureLog('🚫 Account blocked: $status — clearing session');
+      if (blocked.contains(status) || isActive == false) {
+        _secureLog('Account blocked: $status — clearing session');
+        await _logSecurityEvent(
+          type: 'landing_blocked_account',
+          severity: 'high',
+          details: 'Blocked account attempted auto-login: $status',
+        );
+        try {
+          await SecurityHardeningService.instance.clearSession();
+          await FirebaseAuth.instance.signOut();
+        } catch (_) {}
+        if (mounted) setState(() => _checkingSession = false);
+        return;
+      }
+
+      try {
+        final lockCheck = await SessionLockService.instance.checkLock(
+          employeeId: employee.id,
+          deviceBindingOverride: _deviceBinding,
+        );
+
+        if (lockCheck.isLocked) {
+          _secureLog('Session locked by another device — '
+              'clearing local session');
           await _logSecurityEvent(
-            type: 'landing_blocked_account',
+            type: 'landing_auto_redirect_blocked',
             severity: 'high',
-            details: 'Blocked account attempted auto-login: $status',
+            details: 'Auto-redirect blocked: active on '
+                '${lockCheck.otherDeviceModel}',
           );
           try {
             await SecurityHardeningService.instance.clearSession();
+            await SecurityService.instance.clearSession();
             await FirebaseAuth.instance.signOut();
           } catch (_) {}
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('force_show_landing', true);
+          } catch (_) {}
           if (mounted) setState(() => _checkingSession = false);
           return;
         }
+      } catch (e) {
+        _secureLog('Session lock check failed: $e — proceeding');
+      }
 
+      // ═══════════════════════════════════════════════════════════════
+      // 🆕 Only auto-redirect if currently clocked in (last log = IN)
+      // ═══════════════════════════════════════════════════════════════
+      bool isClockedIn = false;
+      try {
+        isClockedIn = await _isCurrentlyClockedIn(employee.id).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => false,
+        );
+      } catch (_) {
+        isClockedIn = false;
+      }
+
+      if (!isClockedIn) {
+        _secureLog('Not clocked in today — staying on landing screen');
         try {
-          final lockCheck = await SessionLockService.instance.checkLock(
-            employeeId: employee.id,
-            deviceBindingOverride: _deviceBinding,
-          );
+          await SecurityHardeningService.instance.clearSession();
+          await SecurityService.instance.clearSession();
+          await FirebaseAuth.instance.signOut();
+        } catch (_) {}
+        if (mounted) setState(() => _checkingSession = false);
+        return;
+      }
 
-          if (lockCheck.isLocked) {
-            _secureLog('🔒 Session locked by another device — '
-            'clearing local session');
-            await _logSecurityEvent(
-              type: 'landing_auto_redirect_blocked',
-              severity: 'high',
-              details: 'Auto-redirect blocked: active on '
-            '${lockCheck.otherDeviceModel}',
-            );
-            try {
-              await SecurityHardeningService.instance.clearSession();
-              await SecurityService.instance.clearSession();
-              await FirebaseAuth.instance.signOut();
-            } catch (_) {}
-            try {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('force_show_landing', true);
-            } catch (_) {}
-            if (mounted) setState(() => _checkingSession = false);
-            return;
-          }
-        } catch (e) {
-          _secureLog('⚠️ Session lock check failed: $e — proceeding');
-        }
-
-        if (!mounted) return;
-        _autoRedirecting = true;
-      _secureLog('➡️ Auto-redirecting to dashboard');
+      if (!mounted) return;
+      _autoRedirecting = true;
+      _secureLog('Auto-redirecting to dashboard');
 
       _startSessionLockWatch(employee.id);
 
@@ -589,11 +602,98 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🆕 CLOCKED-IN CHECK — prevents auto-redirect after clock-out
+  // ═══════════════════════════════════════════════════════════════════════
+  Future<bool> _isCurrentlyClockedIn(String employeeId) async {
+    if (employeeId.isEmpty) return false;
+
+    // 1️⃣ Firestore first (source of truth)
+    try {
+      final now = DateTime.now();
+      final todayStr =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+      DateTime? latestTime;
+      String? latestType;
+
+      final queries = <Future<QuerySnapshot>>[
+        FirebaseFirestore.instance
+            .collection('attendance_logs')
+            .where('employee_id', isEqualTo: employeeId)
+            .where('date', isEqualTo: todayStr)
+            .limit(50)
+            .get(),
+        FirebaseFirestore.instance
+            .collection('attendance_logs')
+            .where('employeeId', isEqualTo: employeeId)
+            .where('date', isEqualTo: todayStr)
+            .limit(50)
+            .get(),
+      ];
+
+      for (final q in queries) {
+        try {
+          final snap = await q.timeout(const Duration(seconds: 5));
+          for (final doc in snap.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            final ts = _extractLogTimestamp(data);
+            if (ts == null) continue;
+            if (latestTime == null || ts.isAfter(latestTime)) {
+              latestTime = ts;
+              latestType = (data['type'] ?? '').toString().toUpperCase();
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (latestType != null) {
+        return latestType.contains('IN');
+      }
+    } catch (e) {
+      _secureLog('Firestore clocked-in check failed: $e');
+    }
+
+    // 2️⃣ Fallback: SharedPreferences (from dashboard's last write)
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final now = DateTime.now();
+      final todayStr =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+      final lastInDate = prefs.getString('last_clock_in_date_$employeeId');
+      if (lastInDate != todayStr) return false;
+
+      final lastOutStr = prefs.getString('last_clock_out_$employeeId');
+      if (lastOutStr == null || lastOutStr.isEmpty) return true;
+
+      final outDt = DateTime.tryParse(lastOutStr);
+      if (outDt == null) return true;
+
+      final outToday = outDt.year == now.year &&
+          outDt.month == now.month &&
+          outDt.day == now.day;
+      return !outToday;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  DateTime? _extractLogTimestamp(Map<String, dynamic> data) {
+    final ts = data['timestamp'];
+    if (ts is Timestamp) return ts.toDate();
+    if (ts is DateTime) return ts;
+    if (ts is int) return DateTime.fromMillisecondsSinceEpoch(ts);
+    if (ts is String) return DateTime.tryParse(ts);
+    return null;
+  }
+
   Employee _docToEmployee(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
     final firstName = (data['firstName'] ?? '').toString();
     final lastName = (data['lastName'] ?? '').toString();
-    final fullName = (data['name'] ?? '$firstName $lastName').toString().trim();
+    final fullName =
+    (data['name'] ?? '$firstName $lastName').toString().trim();
     return Employee.fromMap({
       'id': doc.id,
       'employee_id': data['employeeId'] ?? doc.id,
@@ -614,13 +714,13 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
       'nfc_tag_id': data['nfcTagId'],
       'is_active': data['status'] == 'active' ? 1 : 0,
       'created_at': (data['createdAt'] as Timestamp?)
-      ?.toDate()
-      .toIso8601String() ??
-      DateTime.now().toIso8601String(),
+          ?.toDate()
+          .toIso8601String() ??
+          DateTime.now().toIso8601String(),
       'updated_at': (data['updatedAt'] as Timestamp?)
-      ?.toDate()
-      .toIso8601String() ??
-      DateTime.now().toIso8601String(),
+          ?.toDate()
+          .toIso8601String() ??
+          DateTime.now().toIso8601String(),
     });
   }
 
@@ -639,44 +739,44 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final shouldObscure = state == AppLifecycleState.inactive ||
-    state == AppLifecycleState.paused ||
-    state == AppLifecycleState.hidden;
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden;
     if (shouldObscure != _obscureContent && mounted) {
       setState(() => _obscureContent = shouldObscure);
     }
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🔔 OFFLINE SNACKBAR HELPER
+  // OFFLINE SNACKBAR
   // ═══════════════════════════════════════════════════════════════════════
   void _showOfflineSnack(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.cloud_off_rounded,
-                       color: Colors.white, size: 18),
-                     const SizedBox(width: 10),
-                     Expanded(
-                       child: Text(
-                         message,
-                         style: const TextStyle(fontWeight: FontWeight.w600),
-                       ),
-                     ),
-          ],
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.cloud_off_rounded,
+                  color: Colors.white, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: _T.danger,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 3),
         ),
-        backgroundColor: _T.danger,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 3),
-      ),
-    );
+      );
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -686,13 +786,13 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
     final now = DateTime.now();
 
     if (_lastNavAttempt != null &&
-      now.difference(_lastNavAttempt!) < _navCooldown) {
+        now.difference(_lastNavAttempt!) < _navCooldown) {
       _secureLog('Login nav throttled');
-    return;
-      }
+      return;
+    }
 
-      if (_isNavigating) return;
-      _isNavigating = true;
+    if (_isNavigating) return;
+    _isNavigating = true;
     _lastNavAttempt = now;
 
     try {
@@ -701,8 +801,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
       if (!mounted) return;
 
       if (!online) {
-        _showOfflineSnack(
-          'Internet connection is required to log in.');
+        _showOfflineSnack('Internet connection is required to log in.');
         return;
       }
 
@@ -720,7 +819,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🔒 HIDDEN ADMIN
+  // HIDDEN ADMIN
   // ═══════════════════════════════════════════════════════════════════════
   void _handleAdminHoldStart() {
     if (_adminHoldActive) return;
@@ -745,29 +844,28 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
     _adminHoldActive = false;
   }
 
-  // ✅ 5-tap secret on the logo
   void _handleLogoTap() {
     final now = DateTime.now();
 
     if (_firstLogoTapTime != null &&
-      now.difference(_firstLogoTapTime!) > _logoTapResetWindow) {
+        now.difference(_firstLogoTapTime!) > _logoTapResetWindow) {
       _logoTapCount = 0;
-    _firstLogoTapTime = null;
-      }
+      _firstLogoTapTime = null;
+    }
 
-      if (_logoTapCount == 0) {
-        _firstLogoTapTime = now;
-      }
+    if (_logoTapCount == 0) {
+      _firstLogoTapTime = now;
+    }
 
-      _logoTapCount++;
-      _secureLog('👆 Logo tap $_logoTapCount/$_logoTapRequired');
+    _logoTapCount++;
+    _secureLog('Logo tap $_logoTapCount/$_logoTapRequired');
 
-      if (_logoTapCount >= _logoTapRequired) {
-        _logoTapCount = 0;
-        _firstLogoTapTime = null;
-        _secureLog('🎯 5-tap secret triggered — opening admin login');
-        unawaited(_openAdminLogin());
-      }
+    if (_logoTapCount >= _logoTapRequired) {
+      _logoTapCount = 0;
+      _firstLogoTapTime = null;
+      _secureLog('5-tap secret triggered — opening admin login');
+      unawaited(_openAdminLogin());
+    }
   }
 
   Future<Duration?> _checkAdminLockout() async {
@@ -796,8 +894,8 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
       if (count >= _maxAdminAttemptsBeforeLockout) {
         final until = DateTime.now().add(_adminLockoutDuration);
         await prefs.setInt(
-          _kAdminLockoutUntil, until.millisecondsSinceEpoch);
-        _secureLog('🚨 Admin lockout triggered after $count attempts');
+            _kAdminLockoutUntil, until.millisecondsSinceEpoch);
+        _secureLog('Admin lockout triggered after $count attempts');
 
         await _logSecurityEvent(
           type: 'landing_admin_lockout',
@@ -815,11 +913,11 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
 
     final now = DateTime.now();
     if (_lastAdminAttempt != null &&
-      now.difference(_lastAdminAttempt!) < _adminCooldown) {
+        now.difference(_lastAdminAttempt!) < _adminCooldown) {
       return;
-      }
+    }
 
-      final lockout = await _checkAdminLockout();
+    final lockout = await _checkAdminLockout();
     if (lockout != null) {
       _secureLog('Admin access locked out');
       _handleAdminHoldEnd();
@@ -856,8 +954,8 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? 'anonymous';
 
       await FirebaseFirestore.instance
-      .collection('security_events')
-      .add({
+          .collection('security_events')
+          .add({
         'type': 'admin_access_attempt',
         'severity': 'medium',
         'details': 'Hidden admin login triggered from landing screen',
@@ -881,8 +979,8 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
     try {
       if (!_isOnlineSafely()) return;
       await FirebaseFirestore.instance
-      .collection('security_events')
-      .add({
+          .collection('security_events')
+          .add({
         'type': type,
         'severity': severity,
         'details': details,
@@ -897,7 +995,6 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
     }
   }
 
-  // ✅ Wrap logo with hidden admin (long-press + 5-tap)
   Widget _wrapLogoWithHiddenAdmin({required Widget child}) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -929,7 +1026,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
     final tc = _ThemeColors(isDark);
     final useDesktop = _useDesktopLayout(context);
 
-    // 🔒 Splash habang nagche-check ng session
+    // Splash while checking session
     if (_checkingSession) {
       return Scaffold(
         backgroundColor: useDesktop ? _T.desktopBg : tc.scaffoldBg,
@@ -984,7 +1081,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
       );
     }
 
-    // 🔒 SECRET KEYBOARD SHORTCUT: Ctrl + Shift + A
+    // SECRET KEYBOARD SHORTCUT: Ctrl + Shift + A
     return Shortcuts(
       shortcuts: const {
         SingleActivator(LogicalKeyboardKey.keyA, control: true, shift: true):
@@ -1011,14 +1108,14 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
                     children: [
                       _buildNavbar(useDesktop: useDesktop),
                       if (!_isOnline) _buildOfflineBanner(),
-                        Expanded(
-                          child: SingleChildScrollView(
-                            physics: const BouncingScrollPhysics(),
-                            child: useDesktop
-                            ? _buildDesktopBody()
-                            : _buildMobileBody(tc),
-                          ),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          physics: const BouncingScrollPhysics(),
+                          child: useDesktop
+                              ? _buildDesktopBody()
+                              : _buildMobileBody(tc),
                         ),
+                      ),
                     ],
                   ),
                 ),
@@ -1032,7 +1129,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🔌 OFFLINE BANNER
+  // OFFLINE BANNER
   // ═══════════════════════════════════════════════════════════════════════
   Widget _buildOfflineBanner() {
     return Container(
@@ -1174,19 +1271,18 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
                   child: const Row(
                     children: [
                       Icon(Icons.warning_amber_rounded,
-                           color: Colors.red, size: 12),
-                           SizedBox(width: 4),
-                           Text('UNSAFE DEVICE',
-                                style: TextStyle(
-                                  color: Colors.red,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800)),
+                          color: Colors.red, size: 12),
+                      SizedBox(width: 4),
+                      Text('UNSAFE DEVICE',
+                          style: TextStyle(
+                              color: Colors.red,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800)),
                     ],
                   ),
                 ),
               ],
               const Spacer(),
-              // Employee Sign In ONLY (Admin Button Removed)
               GestureDetector(
                 onTap: _goToLogin,
                 behavior: HitTestBehavior.opaque,
@@ -1235,7 +1331,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
                   ),
                   alignment: Alignment.center,
                   child: const Icon(Icons.back_hand_rounded,
-                                    color: _T.white, size: 20),
+                      color: _T.white, size: 20),
                 ),
               ),
               const SizedBox(width: 8),
@@ -1249,7 +1345,6 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
                 ),
               ),
               const Spacer(),
-              // Mobile Log In ONLY (Admin Button Removed)
               GestureDetector(
                 onTap: _goToLogin,
                 child: Container(
@@ -1317,16 +1412,16 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
             mainAxisSize: MainAxisSize.min,
             children: const [
               Icon(Icons.verified_user_rounded,
-                   color: _T.desktopBadge, size: 16),
-                   SizedBox(width: 8),
-                   Text(
-                     'Verified Location Tracking',
-                     style: TextStyle(
-                       color: _T.desktopBadge,
-                       fontSize: 14,
-                       fontWeight: FontWeight.w500,
-                     ),
-                   ),
+                  color: _T.desktopBadge, size: 16),
+              SizedBox(width: 8),
+              Text(
+                'Verified Location Tracking',
+                style: TextStyle(
+                  color: _T.desktopBadge,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ],
           ),
         ),
@@ -1359,20 +1454,20 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
           width: 576,
           child: Text(
             'Seamless, location-based time tracking for modern teams. '
-          'Automatically verify when you are on-site and ready to work, '
-          'ensuring accurate logs and eliminating guesswork.',
-          style: TextStyle(
-            color: _T.desktopMuted,
-            fontSize: 18,
-            height: 1.55,
-          ),
+                'Automatically verify when you are on-site and ready to work, '
+                'ensuring accurate logs and eliminating guesswork.',
+            style: TextStyle(
+              color: _T.desktopMuted,
+              fontSize: 18,
+              height: 1.55,
+            ),
           ),
         ),
         const SizedBox(height: 48),
         Row(
           children: const [
             Icon(Icons.location_on_rounded,
-                 color: _T.workZoneIcon, size: 20),
+                color: _T.workZoneIcon, size: 20),
             SizedBox(width: 8),
             Text(
               'The Working Zone',
@@ -1389,14 +1484,14 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
           width: 576,
           child: Text(
             'Authorized working zones are defined geographical areas '
-          'designated for your workplace. Once you enter the perimeter, '
-          'our Live GPS system authenticates your location, enabling the '
-          'Clock In feature securely.',
-          style: TextStyle(
-            color: _T.desktopMuted,
-            fontSize: 16,
-            height: 1.55,
-          ),
+                'designated for your workplace. Once you enter the perimeter, '
+                'our Live GPS system authenticates your location, enabling the '
+                'Clock In feature securely.',
+            style: TextStyle(
+              color: _T.desktopMuted,
+              fontSize: 16,
+              height: 1.55,
+            ),
           ),
         ),
         const SizedBox(height: 32),
@@ -1437,7 +1532,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
               ),
               SizedBox(width: 8),
               Icon(Icons.arrow_forward_rounded,
-                   color: Colors.black, size: 18),
+                  color: Colors.black, size: 18),
             ],
           ),
         ),
@@ -1596,16 +1691,16 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
               mainAxisSize: MainAxisSize.min,
               children: const [
                 Icon(Icons.verified_user_rounded,
-                     color: _T.white, size: 16),
-                     SizedBox(width: 8),
-                     Text(
-                       'Verified Location Tracking',
-                       style: TextStyle(
-                         color: _T.white,
-                         fontSize: 13,
-                         fontWeight: FontWeight.w500,
-                       ),
-                     ),
+                    color: _T.white, size: 16),
+                SizedBox(width: 8),
+                Text(
+                  'Verified Location Tracking',
+                  style: TextStyle(
+                    color: _T.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ],
             ),
           ),
@@ -1646,13 +1741,13 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
             alignment: Alignment.centerLeft,
             child: Text(
               'Seamless, location-based time tracking for modern teams. '
-            'Automatically verify when you are on-site and ready to work, '
-            'ensuring accurate logs and eliminating guesswork.',
-            style: TextStyle(
-              color: tc.heroDesc,
-              fontSize: 13.5,
-              height: 1.6,
-            ),
+                  'Automatically verify when you are on-site and ready to work, '
+                  'ensuring accurate logs and eliminating guesswork.',
+              style: TextStyle(
+                color: tc.heroDesc,
+                fontSize: 13.5,
+                height: 1.6,
+              ),
             ),
           ),
           const SizedBox(height: 20),
@@ -1696,7 +1791,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
               ),
               SizedBox(width: 8),
               Icon(Icons.arrow_forward_rounded,
-                   color: Colors.black, size: 18),
+                  color: Colors.black, size: 18),
             ],
           ),
         ),
@@ -1713,7 +1808,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
           Row(
             children: [
               const Icon(Icons.location_on_rounded,
-                         color: _T.workZoneIcon, size: 20),
+                  color: _T.workZoneIcon, size: 20),
               const SizedBox(width: 8),
               Text(
                 'The Working Zone',
@@ -1728,13 +1823,13 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
           const SizedBox(height: 10),
           Text(
             'Authorized working zones are defined geographical areas designated '
-          'for your workplace. Once you enter the perimeter, our Live GPS '
-          'system authenticates your location, enabling the Clock In feature securely.',
-          style: TextStyle(
-            color: tc.heroDesc,
-            fontSize: 13,
-            height: 1.6,
-          ),
+                'for your workplace. Once you enter the perimeter, our Live GPS '
+                'system authenticates your location, enabling the Clock In feature securely.',
+            style: TextStyle(
+              color: tc.heroDesc,
+              fontSize: 13,
+              height: 1.6,
+            ),
           ),
         ],
       ),
@@ -1944,7 +2039,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
                       shape: BoxShape.circle,
                       color: _T.iconCircleBg,
                       border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.05)),
+                          color: Colors.white.withValues(alpha: 0.05)),
                     ),
                     alignment: Alignment.center,
                     child: const Text('🏢', style: TextStyle(fontSize: 16)),
@@ -2017,7 +2112,7 @@ with SingleTickerProviderStateMixin, WidgetsBindingObserver {
                       color: Colors.black.withValues(alpha: 0.1),
                     ),
                     child: const Icon(Icons.arrow_forward_rounded,
-                                      color: _T.white, size: 16),
+                        color: _T.white, size: 16),
                   ),
                 ],
               ),

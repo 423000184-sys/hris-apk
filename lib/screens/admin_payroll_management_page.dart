@@ -32,11 +32,11 @@ class AdminPayrollManagementPage extends StatefulWidget {
 
   @override
   State<AdminPayrollManagementPage> createState() =>
-      _AdminPayrollManagementPageState();
+  _AdminPayrollManagementPageState();
 }
 
 class _AdminPayrollManagementPageState
-    extends State<AdminPayrollManagementPage> {
+extends State<AdminPayrollManagementPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
   bool get _isDemo {
@@ -71,7 +71,7 @@ class _AdminPayrollManagementPageState
     s = s.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'), '');
     s = s.replaceAll(RegExp(r'[\r\n\t]+'), ' ');
     s = s.replaceAll(
-        RegExp(r'[\u200B-\u200F\u202A-\u202E\u2066-\u2069]'), '');
+      RegExp(r'[\u200B-\u200F\u202A-\u202E\u2066-\u2069]'), '');
     if (s.length > maxLen) s = '${s.substring(0, maxLen)}…';
     return s.trim();
   }
@@ -172,15 +172,15 @@ class _AdminPayrollManagementPageState
 
   String get _employeeId {
     final raw = widget.employeeData['id'] ??
-        widget.employeeData['employeeId'] ??
-        '—';
+    widget.employeeData['employeeId'] ??
+    '—';
     return _sanitize(raw, maxLen: 64);
   }
 
   String get _employeeIdForFilename =>
-      _safeFilenameSegment(widget.employeeData['id'] ??
-          widget.employeeData['employeeId'] ??
-          'unknown');
+  _safeFilenameSegment(widget.employeeData['id'] ??
+  widget.employeeData['employeeId'] ??
+  'unknown');
 
   String get _department {
     final raw = widget.employeeData['department'] ?? 'Unassigned';
@@ -416,9 +416,9 @@ class _AdminPayrollManagementPageState
       if (docId.isEmpty || docId == '—') throw Exception('Invalid employee ID');
 
       await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(docId)
-          .update({
+      .collection('employees')
+      .doc(docId)
+      .update({
         'payslipUnlocked': true,
         'payslipUnlockedAt': FieldValue.serverTimestamp(),
         'payslipUnlockedBy': FirebaseAuth.instance.currentUser?.uid,
@@ -478,9 +478,9 @@ class _AdminPayrollManagementPageState
       if (docId.isEmpty || docId == '—') throw Exception('Invalid employee ID');
 
       await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(docId)
-          .update({
+      .collection('employees')
+      .doc(docId)
+      .update({
         'payslipUnlocked': false,
         'payslipLockedAt': FieldValue.serverTimestamp(),
         'payslipLockedBy': FirebaseAuth.instance.currentUser?.uid,
@@ -552,16 +552,16 @@ class _AdminPayrollManagementPageState
                 child: pw.Column(
                   children: [
                     pw.Text('Jumbo Worldwide Express Logistics Inc.',
-                        style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
-                    pw.Text('Unit 12N, 8 Adriatico Tower, Padre Faura Street, Ermita, Manila',
-                        style: const pw.TextStyle(fontSize: 9)),
-                    pw.SizedBox(height: 16),
-                    pw.Text('Payroll Slip',
-                        style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
-                    pw.SizedBox(height: 6),
-                    pw.Text('For the period of $_periodLabel',
-                        style: const pw.TextStyle(fontSize: 10)),
-                    pw.SizedBox(height: 20),
+                            style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                            pw.Text('Unit 12N, 8 Adriatico Tower, Padre Faura Street, Ermita, Manila',
+                                    style: const pw.TextStyle(fontSize: 9)),
+                                    pw.SizedBox(height: 16),
+                                    pw.Text('Payroll Slip',
+                                            style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                                            pw.SizedBox(height: 6),
+                                            pw.Text('For the period of $_periodLabel',
+                                                    style: const pw.TextStyle(fontSize: 10)),
+                                                    pw.SizedBox(height: 20),
                   ],
                 ),
               ),
@@ -586,11 +586,11 @@ class _AdminPayrollManagementPageState
               pw.Row(
                 children: [
                   pw.Expanded(
-                      child: pw.Text('Regular Pay:', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
-                  pw.SizedBox(
+                    child: pw.Text('Regular Pay:', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
+                    pw.SizedBox(
                       width: 70, child: pw.Text('Hrs.', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
-                  pw.SizedBox(
-                      width: 90, child: pw.Text('Amount', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
+                      pw.SizedBox(
+                        width: 90, child: pw.Text('Amount', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
                 ],
               ),
               pw.SizedBox(height: 10),
@@ -890,31 +890,31 @@ class _AdminPayrollManagementPageState
 
     final now = DateTime.now();
     if (_lastNotifyAt != null &&
-        now.difference(_lastNotifyAt!) < _notifyCooldown) {
+      now.difference(_lastNotifyAt!) < _notifyCooldown) {
       return;
-    }
+      }
 
-    try {
-      await EmployeeNotificationService.instance.sendPayrollAlert(
-        employeeId: _employeeId,
-        employeeName: _name,
-        month: _periodLabel,
-        netPay: _autoNetPay,
-      );
-      _lastNotifyAt = now;
+      try {
+        await EmployeeNotificationService.instance.sendPayrollAlert(
+          employeeId: _employeeId,
+          employeeName: _name,
+          month: _periodLabel,
+          netPay: _autoNetPay,
+        );
+        _lastNotifyAt = now;
 
-      unawaited(_audit(
-        action: 'notify_payslip',
-        targetId: _employeeId,
-        targetType: 'employee_notification',
-        metadata: {
-          'employee_name': _name,
-          'period': _periodLabel,
-        },
-      ));
-    } catch (e) {
-      if (kDebugMode) debugPrint('⚠️ [PayrollMgmt] Employee notification failed: $e');
-    }
+        unawaited(_audit(
+          action: 'notify_payslip',
+          targetId: _employeeId,
+          targetType: 'employee_notification',
+          metadata: {
+            'employee_name': _name,
+            'period': _periodLabel,
+          },
+        ));
+      } catch (e) {
+        if (kDebugMode) debugPrint('⚠️ [PayrollMgmt] Employee notification failed: $e');
+      }
   }
 
   @override
@@ -935,25 +935,25 @@ class _AdminPayrollManagementPageState
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(Icons.lock_outline_rounded,
-                      size: 48, color: tc.red),
-                  const SizedBox(height: 12),
-                  Text('Admin access required',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: tc.text)),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Admin role is required to view the payslip.',
-                    style: TextStyle(fontSize: 13, color: tc.muted),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 20),
-                  TextButton.icon(
-                    onPressed: _handleBack,
-                    icon: const Icon(Icons.arrow_back_rounded, size: 16),
-                    label: const Text('Go Back'),
-                  ),
+                       size: 48, color: tc.red),
+                       const SizedBox(height: 12),
+                       Text('Admin access required',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: tc.text)),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Admin role is required to view the payslip.',
+                              style: TextStyle(fontSize: 13, color: tc.muted),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 20),
+                            TextButton.icon(
+                              onPressed: _handleBack,
+                              icon: const Icon(Icons.arrow_back_rounded, size: 16),
+                              label: const Text('Go Back'),
+                            ),
                 ],
               ),
             ),
@@ -971,8 +971,8 @@ class _AdminPayrollManagementPageState
       child: Scaffold(
         backgroundColor: tc.background,
         body: _loading
-            ? Center(child: CircularProgressIndicator(color: tc.orange))
-            : SingleChildScrollView(
+        ? Center(child: CircularProgressIndicator(color: tc.orange))
+        : SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: BsContainer(
             maxWidth: 1300,
@@ -1091,21 +1091,21 @@ class _AdminPayrollManagementPageState
               shape: BoxShape.circle,
               border: Border.all(color: tc.border),
               image: _photoUrl != null
-                  ? DecorationImage(
-                  image: NetworkImage(_photoUrl!), fit: BoxFit.cover)
-                  : null,
+              ? DecorationImage(
+                image: NetworkImage(_photoUrl!), fit: BoxFit.cover)
+              : null,
             ),
             child: _photoUrl == null
-                ? Center(
+            ? Center(
               child: Text(
                 _getInitials(_name),
                 style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: tc.orangeText),
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: tc.orangeText),
               ),
             )
-                : null,
+            : null,
           );
 
           final header = Row(
@@ -1119,45 +1119,45 @@ class _AdminPayrollManagementPageState
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(_name,
-                        style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            color: tc.text),
-                        overflow: TextOverflow.ellipsis),
-                    const SizedBox(height: 4),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Text('ID: $_employeeId',
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: tc.muted,
-                                fontWeight: FontWeight.w600)),
-                        Text('•', style: TextStyle(color: tc.muted)),
-                        Text(_department,
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: tc.muted,
-                                fontWeight: FontWeight.w600)),
-                        Text('•', style: TextStyle(color: tc.muted)),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: tc.surface,
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: tc.border),
-                          ),
-                          child: Text(_periodLabel,
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: tc.text,
-                                  fontWeight: FontWeight.w500)),
-                        ),
-                      ],
-                    ),
+                         style: TextStyle(
+                           fontSize: 20,
+                           fontWeight: FontWeight.w800,
+                           color: tc.text),
+                         overflow: TextOverflow.ellipsis),
+                         const SizedBox(height: 4),
+                         Wrap(
+                           spacing: 8,
+                           runSpacing: 4,
+                           crossAxisAlignment: WrapCrossAlignment.center,
+                           children: [
+                             Text('ID: $_employeeId',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: tc.muted,
+                                    fontWeight: FontWeight.w600)),
+                              Text('•', style: TextStyle(color: tc.muted)),
+                              Text(_department,
+                                   style: TextStyle(
+                                     fontSize: 12,
+                                     color: tc.muted,
+                                     fontWeight: FontWeight.w600)),
+                              Text('•', style: TextStyle(color: tc.muted)),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: tc.surface,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: tc.border),
+                                  ),
+                                  child: Text(_periodLabel,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: tc.text,
+                                                fontWeight: FontWeight.w500)),
+                              ),
+                           ],
+                         ),
                   ],
                 ),
               ),
@@ -1170,83 +1170,83 @@ class _AdminPayrollManagementPageState
             children: [
               OutlinedButton.icon(
                 onPressed: (_unlockingPayslip || _isDemo)
-                    ? null
-                    : (_isPayslipUnlocked ? _handleLockPayslip : _handleUnlockPayslip),
+                ? null
+                : (_isPayslipUnlocked ? _handleLockPayslip : _handleUnlockPayslip),
                 icon: _unlockingPayslip
-                    ? SizedBox(
+                ? SizedBox(
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2, color: _isPayslipUnlocked ? tc.red : tc.blue),
+                    strokeWidth: 2, color: _isPayslipUnlocked ? tc.red : tc.blue),
                 )
-                    : Icon(
+                : Icon(
                   _isPayslipUnlocked ? Icons.lock_rounded : Icons.lock_open_rounded,
                   size: 16,
                   color: _isDemo ? tc.muted : (_isPayslipUnlocked ? tc.red : tc.blue),
                 ),
                 label: Text(
-                    _unlockingPayslip
-                        ? 'Processing...'
-                        : (_isPayslipUnlocked ? 'Lock Payslip' : 'Unlock Payslip'),
-                    style: TextStyle(
-                        color: _isDemo ? tc.muted : (_isPayslipUnlocked ? tc.red : tc.blue),
-                        fontWeight: FontWeight.w600)),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: _isDemo ? tc.border : (_isPayslipUnlocked ? tc.red : tc.blue)),
-                  shape: RoundedRectangleBorder(
+                  _unlockingPayslip
+                  ? 'Processing...'
+                : (_isPayslipUnlocked ? 'Lock Payslip' : 'Unlock Payslip'),
+                style: TextStyle(
+                  color: _isDemo ? tc.muted : (_isPayslipUnlocked ? tc.red : tc.blue),
+                  fontWeight: FontWeight.w600)),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: _isDemo ? tc.border : (_isPayslipUnlocked ? tc.red : tc.blue)),
+                    shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  ),
               ),
               OutlinedButton.icon(
                 onPressed: (_printing || _isDemo) ? null : _handlePrint,
                 icon: _printing
-                    ? SizedBox(
+                ? SizedBox(
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2, color: tc.text),
+                    strokeWidth: 2, color: tc.text),
                 )
-                    : Icon(Icons.print_rounded, size: 16,
-                    color: _isDemo ? tc.muted : tc.text),
-                label: Text(_printing ? 'Printing...' : 'Print',
-                    style: TextStyle(
-                        color: _isDemo ? tc.muted : tc.text,
-                        fontWeight: FontWeight.w600)),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: tc.border),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
+                : Icon(Icons.print_rounded, size: 16,
+                       color: _isDemo ? tc.muted : tc.text),
+                       label: Text(_printing ? 'Printing...' : 'Print',
+                                   style: TextStyle(
+                                     color: _isDemo ? tc.muted : tc.text,
+                                     fontWeight: FontWeight.w600)),
+                                  style: OutlinedButton.styleFrom(
+                                    side: BorderSide(color: tc.border),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8)),
+                                      padding:
+                                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                  ),
               ),
               ElevatedButton.icon(
                 onPressed: (_downloading || _isDemo) ? null : _handleDownload,
                 icon: _downloading
-                    ? const SizedBox(
+                ? const SizedBox(
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
+                    strokeWidth: 2, color: Colors.white),
                 )
-                    : Icon(Icons.download_rounded, size: 16,
-                    color: _isDemo ? tc.muted : Colors.white),
-                label: Text(
-                    _downloading ? 'Downloading...' : 'Download Payslip',
-                    style: TextStyle(
-                        color: _isDemo ? tc.muted : Colors.white,
-                        fontWeight: FontWeight.w600)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isDemo ? tc.border : tc.orange,
-                  disabledBackgroundColor:
-                  tc.orange.withValues(alpha: 0.5),
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
+                : Icon(Icons.download_rounded, size: 16,
+                       color: _isDemo ? tc.muted : Colors.white),
+                       label: Text(
+                         _downloading ? 'Downloading...' : 'Download Payslip',
+                         style: TextStyle(
+                           color: _isDemo ? tc.muted : Colors.white,
+                           fontWeight: FontWeight.w600)),
+                           style: ElevatedButton.styleFrom(
+                             backgroundColor: _isDemo ? tc.border : tc.orange,
+                             disabledBackgroundColor:
+                             tc.orange.withValues(alpha: 0.5),
+                             elevation: 0,
+                             shape: RoundedRectangleBorder(
+                               borderRadius: BorderRadius.circular(8)),
+                               padding:
+                               const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                           ),
               ),
             ],
           );
@@ -1279,12 +1279,12 @@ class _AdminPayrollManagementPageState
 
         final cards = <Widget>[
           _buildMetricCard('NET PAY', PayrollCalculator.peso(_autoNetPay),
-              'Total take-home for this period', false),
+          'Total take-home for this period', false),
           _buildMetricCard('GROSS PAY', PayrollCalculator.peso(_autoGrossPay),
-              'Basic + Allowances + OT (auto)', false),
+          'Basic + Allowances + OT (auto)', false),
           _buildMetricCard('TOTAL DEDUCTIONS',
-              PayrollCalculator.peso(_b.totalDeductions),
-              'Absences + Govt (9%)', true),
+                           PayrollCalculator.peso(_b.totalDeductions),
+                           'Absences + Govt (9%)', true),
         ];
 
         if (wide) {
@@ -1314,7 +1314,7 @@ class _AdminPayrollManagementPageState
   }
 
   Widget _buildMetricCard(
-      String title, String value, String subtitle, bool isRed) {
+    String title, String value, String subtitle, bool isRed) {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -1327,391 +1327,391 @@ class _AdminPayrollManagementPageState
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(title,
-              style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: tc.muted,
-                  letterSpacing: 0.5)),
-          const SizedBox(height: 8),
-          Text(value,
-              style: TextStyle(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w800,
-                  color: isRed ? tc.red : tc.text),
-              overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 8),
-          Text(subtitle,
-              style: TextStyle(fontSize: 12, color: tc.muted),
-              overflow: TextOverflow.ellipsis),
+               style: TextStyle(
+                 fontSize: 11,
+                 fontWeight: FontWeight.w700,
+                 color: tc.muted,
+                 letterSpacing: 0.5)),
+                 const SizedBox(height: 8),
+                 Text(value,
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: isRed ? tc.red : tc.text),
+                      overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 8),
+                    Text(subtitle,
+                         style: TextStyle(fontSize: 12, color: tc.muted),
+                         overflow: TextOverflow.ellipsis),
         ],
       ),
     );
-  }
+    }
 
-  Widget _buildBreakdownGrid() {
-    return LayoutBuilder(
-      builder: (ctx, c) {
-        final w = c.maxWidth.isFinite ? c.maxWidth : 800.0;
-        final wide = w > 900;
+    Widget _buildBreakdownGrid() {
+      return LayoutBuilder(
+        builder: (ctx, c) {
+          final w = c.maxWidth.isFinite ? c.maxWidth : 800.0;
+          final wide = w > 900;
 
-        final earnings = _earningsCard();
-        final benefits = _benefitsCard();
-        final absences = _absencesCard();
-        final govt = _govtCard();
+          final earnings = _earningsCard();
+          final benefits = _benefitsCard();
+          final absences = _absencesCard();
+          final govt = _govtCard();
 
-        if (wide) {
+          if (wide) {
+            return Column(
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: earnings),
+                    const SizedBox(width: 20),
+                    Expanded(child: benefits),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: absences),
+                    const SizedBox(width: 20),
+                    Expanded(child: govt),
+                  ],
+                ),
+              ],
+            );
+          }
           return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: earnings),
-                  const SizedBox(width: 20),
-                  Expanded(child: benefits),
-                ],
-              ),
+              earnings,
               const SizedBox(height: 20),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: absences),
-                  const SizedBox(width: 20),
-                  Expanded(child: govt),
-                ],
-              ),
+              benefits,
+              const SizedBox(height: 20),
+              absences,
+              const SizedBox(height: 20),
+              govt,
             ],
           );
-        }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            earnings,
-            const SizedBox(height: 20),
-            benefits,
-            const SizedBox(height: 20),
-            absences,
-            const SizedBox(height: 20),
-            govt,
-          ],
-        );
-      },
-    );
-  }
+        },
+      );
+    }
 
-  Widget _earningsCard() {
-    final hasOT = _autoOvertimePay > 0;
+    Widget _earningsCard() {
+      final hasOT = _autoOvertimePay > 0;
 
-    return _panel(
-      title: 'Earnings Breakdown',
-      badge: PayrollCalculator.peso(_autoGrossPay),
-      badgeColor: tc.orange.withValues(alpha: 0.15),
-      badgeTextColor: tc.orangeText,
-      children: [
-        _item('Basic Salary', 'Regular monthly pay',
-            PayrollCalculator.peso(_b.basicSalary), false),
-        _item('Allowances', 'Housing / Transport / Special',
-            PayrollCalculator.peso(_b.otherIncomeAllowance), false),
-        _item(
-          'Overtime Pay',
-          hasOT
-              ? 'Auto-detected from work hours (${_hours.overtimeDisplay})'
-              : 'No overtime this period',
-          hasOT
-              ? PayrollCalculator.peso(_autoOvertimePay)
-              : PayrollCalculator.peso(0),
-          false,
-        ),
-        if (_b.nightDiffAmount > 0)
-          _item('Night Differential', 'Additional pay for night hours',
-              PayrollCalculator.peso(_b.nightDiffAmount), false),
-        Divider(color: tc.border, height: 20),
-        _item('Total Gross', 'Sum of earnings',
-            PayrollCalculator.peso(_autoGrossPay), false,
-            bold: true),
-        if (hasOT) ...[
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: tc.pillGreenBg,
-              border:
-              Border(left: BorderSide(color: tc.pillGreenTx, width: 4)),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              'Auto-computed overtime: ${_hours.overtimeDisplay} beyond standard 8h/day.',
-              style: TextStyle(
-                  fontSize: 11, color: tc.pillGreenTx, height: 1.4),
-            ),
-          ),
+      return _panel(
+        title: 'Earnings Breakdown',
+        badge: PayrollCalculator.peso(_autoGrossPay),
+        badgeColor: tc.orange.withValues(alpha: 0.15),
+        badgeTextColor: tc.orangeText,
+        children: [
+          _item('Basic Salary', 'Regular monthly pay',
+                PayrollCalculator.peso(_b.basicSalary), false),
+                _item('Allowances', 'Housing / Transport / Special',
+                      PayrollCalculator.peso(_b.otherIncomeAllowance), false),
+                      _item(
+                        'Overtime Pay',
+                        hasOT
+                        ? 'Auto-detected from work hours (${_hours.overtimeDisplay})'
+                      : 'No overtime this period',
+                      hasOT
+                      ? PayrollCalculator.peso(_autoOvertimePay)
+                      : PayrollCalculator.peso(0),
+                      false,
+                      ),
+                    if (_b.nightDiffAmount > 0)
+                      _item('Night Differential', 'Additional pay for night hours',
+                            PayrollCalculator.peso(_b.nightDiffAmount), false),
+                            Divider(color: tc.border, height: 20),
+                            _item('Total Gross', 'Sum of earnings',
+                                  PayrollCalculator.peso(_autoGrossPay), false,
+                                  bold: true),
+                    if (hasOT) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: tc.pillGreenBg,
+                          border:
+                          Border(left: BorderSide(color: tc.pillGreenTx, width: 4)),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'Auto-computed overtime: ${_hours.overtimeDisplay} beyond standard 8h/day.',
+                          style: TextStyle(
+                            fontSize: 11, color: tc.pillGreenTx, height: 1.4),
+                        ),
+                      ),
+                    ],
         ],
-      ],
-    );
-  }
+      );
+    }
 
-  Widget _benefitsCard() {
-    return _panel(
-      title: 'Benefits (Accrued)',
-      badge: PayrollCalculator.peso(_b.totalBenefits),
-      badgeColor: tc.pillGreenBg,
-      badgeTextColor: tc.pillGreenTx,
-      children: [
-        _item('13th Month Pay', '1/12 of basic salary',
-            PayrollCalculator.peso(_b.thirteenthMonth), false),
-        _item('SIL Credits', '5 days × daily rate (convertible)',
-            PayrollCalculator.peso(_b.silCredits), false),
-        _item('Service Incentive', 'Based on tenure & attendance',
-            '—', false),
-        Divider(color: tc.border, height: 20),
-        _item('Total Benefits', 'Accrued, not yet paid',
-            PayrollCalculator.peso(_b.totalBenefits), false, bold: true),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: tc.pillGreenBg,
-            border: Border(left: BorderSide(color: tc.pillGreenTx, width: 4)),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            'Benefits are not deducted from net pay. These are additional savings received at the 13th month payout or year-end.',
-            style:
-            TextStyle(fontSize: 11, color: tc.pillGreenTx, height: 1.4),
-          ),
-        ),
-      ],
-    );
-  }
+    Widget _benefitsCard() {
+      return _panel(
+        title: 'Benefits (Accrued)',
+        badge: PayrollCalculator.peso(_b.totalBenefits),
+        badgeColor: tc.pillGreenBg,
+        badgeTextColor: tc.pillGreenTx,
+        children: [
+          _item('13th Month Pay', '1/12 of basic salary',
+                PayrollCalculator.peso(_b.thirteenthMonth), false),
+                _item('SIL Credits', '5 days × daily rate (convertible)',
+                PayrollCalculator.peso(_b.silCredits), false),
+                _item('Service Incentive', 'Based on tenure & attendance',
+                      '—', false),
+                    Divider(color: tc.border, height: 20),
+                    _item('Total Benefits', 'Accrued, not yet paid',
+                          PayrollCalculator.peso(_b.totalBenefits), false, bold: true),
+                          const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: tc.pillGreenBg,
+                              border: Border(left: BorderSide(color: tc.pillGreenTx, width: 4)),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Benefits are not deducted from net pay. These are additional savings received at the 13th month payout or year-end.',
+                              style:
+                              TextStyle(fontSize: 11, color: tc.pillGreenTx, height: 1.4),
+                            ),
+                          ),
+        ],
+      );
+    }
 
-  Widget _absencesCard() {
-    final hasHours = _hours.totalNetMinutes > 0;
+    Widget _absencesCard() {
+      final hasHours = _hours.totalNetMinutes > 0;
 
-    return _panel(
-      title: 'Attendance & Hours',
-      badge: _b.absentDays > 0
-          ? '-${PayrollCalculator.peso(_b.absentAmount)}'
-          : 'Perfect',
+      return _panel(
+        title: 'Attendance & Hours',
+        badge: _b.absentDays > 0
+        ? '-${PayrollCalculator.peso(_b.absentAmount)}'
+      : 'Perfect',
       badgeColor: _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
       badgeTextColor: _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
       children: [
         _item('Working Days', 'Weekdays in the period',
-            '${_b.workingDays}', false),
-        _item('Present Days', 'With clock-in logged',
-            '${_b.presentDays}', false),
-        _item('Absent Days', 'No clock-in on weekday',
-            '${_b.absentDays}', _b.absentDays > 0),
+              '${_b.workingDays}', false),
+              _item('Present Days', 'With clock-in logged',
+                    '${_b.presentDays}', false),
+                    _item('Absent Days', 'No clock-in on weekday',
+                          '${_b.absentDays}', _b.absentDays > 0),
 
-        if (hasHours) ...[
-          Divider(color: tc.border, height: 20),
-          Row(
-            children: [
-              Icon(Icons.schedule_rounded, size: 14, color: tc.orange),
-              const SizedBox(width: 6),
-              Text('HOURS SUMMARY (Auto)',
-                  style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      color: tc.textMuted,
-                      letterSpacing: 0.5)),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: tc.pillBlueBg,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(_hours.netDisplay,
-                    style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: tc.pillBlueTx)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          _item('Total Raw Hours', 'Before lunch deduction',
-              _hours.rawDisplay, false),
-          if (_hours.totalLunchDeductedMinutes > 0)
-            _item(
-              'Lunch Deducted',
-              '${_hours.daysWithLunchApplied} day(s) applied',
-              '-${_hours.lunchDisplay}',
-              true,
-            ),
-          _item('Net Hours Worked', 'Raw − lunch deduction',
-              _hours.netDisplay, false,
-              bold: true),
-          if (_hours.totalOvertimeMinutes > 0)
-            _item('Overtime', 'Beyond standard 8h/day',
-                '+${_hours.overtimeDisplay}', false),
-        ],
+                    if (hasHours) ...[
+                      Divider(color: tc.border, height: 20),
+                      Row(
+                        children: [
+                          Icon(Icons.schedule_rounded, size: 14, color: tc.orange),
+                          const SizedBox(width: 6),
+                          Text('HOURS SUMMARY (Auto)',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: tc.textMuted,
+                            letterSpacing: 0.5)),
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: tc.pillBlueBg,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(_hours.netDisplay,
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w800,
+                                            color: tc.pillBlueTx)),
+                          ),
+                        ],
+                      ),
+                    const SizedBox(height: 10),
+                    _item('Total Raw Hours', 'Before lunch deduction',
+                          _hours.rawDisplay, false),
+                    if (_hours.totalLunchDeductedMinutes > 0)
+                      _item(
+                        'Lunch Deducted',
+                        '${_hours.daysWithLunchApplied} day(s) applied',
+                        '-${_hours.lunchDisplay}',
+                        true,
+                      ),
+                    _item('Net Hours Worked', 'Raw − lunch deduction',
+                          _hours.netDisplay, false,
+                          bold: true),
+                    if (_hours.totalOvertimeMinutes > 0)
+                      _item('Overtime', 'Beyond standard 8h/day',
+                            '+${_hours.overtimeDisplay}', false),
+                    ],
 
-        Divider(color: tc.border, height: 20),
-        _item('Daily Rate', 'Basic ÷ working days',
-            PayrollCalculator.peso(_b.dailyRate), false),
-        _item('Absence Deduction',
-            '${_b.absentDays} day/s × daily rate',
-            '-${PayrollCalculator.peso(_b.absentAmount)}',
-            _b.absentDays > 0,
-            bold: true),
+                    Divider(color: tc.border, height: 20),
+                    _item('Daily Rate', 'Basic ÷ working days',
+                          PayrollCalculator.peso(_b.dailyRate), false),
+                          _item('Absence Deduction',
+                                '${_b.absentDays} day/s × daily rate',
+                                '-${PayrollCalculator.peso(_b.absentAmount)}',
+                                _b.absentDays > 0,
+                                bold: true),
 
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
-            border: Border(
-                left: BorderSide(
-                    color:
-                    _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
-                    width: 4)),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            _b.absentDays > 0
-                ? '${_b.absentDays} absent day(s) auto-deducted from salary based on attendance logs.'
-                : 'No absences this period. Full salary will be received.',
-            style: TextStyle(
-                fontSize: 11,
-                color: _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
-                height: 1.4),
-          ),
-        ),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
+                        border: Border(
+                          left: BorderSide(
+                            color:
+                            _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
+                            width: 4)),
+                            borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        _b.absentDays > 0
+                        ? '${_b.absentDays} absent day(s) auto-deducted from salary based on attendance logs.'
+                      : 'No absences this period. Full salary will be received.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
+                        height: 1.4),
+                      ),
+                    ),
       ],
-    );
-  }
+      );
+    }
 
-  Widget _govtCard() {
-    final total =
-        _b.sss + _b.philhealth + _b.pagibig + _b.taxWithheld;
-    return _panel(
-      title: 'Government Remittances & Deductions',
-      badge: '-${PayrollCalculator.peso(total)}',
-      badgeColor: tc.pillErrBg,
-      badgeTextColor: tc.pillErrTx,
-      children: [
-        _item('SSS Contribution', '4.5% Employee Share',
-            '-${PayrollCalculator.peso(_b.sss)}', true),
-        _item('PhilHealth Contribution', '2.5% Employee Share',
-            '-${PayrollCalculator.peso(_b.philhealth)}', true),
-        _item('Pag-IBIG Contribution', '2.0% Employee Share',
-            '-${PayrollCalculator.peso(_b.pagibig)}', true),
-        _item('Withholding Tax', 'Calculated based on net taxable income',
-            '-${PayrollCalculator.peso(_b.taxWithheld)}', true),
-        const SizedBox(height: 16),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: tc.pillWarnBg,
-            border: Border(left: BorderSide(color: tc.pillWarnTx, width: 4)),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            'Total statutory deductions amount to 9% of the basic salary (${PayrollCalculator.peso(_b.basicSalary)}) for this pay period.',
-            style:
-            TextStyle(fontSize: 11, color: tc.pillWarnTx, height: 1.4),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _panel({
-    required String title,
-    required String badge,
-    required Color badgeColor,
-    required Color badgeTextColor,
-    required List<Widget> children,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: tc.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    Widget _govtCard() {
+      final total =
+      _b.sss + _b.philhealth + _b.pagibig + _b.taxWithheld;
+      return _panel(
+        title: 'Government Remittances & Deductions',
+        badge: '-${PayrollCalculator.peso(total)}',
+        badgeColor: tc.pillErrBg,
+        badgeTextColor: tc.pillErrTx,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(title,
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: tc.text),
-                    overflow: TextOverflow.ellipsis),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
+          _item('SSS Contribution', '4.5% Employee Share',
+                '-${PayrollCalculator.peso(_b.sss)}', true),
+                _item('PhilHealth Contribution', '2.5% Employee Share',
+                      '-${PayrollCalculator.peso(_b.philhealth)}', true),
+                      _item('Pag-IBIG Contribution', '2.0% Employee Share',
+                            '-${PayrollCalculator.peso(_b.pagibig)}', true),
+                            _item('Withholding Tax', 'Calculated based on net taxable income',
+                                  '-${PayrollCalculator.peso(_b.taxWithheld)}', true),
+                                  const SizedBox(height: 16),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: tc.pillWarnBg,
+                                      border: Border(left: BorderSide(color: tc.pillWarnTx, width: 4)),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      'Total statutory deductions amount to 9% of the basic salary (${PayrollCalculator.peso(_b.basicSalary)}) for this pay period.',
+                                      style:
+                                      TextStyle(fontSize: 11, color: tc.pillWarnTx, height: 1.4),
+                                    ),
+                                  ),
+        ],
+      );
+    }
+
+    Widget _panel({
+      required String title,
+      required String badge,
+      required Color badgeColor,
+      required Color badgeTextColor,
+      required List<Widget> children,
+    }) {
+      return Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: tc.card,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: tc.border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(title,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: tc.text),
+                              overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
                     color: badgeColor,
                     borderRadius: BorderRadius.circular(6)),
-                child: Text(badge,
-                    style: TextStyle(
-                        color: badgeTextColor,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          ...children,
-        ],
-      ),
-    );
-  }
-
-  Widget _item(String title, String desc, String amount, bool negative,
-      {bool bold = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(title,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
-                        color: tc.text),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text(desc,
-                    style: TextStyle(fontSize: 11, color: tc.muted),
-                    overflow: TextOverflow.ellipsis),
+                    child: Text(badge,
+                                style: TextStyle(
+                                  color: badgeTextColor,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700)),
+                ),
               ],
             ),
-          ),
-          const SizedBox(width: 8),
-          Text(amount,
-              style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: negative ? tc.red : tc.text)),
-        ],
-      ),
-    );
-  }
-
-  String _getInitials(String name) {
-    final clean = _sanitize(name, maxLen: 80);
-    final parts = clean.trim().split(RegExp(r'\s+'));
-    if (parts.length >= 2 && parts[0].isNotEmpty && parts[1].isNotEmpty) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    } else if (parts.isNotEmpty && parts[0].isNotEmpty) {
-      return parts[0][0].toUpperCase();
+            const SizedBox(height: 20),
+            ...children,
+          ],
+        ),
+      );
     }
-    return 'HR';
-  }
+
+    Widget _item(String title, String desc, String amount, bool negative,
+                 {bool bold = false}) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(title,
+                       style: TextStyle(
+                         fontSize: 13,
+                         fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
+                         color: tc.text),
+                       overflow: TextOverflow.ellipsis),
+                       const SizedBox(height: 2),
+                       Text(desc,
+                            style: TextStyle(fontSize: 11, color: tc.muted),
+                            overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(amount,
+                 style: TextStyle(
+                   fontSize: 14,
+                   fontWeight: FontWeight.w700,
+                   color: negative ? tc.red : tc.text)),
+          ],
+        ),
+      );
+                 }
+
+                 String _getInitials(String name) {
+                   final clean = _sanitize(name, maxLen: 80);
+                   final parts = clean.trim().split(RegExp(r'\s+'));
+                   if (parts.length >= 2 && parts[0].isNotEmpty && parts[1].isNotEmpty) {
+                     return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+                   } else if (parts.isNotEmpty && parts[0].isNotEmpty) {
+                     return parts[0][0].toUpperCase();
+                   }
+                   return 'HR';
+                 }
 }
 
 class _SecurityGuard {

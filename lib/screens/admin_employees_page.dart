@@ -1566,6 +1566,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final url = _s(emp['photoUrl'], '').isNotEmpty
         ? _s(emp['photoUrl'], '')
         : _s(emp['photo'], '');
+    debugPrint('avatar url length: ${url.length} | prefix: ${url.length > 40 ? url.substring(0, 40) : url}');
     if (url.isNotEmpty && url != '—') {
       return ClipRRect(
         borderRadius: BorderRadius.circular(size / 2),
@@ -1590,31 +1591,58 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
   Widget _buildPhoto(
       String url, double? w, double? h, BoxFit fit, Widget errorWidget) {
-    if (url.startsWith('data:image')) {
+    final cleanUrl = url.trim();
+    if (cleanUrl.isEmpty || cleanUrl == '—') return errorWidget;
+
+    if (cleanUrl.startsWith('data:image')) {
       try {
-        final b64 = url.split(',').last;
+        final commaIndex = cleanUrl.indexOf(',');
+        if (commaIndex == -1) {
+          debugPrint('_buildPhoto: no comma in data URL');
+          return errorWidget;
+        }
+        // FIX: strip ALL whitespace (newlines, spaces, tabs) bago i-decode
+        final b64 = cleanUrl
+            .substring(commaIndex + 1)
+            .replaceAll(RegExp(r'\s'), '');
+        if (b64.isEmpty) {
+          debugPrint('_buildPhoto: empty b64');
+          return errorWidget;
+        }
+        final bytes = base64Decode(b64);
+        if (bytes.isEmpty) {
+          debugPrint('_buildPhoto: decoded bytes empty');
+          return errorWidget;
+        }
         return Image.memory(
-          base64Decode(b64),
+          bytes,
           fit: fit,
           width: w,
           height: h,
           gaplessPlayback: true,
-          errorBuilder: (_, __, ___) => errorWidget,
+          errorBuilder: (_, error, __) {
+            debugPrint('_buildPhoto Image.memory error: $error');
+            return errorWidget;
+          },
         );
-      } catch (_) {
+      } catch (e) {
+        debugPrint('_buildPhoto base64Decode exception: $e');
         return errorWidget;
       }
     }
+
     return Image.network(
-      url,
+      cleanUrl,
       fit: fit,
       width: w,
       height: h,
       gaplessPlayback: true,
-      errorBuilder: (_, __, ___) => errorWidget,
+      errorBuilder: (_, error, __) {
+        debugPrint('_buildPhoto Image.network error: $error');
+        return errorWidget;
+      },
     );
   }
-
   Widget _quickInviteCard() => Container(
     decoration: BoxDecoration(
       color: tc.card,
@@ -4376,7 +4404,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       final total = basic + allow;
       final newRole = _editRoleCtrl.text.trim();
 
-      // Tinanggal natin ang 'birthday' dito para hindi ma-reject ng service
+      // 🚨 1. PATCH: Walang photoUrl at birthday dito para makalampas sa Whitelist
       final patch = <String, dynamic>{
         'firstName': firstName,
         'lastName': lastName,
@@ -4384,33 +4412,44 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'employeeId': newId,
         'email': email,
         'emailLower': email.toLowerCase(),
-        'phone': AdminEmployeeService.sanitize(_editPhoneCtrl.text,
-            maxLen: 20),
+        'phone': AdminEmployeeService.sanitize(_editPhoneCtrl.text, maxLen: 20),
         'role': newRole,
         'department': _editDeptCtrl.text.trim(),
         'gender': _editGender,
         'nfcTagId': _editKeyfobCtrl.text.trim().toUpperCase(),
-        'deviceName':
-        AdminEmployeeService.sanitize(_editDeviceNameCtrl.text, maxLen: 60),
-        if (uploadedPhoto != null) 'photoUrl': uploadedPhoto,
+        'deviceName': AdminEmployeeService.sanitize(_editDeviceNameCtrl.text, maxLen: 60),
         'basicSalary': basic,
         'allowances': allow,
         'basicAllowance': allow,
         'dailyRate': daily,
         'monthlyTotal': total,
         'workingDaysPerMonth': kWorkingDaysPerMonth,
-        'bankName': AdminEmployeeService.sanitize(_editBankNameCtrl.text,
-            maxLen: 80),
-        'accountNumber': AdminEmployeeService.sanitize(
-            _editAccountNumberCtrl.text,
-            maxLen: 30),
+        'bankName': AdminEmployeeService.sanitize(_editBankNameCtrl.text, maxLen: 80),
+        'accountNumber': AdminEmployeeService.sanitize(_editAccountNumberCtrl.text, maxLen: 30),
         'salaryConfigured': true,
       };
 
       final err = await _svc.updateEmployee(docId: docId, patch: patch);
 
-      // 🆕 DITO NATIN I-SAVE ANG BIRTHDAY DIREKTA SA FIRESTORE PARA MAKALAMPAS SA WHITELIST
-      if (err == null && _editBirthday != null) {
+      if (err != null) {
+        _snack('Error: $err', error: true);
+        return;
+      }
+
+      // 🚨 2. PHOTOURL DIRECT SAVE
+      if (uploadedPhoto != null) {
+        try {
+          await AdminDatabase.fs.collection('employees').doc(docId).update({
+            'photoUrl': uploadedPhoto,
+          });
+        } catch (e) {
+          debugPrint('Failed to update photoUrl directly: $e');
+          if (mounted) _snack('Profile saved, but photo failed: $e', error: true);
+        }
+      }
+
+      // 🚨 3. BIRTHDAY DIRECT SAVE
+      if (_editBirthday != null) {
         try {
           await AdminDatabase.fs.collection('employees').doc(docId).update({
             'birthday': Timestamp.fromDate(_editBirthday!),
@@ -4419,22 +4458,24 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
           debugPrint('Failed to update birthday directly: $e');
         }
       }
+
       if (!mounted) return;
 
-      if (err != null) {
-        _snack('Error: $err', error: true);
-      } else {
-        _snack('Employee profile updated.');
-        setState(() {
-          _isEditingEmployee = false;
-          _selectedProfileEmp = {...emp, ...patch};
-          _editPhotoXFile = null;
-          _editPhotoBytes = null;
-          _editPinJustGenerated = false;
-          _editPinVisible = false;
-        });
-        widget.onRefreshNeeded();
-      }
+      _snack('Employee profile updated.');
+      setState(() {
+        _isEditingEmployee = false;
+        _selectedProfileEmp = {
+          ...emp,
+          ...patch,
+          if (uploadedPhoto != null) 'photoUrl': uploadedPhoto,
+        };
+        _editPhotoXFile = null;
+        _editPhotoBytes = null;
+        _editPinJustGenerated = false;
+        _editPinVisible = false;
+      });
+      widget.onRefreshNeeded();
+
     } finally {
       if (mounted) setState(() => _editSaving = false);
     }
@@ -4511,11 +4552,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         _snack('Failed to compress image.', error: true);
         return null;
       }
-      final b64 = base64Encode(compressed);
+      // FIX: Remove ALL whitespace/newlines from base64 string
+      final b64 = base64Encode(compressed).replaceAll(RegExp(r'\s'), '');
       if (b64.length > 900 * 1024) {
         _snack('Photo too large even after compression.', error: true);
         return null;
       }
+      debugPrint('DEBUG upload photo b64 length: ${b64.length}');
       return 'data:image/jpeg;base64,$b64';
     } catch (e) {
       if (mounted) _snack('Photo failed: $e', error: true);

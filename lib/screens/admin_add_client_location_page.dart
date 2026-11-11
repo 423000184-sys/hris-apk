@@ -30,11 +30,11 @@ class AdminAddClientLocationPage extends StatefulWidget {
 
   @override
   State<AdminAddClientLocationPage> createState() =>
-      _AdminAddClientLocationPageState();
+  _AdminAddClientLocationPageState();
 }
 
 class _AdminAddClientLocationPageState
-    extends State<AdminAddClientLocationPage> {
+extends State<AdminAddClientLocationPage> {
   AdminColors get tc => AdminTheme.getColors(context);
 
   // 🎭 Demo Mode Getter
@@ -147,7 +147,7 @@ class _AdminAddClientLocationPageState
     if (_lastGeocodedAddress == text) return;
 
     if (mounted) {
-      setState(() => _geocodeStatus = '⏳ Hintayin kang matapos mag-type...');
+      setState(() => _geocodeStatus = '⏳ Wait for you to finish typing...');
     }
 
     _geocodeDebounce = Timer(const Duration(milliseconds: 900), () {
@@ -160,7 +160,7 @@ class _AdminAddClientLocationPageState
 
     setState(() {
       _geocodingAddress = true;
-      _geocodeStatus = '🔍 Hinahanap ang address...';
+      _geocodeStatus = '🔍 Searching for address...';
     });
     debugPrint('🌍 [Geocode] Looking up: "$address"');
 
@@ -197,7 +197,7 @@ class _AdminAddClientLocationPageState
         debugPrint('⚠️ [Geocode] No results for: "$address"');
         setState(() {
           _geocodingAddress = false;
-          _geocodeStatus = '❌ Walang nahanap. Try more specific address.';
+          _geocodeStatus = 'Not found. Try a more specific address.';
         });
         return;
       }
@@ -331,7 +331,7 @@ class _AdminAddClientLocationPageState
 
     if (latVal == null || lngVal == null) {
       _showSnack('⚠️ Enter coordinates first to view on map.',
-          isError: true);
+                 isError: true);
       return;
     }
 
@@ -394,15 +394,15 @@ class _AdminAddClientLocationPageState
     try {
       debugPrint('📥 [Clients] Loading from client_locations...');
       final snap = await FirebaseFirestore.instance
-          .collection('client_locations')
-          .get()
-          .timeout(const Duration(seconds: 10));
+      .collection('client_locations')
+      .get()
+      .timeout(const Duration(seconds: 10));
 
       debugPrint('📥 [Clients] Loaded ${snap.docs.length} docs');
 
       final list = snap.docs
-          .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
-          .toList();
+      .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
+      .toList();
 
       list.sort((a, b) {
         final aName = (a['name'] ?? '').toString().toLowerCase();
@@ -431,14 +431,14 @@ class _AdminAddClientLocationPageState
         permission = await Geolocator.requestPermission();
       }
       if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
+        permission == LocationPermission.deniedForever) {
         throw 'Location permission denied.';
-      }
+        }
 
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 20),
-      );
+        final pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.best,
+          timeLimit: const Duration(seconds: 20),
+        );
 
       _latCtrl.text = pos.latitude.toStringAsFixed(6);
       _lngCtrl.text = pos.longitude.toStringAsFixed(6);
@@ -450,10 +450,10 @@ class _AdminAddClientLocationPageState
           final p = placemarks.first;
           final parts = <String>[
             if ((p.street ?? '').isNotEmpty) p.street!,
-            if ((p.subLocality ?? '').isNotEmpty) p.subLocality!,
-            if ((p.locality ?? '').isNotEmpty) p.locality!,
-            if ((p.administrativeArea ?? '').isNotEmpty)
-              p.administrativeArea!,
+              if ((p.subLocality ?? '').isNotEmpty) p.subLocality!,
+                if ((p.locality ?? '').isNotEmpty) p.locality!,
+                  if ((p.administrativeArea ?? '').isNotEmpty)
+                    p.administrativeArea!,
           ];
 
           _suppressAddressGeocode = true;
@@ -467,15 +467,15 @@ class _AdminAddClientLocationPageState
       final acc = pos.accuracy;
       if (acc <= 30) {
         _showSnack(
-            '✅ Location captured! GPS accuracy: ±${acc.toStringAsFixed(0)}m');
+          '✅ Location captured! GPS accuracy: ±${acc.toStringAsFixed(0)}m');
       } else if (acc <= 100) {
         _showSnack(
-            '⚠️ GPS weak: ±${acc.toStringAsFixed(0)}m. Verify on map!',
-            isError: true);
+          '⚠️ GPS weak: ±${acc.toStringAsFixed(0)}m. Verify on map!',
+          isError: true);
       } else {
         _showSnack(
-            '❌ GPS inaccurate: ±${acc.toStringAsFixed(0)}m. Try ulit sa labas.',
-            isError: true);
+          '❌ GPS inaccurate: ±${acc.toStringAsFixed(0)}m. Try again outside.',
+          isError: true);
       }
       setState(() {
         _geocodeStatus =
@@ -500,7 +500,7 @@ class _AdminAddClientLocationPageState
     if (!_formKey.currentState!.validate()) {
       debugPrint('❌ [Save] VALIDATION FAILED');
       _showSnack('⚠️ Please fill all required fields (marked *)',
-          isError: true);
+      isError: true);
       return;
     }
 
@@ -517,8 +517,8 @@ class _AdminAddClientLocationPageState
     if (lat == null || lng == null) {
       debugPrint('❌ [Save] Invalid coordinates');
       _showSnack(
-          '❌ Invalid coordinates. I-type ang address o i-tap ang GPS.',
-          isError: true);
+        '❌ Invalid coordinates. Type the address or tap GPS.',
+        isError: true);
       return;
     }
 
@@ -603,18 +603,18 @@ class _AdminAddClientLocationPageState
         title: Row(
           children: [
             Icon(Icons.check_circle_outline_rounded,
-                color: tc.orange, size: 22),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Confirm Client Location?',
-                style: TextStyle(
-                  color: tc.text,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-              ),
-            ),
+                 color: tc.orange, size: 22),
+                 const SizedBox(width: 8),
+                 Expanded(
+                   child: Text(
+                     'Confirm Client Location?',
+                     style: TextStyle(
+                       color: tc.text,
+                       fontWeight: FontWeight.w700,
+                       fontSize: 16,
+                     ),
+                   ),
+                 ),
           ],
         ),
         content: Column(
@@ -635,7 +635,7 @@ class _AdminAddClientLocationPageState
                 color: tc.orange.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                    color: tc.orange.withValues(alpha: 0.3)),
+                  color: tc.orange.withValues(alpha: 0.3)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -643,7 +643,7 @@ class _AdminAddClientLocationPageState
                   Row(
                     children: [
                       Icon(Icons.verified_rounded,
-                          size: 14, color: tc.orange),
+                           size: 14, color: tc.orange),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
@@ -662,25 +662,25 @@ class _AdminAddClientLocationPageState
                     width: double.infinity,
                     child: OutlinedButton.icon(
                       onPressed: () =>
-                          _openInGoogleMaps(lat: lat, lng: lng),
+                      _openInGoogleMaps(lat: lat, lng: lng),
                       icon: Icon(Icons.map_rounded,
-                          size: 16, color: tc.orange),
-                      label: Text(
-                        'View on Google Maps',
-                        style: TextStyle(
-                          color: tc.orange,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(color: tc.orange, width: 1.5),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
+                                 size: 16, color: tc.orange),
+                                 label: Text(
+                                   'View on Google Maps',
+                                   style: TextStyle(
+                                     color: tc.orange,
+                                     fontWeight: FontWeight.w700,
+                                     fontSize: 12,
+                                   ),
+                                 ),
+                                 style: OutlinedButton.styleFrom(
+                                   side: BorderSide(color: tc.orange, width: 1.5),
+                                   padding: const EdgeInsets.symmetric(
+                                     horizontal: 12, vertical: 10),
+                                     shape: RoundedRectangleBorder(
+                                       borderRadius: BorderRadius.circular(8),
+                                     ),
+                                 ),
                     ),
                   ),
                 ],
@@ -692,7 +692,7 @@ class _AdminAddClientLocationPageState
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text('Cancel',
-                style: TextStyle(color: tc.muted)),
+                        style: TextStyle(color: tc.muted)),
           ),
           ElevatedButton.icon(
             onPressed: () => Navigator.pop(ctx, true),
@@ -701,11 +701,11 @@ class _AdminAddClientLocationPageState
             style: ElevatedButton.styleFrom(
               backgroundColor: tc.orange,
               foregroundColor: Colors.white,
-              padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
             ),
           ),
         ],
@@ -751,11 +751,11 @@ class _AdminAddClientLocationPageState
       _latCtrl.clear();
       _lngCtrl.clear();
       _radiusCtrl.text = '500';
-      _isActive = true;
-      _geocodingAddress = false;
-      _geocodeStatus = null;
-      _lastGeocodedAddress = null;
-      _suppressAddressGeocode = false;
+    _isActive = true;
+    _geocodingAddress = false;
+    _geocodeStatus = null;
+    _lastGeocodedAddress = null;
+    _suppressAddressGeocode = false;
     });
   }
 
@@ -787,30 +787,30 @@ class _AdminAddClientLocationPageState
         backgroundColor: tc.card,
         title: Text('Delete Client?', style: TextStyle(color: tc.text)),
         content: Text('Delete "${client['name']}"?',
-            style: TextStyle(color: tc.text)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancel', style: TextStyle(color: tc.muted)),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: tc.red,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
+                      style: TextStyle(color: tc.text)),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: Text('Cancel', style: TextStyle(color: tc.muted)),
+                        ),
+                        ElevatedButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: tc.red,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Delete'),
+                        ),
+                      ],
       ),
     );
     if (confirm != true) return;
 
     try {
       await FirebaseFirestore.instance
-          .collection('client_locations')
-          .doc(client['id'])
-          .delete();
+      .collection('client_locations')
+      .doc(client['id'])
+      .delete();
       if (!mounted) return;
       _showSnack('🗑️ Deleted "${client['name']}"');
       _loadClients();
@@ -826,9 +826,9 @@ class _AdminAddClientLocationPageState
     try {
       final current = client['isActive'] == true;
       await FirebaseFirestore.instance
-          .collection('client_locations')
-          .doc(client['id'])
-          .update({
+      .collection('client_locations')
+      .doc(client['id'])
+      .update({
         'isActive': !current,
         'updatedAt': FieldValue.serverTimestamp(),
       });
@@ -946,21 +946,21 @@ class _AdminAddClientLocationPageState
             }
           },
           icon: const Icon(Icons.arrow_back_rounded,
-              size: 16, color: Color(0xFFFF8A00)),
-          label: const Text(
-            'Back to Activity & Leave',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFFFF8A00),
-            ),
-          ),
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 4, vertical: 4),
-            minimumSize: Size.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
+                           size: 16, color: Color(0xFFFF8A00)),
+                           label: const Text(
+                             'Back to Activity & Leave',
+                             style: TextStyle(
+                               fontSize: 13,
+                               fontWeight: FontWeight.w600,
+                               color: Color(0xFFFF8A00),
+                             ),
+                           ),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 4),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
         ),
         const SizedBox(height: 8),
         Text(
@@ -1002,19 +1002,19 @@ class _AdminAddClientLocationPageState
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(Icons.add_circle_outline_rounded,
-                      color: tc.orange, size: 20),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      'Add New Client Location',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: tc.text,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+                       color: tc.orange, size: 20),
+                       const SizedBox(width: 8),
+                       Flexible(
+                         child: Text(
+                           'Add New Client Location',
+                           style: TextStyle(
+                             fontSize: 16,
+                             fontWeight: FontWeight.w700,
+                             color: tc.text,
+                           ),
+                           overflow: TextOverflow.ellipsis,
+                         ),
+                       ),
                 ],
               );
 
@@ -1023,32 +1023,32 @@ class _AdminAddClientLocationPageState
                 children: [
                   Tooltip(
                     message: _isDemo
-                        ? 'Test disabled in Demo'
-                        : 'Test Firestore connection',
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: (_testingConnection || _isDemo)
-                            ? (_isDemo ? _demoBlock : null)
-                            : _testConnection,
-                        borderRadius: BorderRadius.circular(8),
-                        child: Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: _testingConnection
-                              ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2),
-                          )
-                              : Icon(
-                            Icons.wifi_tethering_rounded,
-                            color: _isDemo ? tc.muted : tc.orange,
-                            size: 20,
-                          ),
+                    ? 'Test disabled in Demo'
+                  : 'Test Firestore connection',
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: (_testingConnection || _isDemo)
+                      ? (_isDemo ? _demoBlock : null)
+                      : _testConnection,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: _testingConnection
+                        ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2),
+                        )
+                        : Icon(
+                          Icons.wifi_tethering_rounded,
+                          color: _isDemo ? tc.muted : tc.orange,
+                          size: 20,
                         ),
                       ),
                     ),
+                  ),
                   ),
                   Tooltip(
                     message: 'Refresh clients',
@@ -1098,11 +1098,11 @@ class _AdminAddClientLocationPageState
             TextFormField(
               controller: _nameCtrl,
               decoration: _inputDeco('Client Name *',
-                  hint: 'e.g. ABC Corporation HQ'),
-              style: TextStyle(color: tc.text),
-              validator: (v) => (v == null || v.trim().isEmpty)
-                  ? 'Required'
-                  : null,
+                                     hint: 'e.g. ABC Corporation HQ'),
+                                     style: TextStyle(color: tc.text),
+                                     validator: (v) => (v == null || v.trim().isEmpty)
+                                     ? 'Required'
+            : null,
             ),
             const SizedBox(height: 16),
 
@@ -1111,10 +1111,10 @@ class _AdminAddClientLocationPageState
               controller: _addressCtrl,
               maxLines: 2,
               decoration: _inputDeco('Address *',
-                  hint: 'e.g. 629 J. Nepomuceno St, Quiapo, Manila')
-                  .copyWith(
+                                     hint: 'e.g. 629 J. Nepomuceno St, Quiapo, Manila')
+              .copyWith(
                 suffixIcon: _geocodingAddress
-                    ? Padding(
+                ? Padding(
                   padding: const EdgeInsets.all(12),
                   child: SizedBox(
                     width: 18,
@@ -1125,12 +1125,12 @@ class _AdminAddClientLocationPageState
                     ),
                   ),
                 )
-                    : null,
+                : null,
               ),
               style: TextStyle(color: tc.text),
               validator: (v) => (v == null || v.trim().isEmpty)
-                  ? 'Address is required'
-                  : null,
+              ? 'Address is required'
+            : null,
             ),
             const SizedBox(height: 6),
 
@@ -1140,16 +1140,16 @@ class _AdminAddClientLocationPageState
                 children: [
                   Icon(
                     _geocodeStatus!.startsWith('✅')
-                        ? Icons.check_circle_outline
-                        : (_geocodeStatus!.startsWith('❌')
-                        ? Icons.error_outline
-                        : Icons.hourglass_empty),
+                    ? Icons.check_circle_outline
+                    : (_geocodeStatus!.startsWith('❌')
+                    ? Icons.error_outline
+                    : Icons.hourglass_empty),
                     size: 12,
                     color: _geocodeStatus!.startsWith('✅')
-                        ? tc.green
-                        : (_geocodeStatus!.startsWith('❌')
-                        ? tc.red
-                        : tc.orange),
+                    ? tc.green
+                    : (_geocodeStatus!.startsWith('❌')
+                    ? tc.red
+                    : tc.orange),
                   ),
                   const SizedBox(width: 4),
                   Expanded(
@@ -1158,311 +1158,311 @@ class _AdminAddClientLocationPageState
                       style: TextStyle(
                         fontSize: 11,
                         color: _geocodeStatus!.startsWith('✅')
-                            ? tc.green
-                            : (_geocodeStatus!.startsWith('❌')
-                            ? tc.red
-                            : tc.orange),
+                        ? tc.green
+                        : (_geocodeStatus!.startsWith('❌')
+                        ? tc.red
+                        : tc.orange),
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                 ],
               )
-            else
-              Row(
-                children: [
-                  Icon(Icons.auto_fix_high_rounded,
-                      size: 12, color: tc.orange),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      'AUTO-FILL: I-type ang address → kusang lalabas ang lat/lng',
-                      style: TextStyle(fontSize: 10.5, color: tc.muted),
-                    ),
-                  ),
-                ],
-              ),
-            const SizedBox(height: 16),
-
-            // ── 4. COORDINATES (auto-filled, editable) ──
-            LayoutBuilder(builder: (context, c) {
-              final wide = c.maxWidth >= 600;
-              final latField = TextFormField(
-                controller: _latCtrl,
-                keyboardType:
-                const TextInputType.numberWithOptions(
-                    decimal: true, signed: true),
-                decoration:
-                _inputDeco('Latitude *', hint: 'e.g. 14.5547'),
-                style: TextStyle(color: tc.text),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return 'Required';
-                  if (double.tryParse(v.trim()) == null) {
-                    return 'Invalid number';
-                  }
-                  return null;
-                },
-              );
-              final lngField = TextFormField(
-                controller: _lngCtrl,
-                keyboardType:
-                const TextInputType.numberWithOptions(
-                    decimal: true, signed: true),
-                decoration: _inputDeco('Longitude *',
-                    hint: 'e.g. 121.0244'),
-                style: TextStyle(color: tc.text),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return 'Required';
-                  if (double.tryParse(v.trim()) == null) {
-                    return 'Invalid number';
-                  }
-                  return null;
-                },
-              );
-              final radiusField = TextFormField(
-                controller: _radiusCtrl,
-                keyboardType: TextInputType.number,
-                decoration:
-                _inputDeco('Radius (meters)', hint: '500'),
-                style: TextStyle(color: tc.text),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return null;
-                  final d = double.tryParse(v.trim());
-                  if (d == null || d <= 0) return 'Invalid';
-                  return null;
-                },
-              );
-
-              if (!wide) {
-                return Column(
+              else
+                Row(
                   children: [
-                    latField,
-                    const SizedBox(height: 12),
-                    lngField,
-                    const SizedBox(height: 12),
-                    radiusField,
+                    Icon(Icons.auto_fix_high_rounded,
+                         size: 12, color: tc.orange),
+                         const SizedBox(width: 4),
+                         Expanded(
+                           child: Text(
+                             'AUTO-FILL: Type the address → lat/lng will appear automatically',
+                             style: TextStyle(fontSize: 10.5, color: tc.muted),
+                           ),
+                         ),
                   ],
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(child: latField),
-                  const SizedBox(width: 12),
-                  Expanded(child: lngField),
-                  const SizedBox(width: 12),
-                  Expanded(child: radiusField),
-                ],
-              );
-            }),
-            const SizedBox(height: 8),
+                ),
+                const SizedBox(height: 16),
 
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: () => _openInGoogleMaps(),
-                icon: Icon(Icons.map_rounded,
-                    size: 16, color: tc.orange),
-                label: Text(
-                  'I-verify sa Google Maps',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: tc.orange,
-                    fontWeight: FontWeight.w600,
+                // ── 4. COORDINATES (auto-filled, editable) ──
+                LayoutBuilder(builder: (context, c) {
+                  final wide = c.maxWidth >= 600;
+                  final latField = TextFormField(
+                    controller: _latCtrl,
+                    keyboardType:
+                    const TextInputType.numberWithOptions(
+                      decimal: true, signed: true),
+                      decoration:
+                      _inputDeco('Latitude *', hint: 'e.g. 14.5547'),
+                      style: TextStyle(color: tc.text),
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) return 'Required';
+                  if (double.tryParse(v.trim()) == null) {
+                    return 'Invalid number';
+                  }
+                  return null;
+                      },
+                  );
+                  final lngField = TextFormField(
+                    controller: _lngCtrl,
+                    keyboardType:
+                    const TextInputType.numberWithOptions(
+                      decimal: true, signed: true),
+                      decoration: _inputDeco('Longitude *',
+                                             hint: 'e.g. 121.0244'),
+                                             style: TextStyle(color: tc.text),
+                                             validator: (v) {
+                                               if (v == null || v.trim().isEmpty) return 'Required';
+                  if (double.tryParse(v.trim()) == null) {
+                    return 'Invalid number';
+                  }
+                  return null;
+                                             },
+                  );
+                  final radiusField = TextFormField(
+                    controller: _radiusCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration:
+                    _inputDeco('Radius (meters)', hint: '500'),
+                    style: TextStyle(color: tc.text),
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return null;
+                      final d = double.tryParse(v.trim());
+                      if (d == null || d <= 0) return 'Invalid';
+                  return null;
+                    },
+                  );
+
+                  if (!wide) {
+                    return Column(
+                      children: [
+                        latField,
+                        const SizedBox(height: 12),
+                        lngField,
+                        const SizedBox(height: 12),
+                        radiusField,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: latField),
+                      const SizedBox(width: 12),
+                      Expanded(child: lngField),
+                      const SizedBox(width: 12),
+                      Expanded(child: radiusField),
+                    ],
+                  );
+                }),
+                const SizedBox(height: 8),
+
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => _openInGoogleMaps(),
+                    icon: Icon(Icons.map_rounded,
+                               size: 16, color: tc.orange),
+                               label: Text(
+                                 'Verify on Google Maps',
+                                 style: TextStyle(
+                                   fontSize: 12,
+                                   color: tc.orange,
+                                   fontWeight: FontWeight.w600,
+                                 ),
+                               ),
+                               style: TextButton.styleFrom(
+                                 padding: const EdgeInsets.symmetric(
+                                   horizontal: 8, vertical: 6),
+                               ),
                   ),
                 ),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 6),
+                const SizedBox(height: 16),
+
+                // ── 5. SECONDARY OPTIONS ──
+                Text(
+                  'OTHER OPTIONS',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: tc.muted,
+                    letterSpacing: 0.8,
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: 16),
+                const SizedBox(height: 8),
+                LayoutBuilder(builder: (context, c) {
+                  final wide = c.maxWidth >= 700;
 
-            // ── 5. SECONDARY OPTIONS ──
-            Text(
-              'IBA PANG OPTIONS',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w800,
-                color: tc.muted,
-                letterSpacing: 0.8,
-              ),
-            ),
-            const SizedBox(height: 8),
-            LayoutBuilder(builder: (context, c) {
-              final wide = c.maxWidth >= 700;
-
-              final gpsBtn = OutlinedButton.icon(
-                onPressed:
-                _loadingLocation ? null : _useCurrentLocation,
-                icon: _loadingLocation
+                  final gpsBtn = OutlinedButton.icon(
+                    onPressed:
+                    _loadingLocation ? null : _useCurrentLocation,
+                    icon: _loadingLocation
                     ? const SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2),
-                )
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2),
+                    )
                     : Icon(Icons.my_location_rounded,
-                    size: 16, color: tc.orange),
-                label: Text(
-                  _loadingLocation ? 'GPS...' : 'Use My GPS',
-                  style: TextStyle(
-                    color: tc.orange,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                  ),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: tc.orange, width: 1.5),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              );
+                           size: 16, color: tc.orange),
+                           label: Text(
+                             _loadingLocation ? 'GPS...' : 'Use My GPS',
+                             style: TextStyle(
+                               color: tc.orange,
+                               fontWeight: FontWeight.w700,
+                               fontSize: 12,
+                             ),
+                           ),
+                           style: OutlinedButton.styleFrom(
+                             side: BorderSide(color: tc.orange, width: 1.5),
+                             padding: const EdgeInsets.symmetric(
+                               horizontal: 12, vertical: 12),
+                               shape: RoundedRectangleBorder(
+                                 borderRadius: BorderRadius.circular(8),
+                               ),
+                           ),
+                  );
 
-              final mapBtn = OutlinedButton.icon(
-                onPressed: _isDemo ? _demoBlock : _pickOnMap,
-                icon: Icon(Icons.map_rounded,
-                    size: 16, color: _isDemo ? tc.muted : tc.orange),
-                label: Text(
-                  'Pick on Map',
-                  style: TextStyle(
-                    color: _isDemo ? tc.muted : tc.orange,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                  ),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(
-                      color: _isDemo ? tc.border : tc.orange, width: 1.5),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              );
+                  final mapBtn = OutlinedButton.icon(
+                    onPressed: _isDemo ? _demoBlock : _pickOnMap,
+                    icon: Icon(Icons.map_rounded,
+                               size: 16, color: _isDemo ? tc.muted : tc.orange),
+                               label: Text(
+                                 'Pick on Map',
+                                 style: TextStyle(
+                                   color: _isDemo ? tc.muted : tc.orange,
+                                   fontWeight: FontWeight.w700,
+                                   fontSize: 12,
+                                 ),
+                               ),
+                               style: OutlinedButton.styleFrom(
+                                 side: BorderSide(
+                                   color: _isDemo ? tc.border : tc.orange, width: 1.5),
+                                   padding: const EdgeInsets.symmetric(
+                                     horizontal: 12, vertical: 12),
+                                     shape: RoundedRectangleBorder(
+                                       borderRadius: BorderRadius.circular(8),
+                                     ),
+                               ),
+                  );
 
-              final pasteBtn = OutlinedButton.icon(
-                onPressed: _pasteCoordsFromClipboard,
-                icon: Icon(Icons.content_paste_rounded,
-                    size: 16, color: tc.text),
-                label: Text(
-                  'Paste Coords',
-                  style: TextStyle(
-                    color: tc.text,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                  ),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: tc.border),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              );
+                  final pasteBtn = OutlinedButton.icon(
+                    onPressed: _pasteCoordsFromClipboard,
+                    icon: Icon(Icons.content_paste_rounded,
+                               size: 16, color: tc.text),
+                               label: Text(
+                                 'Paste Coords',
+                                 style: TextStyle(
+                                   color: tc.text,
+                                   fontWeight: FontWeight.w600,
+                                   fontSize: 12,
+                                 ),
+                               ),
+                               style: OutlinedButton.styleFrom(
+                                 side: BorderSide(color: tc.border),
+                                 padding: const EdgeInsets.symmetric(
+                                   horizontal: 12, vertical: 12),
+                                   shape: RoundedRectangleBorder(
+                                     borderRadius: BorderRadius.circular(8),
+                                   ),
+                               ),
+                  );
 
-              if (!wide) {
-                return Column(
+                  if (!wide) {
+                    return Column(
+                      children: [
+                        SizedBox(width: double.infinity, child: gpsBtn),
+                        const SizedBox(height: 8),
+                        SizedBox(width: double.infinity, child: mapBtn),
+                        const SizedBox(height: 8),
+                        SizedBox(width: double.infinity, child: pasteBtn),
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: gpsBtn),
+                      const SizedBox(width: 8),
+                      Expanded(child: mapBtn),
+                      const SizedBox(width: 8),
+                      Expanded(child: pasteBtn),
+                    ],
+                  );
+                }),
+                const SizedBox(height: 20),
+
+                // ── 6. ACTIVE TOGGLE ──
+                Row(
                   children: [
-                    SizedBox(width: double.infinity, child: gpsBtn),
-                    const SizedBox(height: 8),
-                    SizedBox(width: double.infinity, child: mapBtn),
-                    const SizedBox(height: 8),
-                    SizedBox(width: double.infinity, child: pasteBtn),
-                  ],
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(child: gpsBtn),
-                  const SizedBox(width: 8),
-                  Expanded(child: mapBtn),
-                  const SizedBox(width: 8),
-                  Expanded(child: pasteBtn),
-                ],
-              );
-            }),
-            const SizedBox(height: 20),
-
-            // ── 6. ACTIVE TOGGLE ──
-            Row(
-              children: [
-                Switch(
-                  value: _isActive,
-                  onChanged: _isDemo
+                    Switch(
+                      value: _isActive,
+                      onChanged: _isDemo
                       ? null
                       : (v) => setState(() => _isActive = v),
-                  activeThumbColor: _isDemo ? tc.muted : tc.orange,
+                      activeThumbColor: _isDemo ? tc.muted : tc.orange,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _isActive ? 'Active' : 'Inactive',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: _isActive ? tc.green : tc.muted,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  _isActive ? 'Active' : 'Inactive',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: _isActive ? tc.green : tc.muted,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-            // ── 7. ACTIONS ──
-            Row(
-              children: [
-                TextButton.icon(
-                  onPressed: _submitting ? null : _resetForm,
-                  icon: Icon(Icons.refresh_rounded,
-                      size: 16, color: tc.muted),
-                  label: Text('Reset',
-                      style: TextStyle(color: tc.muted)),
-                ),
-                const Spacer(),
-                ElevatedButton.icon(
-                  onPressed: (_submitting || _isDemo)
+                // ── 7. ACTIONS ──
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _submitting ? null : _resetForm,
+                      icon: Icon(Icons.refresh_rounded,
+                                 size: 16, color: tc.muted),
+                                 label: Text('Reset',
+                                             style: TextStyle(color: tc.muted)),
+                    ),
+                    const Spacer(),
+                    ElevatedButton.icon(
+                      onPressed: (_submitting || _isDemo)
                       ? (_isDemo ? _demoBlock : null)
                       : _saveClient,
-                  icon: (_submitting)
+                      icon: (_submitting)
                       ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
                       : Icon(
-                    _isDemo
+                        _isDemo
                         ? Icons.lock_outline_rounded
                         : Icons.save_rounded,
-                    size: 16,
-                  ),
-                  label: Text(
-                    _submitting
+                        size: 16,
+                      ),
+                      label: Text(
+                        _submitting
                         ? 'Saving...'
-                        : (_isDemo
-                        ? 'Save Disabled (Demo)'
-                        : 'Save Client'),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isDemo ? tc.border : tc.orange,
-                    foregroundColor: _isDemo ? tc.muted : Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 20, vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      : (_isDemo
+                      ? 'Save Disabled (Demo)'
+                      : 'Save Client'),
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _isDemo ? tc.border : tc.orange,
+                        foregroundColor: _isDemo ? tc.muted : Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
           ],
         ),
       ),
@@ -1519,19 +1519,19 @@ class _AdminAddClientLocationPageState
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: tc.orange.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    '${_clients.length}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: tc.orangeText,
+                    horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: tc.orange.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
                     ),
-                  ),
+                    child: Text(
+                      '${_clients.length}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: tc.orangeText,
+                      ),
+                    ),
                 ),
               ],
             ),
@@ -1544,24 +1544,24 @@ class _AdminAddClientLocationPageState
                 child: CircularProgressIndicator(color: tc.orange),
               ),
             )
-          else if (_clients.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(40),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.location_off_rounded,
-                        size: 40, color: tc.muted),
-                    const SizedBox(height: 8),
-                    Text('No clients registered yet.',
-                        style:
-                        TextStyle(color: tc.muted, fontSize: 13)),
-                  ],
+            else if (_clients.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(40),
+                child: Center(
+                  child: Column(
+                    children: [
+                      Icon(Icons.location_off_rounded,
+                           size: 40, color: tc.muted),
+                           const SizedBox(height: 8),
+                           Text('No clients registered yet.',
+                                style:
+                                TextStyle(color: tc.muted, fontSize: 13)),
+                    ],
+                  ),
                 ),
-              ),
-            )
-          else
-            ..._clients.map(_buildClientTile),
+              )
+              else
+                ..._clients.map(_buildClientTile),
         ],
       ),
     );
@@ -1606,27 +1606,27 @@ class _AdminAddClientLocationPageState
             }
           },
           icon: Icon(Icons.map_rounded,
-              color: _isDemo ? tc.muted : tc.orange, size: 18),
-          tooltip: 'View on Google Maps',
-          padding: EdgeInsets.zero,
-          constraints:
-          const BoxConstraints(minWidth: 36, minHeight: 36),
+                     color: _isDemo ? tc.muted : tc.orange, size: 18),
+                   tooltip: 'View on Google Maps',
+                   padding: EdgeInsets.zero,
+                   constraints:
+                   const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
         IconButton(
           onPressed: _isDemo ? _demoBlock : () => _editClient(c),
           icon: Icon(Icons.edit_rounded,
-              color: _isDemo ? tc.muted : tc.orange, size: 18),
-          tooltip: _isDemo ? 'Edit disabled in Demo' : 'Edit client',
-          padding: EdgeInsets.zero,
-          constraints:
-          const BoxConstraints(minWidth: 36, minHeight: 36),
+                     color: _isDemo ? tc.muted : tc.orange, size: 18),
+                   tooltip: _isDemo ? 'Edit disabled in Demo' : 'Edit client',
+                   padding: EdgeInsets.zero,
+                   constraints:
+                   const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
         IconButton(
           onPressed: _isDemo ? _demoBlock : () => _toggleActive(c),
           icon: Icon(
             isActive
-                ? Icons.toggle_on_rounded
-                : Icons.toggle_off_rounded,
+            ? Icons.toggle_on_rounded
+            : Icons.toggle_off_rounded,
             color: _isDemo ? tc.muted : (isActive ? tc.green : tc.muted),
             size: 22,
           ),
@@ -1638,11 +1638,11 @@ class _AdminAddClientLocationPageState
         IconButton(
           onPressed: _isDemo ? _demoBlock : () => _deleteClient(c),
           icon: Icon(Icons.delete_outline_rounded,
-              color: _isDemo ? tc.muted : tc.red, size: 18),
-          tooltip: _isDemo ? 'Delete disabled in Demo' : 'Delete',
-          padding: EdgeInsets.zero,
-          constraints:
-          const BoxConstraints(minWidth: 36, minHeight: 36),
+                     color: _isDemo ? tc.muted : tc.red, size: 18),
+                   tooltip: _isDemo ? 'Delete disabled in Demo' : 'Delete',
+                   padding: EdgeInsets.zero,
+                   constraints:
+                   const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
       ],
     );
@@ -1678,10 +1678,10 @@ class _AdminAddClientLocationPageState
                           child: Text(
                             name,
                             style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: tc.text),
-                            overflow: TextOverflow.ellipsis,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: tc.text),
+                              overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -1703,30 +1703,30 @@ class _AdminAddClientLocationPageState
                       children: [
                         if (lat != null && lng != null) ...[
                           Icon(Icons.location_on_outlined,
-                              size: 12, color: tc.muted),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}',
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: tc.text),
+                               size: 12, color: tc.muted),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: tc.text),
                               overflow: TextOverflow.ellipsis,
-                            ),
                           ),
+                        ),
                         ],
                         if (radius != null) ...[
                           const SizedBox(width: 8),
                           Text('•',
-                              style: TextStyle(
-                                  fontSize: 11, color: tc.muted)),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${radius.toStringAsFixed(0)}m',
-                            style: TextStyle(
-                                fontSize: 11, color: tc.muted),
-                          ),
+                               style: TextStyle(
+                                 fontSize: 11, color: tc.muted)),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${radius.toStringAsFixed(0)}m',
+                          style: TextStyle(
+                            fontSize: 11, color: tc.muted),
+                        ),
                         ],
                       ],
                     ),
@@ -1765,17 +1765,17 @@ class _AdminAddClientLocationPageState
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(name,
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: tc.text),
-                      overflow: TextOverflow.ellipsis),
-                  if (address.isNotEmpty)
-                    Text(address,
-                        style:
-                        TextStyle(fontSize: 11, color: tc.muted),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1),
+                       style: TextStyle(
+                         fontSize: 13,
+                         fontWeight: FontWeight.w700,
+                         color: tc.text),
+                       overflow: TextOverflow.ellipsis),
+                       if (address.isNotEmpty)
+                         Text(address,
+                              style:
+                              TextStyle(fontSize: 11, color: tc.muted),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1),
                 ],
               ),
             ),
@@ -1786,15 +1786,15 @@ class _AdminAddClientLocationPageState
                 children: [
                   if (lat != null && lng != null)
                     Text(
-                        '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}',
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: tc.text)),
-                  if (radius != null)
-                    Text('${radius.toStringAsFixed(0)}m radius',
-                        style:
-                        TextStyle(fontSize: 11, color: tc.muted)),
+                      '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: tc.text)),
+                        if (radius != null)
+                          Text('${radius.toStringAsFixed(0)}m radius',
+                          style:
+                          TextStyle(fontSize: 11, color: tc.muted)),
                 ],
               ),
             ),
@@ -1920,7 +1920,7 @@ class _EditClientDialogState extends State<_EditClientDialog> {
     if (_lastGeocodedAddress == text) return;
 
     if (mounted) {
-      setState(() => _geocodeStatus = '⏳ Hintayin kang matapos mag-type...');
+      setState(() => _geocodeStatus = '⏳ Wait for you to finish typing...');
     }
 
     _geocodeDebounce = Timer(const Duration(milliseconds: 900), () {
@@ -1933,7 +1933,7 @@ class _EditClientDialogState extends State<_EditClientDialog> {
 
     setState(() {
       _geocodingAddress = true;
-      _geocodeStatus = '🔍 Hinahanap ang address...';
+      _geocodeStatus = '🔍 Searching for address...';
     });
     debugPrint('🌍 [Edit][Geocode] Looking up: "$address"');
 
@@ -1968,7 +1968,7 @@ class _EditClientDialogState extends State<_EditClientDialog> {
       if (data.isEmpty) {
         setState(() {
           _geocodingAddress = false;
-          _geocodeStatus = '❌ Walang nahanap.';
+          _geocodeStatus = '❌ Nothing found.';
         });
         return;
       }
@@ -2120,14 +2120,14 @@ class _EditClientDialogState extends State<_EditClientDialog> {
         permission = await Geolocator.requestPermission();
       }
       if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
+        permission == LocationPermission.deniedForever) {
         throw 'Location permission denied.';
-      }
+        }
 
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 20),
-      );
+        final pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.best,
+          timeLimit: const Duration(seconds: 20),
+        );
 
       if (!mounted) return;
       setState(() {
@@ -2138,11 +2138,11 @@ class _EditClientDialogState extends State<_EditClientDialog> {
       final acc = pos.accuracy;
       if (acc <= 30) {
         _showSnack(
-            '✅ Location captured! GPS accuracy: ±${acc.toStringAsFixed(0)}m');
+          '✅ Location captured! GPS accuracy: ±${acc.toStringAsFixed(0)}m');
       } else {
         _showSnack(
-            '⚠️ GPS weak: ±${acc.toStringAsFixed(0)}m — verify with map!',
-            isError: true);
+          '⚠️ GPS weak: ±${acc.toStringAsFixed(0)}m — verify with map!',
+          isError: true);
       }
     } catch (e) {
       if (!mounted) return;
@@ -2196,10 +2196,10 @@ class _EditClientDialogState extends State<_EditClientDialog> {
       };
 
       await FirebaseFirestore.instance
-          .collection('client_locations')
-          .doc(widget.client['id'])
-          .update(update)
-          .timeout(const Duration(seconds: 15));
+      .collection('client_locations')
+      .doc(widget.client['id'])
+      .update(update)
+      .timeout(const Duration(seconds: 15));
 
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -2230,18 +2230,18 @@ class _EditClientDialogState extends State<_EditClientDialog> {
         title: Row(
           children: [
             Icon(Icons.check_circle_outline_rounded,
-                color: tc.orange, size: 22),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Confirm Changes?',
-                style: TextStyle(
-                  color: tc.text,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-              ),
-            ),
+                 color: tc.orange, size: 22),
+                 const SizedBox(width: 8),
+                 Expanded(
+                   child: Text(
+                     'Confirm Changes?',
+                     style: TextStyle(
+                       color: tc.text,
+                       fontWeight: FontWeight.w700,
+                       fontSize: 16,
+                     ),
+                   ),
+                 ),
           ],
         ),
         content: Column(
@@ -2263,7 +2263,7 @@ class _EditClientDialogState extends State<_EditClientDialog> {
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text('Cancel',
-                style: TextStyle(color: tc.muted)),
+                        style: TextStyle(color: tc.muted)),
           ),
           ElevatedButton.icon(
             onPressed: () => Navigator.pop(ctx, true),
@@ -2272,11 +2272,11 @@ class _EditClientDialogState extends State<_EditClientDialog> {
             style: ElevatedButton.styleFrom(
               backgroundColor: tc.orange,
               foregroundColor: Colors.white,
-              padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
             ),
           ),
         ],
@@ -2335,468 +2335,468 @@ class _EditClientDialogState extends State<_EditClientDialog> {
         borderRadius: BorderRadius.circular(16),
       ),
       insetPadding: const EdgeInsets.symmetric(
-          horizontal: 16, vertical: 24),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 620,
-          maxHeight: MediaQuery.of(context).size.height * 0.9,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 12, 14),
-              child: Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: tc.orange.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
+        horizontal: 16, vertical: 24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 620,
+            maxHeight: MediaQuery.of(context).size.height * 0.9,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 12, 14),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: tc.orange.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(Icons.edit_location_alt_rounded,
+                                  color: _isDemo ? tc.muted : tc.orange, size: 20),
                     ),
-                    child: Icon(Icons.edit_location_alt_rounded,
-                        color: _isDemo ? tc.muted : tc.orange, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Edit Client Location',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
-                            color: tc.text,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          widget.client['name']?.toString() ?? '',
-                          style: TextStyle(
-                              fontSize: 11, color: tc.muted),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(false),
-                    icon: Icon(Icons.close_rounded,
-                        color: tc.muted, size: 20),
-                    tooltip: 'Close',
-                  ),
-                ],
-              ),
-            ),
-            Divider(height: 1, color: tc.border),
-
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Client Name
-                      TextFormField(
-                        controller: _nameCtrl,
-                        decoration: _inputDeco('Client Name *',
-                            hint: 'e.g. ABC Corporation HQ'),
-                        style: TextStyle(color: tc.text),
-                        validator: (v) =>
-                        (v == null || v.trim().isEmpty)
-                            ? 'Required'
-                            : null,
-                      ),
-                      const SizedBox(height: 16),
-
-                      // Address (primary)
-                      TextFormField(
-                        controller: _addressCtrl,
-                        maxLines: 2,
-                        decoration: _inputDeco('Address *',
-                            hint:
-                            'e.g. 629 J. Nepomuceno St, Quiapo')
-                            .copyWith(
-                          suffixIcon: _geocodingAddress
-                              ? Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: SizedBox(
-                              width: 18,
-                              height: 18,
-                              child:
-                              CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: tc.orange,
-                              ),
-                            ),
-                          )
-                              : null,
-                        ),
-                        style: TextStyle(color: tc.text),
-                        validator: (v) =>
-                        (v == null || v.trim().isEmpty)
-                            ? 'Required'
-                            : null,
-                      ),
-                      const SizedBox(height: 6),
-
-                      // Status
-                      if (_geocodeStatus != null)
-                        Row(
-                          children: [
-                            Icon(
-                              _geocodeStatus!.startsWith('✅')
-                                  ? Icons.check_circle_outline
-                                  : (_geocodeStatus!.startsWith('❌')
-                                  ? Icons.error_outline
-                                  : Icons.hourglass_empty),
-                              size: 12,
-                              color: _geocodeStatus!.startsWith('✅')
-                                  ? tc.green
-                                  : (_geocodeStatus!.startsWith('❌')
-                                  ? tc.red
-                                  : tc.orange),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                _geocodeStatus!,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: _geocodeStatus!.startsWith('✅')
-                                      ? tc.green
-                                      : (_geocodeStatus!
-                                      .startsWith('❌')
-                                      ? tc.red
-                                      : tc.orange),
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      const SizedBox(height: 16),
-
-                      // Lat/Lng/Radius
-                      if (isWide)
-                        Row(
-                          children: [
-                            Expanded(child: _buildLatField()),
-                            const SizedBox(width: 12),
-                            Expanded(child: _buildLngField()),
-                            const SizedBox(width: 12),
-                            Expanded(child: _buildRadiusField()),
-                          ],
-                        )
-                      else ...[
-                        _buildLatField(),
-                        const SizedBox(height: 12),
-                        _buildLngField(),
-                        const SizedBox(height: 12),
-                        _buildRadiusField(),
-                      ],
-                      const SizedBox(height: 12),
-
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          onPressed: _openInGoogleMaps,
-                          icon: Icon(Icons.map_rounded,
-                              size: 16, color: tc.orange),
-                          label: Text(
-                            'View coordinates on Google Maps',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: tc.orange,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-
-                      // Options
-                      if (isWide)
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _loadingLocation
-                                    ? null
-                                    : _useCurrentLocation,
-                                icon: _loadingLocation
-                                    ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child:
-                                  CircularProgressIndicator(
-                                      strokeWidth: 2),
-                                )
-                                    : Icon(
-                                    Icons.my_location_rounded,
-                                    size: 16,
-                                    color: tc.orange),
-                                label: Text(
-                                  'Use My GPS',
-                                  style: TextStyle(
-                                    color: tc.orange,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  side: BorderSide(
-                                      color: tc.orange, width: 1.5),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 12),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius:
-                                    BorderRadius.circular(8),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _isDemo ? _demoBlock : _pickOnMap,
-                                icon: Icon(Icons.map_rounded,
-                                    size: 16,
-                                    color: _isDemo ? tc.muted : tc.orange),
-                                label: Text(
-                                  'Pick on Map',
-                                  style: TextStyle(
-                                    color: _isDemo ? tc.muted : tc.orange,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  side: BorderSide(
-                                      color: _isDemo ? tc.border : tc.orange,
-                                      width: 1.5),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 12),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius:
-                                    BorderRadius.circular(8),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _pasteCoordsFromClipboard,
-                                icon: Icon(
-                                    Icons.content_paste_rounded,
-                                    size: 16,
-                                    color: tc.text),
-                                label: Text(
-                                  'Paste',
-                                  style: TextStyle(
-                                    color: tc.text,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  side: BorderSide(color: tc.border),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 12),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius:
-                                    BorderRadius.circular(8),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        )
-                      else ...[
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: _loadingLocation
-                                ? null
-                                : _useCurrentLocation,
-                            icon: _loadingLocation
-                                ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2),
-                            )
-                                : Icon(Icons.my_location_rounded,
-                                size: 16, color: tc.orange),
-                            label: Text(
-                              'Use My GPS',
-                              style: TextStyle(
-                                color: tc.orange,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 12,
-                              ),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide(
-                                  color: tc.orange, width: 1.5),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: _isDemo ? _demoBlock : _pickOnMap,
-                            icon: Icon(Icons.map_rounded,
-                                size: 16,
-                                color: _isDemo ? tc.muted : tc.orange),
-                            label: Text(
-                              'Pick on Map',
-                              style: TextStyle(
-                                color: _isDemo ? tc.muted : tc.orange,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 12,
-                              ),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide(
-                                  color: _isDemo ? tc.border : tc.orange,
-                                  width: 1.5),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: _pasteCoordsFromClipboard,
-                            icon: Icon(Icons.content_paste_rounded,
-                                size: 16, color: tc.text),
-                            label: Text(
-                              'Paste Coords',
-                              style: TextStyle(
-                                color: tc.text,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 12,
-                              ),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide(color: tc.border),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 16),
-
-                      Row(
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Switch(
-                            value: _isActive,
-                            onChanged: (_saving || _isDemo)
-                                ? null
-                                : (v) =>
-                                setState(() => _isActive = v),
-                            activeThumbColor: _isDemo ? tc.muted : tc.orange,
-                          ),
-                          const SizedBox(width: 8),
                           Text(
-                            _isActive ? 'Active' : 'Inactive',
+                            'Edit Client Location',
                             style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color:
-                              _isActive ? tc.green : tc.muted,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: tc.text,
                             ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.client['name']?.toString() ?? '',
+                            style: TextStyle(
+                              fontSize: 11, color: tc.muted),
+                               overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
-                    ],
+                    ),
+                    IconButton(
+                      onPressed: _saving
+                      ? null
+                      : () => Navigator.of(context).pop(false),
+                      icon: Icon(Icons.close_rounded,
+                                 color: tc.muted, size: 20),
+                               tooltip: 'Close',
+                    ),
+                  ],
+                ),
+              ),
+              Divider(height: 1, color: tc.border),
+
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Client Name
+                        TextFormField(
+                          controller: _nameCtrl,
+                          decoration: _inputDeco('Client Name *',
+                                                 hint: 'e.g. ABC Corporation HQ'),
+                                      style: TextStyle(color: tc.text),
+                                      validator: (v) =>
+                                      (v == null || v.trim().isEmpty)
+                                      ? 'Required'
+                        : null,
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Address (primary)
+                        TextFormField(
+                          controller: _addressCtrl,
+                          maxLines: 2,
+                          decoration: _inputDeco('Address *',
+                                                 hint:
+                                                 'e.g. 629 J. Nepomuceno St, Quiapo')
+                          .copyWith(
+                            suffixIcon: _geocodingAddress
+                            ? Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: tc.orange,
+                                ),
+                              ),
+                            )
+                            : null,
+                          ),
+                          style: TextStyle(color: tc.text),
+                          validator: (v) =>
+                          (v == null || v.trim().isEmpty)
+                          ? 'Required'
+                        : null,
+                        ),
+                        const SizedBox(height: 6),
+
+                        // Status
+                        if (_geocodeStatus != null)
+                          Row(
+                            children: [
+                              Icon(
+                                _geocodeStatus!.startsWith('✅')
+                                ? Icons.check_circle_outline
+                                : (_geocodeStatus!.startsWith('❌')
+                                ? Icons.error_outline
+                                : Icons.hourglass_empty),
+                                size: 12,
+                                color: _geocodeStatus!.startsWith('✅')
+                                ? tc.green
+                                : (_geocodeStatus!.startsWith('❌')
+                                ? tc.red
+                                : tc.orange),
+                              ),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  _geocodeStatus!,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: _geocodeStatus!.startsWith('✅')
+                                    ? tc.green
+                                    : (_geocodeStatus!
+                                    .startsWith('❌')
+                                    ? tc.red
+                                    : tc.orange),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Lat/Lng/Radius
+                          if (isWide)
+                            Row(
+                              children: [
+                                Expanded(child: _buildLatField()),
+                                const SizedBox(width: 12),
+                                Expanded(child: _buildLngField()),
+                                const SizedBox(width: 12),
+                                Expanded(child: _buildRadiusField()),
+                              ],
+                            )
+                            else ...[
+                              _buildLatField(),
+                              const SizedBox(height: 12),
+                              _buildLngField(),
+                              const SizedBox(height: 12),
+                              _buildRadiusField(),
+                            ],
+                            const SizedBox(height: 12),
+
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                onPressed: _openInGoogleMaps,
+                                icon: Icon(Icons.map_rounded,
+                                           size: 16, color: tc.orange),
+                                           label: Text(
+                                             'View coordinates on Google Maps',
+                                             style: TextStyle(
+                                               fontSize: 12,
+                                               color: tc.orange,
+                                               fontWeight: FontWeight.w600,
+                                             ),
+                                           ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+
+                            // Options
+                            if (isWide)
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: _loadingLocation
+                                      ? null
+                                      : _useCurrentLocation,
+                                      icon: _loadingLocation
+                                      ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child:
+                                        CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                      )
+                                      : Icon(
+                                        Icons.my_location_rounded,
+                                        size: 16,
+                                        color: tc.orange),
+                                        label: Text(
+                                          'Use My GPS',
+                                          style: TextStyle(
+                                            color: tc.orange,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        style: OutlinedButton.styleFrom(
+                                          side: BorderSide(
+                                            color: tc.orange, width: 1.5),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 12),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                BorderRadius.circular(8),
+                                              ),
+                                        ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: _isDemo ? _demoBlock : _pickOnMap,
+                                      icon: Icon(Icons.map_rounded,
+                                                 size: 16,
+                                                 color: _isDemo ? tc.muted : tc.orange),
+                                                 label: Text(
+                                                   'Pick on Map',
+                                                   style: TextStyle(
+                                                     color: _isDemo ? tc.muted : tc.orange,
+                                                     fontWeight: FontWeight.w700,
+                                                     fontSize: 12,
+                                                   ),
+                                                 ),
+                                                 style: OutlinedButton.styleFrom(
+                                                   side: BorderSide(
+                                                     color: _isDemo ? tc.border : tc.orange,
+                                                     width: 1.5),
+                                                     padding: const EdgeInsets.symmetric(
+                                                       horizontal: 12, vertical: 12),
+                                                       shape: RoundedRectangleBorder(
+                                                         borderRadius:
+                                                         BorderRadius.circular(8),
+                                                       ),
+                                                 ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: _pasteCoordsFromClipboard,
+                                      icon: Icon(
+                                        Icons.content_paste_rounded,
+                                        size: 16,
+                                        color: tc.text),
+                                        label: Text(
+                                          'Paste',
+                                          style: TextStyle(
+                                            color: tc.text,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        style: OutlinedButton.styleFrom(
+                                          side: BorderSide(color: tc.border),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12, vertical: 12),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                              BorderRadius.circular(8),
+                                            ),
+                                        ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                              else ...[
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: _loadingLocation
+                                    ? null
+                                    : _useCurrentLocation,
+                                    icon: _loadingLocation
+                                    ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                    )
+                                    : Icon(Icons.my_location_rounded,
+                                           size: 16, color: tc.orange),
+                                           label: Text(
+                                             'Use My GPS',
+                                             style: TextStyle(
+                                               color: tc.orange,
+                                               fontWeight: FontWeight.w700,
+                                               fontSize: 12,
+                                             ),
+                                           ),
+                                           style: OutlinedButton.styleFrom(
+                                             side: BorderSide(
+                                               color: tc.orange, width: 1.5),
+                                               padding: const EdgeInsets.symmetric(
+                                                 horizontal: 12, vertical: 12),
+                                                 shape: RoundedRectangleBorder(
+                                                   borderRadius: BorderRadius.circular(8),
+                                                 ),
+                                           ),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: _isDemo ? _demoBlock : _pickOnMap,
+                                    icon: Icon(Icons.map_rounded,
+                                               size: 16,
+                                               color: _isDemo ? tc.muted : tc.orange),
+                                               label: Text(
+                                                 'Pick on Map',
+                                                 style: TextStyle(
+                                                   color: _isDemo ? tc.muted : tc.orange,
+                                                   fontWeight: FontWeight.w700,
+                                                   fontSize: 12,
+                                                 ),
+                                               ),
+                                               style: OutlinedButton.styleFrom(
+                                                 side: BorderSide(
+                                                   color: _isDemo ? tc.border : tc.orange,
+                                                   width: 1.5),
+                                                   padding: const EdgeInsets.symmetric(
+                                                     horizontal: 12, vertical: 12),
+                                                     shape: RoundedRectangleBorder(
+                                                       borderRadius: BorderRadius.circular(8),
+                                                     ),
+                                               ),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: _pasteCoordsFromClipboard,
+                                    icon: Icon(Icons.content_paste_rounded,
+                                               size: 16, color: tc.text),
+                                               label: Text(
+                                                 'Paste Coords',
+                                                 style: TextStyle(
+                                                   color: tc.text,
+                                                   fontWeight: FontWeight.w600,
+                                                   fontSize: 12,
+                                                 ),
+                                               ),
+                                               style: OutlinedButton.styleFrom(
+                                                 side: BorderSide(color: tc.border),
+                                                 padding: const EdgeInsets.symmetric(
+                                                   horizontal: 12, vertical: 12),
+                                                   shape: RoundedRectangleBorder(
+                                                     borderRadius: BorderRadius.circular(8),
+                                                   ),
+                                               ),
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 16),
+
+                              Row(
+                                children: [
+                                  Switch(
+                                    value: _isActive,
+                                    onChanged: (_saving || _isDemo)
+                                    ? null
+                                    : (v) =>
+                                    setState(() => _isActive = v),
+                                    activeThumbColor: _isDemo ? tc.muted : tc.orange,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _isActive ? 'Active' : 'Inactive',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color:
+                                      _isActive ? tc.green : tc.muted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
 
-            Divider(height: 1, color: tc.border),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
-              child: Row(
-                children: [
-                  TextButton.icon(
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(false),
-                    icon: Icon(Icons.close_rounded,
-                        size: 16, color: tc.muted),
-                    label: Text('Cancel',
-                        style: TextStyle(color: tc.muted)),
-                  ),
-                  const Spacer(),
-                  ElevatedButton.icon(
-                    onPressed: (_saving || _isDemo)
-                        ? (_isDemo ? _demoBlock : null)
-                        : _save,
-                    icon: _saving
-                        ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                        : Icon(
-                      _isDemo
-                          ? Icons.lock_outline_rounded
-                          : Icons.save_rounded,
-                      size: 16,
+              Divider(height: 1, color: tc.border),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
+                child: Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _saving
+                      ? null
+                      : () => Navigator.of(context).pop(false),
+                      icon: Icon(Icons.close_rounded,
+                                 size: 16, color: tc.muted),
+                                 label: Text('Cancel',
+                                             style: TextStyle(color: tc.muted)),
                     ),
-                    label: Text(
-                      _saving
-                          ? 'Saving...'
-                          : (_isDemo
-                          ? 'Save Disabled (Demo)'
-                          : 'Save Changes'),
+                    const Spacer(),
+                    ElevatedButton.icon(
+                      onPressed: (_saving || _isDemo)
+                      ? (_isDemo ? _demoBlock : null)
+                      : _save,
+                      icon: _saving
+                      ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                      : Icon(
+                        _isDemo
+                        ? Icons.lock_outline_rounded
+                        : Icons.save_rounded,
+                        size: 16,
+                      ),
+                      label: Text(
+                        _saving
+                        ? 'Saving...'
+                      : (_isDemo
+                      ? 'Save Disabled (Demo)'
+                      : 'Save Changes'),
                       style:
                       const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _isDemo ? tc.border : tc.orange,
-                      foregroundColor: _isDemo ? tc.muted : Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _isDemo ? tc.border : tc.orange,
+                        foregroundColor: _isDemo ? tc.muted : Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
     );
   }
 
@@ -2804,15 +2804,15 @@ class _EditClientDialogState extends State<_EditClientDialog> {
     return TextFormField(
       controller: _latCtrl,
       keyboardType: const TextInputType.numberWithOptions(
-          decimal: true, signed: true),
-      decoration:
-      _inputDeco('Latitude *', hint: 'e.g. 14.5547'),
-      style: TextStyle(color: tc.text),
-      validator: (v) {
-        if (v == null || v.trim().isEmpty) return 'Required';
-        if (double.tryParse(v.trim()) == null) return 'Invalid number';
-        return null;
-      },
+        decimal: true, signed: true),
+        decoration:
+        _inputDeco('Latitude *', hint: 'e.g. 14.5547'),
+        style: TextStyle(color: tc.text),
+        validator: (v) {
+          if (v == null || v.trim().isEmpty) return 'Required';
+    if (double.tryParse(v.trim()) == null) return 'Invalid number';
+    return null;
+        },
     );
   }
 
@@ -2820,15 +2820,15 @@ class _EditClientDialogState extends State<_EditClientDialog> {
     return TextFormField(
       controller: _lngCtrl,
       keyboardType: const TextInputType.numberWithOptions(
-          decimal: true, signed: true),
-      decoration:
-      _inputDeco('Longitude *', hint: 'e.g. 121.0244'),
-      style: TextStyle(color: tc.text),
-      validator: (v) {
-        if (v == null || v.trim().isEmpty) return 'Required';
-        if (double.tryParse(v.trim()) == null) return 'Invalid number';
-        return null;
-      },
+        decimal: true, signed: true),
+        decoration:
+        _inputDeco('Longitude *', hint: 'e.g. 121.0244'),
+        style: TextStyle(color: tc.text),
+        validator: (v) {
+          if (v == null || v.trim().isEmpty) return 'Required';
+    if (double.tryParse(v.trim()) == null) return 'Invalid number';
+    return null;
+        },
     );
   }
 
@@ -2842,7 +2842,7 @@ class _EditClientDialogState extends State<_EditClientDialog> {
         if (v == null || v.trim().isEmpty) return null;
         final d = double.tryParse(v.trim());
         if (d == null || d <= 0) return 'Invalid';
-        return null;
+    return null;
       },
     );
   }

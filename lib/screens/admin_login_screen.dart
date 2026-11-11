@@ -1,5 +1,6 @@
 // lib/screens/admin_login_screen.dart
-// v4.0: 🧹 Removed Demo Mode entirely (button, service, demo paths)
+// v4.1: 📡 Hero panel now shows real-time data (public_stats/summary + network)
+//       🧹 Removed Demo Mode entirely (button, service, demo paths)
 //       🔒 All security features preserved
 import 'dart:async';
 import 'dart:convert';
@@ -119,14 +120,36 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
   late Animation<double> _orbAnim;
   late Animation<double> _glowAnim;
 
-  final List<String> _tickerMessages = [
-    'John D. clocked in — 2m ago',
-    'Maria S. clocked out — 5m ago',
-    'System backup completed — 12m ago',
-    'New employee enrolled — 1h ago',
-    'Security scan passed — 2h ago',
-  ];
+  // ── 📡 LIVE STATS (public_stats/summary) ────────────────────
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statsSub;
+  int? _statEmployees;
+  int? _statTodayLogs;
+  String? _statDay;
+  DateTime? _statLastActivity;
+  DateTime? _statUpdatedAt;
+  bool _dbLive = false;
+
   int _tickerIndex = 0;
+
+  /// Ticker messages built only from real values.
+  List<String> get _tickerMessages {
+    final list = <String>[
+      _isOnline ? 'Network connected' : 'No internet connection',
+    ];
+    if (_statLastActivity != null) {
+      list.add('Last activity recorded — ${_ago(_statLastActivity!)}');
+    }
+    if (_statEmployees != null) {
+      list.add('$_statEmployees employees on record');
+    }
+    if (_statUpdatedAt != null) {
+      list.add('Stats synced — ${_ago(_statUpdatedAt!)}');
+    }
+    if (list.length == 1 && _isOnline) {
+      list.add('Waiting for live data...');
+    }
+    return list;
+  }
 
   static const Color _bg = Colors.white;
   static const Color _textPrimary = Color(0xFF000000);
@@ -136,6 +159,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
   static const Color _orangeDeep = Color(0xFFF54900);
   static const Color _red = Color(0xFFEF4444);
   static const Color _green = Color(0xFF16A34A);
+  static const Color _amber = Color(0xFFF59E0B);
 
   @override
   void initState() {
@@ -270,6 +294,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
     _loadDeviceModel();
     _startClock();
     _startTicker();
+    _startStatsStream();
 
     _passCtrl.addListener(_updatePasswordStrength);
     _passCtrl.addListener(_onPasswordChanged);
@@ -280,6 +305,98 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
     HardwareKeyboard.instance.addHandler(_onKeyEvent);
 
     _waitForAuthRestore();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 📡 LIVE STATS
+  // ═══════════════════════════════════════════════════════════════
+  static String _dayKey(DateTime d) =>
+  '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  static String _compact(int n) {
+    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
+    return '$n';
+  }
+
+  static String _ago(DateTime t) {
+    final s = DateTime.now().difference(t).inSeconds;
+    if (s < 10) return 'just now';
+    if (s < 60) return '${s}s ago';
+    if (s < 3600) return '${s ~/ 60}m ago';
+    if (s < 86400) return '${s ~/ 3600}h ago';
+    return '${s ~/ 86400}d ago';
+  }
+
+  /// Listens to the aggregate doc `public_stats/summary` (counts only, no PII).
+  void _startStatsStream() {
+    _statsSub?.cancel();
+    _statsSub = FirebaseFirestore.instance
+    .collection('public_stats')
+    .doc('summary')
+    .snapshots(includeMetadataChanges: true)
+    .listen((snap) {
+      if (!mounted) return;
+      final d = snap.data();
+      DateTime? ts(dynamic v) => v is Timestamp ? v.toDate() : null;
+      setState(() {
+        _statEmployees = (d?['employeeCount'] as num?)?.toInt();
+        _statTodayLogs = (d?['todayLogs'] as num?)?.toInt();
+        _statDay = d?['statsDay']?.toString();
+        _statLastActivity = ts(d?['lastActivityAt']);
+        _statUpdatedAt = ts(d?['updatedAt']);
+        _dbLive = !snap.metadata.isFromCache;
+      });
+    }, onError: (Object e) {
+      _log('stats stream error: $e');
+      if (mounted) setState(() => _dbLive = false);
+    });
+  }
+
+  /// Writes aggregate counts for the login page. Call only while signed in as admin.
+  Future<void> _syncPublicStats() async {
+    try {
+      final fs = FirebaseFirestore.instance;
+      final now = DateTime.now();
+      final startOfDay = DateTime(now.year, now.month, now.day);
+
+      final employees = fs.collection('employees');
+      final logs = fs.collection('activity_logs');
+
+      final total = (await employees.count().get()).count ?? 0;
+      final terminated = (await employees
+      .where('terminated', isEqualTo: true)
+      .count()
+      .get())
+      .count ??
+      0;
+      final todayLogs = (await logs
+      .where('timestamp',
+             isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+      .count()
+      .get())
+      .count ??
+      0;
+
+      final last =
+      await logs.orderBy('timestamp', descending: true).limit(1).get();
+      Timestamp? lastTs;
+      if (last.docs.isNotEmpty) {
+        final v = last.docs.first.data()['timestamp'];
+        if (v is Timestamp) lastTs = v;
+      }
+
+      final active = total - terminated;
+      await fs.collection('public_stats').doc('summary').set({
+        'employeeCount': active < 0 ? 0 : active,
+        'todayLogs': todayLogs,
+        'statsDay': _dayKey(now),
+        'lastActivityAt': lastTs,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      _log('syncPublicStats failed: $e');
+    }
   }
 
   Future<void> _waitForAuthRestore() async {
@@ -366,7 +483,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
         return;
       }
       setState(() {
-        _tickerIndex = (_tickerIndex + 1) % _tickerMessages.length;
+        _tickerIndex = (_tickerIndex + 1) % 1000000;
       });
     });
   }
@@ -438,6 +555,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
     _tickerTimer?.cancel();
     _connectivityTimer?.cancel();
     _connectivitySub?.cancel();
+    _statsSub?.cancel();
 
     if (_sessionCleared) {
       _ctrl.dispose();
@@ -676,7 +794,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapDown: (_) => _handleHoldStart(),
-        onTapUp: (_) => _handleHoldEnd,
+        onTapUp: (_) => _handleHoldEnd(),
         onTapCancel: _handleHoldEnd,
         onLongPressStart: (_) => _handleHoldStart(),
         onLongPressEnd: (_) => _handleHoldEnd(),
@@ -770,7 +888,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
 
     Color _strengthColor(double s) {
       if (s < 0.4) return _red;
-      if (s < 0.7) return const Color(0xFFF59E0B);
+      if (s < 0.7) return _amber;
       if (s < 0.9) return _green;
       return const Color(0xFF059669);
     }
@@ -1067,6 +1185,9 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
 
       await _resetFailedAttempts();
       _logLoginAttempt(email: email, success: true);
+
+      // 📡 Refresh the aggregate counts shown on the login panel.
+      _fireAndForget(_syncPublicStats, tag: 'syncPublicStats');
 
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -1422,8 +1543,8 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                         const SizedBox(height: 8),
                         const Text(
                           'Enter your admin credentials to continue.',
-                          style: TextStyle(
-                            fontSize: 13, color: _textMuted, height: 1.4),
+                          style:
+                          TextStyle(fontSize: 13, color: _textMuted, height: 1.4),
                         ),
                         const SizedBox(height: 20),
                         _buildDeviceInfoCard(),
@@ -1509,8 +1630,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                                   return null;
                               },
                               decoration: _inputDeco(
-                                hint: 'admin@racoma.com',
-                                icon: Icons.email_outlined),
+                                hint: 'admin@racoma.com', icon: Icons.email_outlined),
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -1539,8 +1659,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                                 return null;
                               },
                               decoration: _inputDeco(
-                                hint: '••••••••',
-                                icon: Icons.lock_outline_rounded)
+                                hint: '••••••••', icon: Icons.lock_outline_rounded)
                               .copyWith(
                                 suffixIcon: IconButton(
                                   onPressed: locked || _loading
@@ -1573,7 +1692,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                             decoration: BoxDecoration(
                               color: const Color(0xFFFEF3C7),
                               borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: const Color(0xFFF59E0B)),
+                              border: Border.all(color: _amber),
                             ),
                             child: const Row(
                               mainAxisSize: MainAxisSize.min,
@@ -2114,23 +2233,24 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                                       width: 6,
                                       height: 6,
                                       decoration: BoxDecoration(
-                                        color: _green,
+                                        color: _isOnline ? _green : _red,
                                         shape: BoxShape.circle,
                                         boxShadow: [
                                           BoxShadow(
-                                            color: _green.withValues(alpha: 0.6),
+                                            color: (_isOnline ? _green : _red)
+                                            .withValues(alpha: 0.6),
                                             blurRadius: 6,
                                             spreadRadius: 1),
                                         ],
                                       ),
                                     ),
                                     const SizedBox(width: 6),
-                                    const Text('ONLINE',
-                                               style: TextStyle(
-                                                 fontSize: 10,
-                                                 fontWeight: FontWeight.w800,
-                                                 color: _green,
-                                                 letterSpacing: 1.2)),
+                                    Text(_isOnline ? 'ONLINE' : 'OFFLINE',
+                                         style: TextStyle(
+                                           fontSize: 10,
+                                           fontWeight: FontWeight.w800,
+                                           color: _isOnline ? _green : _red,
+                                           letterSpacing: 1.2)),
                                   ],
                                 ),
                             ),
@@ -2145,7 +2265,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                                   decoration: BoxDecoration(
                                     color: Colors.white.withValues(alpha: 0.06),
                                     borderRadius: BorderRadius.circular(4)),
-                                    child: Text('v4.0.0',
+                                    child: Text('v4.1.0',
                                                 style: TextStyle(
                                                   fontSize: 9,
                                                   fontWeight: FontWeight.w700,
@@ -2221,14 +2341,14 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                                   height: 200,
                                   child: CustomPaint(
                                     painter: _DashedRingPainter(
-                                      color: _orange.withValues(alpha: 0.3))),
+                                      color: _orange.withValues(alpha: 0.3)),
+                                  ),
                                 ),
                                 Padding(
                                   padding: const EdgeInsets.all(55),
                                   child: Image.asset(_heroAsset,
                                                      fit: BoxFit.contain,
-                                                     errorBuilder: (_, __, ___) =>
-                                                     _heroFallback()),
+                                                     errorBuilder: (_, __, ___) => _heroFallback()),
                                 ),
                               ],
                             ),
@@ -2243,8 +2363,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                           alignment: WrapAlignment.center,
                           children: [
                             _featurePill(
-                              icon: Icons.fingerprint_rounded,
-                              label: 'Biometric'),
+                              icon: Icons.fingerprint_rounded, label: 'Biometric'),
                               _featurePill(
                                 icon: Icons.bolt_rounded, label: 'Real-time'),
                                 _featurePill(
@@ -2330,26 +2449,41 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
       );
     }
 
+    // ── 📡 LIVE METRICS ─────────────────────────────────────────
     Widget _buildMetricsRow() {
+      final logsFresh = _statDay == _dayKey(_now);
+      final live = _isOnline && _dbLive;
+
       return Row(
         children: [
           Expanded(
             child: _metricCard(
               icon: Icons.people_alt_rounded,
-              value: '248',
-              label: 'Employees')),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _metricCard(
-                  icon: Icons.fingerprint_rounded,
-                  value: '1.2K',
-                  label: 'Today\'s Logs')),
-                 const SizedBox(width: 12),
-                 Expanded(
-                   child: _metricCard(
-                     icon: Icons.speed_rounded,
-                     value: '99.9%',
-                     label: 'Uptime')),
+              value: _statEmployees == null ? '—' : _compact(_statEmployees!),
+              label: 'Employees',
+              live: live,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _metricCard(
+              icon: Icons.fingerprint_rounded,
+              value: (_statTodayLogs == null || !logsFresh)
+              ? '—'
+            : _compact(_statTodayLogs!),
+            label: "Today's Logs",
+            live: live,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _metricCard(
+              icon: Icons.history_rounded,
+              value: _statLastActivity == null ? '—' : _ago(_statLastActivity!),
+              label: 'Last Activity',
+              live: live,
+            ),
+          ),
         ],
       );
     }
@@ -2358,6 +2492,7 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
       required IconData icon,
       required String value,
       required String label,
+      required bool live,
     }) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -2376,12 +2511,14 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                 Container(
                   width: 4,
                   height: 4,
-                  decoration: const BoxDecoration(
-                    color: _green, shape: BoxShape.circle)),
+                  decoration: BoxDecoration(
+                    color: live ? _green : _amber, shape: BoxShape.circle)),
               ],
             ),
             const SizedBox(height: 8),
             Text(value,
+                 maxLines: 1,
+                 overflow: TextOverflow.ellipsis,
                  style: const TextStyle(
                    fontSize: 18,
                    fontWeight: FontWeight.w800,
@@ -2400,6 +2537,20 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
     }
 
     Widget _buildSystemStatusCard() {
+      final dbOk = _isOnline && _dbLive;
+      final Color color;
+      final String label;
+      if (!_isOnline) {
+        color = _red;
+        label = 'Offline';
+      } else if (!dbOk) {
+        color = _amber;
+        label = 'Connecting to database...';
+      } else {
+        color = _green;
+        label = 'All systems operational';
+      }
+
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -2424,24 +2575,22 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                 Container(
                   width: 6,
                   height: 6,
-                  decoration: const BoxDecoration(
-                    color: _green, shape: BoxShape.circle)),
-                const SizedBox(width: 4),
-                const Text('All systems operational',
-                           style: TextStyle(
-                             fontSize: 9,
-                             fontWeight: FontWeight.w600,
-                             color: _green)),
+                  decoration:
+                  BoxDecoration(color: color, shape: BoxShape.circle)),
+                  const SizedBox(width: 4),
+                  Text(label,
+                       style: TextStyle(
+                         fontSize: 9,
+                         fontWeight: FontWeight.w600,
+                         color: color)),
               ],
             ),
             const SizedBox(height: 12),
             Row(
               children: [
-                _statusItem('Firebase', true),
+                _statusItem('Network', _isOnline),
                 const SizedBox(width: 16),
-                _statusItem('Database', true),
-                const SizedBox(width: 16),
-                _statusItem('Auth API', true),
+                _statusItem('Database', dbOk),
               ],
             ),
           ],
@@ -2466,6 +2615,9 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
     }
 
     Widget _buildActivityTicker() {
+      final msgs = _tickerMessages;
+      final text = msgs[_tickerIndex % msgs.length];
+
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -2504,8 +2656,8 @@ with TickerProviderStateMixin, WidgetsBindingObserver {
                   ),
                 ),
                 child: Text(
-                  _tickerMessages[_tickerIndex],
-                  key: ValueKey(_tickerIndex),
+                  text,
+                  key: ValueKey(text),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -2727,8 +2879,8 @@ class _CornerAccentPainter extends CustomPainter {
       canvas.drawLine(Offset(0, 0), Offset(size.width * 0.7, 0), paint);
     }
     if (topLeft) {
-      canvas.drawLine(Offset(0, size.height),
-      Offset(0, size.height * 0.3), paint);
+      canvas.drawLine(
+        Offset(0, size.height), Offset(0, size.height * 0.3), paint);
       canvas.drawLine(Offset(size.width, size.height),
       Offset(size.width * 0.3, size.height), paint);
     }

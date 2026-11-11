@@ -1,7 +1,7 @@
 // lib/screens/admin_presence_monitor_screen.dart
 // v1.3: 🎭 Demo Mode Support
-//       🐛 FIX: RangeError sa initials kapag empty o puro spaces ang name.
-//       🐛 FIX: Hindi na mag-render ng "Unnamed" ghost records (walang name & ID).
+//       🐛 FIX: RangeError on initials when name is empty or all whitespace.
+//       🐛 FIX: No longer renders "Unnamed" ghost records (no name & no ID).
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -104,7 +104,7 @@ class PresenceRow {
   }
 
   String get lastSeenText {
-    if (lastUpdated == null) return 'Walang record';
+    if (lastUpdated == null) return 'No record';
     final diff = DateTime.now().difference(lastUpdated!);
     if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
@@ -143,7 +143,7 @@ class AdminPresenceMonitorScreen extends StatefulWidget {
 
   @override
   State<AdminPresenceMonitorScreen> createState() =>
-      _AdminPresenceMonitorScreenState();
+  _AdminPresenceMonitorScreenState();
 }
 
 class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen> {
@@ -291,10 +291,10 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
     try {
       _employeesSub?.cancel();
       _employeesSub = FirebaseFirestore.instance
-          .collection('employees')
-          .snapshots()
-          .listen(
-            (snap) {
+      .collection('employees')
+      .snapshots()
+      .listen(
+        (snap) {
           final map = <String, Map<String, dynamic>>{};
           for (final d in snap.docs) {
             final data = d.data();
@@ -311,7 +311,7 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
           if (mounted) {
             setState(() {
               _error = 'Failed to load employees: $e';
-              _loading = false;
+            _loading = false;
             });
           }
         },
@@ -323,10 +323,10 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
     try {
       _presenceSub?.cancel();
       _presenceSub = FirebaseFirestore.instance
-          .collection('employee_presence')
-          .snapshots()
-          .listen(
-            (snap) {
+      .collection('employee_presence')
+      .snapshots()
+      .listen(
+        (snap) {
           final map = <String, Map<String, dynamic>>{};
           for (final d in snap.docs) {
             map[d.id] = d.data();
@@ -339,7 +339,7 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
           if (mounted) {
             setState(() {
               _error = 'Failed to load presence: $e';
-              _loading = false;
+            _loading = false;
             });
           }
         },
@@ -368,36 +368,36 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
 
       // 🐛 Extract raw name
       final rawName = (entry['name'] ??
-          '${entry['firstName'] ?? ''} ${entry['lastName'] ?? ''}')
-          .toString()
-          .trim();
+      '${entry['firstName'] ?? ''} ${entry['lastName'] ?? ''}')
+      .toString()
+      .trim();
 
-      // 🐛 SKIP GHOST RECORDS: Kung walang name at walang employeeId, i-skip na.
+      // 🐛 SKIP GHOST RECORDS: If there is no name and no employeeId, skip it.
       if (rawName.isEmpty && empId.isEmpty) {
         continue;
       }
 
-      // 🐛 FALLBACK NAME: Kung walang name pero may ID, ID ang ipakita.
+      // 🐛 FALLBACK NAME: If there is no name but there is an ID, show the ID.
       final displayName = rawName.isNotEmpty
-          ? rawName
-          : 'Employee (${empId.isNotEmpty ? empId : docId.substring(0, 6)})';
+      ? rawName
+      : 'Employee (${empId.isNotEmpty ? empId : docId.substring(0, 6)})';
 
       final presence = _presenceById[docId] ??
-          (empId.isNotEmpty ? _presenceById[empId] : null);
+      (empId.isNotEmpty ? _presenceById[empId] : null);
 
       final role = (entry['role'] ?? entry['position'] ?? '').toString();
       final dept = (entry['department'] ?? '').toString();
       final roleLower = role.toLowerCase();
       final deptLower = dept.toLowerCase();
       final isDriver = roleLower.contains('driver') ||
-          roleLower.contains('rider') ||
-          deptLower.contains('driver') ||
-          deptLower.contains('rider');
+      roleLower.contains('rider') ||
+      deptLower.contains('driver') ||
+      deptLower.contains('rider');
 
       final rawWfh = entry['wfhAccess'];
       final wfh = rawWfh is bool
-          ? rawWfh
-          : (rawWfh?.toString().toLowerCase() == 'true');
+      ? rawWfh
+      : (rawWfh?.toString().toLowerCase() == 'true');
 
       DateTime? lastUpdated;
       final rawUpdated = presence?['lastUpdated'];
@@ -426,7 +426,7 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
       list.add(PresenceRow(
         employeeId: empId.isNotEmpty ? empId : docId,
         docId: docId,
-        name: displayName, // 👈 Ginamit ang fallback name
+        name: displayName, // 👈 Fallback name used here
         role: role,
         department: dept,
         photoUrl: (entry['photoUrl'] ?? '').toString(),
@@ -452,23 +452,23 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
   List<PresenceRow> get _filtered {
     var out = _rows.where((r) {
       if (_statusFilter == 'Present' &&
-          r.status != PresenceStatus.present) {
+        r.status != PresenceStatus.present) {
         return false;
-      }
-      if (_statusFilter == 'Idle' && r.status != PresenceStatus.idle) {
-        return false;
-      }
-      if (_statusFilter == 'Offline' &&
+        }
+        if (_statusFilter == 'Idle' && r.status != PresenceStatus.idle) {
+          return false;
+        }
+        if (_statusFilter == 'Offline' &&
           r.status != PresenceStatus.offline) {
-        return false;
-      }
+          return false;
+          }
 
-      final q = _search.trim().toLowerCase();
-      if (q.isEmpty) return true;
-      return r.name.toLowerCase().contains(q) ||
-          r.role.toLowerCase().contains(q) ||
-          r.department.toLowerCase().contains(q) ||
-          r.employeeId.toLowerCase().contains(q);
+          final q = _search.trim().toLowerCase();
+        if (q.isEmpty) return true;
+        return r.name.toLowerCase().contains(q) ||
+        r.role.toLowerCase().contains(q) ||
+        r.department.toLowerCase().contains(q) ||
+        r.employeeId.toLowerCase().contains(q);
     }).toList();
 
     out.sort((a, b) {
@@ -497,13 +497,13 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
   }
 
   int get _countPresent =>
-      _rows.where((r) => r.status == PresenceStatus.present).length;
+  _rows.where((r) => r.status == PresenceStatus.present).length;
   int get _countIdle =>
-      _rows.where((r) => r.status == PresenceStatus.idle).length;
+  _rows.where((r) => r.status == PresenceStatus.idle).length;
   int get _countOffline =>
-      _rows.where((r) => r.status == PresenceStatus.offline).length;
+  _rows.where((r) => r.status == PresenceStatus.offline).length;
   int get _countUnknown =>
-      _rows.where((r) => r.status == PresenceStatus.unknown).length;
+  _rows.where((r) => r.status == PresenceStatus.unknown).length;
 
   @override
   Widget build(BuildContext context) {
@@ -613,7 +613,7 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Real-time location & heartbeat ng lahat ng employees',
+                  'Real-time location & heartbeat of all employees',
                   style: TextStyle(color: tc.muted, fontSize: 13),
                 ),
               ],
@@ -623,7 +623,7 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
             onPressed: _isDemo ? null : _startStreams,
             tooltip: _isDemo ? 'Refresh disabled in Demo' : 'Refresh',
             icon: Icon(Icons.refresh_rounded,
-                color: _isDemo ? tc.muted : tc.text),
+                       color: _isDemo ? tc.muted : tc.text),
           ),
         ],
       ),
@@ -711,13 +711,13 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
         }
         return Row(
           children: tiles
-              .map((t) => Expanded(
+          .map((t) => Expanded(
             child: Padding(
               padding: const EdgeInsets.only(right: 8),
               child: t,
             ),
           ))
-              .toList(),
+          .toList(),
         );
       }),
     );
@@ -817,7 +817,7 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
                     setState(() => _search = '');
                   },
                   child: Icon(Icons.close_rounded,
-                      size: 16, color: tc.muted),
+                              size: 16, color: tc.muted),
                 ),
             ],
           ),
@@ -828,7 +828,7 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
           items: const ['All', 'Present', 'Idle', 'Offline'],
           prefix: 'Status: ',
           onChanged: (v) =>
-              setState(() => _statusFilter = v ?? 'All'),
+          setState(() => _statusFilter = v ?? 'All'),
         );
         final sortDD = _pillDropdown(
           value: _sort,
@@ -881,21 +881,21 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
           isExpanded: true,
           dropdownColor: tc.card,
           icon: Icon(Icons.keyboard_arrow_down_rounded,
-              color: tc.muted, size: 18),
-          style: TextStyle(
-              color: tc.text, fontSize: 13, fontWeight: FontWeight.w600),
-          items: items
-              .map((d) => DropdownMenuItem<String>(
-            value: d,
-            child: Text('$prefix$d',
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    color: tc.text,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600)),
-          ))
-              .toList(),
-          onChanged: onChanged,
+                     color: tc.muted, size: 18),
+                     style: TextStyle(
+                       color: tc.text, fontSize: 13, fontWeight: FontWeight.w600),
+                       items: items
+                       .map((d) => DropdownMenuItem<String>(
+                         value: d,
+                         child: Text('$prefix$d',
+                                     overflow: TextOverflow.ellipsis,
+                                     style: TextStyle(
+                                       color: tc.text,
+                                       fontSize: 13,
+                                       fontWeight: FontWeight.w600)),
+                       ))
+                       .toList(),
+                       onChanged: onChanged,
         ),
       ),
     );
@@ -919,23 +919,23 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.error_outline_rounded,
-                  size: 48, color: tc.red),
-              const SizedBox(height: 12),
-              Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: tc.muted, fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: _isDemo ? null : _startStreams,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isDemo ? tc.border : tc.orange,
-                  foregroundColor: _isDemo ? tc.muted : Colors.white,
-                ),
-                icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('Retry'),
-              ),
+                   size: 48, color: tc.red),
+                   const SizedBox(height: 12),
+                   Text(
+                     _error!,
+                     textAlign: TextAlign.center,
+                     style: TextStyle(color: tc.muted, fontSize: 13),
+                   ),
+                   const SizedBox(height: 16),
+                   ElevatedButton.icon(
+                     onPressed: _isDemo ? null : _startStreams,
+                     style: ElevatedButton.styleFrom(
+                       backgroundColor: _isDemo ? tc.border : tc.orange,
+                       foregroundColor: _isDemo ? tc.muted : Colors.white,
+                     ),
+                     icon: const Icon(Icons.refresh_rounded, size: 16),
+                     label: const Text('Retry'),
+                   ),
             ],
           ),
         ),
@@ -955,10 +955,10 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
               const SizedBox(height: 12),
               Text(
                 _rows.isEmpty
-                    ? 'Walang presence data pa.\nEmployees need to login first.'
-                    : 'Walang match sa filter.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: tc.muted, fontSize: 13),
+                ? 'No presence data yet.\nEmployees need to login first.'
+              : 'No matches for this filter.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: tc.muted, fontSize: 13),
               ),
             ],
           ),
@@ -1103,29 +1103,29 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
                         r.lastSeenText,
                         statusColor,
                       ),
-                      _chip(
-                        r.zone == 'inside'
-                            ? Icons.location_on_rounded
-                            : Icons.location_off_rounded,
-                        r.zoneLabel,
-                        r.zone == 'inside'
-                            ? const Color(0xFF22C55E)
-                            : (r.wfhAccess || r.isDriver
-                            ? const Color(0xFF3B82F6)
-                            : const Color(0xFFEF4444)),
-                      ),
-                      if (r.distanceMeters != null)
-                        _chip(
-                          Icons.straighten_rounded,
-                          '${r.distanceMeters!.toStringAsFixed(0)}m',
-                          tc.muted,
-                        ),
-                      if (r.outsideSince != null)
-                        _chip(
-                          Icons.timer_outlined,
-                          'Out ${_durSince(r.outsideSince!)}',
-                          const Color(0xFFEF4444),
-                        ),
+                       _chip(
+                         r.zone == 'inside'
+                       ? Icons.location_on_rounded
+                       : Icons.location_off_rounded,
+                       r.zoneLabel,
+                       r.zone == 'inside'
+                       ? const Color(0xFF22C55E)
+                       : (r.wfhAccess || r.isDriver
+                       ? const Color(0xFF3B82F6)
+                       : const Color(0xFFEF4444)),
+                       ),
+                       if (r.distanceMeters != null)
+                         _chip(
+                           Icons.straighten_rounded,
+                           '${r.distanceMeters!.toStringAsFixed(0)}m',
+                           tc.muted,
+                         ),
+                       if (r.outsideSince != null)
+                         _chip(
+                           Icons.timer_outlined,
+                           'Out ${_durSince(r.outsideSince!)}',
+                           const Color(0xFFEF4444),
+                         ),
                     ],
                   ),
                 ],
@@ -1315,23 +1315,23 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
                   'Distance',
                   '${r.distanceMeters!.toStringAsFixed(1)} m',
                 ),
-              if (r.accuracyMeters != null)
-                _detailRow(
-                  'Accuracy',
-                  '±${r.accuracyMeters!.toStringAsFixed(1)} m',
-                ),
-              if (r.outsideSince != null)
-                _detailRow(
-                  'Outside since',
-                  '${_fmtDateTime(r.outsideSince!)} (${_durSince(r.outsideSince!)})',
-                ),
-              const Divider(height: 20),
-              _detailRow('Is online', r.isOnline ? 'Yes' : 'No'),
-              _detailRow('Heartbeat checks', '${r.checkCount}'),
-              _detailRow('WFH access', r.wfhAccess ? 'Enabled' : 'Disabled'),
-              _detailRow('Driver role', r.isDriver ? 'Yes' : 'No'),
-              if (r.lastUpdated != null)
-                _detailRow('Last updated', _fmtDateTime(r.lastUpdated!)),
+                if (r.accuracyMeters != null)
+                  _detailRow(
+                    'Accuracy',
+                    '±${r.accuracyMeters!.toStringAsFixed(1)} m',
+                  ),
+                  if (r.outsideSince != null)
+                    _detailRow(
+                      'Outside since',
+                      '${_fmtDateTime(r.outsideSince!)} (${_durSince(r.outsideSince!)})',
+                    ),
+                    const Divider(height: 20),
+                    _detailRow('Is online', r.isOnline ? 'Yes' : 'No'),
+                    _detailRow('Heartbeat checks', '${r.checkCount}'),
+                    _detailRow('WFH access', r.wfhAccess ? 'Enabled' : 'Disabled'),
+                    _detailRow('Driver role', r.isDriver ? 'Yes' : 'No'),
+                    if (r.lastUpdated != null)
+                      _detailRow('Last updated', _fmtDateTime(r.lastUpdated!)),
             ],
           ),
         ),
@@ -1382,8 +1382,8 @@ class _AdminPresenceMonitorScreenState extends State<AdminPresenceMonitorScreen>
     final h = l.hour == 0 ? 12 : (l.hour > 12 ? l.hour - 12 : l.hour);
     final ampm = l.hour >= 12 ? 'PM' : 'AM';
     return '${l.year}-${l.month.toString().padLeft(2, '0')}-${l.day.toString().padLeft(2, '0')} '
-        '${h.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')} '
-        '${l.second.toString().padLeft(2, '0')} $ampm';
+    '${h.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')} '
+    '${l.second.toString().padLeft(2, '0')} $ampm';
   }
 }
 
@@ -1396,7 +1396,7 @@ class _PulsingDot extends StatefulWidget {
 }
 
 class _PulsingDotState extends State<_PulsingDot>
-    with SingleTickerProviderStateMixin {
+with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
   late Animation<double> _anim;
 
@@ -1408,7 +1408,7 @@ class _PulsingDotState extends State<_PulsingDot>
       duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
     _anim = Tween<double>(begin: 0.4, end: 1.0)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+    .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
   }
 
   @override

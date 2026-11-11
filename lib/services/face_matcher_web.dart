@@ -53,7 +53,7 @@ class FaceVerifyResult {
 }
 
 class FaceMatcher {
-  static const double defaultThreshold = 0.65;
+  static const double defaultThreshold = 0.92;
 
   static Future<List<double>> generateEmbedding(
       Uint8List imageBytes, {

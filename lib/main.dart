@@ -115,9 +115,12 @@ StreamSubscription<void>? _forcedSignOutSub;
 void _listenForForcedSignOut() {
   _forcedSignOutSub?.cancel();
   _forcedSignOutSub = AuthService.instance.onForcedSignOut.listen((_) async {
-    try {
-      OneSignal.logout();
-    } catch (_) {}
+    // ✅ Guard para hindi mag-crash sa Web
+    if (!kIsWeb) {
+      try {
+        OneSignal.logout();
+      } catch (_) {}
+    }
 
     final nav = navigatorKey.currentState;
     final ctx = navigatorKey.currentContext;
@@ -226,78 +229,84 @@ void main() async {
       debugPrint('Firebase Initialized Successfully');
 
       // ═══════════════════════════════════════════════════════════════
-      // 🔔 INITIALIZE ONESIGNAL
+      // 🔔 INITIALIZE ONESIGNAL (MOBILE ONLY)
       // ═══════════════════════════════════════════════════════════════
-      try {
-        OneSignal.Debug.setLogLevel(OSLogLevel.none);
-        OneSignal.initialize(kOneSignalAppId);
+      // ✅ Inayos natin ito: Nilagyan ng if(!kIsWeb) para hindi
+      // mag-throw ng MissingPluginException sa browser.
+      if (!kIsWeb) {
+        try {
+          OneSignal.Debug.setLogLevel(OSLogLevel.none);
+          OneSignal.initialize(kOneSignalAppId);
 
-        OneSignal.Notifications.requestPermission(true);
-        debugPrint('🔔 [OneSignal] Initialized');
+          OneSignal.Notifications.requestPermission(true);
+          debugPrint('🔔 [OneSignal] Initialized');
 
-        // ✅ FOREGROUND HANDLER
-        OneSignal.Notifications.addForegroundWillDisplayListener((event) {
-          final data = event.notification.additionalData;
+          // ✅ FOREGROUND HANDLER
+          OneSignal.Notifications.addForegroundWillDisplayListener((event) {
+            final data = event.notification.additionalData;
 
-          // 🚨 DEVICE_REVOKED → wipe agad, huwag i-display ang notification
-          if (data != null && data['type'] == 'DEVICE_REVOKED') {
-            debugPrint('🚨 [OneSignal] DEVICE_REVOKED (foreground) — wiping...');
-            DeviceBindingService().wipeLocalData().then((_) {
+            // 🚨 DEVICE_REVOKED → wipe agad, huwag i-display ang notification
+            if (data != null && data['type'] == 'DEVICE_REVOKED') {
+              debugPrint('🚨 [OneSignal] DEVICE_REVOKED (foreground) — wiping...');
+              DeviceBindingService().wipeLocalData().then((_) {
+                navigatorKey.currentState?.pushAndRemoveUntil(
+                  MaterialPageRoute(
+                    builder: (_) => const SplashScreen(startPage: 'landing'),
+                  ),
+                  (route) => false,
+                );
+              });
+              return; // Suppress — huwag i-display ang notif
+            }
+
+            // Normal notification
+            debugPrint(
+              '🔔 [OneSignal] Foreground notification: ${event.notification.title}');
+            event.notification.display();
+          });
+
+          // ✅ CLICK HANDLER
+          OneSignal.Notifications.addClickListener((event) async {
+            debugPrint(
+              '🔔 [OneSignal] Notification clicked: ${event.notification.title}');
+
+            final data = event.notification.additionalData;
+
+            // 🚨 DEVICE_REVOKED → wipe agad
+            if (data != null && data['type'] == 'DEVICE_REVOKED') {
+              debugPrint('🚨 [OneSignal] DEVICE_REVOKED (click) — wiping...');
+              await DeviceBindingService().wipeLocalData();
               navigatorKey.currentState?.pushAndRemoveUntil(
                 MaterialPageRoute(
                   builder: (_) => const SplashScreen(startPage: 'landing'),
                 ),
                 (route) => false,
               );
-            });
-            return; // Suppress — huwag i-display ang notif
-          }
+              return;
+            }
 
-          // Normal notification
-          debugPrint(
-            '🔔 [OneSignal] Foreground notification: ${event.notification.title}');
-          event.notification.display();
-        });
+            // Existing routing
+            if (data != null && data['route'] == 'notifications') {
+              SharedPreferences.getInstance().then((prefs) {
+                final lastEmpId = prefs.getString('fp_preauth_employee_id') ??
+                prefs.getString('last_logged_in_employee_id');
 
-        // ✅ CLICK HANDLER
-        OneSignal.Notifications.addClickListener((event) async {
-          debugPrint(
-            '🔔 [OneSignal] Notification clicked: ${event.notification.title}');
-
-          final data = event.notification.additionalData;
-
-          // 🚨 DEVICE_REVOKED → wipe agad
-          if (data != null && data['type'] == 'DEVICE_REVOKED') {
-            debugPrint('🚨 [OneSignal] DEVICE_REVOKED (click) — wiping...');
-            await DeviceBindingService().wipeLocalData();
-            navigatorKey.currentState?.pushAndRemoveUntil(
-              MaterialPageRoute(
-                builder: (_) => const SplashScreen(startPage: 'landing'),
-              ),
-              (route) => false,
-            );
-            return;
-          }
-
-          // Existing routing
-          if (data != null && data['route'] == 'notifications') {
-            SharedPreferences.getInstance().then((prefs) {
-              final lastEmpId = prefs.getString('fp_preauth_employee_id') ??
-              prefs.getString('last_logged_in_employee_id');
-
-              if (lastEmpId != null && lastEmpId.isNotEmpty) {
-                navigatorKey.currentState?.push(
-                  MaterialPageRoute(
-                    builder: (_) =>
-                    EmployeeNotificationsScreen(employeeId: lastEmpId),
-                  ),
-                );
-              }
-            });
-          }
-        });
-      } catch (e) {
-        debugPrint('⚠️ [OneSignal] Init failed: $e');
+                if (lastEmpId != null && lastEmpId.isNotEmpty) {
+                  navigatorKey.currentState?.push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                      EmployeeNotificationsScreen(employeeId: lastEmpId),
+                    ),
+                  );
+                }
+              });
+            }
+          });
+        } catch (e) {
+          debugPrint('⚠️ [OneSignal] Init failed: $e');
+        }
+      } else {
+        debugPrint('⚠️ [OneSignal] Skipped initialization on Web.');
       }
 
       if (kIsWeb) {
@@ -347,34 +356,36 @@ void main() async {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 🔔 Auto-link OneSignal
+    // 🔔 Auto-link OneSignal (MOBILE ONLY)
     // ═══════════════════════════════════════════════════════════════
-    try {
-      if (!sessionOk) {
-        OneSignal.logout();
-        debugPrint(
-          '🔔 [OneSignal] Skipped auto-link: session taken by another device.');
-      } else {
-        final prefs = await SharedPreferences.getInstance();
-        final lastEmpId = prefs.getString('fp_preauth_employee_id') ??
-        prefs.getString('last_logged_in_employee_id');
-
-        if (lastEmpId != null && lastEmpId.isNotEmpty) {
-          OneSignal.login(lastEmpId);
+    if (!kIsWeb) {
+      try {
+        if (!sessionOk) {
+          OneSignal.logout();
           debugPrint(
-            '🔔 [OneSignal] Auto-linked device to employee: $lastEmpId');
-
-          if (!kIsWeb) {
-            try {
-              await EmployeeNotificationListener.instance.start(lastEmpId);
-            } catch (e) {}
-          }
+            '🔔 [OneSignal] Skipped auto-link: session taken by another device.');
         } else {
-          debugPrint('🔔 [OneSignal] No previous employee ID on this device.');
+          final prefs = await SharedPreferences.getInstance();
+          final lastEmpId = prefs.getString('fp_preauth_employee_id') ??
+          prefs.getString('last_logged_in_employee_id');
+
+          if (lastEmpId != null && lastEmpId.isNotEmpty) {
+            OneSignal.login(lastEmpId);
+            debugPrint(
+              '🔔 [OneSignal] Auto-linked device to employee: $lastEmpId');
+
+            if (!kIsWeb) {
+              try {
+                await EmployeeNotificationListener.instance.start(lastEmpId);
+              } catch (e) {}
+            }
+          } else {
+            debugPrint('🔔 [OneSignal] No previous employee ID on this device.');
+          }
         }
+      } catch (e) {
+        debugPrint('⚠️ [OneSignal] Auto-link error: $e');
       }
-    } catch (e) {
-      debugPrint('⚠️ [OneSignal] Auto-link error: $e');
     }
 
     if (!kIsWeb) {

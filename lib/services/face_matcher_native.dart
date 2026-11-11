@@ -71,8 +71,8 @@ class EnrollResult {
 class FaceMatcher {
   static const int _embeddingSize = 192;
 
-  static const double defaultThreshold = 0.65;
-  static const double _minAcceptableThreshold = 0.60;
+  static const double defaultThreshold = 0.92;
+  static const double _minAcceptableThreshold = 0.92;
   static const int _maxStoredEmbeddings = 5;
   static const int _currentVersion = 4;
 
