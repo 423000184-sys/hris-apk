@@ -1,6 +1,13 @@
 // lib/screens/landing_screen.dart
-// v2.7: Auto-redirect only if employee is currently clocked in.
-//       Killed app after clock-out will stay on landing screen.
+// v2.9: Clock-out detection fix + safe unknown state
+//   • Pending-write logs no longer skipped (null timestamp → treated as now)
+//   • Exact-match type parsing (no more "contains('IN')" false positives)
+//   • Local prefs vs Firestore timestamp comparison (newer wins)
+//   • Handles IN → OUT → IN sequences on the same day
+//   • Reads keys: last_clock_in_at_* / last_clock_out_at_* (with legacy fallback)
+//   • NEW: _isCurrentlyClockedIn returns bool? — null = unknown (network error)
+//          → stays on landing WITHOUT signing the user out
+//   • NEW: removed inToday/outToday flags so Dart promotes inAt/outAt safely
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -22,9 +29,6 @@ void _secureLog(String message) {
   if (kDebugMode) debugPrint('[LandingScreen] $message');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// COLORS
-// ═══════════════════════════════════════════════════════════════════════════
 class _T {
   static const Color headerStart = Color(0xFFF54900);
   static const Color headerMid = Color(0xFFFF6B00);
@@ -146,6 +150,28 @@ class _LandingScreenState extends State<LandingScreen>
   StreamSubscription<bool>? _connectivitySub;
   bool _isOnline = true;
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // LOG TYPE SETS — exact match only, no 'contains'
+  // ═══════════════════════════════════════════════════════════════════════
+  static const Set<String> _inTypes = {
+    'IN',
+    'CLOCK_IN',
+    'CLOCKIN',
+    'TIME_IN',
+    'TIMEIN',
+    'CHECK_IN',
+    'CHECKIN',
+  };
+  static const Set<String> _outTypes = {
+    'OUT',
+    'CLOCK_OUT',
+    'CLOCKOUT',
+    'TIME_OUT',
+    'TIMEOUT',
+    'CHECK_OUT',
+    'CHECKOUT',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -200,11 +226,7 @@ class _LandingScreenState extends State<LandingScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // BOOTSTRAP
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _bootstrapSecurityAndCheckSession() async {
-    // STEP 0: Check if forced to show landing (after snap logout or forced logout)
     try {
       final prefs = await SharedPreferences.getInstance();
       final forceShow = prefs.getBool('force_show_landing') ?? false;
@@ -220,7 +242,6 @@ class _LandingScreenState extends State<LandingScreen>
       _secureLog('flag check failed: $e');
     }
 
-    // STEP 0b: Check route arguments
     try {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map && args['skipSessionRestore'] == true) {
@@ -231,14 +252,12 @@ class _LandingScreenState extends State<LandingScreen>
       }
     } catch (_) {}
 
-    // 1. FLAG_SECURE
     try {
       await SecurityHardeningService.instance.enableSecureScreen();
     } catch (e) {
       _secureLog('FLAG_SECURE failed: $e');
     }
 
-    // 2. Device integrity
     try {
       final ok =
       await SecurityHardeningService.instance.checkDeviceIntegrity();
@@ -251,19 +270,14 @@ class _LandingScreenState extends State<LandingScreen>
       _secureLog('Integrity check failed: $e');
     }
 
-    // 3. Device binding
     try {
       _deviceBinding =
       await SecurityHardeningService.instance.getDeviceBindingToken();
     } catch (_) {}
 
-    // 4. Session check
     await _checkExistingSession();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // SESSION LOCK — real-time listener + heartbeat
-  // ═══════════════════════════════════════════════════════════════════════
   void _startSessionLockWatch(String employeeId) {
     _activeEmployeeId = employeeId;
     _revokeDialogShown = false;
@@ -418,9 +432,6 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // SESSION CHECK + AUTO-REDIRECT
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _checkExistingSession() async {
     if (_autoRedirecting) return;
 
@@ -554,20 +565,29 @@ class _LandingScreenState extends State<LandingScreen>
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // 🆕 Only auto-redirect if currently clocked in (last log = IN)
+      // Auto-redirect only if currently clocked in (last event = IN)
+      //   true  → clocked in  → redirect to dashboard
+      //   false → clocked out → clear session, stay on landing
+      //   null  → UNKNOWN (network error) → stay on landing, NO sign out
       // ═══════════════════════════════════════════════════════════════
-      bool isClockedIn = false;
+      bool? clockedIn;
       try {
-        isClockedIn = await _isCurrentlyClockedIn(employee.id).timeout(
-          const Duration(seconds: 10),
-          onTimeout: () => false,
-        );
-      } catch (_) {
-        isClockedIn = false;
+        clockedIn = await _isCurrentlyClockedIn(employee.id)
+            .timeout(const Duration(seconds: 12));
+      } catch (e) {
+        _secureLog('Clocked-in check timed out / failed: $e');
+        clockedIn = null;
       }
 
-      if (!isClockedIn) {
-        _secureLog('Not clocked in today — staying on landing screen');
+      if (clockedIn == null) {
+        _secureLog('Clocked-in status unknown — staying on landing, '
+            'no sign out');
+        if (mounted) setState(() => _checkingSession = false);
+        return;
+      }
+
+      if (!clockedIn) {
+        _secureLog('Not clocked in — staying on landing screen');
         try {
           await SecurityHardeningService.instance.clearSession();
           await SecurityService.instance.clearSession();
@@ -603,29 +623,84 @@ class _LandingScreenState extends State<LandingScreen>
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 🆕 CLOCKED-IN CHECK — prevents auto-redirect after clock-out
+  // CLOCKED-IN CHECK
+  //    - Pending writes (null timestamp) treated as "now"
+  //    - Exact-match log types (no 'contains')
+  //    - Newest event (remote vs local) decides the result
+  //    - Handles IN → OUT → IN on the same day
+  //    - Returns null when status cannot be determined (network failure)
   // ═══════════════════════════════════════════════════════════════════════
-  Future<bool> _isCurrentlyClockedIn(String employeeId) async {
+
+  /// true = IN, false = OUT, null = unknown (e.g. BREAK_IN) → ignored.
+  bool? _parseLogType(dynamic raw) {
+    final t = (raw ?? '')
+        .toString()
+        .toUpperCase()
+        .trim()
+        .replaceAll(RegExp(r'[\s\-]+'), '_');
+    if (_outTypes.contains(t)) return false;
+    if (_inTypes.contains(t)) return true;
+    return null;
+  }
+
+  /// Reads the timestamp from data. When [hasPendingWrites] is true and no
+  /// timestamp field is present (serverTimestamp still null), treat as now
+  /// so the OUT is not skipped.
+  DateTime? _extractLogTimestamp(
+      Map<String, dynamic> data, {
+        bool hasPendingWrites = false,
+      }) {
+    for (final key in const [
+      'timestamp',
+      'clientTimestamp',
+      'createdAt',
+      'time',
+    ]) {
+      final ts = data[key];
+      if (ts is Timestamp) return ts.toDate();
+      if (ts is DateTime) return ts;
+      if (ts is int) return DateTime.fromMillisecondsSinceEpoch(ts);
+      if (ts is String) {
+        final parsed = DateTime.tryParse(ts);
+        if (parsed != null) return parsed;
+      }
+    }
+    return hasPendingWrites ? DateTime.now() : null;
+  }
+
+  String _todayStr(DateTime now) =>
+      '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+          '${now.day.toString().padLeft(2, '0')}';
+
+  bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// Returns:
+  ///   true  = currently clocked in
+  ///   false = clocked out / no activity today
+  ///   null  = could not determine (Firestore failed and no local data)
+  Future<bool?> _isCurrentlyClockedIn(String employeeId) async {
     if (employeeId.isEmpty) return false;
 
-    // 1️⃣ Firestore first (source of truth)
+    final now = DateTime.now();
+    final todayStr = _todayStr(now);
+
+    // ─────────────────────────────────────────────────────────────
+    // 1) FIRESTORE
+    // ─────────────────────────────────────────────────────────────
+    DateTime? remoteTime;
+    bool? remoteIn;
+    bool remoteFailed = false;
+
     try {
-      final now = DateTime.now();
-      final todayStr =
-          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-
-      DateTime? latestTime;
-      String? latestType;
-
-      final queries = <Future<QuerySnapshot>>[
-        FirebaseFirestore.instance
-            .collection('attendance_logs')
+      final col = FirebaseFirestore.instance.collection('attendance_logs');
+      final queries = <Future<QuerySnapshot<Map<String, dynamic>>>>[
+        col
             .where('employee_id', isEqualTo: employeeId)
             .where('date', isEqualTo: todayStr)
             .limit(50)
             .get(),
-        FirebaseFirestore.instance
-            .collection('attendance_logs')
+        col
             .where('employeeId', isEqualTo: employeeId)
             .where('date', isEqualTo: todayStr)
             .limit(50)
@@ -636,56 +711,86 @@ class _LandingScreenState extends State<LandingScreen>
         try {
           final snap = await q.timeout(const Duration(seconds: 5));
           for (final doc in snap.docs) {
-            final data = doc.data() as Map<String, dynamic>;
-            final ts = _extractLogTimestamp(data);
-            if (ts == null) continue;
-            if (latestTime == null || ts.isAfter(latestTime)) {
-              latestTime = ts;
-              latestType = (data['type'] ?? '').toString().toUpperCase();
+            final data = doc.data();
+            final isIn = _parseLogType(data['type'] ?? data['action']);
+            if (isIn == null) continue;
+
+            final ts = _extractLogTimestamp(
+              data,
+              hasPendingWrites: doc.metadata.hasPendingWrites,
+            );
+            if (ts == null) {
+              _secureLog('Log ${doc.id} has no usable timestamp');
+              continue;
+            }
+            if (remoteTime == null || ts.isAfter(remoteTime)) {
+              remoteTime = ts;
+              remoteIn = isIn;
             }
           }
-        } catch (_) {}
-      }
-
-      if (latestType != null) {
-        return latestType.contains('IN');
+        } catch (e) {
+          remoteFailed = true;
+          _secureLog('attendance query failed: $e');
+        }
       }
     } catch (e) {
+      remoteFailed = true;
       _secureLog('Firestore clocked-in check failed: $e');
     }
 
-    // 2️⃣ Fallback: SharedPreferences (from dashboard's last write)
+    // ─────────────────────────────────────────────────────────────
+    // 2) LOCAL (SharedPreferences)
+    // ─────────────────────────────────────────────────────────────
+    DateTime? localTime;
+    bool? localIn;
+
     try {
       final prefs = await SharedPreferences.getInstance();
-      final now = DateTime.now();
-      final todayStr =
-          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
 
-      final lastInDate = prefs.getString('last_clock_in_date_$employeeId');
-      if (lastInDate != todayStr) return false;
+      final inAt = DateTime.tryParse(
+          prefs.getString('last_clock_in_at_$employeeId') ?? '');
+      // 'last_clock_out_<id>' = legacy key, still an ISO string
+      final outAt = DateTime.tryParse(
+          prefs.getString('last_clock_out_at_$employeeId') ??
+              prefs.getString('last_clock_out_$employeeId') ??
+              '');
 
-      final lastOutStr = prefs.getString('last_clock_out_$employeeId');
-      if (lastOutStr == null || lastOutStr.isEmpty) return true;
-
-      final outDt = DateTime.tryParse(lastOutStr);
-      if (outDt == null) return true;
-
-      final outToday = outDt.year == now.year &&
-          outDt.month == now.month &&
-          outDt.day == now.day;
-      return !outToday;
-    } catch (_) {
-      return false;
+      // NOTE: conditions are written inline (no bool flags) so Dart can
+      // promote inAt / outAt to non-null inside each branch.
+      if (inAt != null &&
+          outAt != null &&
+          _isSameDay(inAt, now) &&
+          _isSameDay(outAt, now)) {
+        final outIsLatest = !inAt.isAfter(outAt);
+        localTime = outIsLatest ? outAt : inAt;
+        localIn = !outIsLatest;
+      } else if (outAt != null && _isSameDay(outAt, now)) {
+        localTime = outAt;
+        localIn = false;
+      } else if (inAt != null && _isSameDay(inAt, now)) {
+        localTime = inAt;
+        localIn = true;
+      } else if (remoteIn == null) {
+        // Legacy fallback: only the date is known, no time
+        final lastInDate = prefs.getString('last_clock_in_date_$employeeId');
+        if (lastInDate == todayStr) return true;
+      }
+    } catch (e) {
+      _secureLog('Local clocked-in check failed: $e');
     }
-  }
 
-  DateTime? _extractLogTimestamp(Map<String, dynamic> data) {
-    final ts = data['timestamp'];
-    if (ts is Timestamp) return ts.toDate();
-    if (ts is DateTime) return ts;
-    if (ts is int) return DateTime.fromMillisecondsSinceEpoch(ts);
-    if (ts is String) return DateTime.tryParse(ts);
-    return null;
+    // ─────────────────────────────────────────────────────────────
+    // 3) DECISION — the newer event wins
+    // ─────────────────────────────────────────────────────────────
+    // Nothing known locally and Firestore failed → we simply don't know.
+    if (remoteIn == null && localIn == null && remoteFailed) {
+      return null;
+    }
+
+    if (remoteIn != null && localIn != null) {
+      return localTime!.isAfter(remoteTime!) ? localIn : remoteIn;
+    }
+    return remoteIn ?? localIn ?? false;
   }
 
   Employee _docToEmployee(DocumentSnapshot doc) {
@@ -746,9 +851,6 @@ class _LandingScreenState extends State<LandingScreen>
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // OFFLINE SNACKBAR
-  // ═══════════════════════════════════════════════════════════════════════
   void _showOfflineSnack(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -779,9 +881,6 @@ class _LandingScreenState extends State<LandingScreen>
       );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // EMPLOYEE LOGIN NAVIGATION
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _goToLogin() async {
     final now = DateTime.now();
 
@@ -1026,7 +1125,6 @@ class _LandingScreenState extends State<LandingScreen>
     final tc = _ThemeColors(isDark);
     final useDesktop = _useDesktopLayout(context);
 
-    // Splash while checking session
     if (_checkingSession) {
       return Scaffold(
         backgroundColor: useDesktop ? _T.desktopBg : tc.scaffoldBg,
@@ -1081,7 +1179,6 @@ class _LandingScreenState extends State<LandingScreen>
       );
     }
 
-    // SECRET KEYBOARD SHORTCUT: Ctrl + Shift + A
     return Shortcuts(
       shortcuts: const {
         SingleActivator(LogicalKeyboardKey.keyA, control: true, shift: true):
@@ -1128,9 +1225,6 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // OFFLINE BANNER
-  // ═══════════════════════════════════════════════════════════════════════
   Widget _buildOfflineBanner() {
     return Container(
       width: double.infinity,
@@ -1208,9 +1302,6 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // NAVBAR
-  // ═══════════════════════════════════════════════════════════════════════
   Widget _buildNavbar({required bool useDesktop}) {
     if (useDesktop) return _buildDesktopNavbar();
     return _buildMobileNavbar();
@@ -1371,9 +1462,6 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // DESKTOP BODY
-  // ═══════════════════════════════════════════════════════════════════════
   Widget _buildDesktopBody() {
     return Container(
       width: double.infinity,
@@ -1556,9 +1644,6 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // MOBILE BODY
-  // ═══════════════════════════════════════════════════════════════════════
   Widget _buildMobileBody(_ThemeColors tc) {
     return Container(
       decoration: BoxDecoration(

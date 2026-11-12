@@ -1,4 +1,6 @@
 // lib/screens/clock_screen.dart
+// v1.6: ⏱️ Writes local clock marker at the exact moment of successful
+//       clock-in/out so the UI reacts instantly (no Firestore wait).
 // v1.5: 🔒 One-device-one-login — session nonce = SecurityService token.
 // v1.4: 🚪 Auto sign-out pagkatapos mag-clock out (Real & Demo mode).
 import 'dart:async';
@@ -26,6 +28,10 @@ import '../services/demo_mode_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_screens.dart';
 import 'login_screen.dart';
+// ⏱️ Local clock marker — shared with MainScreen so the UI can react
+//    instantly after a successful clock-in/out without waiting on
+//    the Firestore snapshot.
+import 'main_screen.dart' show saveLocalClockMarker;
 
 class _ThemeColors {
   final bool isDark;
@@ -1672,6 +1678,21 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('last_clock_in_date_$empId', _todayStr);
       } catch (_) {}
+    }
+
+    // ⏱️ INSTANT LOCAL MARKER — lets MainScreen / Dashboard react
+    // immediately without waiting for the Firestore snapshot to fire.
+    // Written at the exact moment the attendance write succeeds.
+    try {
+      final emp = _employee;
+      if (emp != null) {
+        await saveLocalClockMarker(
+          employeeIds: [emp.id, emp.employeeId],
+          isClockIn: isClockIn,
+        );
+      }
+    } catch (e) {
+      debugPrint('⚠️ [LocalMarker] save failed: $e');
     }
 
     await _logSecurityEvent(
