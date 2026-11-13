@@ -1,11 +1,7 @@
 // lib/screens/attendance_history_screen.dart
-// ✅ v3.3: DEMO MODE now shows the SAME skeleton loading screen as normal mode.
-//         - Skeleton appears briefly (900ms), then fades into demo UI.
-// ✅ v3.2: Fixed RenderFlex overflow in header (Row ← Expanded ← Row)
-//         - Title now wrapped in Flexible with ellipsis
-//         - Refresh button moved OUTSIDE the Expanded for guaranteed space
-//         - Tighter paddings/font sizes for narrow screens
-// ✅ v3.1: DEMO MODE — orange theme (same as main), no purple
+// ✅ v3.5: HR overrides now render as a full audit trail:
+//          WHO (name + role) • WHAT (field, old→new) • WHEN • WHY.
+//          Supports multiple overrides per day (IN and OUT).
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -26,7 +22,6 @@ import '../widgets/skeleton_screens.dart';
 import 'login_screen.dart';
 
 class _Extra {
-  // 🎭 Demo now uses orange (dating purple A78BFA)
   static const Color purple = Color(0xFFFF8A00);
   static const Color lime = Color(0xFFC4FF0A);
 }
@@ -90,6 +85,12 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
   List<Map<String, dynamic>> _combined = [];
   final Map<String, String> _locInByDate = {};
   final Map<String, String> _locOutByDate = {};
+
+  // ── OVERRIDE DATA MAP (per day, list of overrides) ──
+  // Each entry: { fieldType, by, byRole, byEmail, reason,
+  //               originalTime, newTime, at, isManualEntry }
+  final Map<String, List<Map<String, dynamic>>> _overrideInfoByDate = {};
+
   bool _loading = true;
   bool _syncing = false;
   int _pendingCount = 0;
@@ -112,7 +113,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
   static const Duration _sessionCacheTTL = Duration(seconds: 5);
   static const int _maxViewsPerSession = 100;
 
-  // 🆕 Demo skeleton display time
   static const Duration _demoSkeletonDuration = Duration(milliseconds: 900);
 
   late final String _sessionNonce;
@@ -141,17 +141,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     _lastUserActivityAt = DateTime.now();
     _tabController = TabController(length: kIsWeb ? 3 : 1, vsync: this);
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — skip network listener, sync, security monitoring
-    //             pero IPAKITA ANG SKELETON sa simula
-    // ═══════════════════════════════════════════════════════════
     if (_isDemo) {
       debugPrint('═══════════════════════════════════════════');
       debugPrint('🎭 [DemoMode] Attendance History — DEMO PATH');
-      debugPrint('   • Skipping network listener');
-      debugPrint('   • Skipping sync service');
-      debugPrint('   • Skipping security monitoring');
-      debugPrint('   • Skeleton shown for ${_demoSkeletonDuration.inMilliseconds}ms');
       debugPrint('═══════════════════════════════════════════');
 
       _networkState = _NetworkState.online;
@@ -159,12 +151,10 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
       _verifiedEmployeeId = widget.initialEmployee?.id ?? 'DEMO-001';
       _employee = widget.initialEmployee ?? DemoModeService.demoEmployee;
 
-      // 🆕 Panatilihing TRUE para mag-show ang skeleton sa simula
       _isInitialLoading = true;
 
       _loadData();
 
-      // 🆕 Itago ang skeleton pagkatapos ng maikling delay
       Future.delayed(_demoSkeletonDuration, () {
         if (!mounted) return;
         setState(() => _isInitialLoading = false);
@@ -582,8 +572,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
             return;
           }
           for (final doc in snap.docs) {
-            final eid =
-            (doc.data()['employee_id'] ?? '').toString().trim();
+            final eid = (doc.data()['employee_id'] ?? '').toString().trim();
             if (eid.isNotEmpty &&
                 eid != verified &&
                 eid != _employee?.id &&
@@ -591,8 +580,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
               _logSecurityEvent(
                 type: 'history_listener_mismatch',
                 severity: 'critical',
-                details:
-                'Listener received doc from another employee: $eid',
+                details: 'Listener received doc from another employee: $eid',
               );
               _forceLogout('Data mismatch detected');
               return;
@@ -651,18 +639,12 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     return true;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // LOAD DATA — may demo branch
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _loadData() async {
     if (!mounted || _loggedOut) {
       return;
     }
     _recordUserActivity();
 
-    // ═══════════════════════════════════════════════════════════
-    // 🎭 DEMO MODE — load fake data, walang Firestore / local DB
-    // ═══════════════════════════════════════════════════════════
     if (_isDemo) {
       setState(() {
         _loading = true;
@@ -675,8 +657,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
 
       final demoAtt = DemoModeService.instance.demoAttendanceHistory;
       final records = demoAtt.map((e) {
-        final statusStr =
-        (e['status'] ?? 'present').toString().toLowerCase();
+        final statusStr = (e['status'] ?? 'present').toString().toLowerCase();
         final AttendanceStatus status;
         if (statusStr == 'late') {
           status = AttendanceStatus.late;
@@ -729,16 +710,31 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
 
       _locInByDate.clear();
       _locOutByDate.clear();
+      _overrideInfoByDate.clear();
+
       for (final e in demoAtt) {
         final date = e['date'] as String;
         final locIn = (e['locationIn'] ?? '').toString();
         final locOut = (e['locationOut'] ?? '').toString();
-        if (locIn.isNotEmpty) {
-          _locInByDate[date] = locIn;
-        }
-        if (locOut.isNotEmpty) {
-          _locOutByDate[date] = locOut;
-        }
+        if (locIn.isNotEmpty) _locInByDate[date] = locIn;
+        if (locOut.isNotEmpty) _locOutByDate[date] = locOut;
+      }
+
+      // Mock override data for demo (full who/what/when/why)
+      if (demoAtt.isNotEmpty) {
+        _overrideInfoByDate[demoAtt[0]['date'] as String] = [
+          {
+            'fieldType': 'OUT',
+            'by': 'Maria Santos',
+            'byRole': 'HR Assistant',
+            'byEmail': 'maria.santos@demo.local',
+            'reason': 'System error at clock-out — verified via CCTV footage',
+            'originalTime': '17:00:00',
+            'newTime': '18:30:00',
+            'at': DateTime.now().subtract(const Duration(hours: 1)),
+            'isManualEntry': false,
+          },
+        ];
       }
 
       setState(() {
@@ -837,9 +833,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
         if (ts is Timestamp) {
           loginDt = ts.toDate();
         }
-        final loginDateStr = loginDt != null
-            ? DateFormat('yyyy-MM-dd').format(loginDt)
-            : '';
+        final loginDateStr =
+        loginDt != null ? DateFormat('yyyy-MM-dd').format(loginDt) : '';
         final eid = (login['employee_id'] ?? '').toString();
         if (eid != empId) {
           continue;
@@ -854,9 +849,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
           if (lts is Timestamp) {
             logoutDt = lts.toDate();
           }
-          final logoutDateStr = logoutDt != null
-              ? DateFormat('yyyy-MM-dd').format(logoutDt)
-              : '';
+          final logoutDateStr =
+          logoutDt != null ? DateFormat('yyyy-MM-dd').format(logoutDt) : '';
           final leid = (logout['employee_id'] ?? '').toString();
           if (leid == eid && logoutDateStr == loginDateStr) {
             matchedLogout = logout;
@@ -896,6 +890,11 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
   }
 
   Future<void> _loadMobileData() async {
+    // ✅ Clear ONCE at start — was previously cleared inside
+    //    _fetchActivityLogsLocations which wiped data populated by
+    //    _fetchRemoteAttendance. That's why the banner never appeared.
+    _overrideInfoByDate.clear();
+
     final empId = await _resolveEmployeeId();
     if (empId == null || empId.isEmpty) {
       if (mounted) {
@@ -1002,6 +1001,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
   Future<void> _fetchActivityLogsLocations(String empId) async {
     _locInByDate.clear();
     _locOutByDate.clear();
+    // NOTE: do NOT clear _overrideInfoByDate here — it's populated by
+    // _fetchRemoteAttendance() and must survive until the UI renders.
+
     try {
       final snap = await FirebaseFirestore.instance
           .collection('activity logs')
@@ -1108,6 +1110,17 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     }
   }
 
+  /// Convert a Timestamp or DateTime into HH:mm:ss string (local tz).
+  String _timeStrFromTs(dynamic ts) {
+    DateTime? dt;
+    if (ts is Timestamp) dt = ts.toDate();
+    else if (ts is DateTime) dt = ts;
+    if (dt == null) return '';
+    return '${dt.hour.toString().padLeft(2, '0')}:'
+        '${dt.minute.toString().padLeft(2, '0')}:'
+        '${dt.second.toString().padLeft(2, '0')}';
+  }
+
   Future<List<Attendance>> _fetchRemoteAttendance(String empId) async {
     try {
       final snap = await FirebaseFirestore.instance
@@ -1139,18 +1152,55 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
         });
         String? timeIn;
         String? timeOut;
+
+        // ── OVERRIDE EXTRACTION (who / what / when / why) ──
+        final overrides = <Map<String, dynamic>>[];
+
         for (final log in logs) {
           final type = (log['type'] ?? '').toString().toUpperCase();
-          final time = (log['time'] ?? '').toString();
+          final rawTime = (log['time'] ?? '').toString();
+          // Fallback: if 'time' missing (legacy manual entries), derive
+          // from timestamp so the row still renders.
+          final effectiveTime = rawTime.isNotEmpty
+              ? rawTime
+              : _timeStrFromTs(log['timestamp']);
+
+          if (log['isOverridden'] == true) {
+            final originalTs = log['originalTimestamp'];
+            overrides.add({
+              'fieldType': type, // IN or OUT
+              'by': (log['overriddenByName'] ??
+                  log['editedBy'] ??
+                  'Admin/HR')
+                  .toString(),
+              'byRole': (log['overriddenByRole'] ?? '').toString(),
+              'byEmail': (log['overriddenByEmail'] ??
+                  log['editedBy'] ??
+                  '')
+                  .toString(),
+              'reason': (log['overrideReason'] ?? 'No reason provided')
+                  .toString(),
+              'originalTime': _timeStrFromTs(originalTs),
+              'newTime': effectiveTime,
+              'at': log['overrideAt'] ?? log['editedAt'],
+              'isManualEntry': log['manualEntry'] == true,
+            });
+          }
+
           if (type == 'IN' || type == 'CLOCK_IN') {
-            timeIn = time;
+            timeIn = effectiveTime.isNotEmpty ? effectiveTime : timeIn;
             timeOut = null;
           } else if (type == 'OUT' || type == 'CLOCK_OUT') {
             if (timeIn != null) {
-              timeOut = time;
+              timeOut = effectiveTime.isNotEmpty ? effectiveTime : timeOut;
             }
           }
         }
+
+        if (overrides.isNotEmpty) {
+          _overrideInfoByDate[date] = overrides;
+        }
+
         if (timeIn == null && timeOut == null) {
           continue;
         }
@@ -1229,8 +1279,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     for (final r in remote) {
       byDate[r.date] = r;
     }
-    return byDate.values.toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
+    return byDate.values.toList()..sort((a, b) => b.date.compareTo(a.date));
   }
 
   Future<void> _sync() async {
@@ -1502,10 +1551,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔥 HEADER — Title + Refresh SAME ROW, LOCKED TOGETHER
-  //    ✅ FIX: Flexible title + Refresh OUTSIDE Expanded = no overflow
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildHeader() {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
@@ -1518,7 +1563,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
       ),
       child: Row(
         children: [
-          // ── Back button ──
           GestureDetector(
             onTap: _handleBack,
             behavior: HitTestBehavior.opaque,
@@ -1529,8 +1573,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
             ),
           ),
           const SizedBox(width: 8),
-
-          // ── Title + DEMO badge (FLEXIBLE — pwedeng mag-shrink) ──
           Expanded(
             child: Row(
               children: [
@@ -1550,8 +1592,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
                 if (_isDemo) ...[
                   const SizedBox(width: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.25),
                       borderRadius: BorderRadius.circular(8),
@@ -1582,10 +1624,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
               ],
             ),
           ),
-
           const SizedBox(width: 6),
-
-          // ── Refresh button (FIXED — garantisadong may space) ──
           GestureDetector(
             onTap: _syncing ? null : (kIsWeb ? _loadData : _sync),
             child: _syncing && !kIsWeb
@@ -1622,13 +1661,11 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
               ),
             ),
           ),
-
-          // ── Pending count badge (mobile only) ──
           if (!kIsWeb && _pendingCount > 0) ...[
             const SizedBox(width: 6),
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 6, vertical: 3),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
               decoration: BoxDecoration(
                 color: AppColors.warning.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(10),
@@ -1676,9 +1713,6 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🦴 SKELETON LOADER
-  // ═══════════════════════════════════════════════════════════════
   Widget _buildLoader(_ThemeColors tc) {
     return const ListSkeleton(itemCount: 5);
   }
@@ -1707,8 +1741,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
                     fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             Text(_error ?? '',
-                style:
-                TextStyle(color: tc.textSecondary, fontSize: 12),
+                style: TextStyle(color: tc.textSecondary, fontSize: 12),
                 textAlign: TextAlign.center),
             const SizedBox(height: 16),
             GestureDetector(
@@ -1831,6 +1864,11 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     }
     final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
     final isToday = dateStr == today;
+
+    // ✅ List of overrides (may be empty)
+    final overrides =
+        _overrideInfoByDate[dateStr] ?? const <Map<String, dynamic>>[];
+
     return Container(
       margin: const EdgeInsets.fromLTRB(14, 0, 14, 10),
       decoration: BoxDecoration(
@@ -1844,110 +1882,319 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 52,
-              height: 60,
-              decoration: BoxDecoration(
-                  color: isToday
-                      ? AppColors.orange.withValues(alpha: 0.1)
-                      : (tc.isDark
-                      ? Colors.white.withValues(alpha: 0.05)
-                      : Colors.black.withValues(alpha: 0.04)),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
+            Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 60,
+                  decoration: BoxDecoration(
                       color: isToday
-                          ? AppColors.orange.withValues(alpha: 0.3)
-                          : tc.cardBorder)),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(dt != null ? DateFormat('EEE').format(dt) : '--',
-                      style: TextStyle(
-                          fontSize: 9,
+                          ? AppColors.orange.withValues(alpha: 0.1)
+                          : (tc.isDark
+                          ? Colors.white.withValues(alpha: 0.05)
+                          : Colors.black.withValues(alpha: 0.04)),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
                           color: isToday
-                              ? AppColors.orange
-                              : tc.textSecondary,
-                          fontWeight: FontWeight.w700)),
-                  Text(dt != null ? DateFormat('d').format(dt) : '--',
-                      style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                          color: isToday
-                              ? AppColors.orange
-                              : tc.textPrimary)),
-                  Text(dt != null ? DateFormat('MMM').format(dt) : '--',
-                      style: TextStyle(
-                          fontSize: 9,
-                          color: isToday
-                              ? AppColors.orange
-                              : tc.textSecondary,
-                          fontWeight: FontWeight.w600)),
-                ],
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (empName.isNotEmpty)
-                    Text(empName,
-                        style: TextStyle(
-                            color: tc.textPrimary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700),
-                        overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 8),
-                  Row(
+                              ? AppColors.orange.withValues(alpha: 0.3)
+                              : tc.cardBorder)),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      _buildTimeChip(
-                          'IN', _fmtTimestamp(loginTs), AppColors.success),
-                      Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: Icon(Icons.arrow_forward_rounded,
-                              size: 12, color: tc.textSecondary)),
-                      _buildTimeChip(
-                          'OUT',
-                          hasOut ? _fmtTimestamp(logoutTs) : 'ACTIVE',
-                          hasOut ? _Extra.purple : AppColors.orangeDark),
+                      Text(dt != null ? DateFormat('EEE').format(dt) : '--',
+                          style: TextStyle(
+                              fontSize: 9,
+                              color: isToday
+                                  ? AppColors.orange
+                                  : tc.textSecondary,
+                              fontWeight: FontWeight.w700)),
+                      Text(dt != null ? DateFormat('d').format(dt) : '--',
+                          style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                              color: isToday
+                                  ? AppColors.orange
+                                  : tc.textPrimary)),
+                      Text(dt != null ? DateFormat('MMM').format(dt) : '--',
+                          style: TextStyle(
+                              fontSize: 9,
+                              color: isToday
+                                  ? AppColors.orange
+                                  : tc.textSecondary,
+                              fontWeight: FontWeight.w600)),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Row(
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.timer_outlined,
-                          size: 11, color: tc.textSecondary),
-                      const SizedBox(width: 4),
-                      Text(dur,
-                          style: TextStyle(
-                              fontSize: 11, color: tc.textSecondary)),
-                      const SizedBox(width: 10),
-                      Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                              color: hasOut
-                                  ? AppColors.success.withValues(alpha: 0.1)
-                                  : AppColors.orange.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(6)),
-                          child: Text(hasOut ? 'COMPLETE' : 'ACTIVE',
+                      if (empName.isNotEmpty)
+                        Text(empName,
+                            style: TextStyle(
+                                color: tc.textPrimary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700),
+                            overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          _buildTimeChip(
+                              'IN', _fmtTimestamp(loginTs), AppColors.success),
+                          Padding(
+                              padding:
+                              const EdgeInsets.symmetric(horizontal: 8),
+                              child: Icon(Icons.arrow_forward_rounded,
+                                  size: 12, color: tc.textSecondary)),
+                          _buildTimeChip(
+                              'OUT',
+                              hasOut ? _fmtTimestamp(logoutTs) : 'ACTIVE',
+                              hasOut ? _Extra.purple : AppColors.orangeDark),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(Icons.timer_outlined,
+                              size: 11, color: tc.textSecondary),
+                          const SizedBox(width: 4),
+                          Text(dur,
                               style: TextStyle(
-                                  fontSize: 8,
+                                  fontSize: 11, color: tc.textSecondary)),
+                          const SizedBox(width: 10),
+                          Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 7, vertical: 2),
+                              decoration: BoxDecoration(
                                   color: hasOut
                                       ? AppColors.success
-                                      : AppColors.orangeDark,
-                                  fontWeight: FontWeight.w800))),
+                                      .withValues(alpha: 0.1)
+                                      : AppColors.orange
+                                      .withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(6)),
+                              child: Text(hasOut ? 'COMPLETE' : 'ACTIVE',
+                                  style: TextStyle(
+                                      fontSize: 8,
+                                      color: hasOut
+                                          ? AppColors.success
+                                          : AppColors.orangeDark,
+                                      fontWeight: FontWeight.w800))),
+                        ],
+                      ),
                     ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
+            if (overrides.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              _buildOverridesPanel(overrides, tc),
+            ]
           ],
         ),
       ),
     );
+  }
+
+  /// Renders the full audit trail of one or more HR overrides for a single
+  /// attendance day — WHO changed it, WHAT changed (old → new), WHEN, WHY.
+  Widget _buildOverridesPanel(
+      List<Map<String, dynamic>> overrides, _ThemeColors tc) {
+    if (overrides.isEmpty) return const SizedBox.shrink();
+
+    final accentColor =
+    tc.isDark ? const Color(0xFFFBBF24) : const Color(0xFF92400E);
+    final bodyColor =
+    tc.isDark ? const Color(0xFFFCD34D) : const Color(0xFFB45309);
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: tc.isDark ? const Color(0xFF2D2211) : const Color(0xFFFFF7ED),
+        border: Border.all(color: const Color(0xFFF59E0B), width: 1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.edit_note_rounded,
+                  color: Color(0xFFF59E0B), size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  overrides.length == 1
+                      ? 'Attendance edited by HR'
+                      : 'Attendance edited ${overrides.length}× by HR',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: accentColor,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          for (final o in overrides) ...[
+            const SizedBox(height: 8),
+            _overrideEntry(o, tc, accentColor, bodyColor),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _overrideEntry(
+      Map<String, dynamic> o,
+      _ThemeColors tc,
+      Color accentColor,
+      Color bodyColor,
+      ) {
+    final fieldType = (o['fieldType'] ?? '').toString();
+    final isManual = o['isManualEntry'] == true;
+    final by = (o['by'] ?? 'Admin/HR').toString();
+    final byRole = (o['byRole'] ?? '').toString().trim();
+    final reason = (o['reason'] ?? 'No reason provided').toString();
+    final originalTime = (o['originalTime'] ?? '').toString();
+    final newTime = (o['newTime'] ?? '').toString();
+    final atStr = _fmtOverrideWhen(o['at']);
+
+    // WHAT changed
+    String action;
+    if (isManual) {
+      action = '${fieldType.isEmpty ? '' : '$fieldType '}added manually'
+          '${newTime.isNotEmpty ? ' at ${_fmt12(newTime)}' : ''}';
+    } else if (originalTime.isNotEmpty && newTime.isNotEmpty) {
+      action = '$fieldType: ${_fmt12(originalTime)} → ${_fmt12(newTime)}';
+    } else if (newTime.isNotEmpty) {
+      action = '$fieldType: → ${_fmt12(newTime)}';
+    } else {
+      action = '$fieldType edited';
+    }
+
+    // WHO
+    final byLine = byRole.isNotEmpty ? '$by ($byRole)' : by;
+
+    final badgeColor = fieldType == 'IN'
+        ? AppColors.success
+        : (fieldType == 'OUT' ? _Extra.purple : AppColors.orange);
+    final badgeLabel = fieldType.isEmpty
+        ? (isManual ? 'MANUAL' : 'EDIT')
+        : (isManual ? 'MANUAL $fieldType' : fieldType);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: tc.isDark ? 0.05 : 0.6),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: badgeColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  badgeLabel,
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w800,
+                    color: badgeColor,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  action,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: accentColor,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.person_outline_rounded,
+                  size: 11, color: Color(0xFFF59E0B)),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'By $byLine',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: bodyColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (atStr.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.schedule_rounded,
+                    size: 11, color: Color(0xFFF59E0B)),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    'On $atStr',
+                    style: TextStyle(
+                      fontSize: 9,
+                      color: bodyColor.withValues(alpha: 0.9),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 2),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.notes_rounded,
+                  size: 11, color: Color(0xFFF59E0B)),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'Reason: $reason',
+                  style: TextStyle(fontSize: 10, color: bodyColor),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _fmtOverrideWhen(dynamic v) {
+    DateTime? dt;
+    if (v is Timestamp) dt = v.toDate().toLocal();
+    else if (v is DateTime) dt = v;
+    if (dt == null) return '';
+    return DateFormat('MMM d, yyyy • hh:mm a').format(dt);
   }
 
   Widget _buildLoginList(_ThemeColors tc) {
@@ -2136,8 +2383,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
               child: Row(
                 children: [
                   Expanded(
-                      child: _statCard(tc, '$present', 'Present Days',
-                          AppColors.orange)),
+                      child: _statCard(
+                          tc, '$present', 'Present Days', AppColors.orange)),
                   const SizedBox(width: 15),
                   Expanded(
                       child:
@@ -2180,6 +2427,10 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     }
     final locIn = _locInByDate[record.date] ?? '';
     final locOut = _locOutByDate[record.date] ?? '';
+    // ✅ List-based override info per day
+    final overrides =
+        _overrideInfoByDate[record.date] ?? const <Map<String, dynamic>>[];
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 15),
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -2354,6 +2605,10 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
               ],
             ),
           ),
+          if (overrides.isNotEmpty) ...[
+            _buildOverridesPanel(overrides, tc),
+            const SizedBox(height: 12),
+          ]
         ],
       ),
     );

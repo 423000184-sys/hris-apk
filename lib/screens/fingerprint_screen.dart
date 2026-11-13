@@ -1,7 +1,7 @@
 // lib/screens/fingerprint_screen.dart
-// v5.1: Uses device biometrics directly — no app-level registration.
-//       Standalone mode bypasses fingerprint scan if device has no biometrics,
-//       so clock-in still works even without registered fingerprint.
+// v5.2: 🏷️ Renamed to "Device Auth" — reports honestly that this uses device-level biometrics/PIN.
+//       🚫 Removed the "you must register" gate. If no biometrics are enrolled, it gracefully
+//       falls back to face scan (or bypasses in standalone mode).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -416,10 +416,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   }
 
   static const List<({String key, String label})> _reportCategories = [
-    (key: 'fingerprint_not_recognized', label: 'Fingerprint not recognized'),
+    (key: 'device_auth_failed', label: 'Device auth failed'),
     (key: 'sensor_error', label: 'Sensor problem'),
     (key: 'lockout_issue', label: 'Locked out'),
-    (key: 'no_enrollment', label: 'No fingerprint registered'),
+    (key: 'no_enrollment', label: 'No device security set up'),
     (key: 'geofence_issue', label: 'Location issue'),
     (key: 'security_issue', label: 'Security error'),
     (key: 'other', label: 'Other'),
@@ -452,10 +452,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (err.contains('sensor') || err.contains('hardware')) {
       return 'sensor_error';
     }
-    if (err.contains('match') ||
-        err.contains('recognized') ||
-        err.contains('finger')) {
-      return 'fingerprint_not_recognized';
+    if (err.contains('device auth') ||
+        err.contains('pin') ||
+        err.contains('biometric')) {
+      return 'device_auth_failed';
     }
     if (err.contains('compromised') || err.contains('security')) {
       return 'security_issue';
@@ -466,7 +466,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       return 'geofence_issue';
     }
 
-    return 'fingerprint_not_recognized';
+    return 'device_auth_failed';
   }
 
   String _labelForReportCategory(String c) {
@@ -479,11 +479,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       {required String category, required String notes}) {
     final buf = StringBuffer();
     buf.writeln(
-        'Employee reported a fingerprint issue: ${_labelForReportCategory(category)}.');
+        'Employee reported a device auth issue: ${_labelForReportCategory(category)}.');
     if (_errorMessage != null && _errorMessage!.isNotEmpty) {
       buf.writeln('Error shown: ${_errorMessage!.replaceAll('\n', ' ')}');
     }
-    buf.writeln('Stage: ${_fpState.name} • Mode: Fingerprint');
+    buf.writeln('Stage: ${_fpState.name} • Mode: Device Auth');
     buf.writeln('Device: $_deviceModel • Network: ${_networkState.name}');
     if (notes.isNotEmpty) buf.writeln('\nNotes from employee: $notes');
     return buf.toString().trim();
@@ -541,7 +541,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         faceMatchPercent: null,
         deviceModel: _deviceModel,
         zoneType: _computeZoneType(),
-        authMode: 'fingerprint',
+        authMode: 'device_auth',
         stage: _fpState.name,
         errorDetail: _errorMessage,
       );
@@ -578,7 +578,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (_sendingAdminReport) return;
 
     final notesCtrl = TextEditingController();
-    String category = 'fingerprint_not_recognized';
+    String category = 'device_auth_failed';
     bool sending = false;
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -701,7 +701,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                                         fontWeight: FontWeight.w800,
                                         color: textCol)),
                                 Text(
-                                    'Tell us what went wrong with your fingerprint scan.',
+                                    'Tell us what went wrong with your device authentication.',
                                     style: TextStyle(
                                         fontSize: 11.5, color: mutedCol)),
                               ])),
@@ -767,7 +767,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                                   letterSpacing: 0.6)),
                           const SizedBox(height: 6),
                           ctxRow('Stage', _fpState.name),
-                          ctxRow('Mode', 'fingerprint'),
+                          ctxRow('Mode', 'device_auth'),
                           if (_errorMessage != null &&
                               _errorMessage!.isNotEmpty)
                             ctxRow('Error',
@@ -943,7 +943,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         await prefs.setInt(_kLastAdminResetKey, resetAt);
         await _clearLockoutState(prefs);
         if (mounted) {
-          _showInfoSnack('✅ Admin reset your fingerprint state. Try again.');
+          _showInfoSnack('✅ Admin reset your device auth state. Try again.');
         }
       }
 
@@ -953,7 +953,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         await _clearLockoutState(prefs);
         if (mounted) {
           setState(() => _fingerprintLocked = false);
-          _showInfoSnack('🔓 Fingerprint unlocked by Admin.');
+          _showInfoSnack('🔓 Device Auth unlocked by Admin.');
         }
       }
 
@@ -1460,7 +1460,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     await _checkNetworkAndProceed();
   }
 
-  // ✅ FIX 1: Standalone mode proceeds kahit walang biometrics
   Future<void> _checkHardwareAndProceed() async {
     if (_isDemo) return;
 
@@ -1487,7 +1486,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (!mounted) return;
 
     if (_fingerprintLocked) {
-      _onFailure('Fingerprint access blocked by Admin.\n'
+      _onFailure('Device Auth blocked by Admin.\n'
           'Please use Face Recognition or contact Admin.');
       return;
     }
@@ -1522,7 +1521,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             attemptedPrompt = true;
             try {
               await _localAuth.authenticate(
-                localizedReason: 'Demo: Scan your fingerprint',
+                localizedReason: 'Demo: Authenticate your device',
                 options: const AuthenticationOptions(
                   biometricOnly: false,
                   stickyAuth: true,
@@ -1559,7 +1558,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       return;
     }
 
-    // ✅ FIX 2: Standalone + no biometrics → bypass scan, tuloy sa clock-in
     if (!_biometricAvailable && !kIsWeb) {
       if (widget.standaloneMode) {
         _secureLog(
@@ -1579,7 +1577,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         return;
       }
       await _autoProceedToFaceScan(
-          'No fingerprint sensor on this device.\n'
+          'No device security set up.\n'
               'Proceeding to facial recognition...');
       return;
     }
@@ -1639,7 +1637,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       if (!canCheck || !isSupported) {
         if (!mounted) return;
         await _autoProceedToFaceScan(
-            'This device does not support fingerprint sensors.\n'
+            'This device does not support biometrics/PIN.\n'
                 'Proceeding to facial recognition...');
         return;
       }
@@ -1648,7 +1646,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       if (enrolled.isEmpty) {
         if (!mounted) return;
         await _autoProceedToFaceScan(
-            'No fingerprint enrolled in device settings.\n'
+            'No biometrics enrolled in device settings.\n'
                 'Proceeding to facial recognition...');
         return;
       }
@@ -1656,9 +1654,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final authenticated = await _localAuth
           .authenticate(
         localizedReason:
-        'Scan your device fingerprint to verify your identity',
+        'Verify your identity to clock in',
         options: const AuthenticationOptions(
-          biometricOnly: true,
+          biometricOnly: false, // Allows PIN fallback if biometrics fail
           stickyAuth: true,
           useErrorDialogs: true,
           sensitiveTransaction: true,
@@ -1679,7 +1677,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
         await _recordFailedAuthAttempt();
         await _logSecurityEvent(
-          type: 'fp_failed',
+          type: 'device_auth_failed',
           severity: _authFailedAttempts >= 2 ? 'high' : 'medium',
           details: 'Failed attempt #$_authFailedAttempts '
               'sessionFail=$_sessionFailCount',
@@ -1688,7 +1686,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         if (_sessionFailCount >= _maxSessionFails) {
           if (!mounted) return;
           await _autoProceedToFaceScan(
-              'Fingerprint verification failed.\n'
+              'Device authentication failed.\n'
                   'Switching to facial recognition...');
           return;
         }
@@ -1724,15 +1722,15 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       _sessionFailCount = 0;
 
       await _logSecurityEvent(
-        type: 'fp_success',
+        type: 'device_auth_success',
         severity: 'info',
-        details: 'Fingerprint verified in ${durationMs}ms',
+        details: 'Device auth verified in ${durationMs}ms',
       );
       await _onSuccess();
     } on TimeoutException {
       _sessionFailCount++;
       await _recordFailedAuthAttempt();
-      _onFailure('Fingerprint scan timed out. Please try again.');
+      _onFailure('Device auth timed out. Please try again.');
     } on PlatformException catch (e) {
       await _handlePlatformException(e);
     } catch (e) {
@@ -1743,7 +1741,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           msg.contains('NotEnrolled')) {
         if (!mounted) return;
         await _autoProceedToFaceScan(
-            'Fingerprint not available.\n'
+            'Device auth not available.\n'
                 'Proceeding to facial recognition...');
       } else if (msg.contains('LockedOut') ||
           msg.contains('PermanentlyLockedOut')) {
@@ -1757,7 +1755,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         });
       } else {
         await _recordFailedAuthAttempt();
-        _onFailure('Biometric error: $msg');
+        _onFailure('Device auth error: $msg');
       }
     }
   }
@@ -1793,7 +1791,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (code.contains('notenrolled')) {
       if (!mounted) return;
       await _autoProceedToFaceScan(
-          'No fingerprint enrolled in device settings.\n'
+          'No biometrics enrolled in device settings.\n'
               'Proceeding to facial recognition...');
       return;
     }
@@ -1801,7 +1799,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (code.contains('notavailable') || code.contains('hwnotavailable')) {
       if (!mounted) return;
       await _autoProceedToFaceScan(
-          'Fingerprint sensor not available.\n'
+          'Device biometric sensor not available.\n'
               'Proceeding to facial recognition...');
       return;
     }
@@ -1865,7 +1863,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     if (!_isDemo) {
       final logPayload = <String, dynamic>{
-        'type': 'fingerprint_verified',
+        'type': 'device_auth_verified',
         'employeeId': widget.employee.id,
         'employee_id': widget.employee.id,
         'employee_name': widget.employee.fullName,
@@ -2186,7 +2184,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             await TrustedTimeService.instance.logTamperEvent(
               employeeId: employeeId,
               employeeName: employeeName,
-              context: 'clock_in_fingerprint',
+              context: 'clock_in_device_auth',
             );
             _secureLog('🚨 [FP] Time tampering detected on clock-in');
           }
@@ -2248,8 +2246,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final zoneType = _computeZoneType();
 
       final baseRemarks = _geofenceVerifiedOffline
-          ? 'fingerprint_match|pending_geofence_verification'
-          : 'fingerprint_match';
+          ? 'device_auth|pending_geofence_verification'
+          : 'device_auth';
       final remarks = delayMinutes >= 1
           ? '$baseRemarks|first_attempt_delay:${delayMinutes}m'
           : baseRemarks;
@@ -2314,13 +2312,13 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final activityPayload = <String, dynamic>{
         'type': isClockIn ? 'clock_in' : 'clock_out',
         'action': isClockIn
-            ? 'Clocked In (Fingerprint)'
-            : 'Clocked Out (Fingerprint)',
+            ? 'Clocked In (Device Auth)'
+            : 'Clocked Out (Device Auth)',
         'employeeId': widget.employee.id,
         'employee_id': employeeId,
         'employee_name': employeeName,
         'email': employeeEmail,
-        'verification_method': 'fingerprint',
+        'verification_method': 'device_biometric',
         'zone_type': zoneType,
         'time': timeStr,
         'date': todayStr,
@@ -2399,7 +2397,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
               employeeId: employeeId,
               employeeName: employeeName,
               timeStr: timeStr,
-              faceMatchPercent: 100.0,
+              faceMatchPercent: null, // Honest: no face match, just device auth
               wfh: widget.employee.wfhAccess,
               inRange: true,
               zoneType: zoneType,
@@ -2410,7 +2408,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
               employeeId: employeeId,
               employeeName: employeeName,
               timeStr: timeStr,
-              faceMatchPercent: 100.0,
+              faceMatchPercent: null,
               wfh: widget.employee.wfhAccess,
               inRange: true,
               zoneType: zoneType,
@@ -2451,8 +2449,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         pageBuilder: (_, __, ___) => ClockInSuccessScreen(
           employee: widget.employee,
           arrivalTime: effective,
-          faceMatchPercent: 100.0,
-          verificationMethod: 'fingerprint',
+          faceMatchPercent: 100.0, // Static 100 for UI compatibility
+          verificationMethod: 'device_auth',
           locationName: _isDemo ? 'Demo Location' : _lastLocationName,
           onContinue: () {
             navigator.pushAndRemoveUntil(
@@ -2796,8 +2794,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                             _isDemo
                                 ? 'Demo Verify'
                                 : (widget.standaloneMode
-                                ? 'Verify Identity'
-                                : 'Auth & Clock In'),
+                                ? 'Device Verification'
+                                : 'Device Auth & Clock In'),
                             style: const TextStyle(
                                 color: _white,
                                 fontSize: 28,
@@ -2808,7 +2806,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                             _isDemo
                                 ? 'Real biometric prompt — always pass'
                                 : (widget.standaloneMode
-                                ? 'Device fingerprint verification'
+                                ? 'Verify using your device lock'
                                 : 'Select your initial verification method'),
                             style:
                             const TextStyle(color: _white, fontSize: 14)),
@@ -2921,7 +2919,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                               : (_fingerprintLocked
                               ? 'Access Blocked by Admin'
                               : (widget.standaloneMode
-                              ? 'Fingerprint Verification'
+                              ? 'Device Authentication'
                               : 'Step 1: Initial Login')),
                           style: TextStyle(
                               color: _isDemo
@@ -2998,7 +2996,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     final blocked = _deviceCompromised && !_isDemo;
     final checking = _isCheckingGeofence && !_isDemo;
 
-    // ✅ FIX 4: Sa standalone, huwag i-flag as no biometrics
     final noBiometrics = !_biometricAvailable &&
         _biometricCheckDone &&
         !_isDemo &&
@@ -3042,7 +3039,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                   : checking
                   ? 'Verifying\nLocation...'
                   : noBiometrics
-                  ? 'No Biometrics'
+                  ? 'No Device Auth'
                   : _stateTitle,
               key: ValueKey('title-$locked-$blocked-$checking-'
                   '$noBiometrics-$_fpState-'
@@ -3062,7 +3059,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                   ? 'This device failed the security integrity check.\n'
                   'Please contact your administrator.'
                   : _fingerprintLocked
-                  ? 'Fingerprint access has been blocked by Admin.\n'
+                  ? 'Device authentication has been blocked by Admin.\n'
                   'Please use Face Recognition or contact Admin.'
                   : locked
                   ? 'Too many failed attempts.\nTry again in '
@@ -3070,9 +3067,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                   : checking
                   ? 'Checking your role and location...'
                   : noBiometrics
-                  ? 'This device does not have an enrolled '
-                  'fingerprint.\nPlease use Face '
-                  'Recognition instead.'
+                  ? 'This device does not have an enrolled\n'
+                  'biometric or PIN.\n'
+                  'Please use Face Recognition instead.'
                   : (_errorMessage ?? _stateSubtitle),
               key: ValueKey('sub-${_errorMessage ?? _fpState}'
                   '-$locked-$blocked-$checking-$noBiometrics-'
@@ -3132,7 +3129,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           ),
         ],
         const SizedBox(height: 28),
-        // ✅ FIX 4: Cancel button visible kahit standalone + no biometrics
         if (!kIsWeb &&
             !locked &&
             !blocked &&
@@ -3203,7 +3199,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     final successAnim = _successAnim ?? const AlwaysStoppedAnimation(0.0);
     final shakeAnim = _shakeAnim ?? const AlwaysStoppedAnimation(0.0);
 
-    // ✅ FIX 3: Pwedeng i-tap kahit standalone + no biometrics
     final canTap = _isDemo
         ? (_fpState == _FpState.idle || _fpState == _FpState.error)
         : (!locked &&
@@ -3376,7 +3371,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             const SizedBox(width: 6),
             Text(
               isError
-                  ? 'Fingerprint issue? Contact Admin'
+                  ? 'Device auth issue? Contact Admin'
                   : 'Having trouble? Contact Admin',
               style: TextStyle(
                 color: isError ? _white : _white.withValues(alpha: 0.72),
@@ -3424,7 +3419,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (_isDemo) {
       switch (_fpState) {
         case _FpState.idle:
-          return 'Demo\nFingerprint';
+          return 'Demo\nDevice Auth';
         case _FpState.scanning:
           return 'Scanning...';
         case _FpState.success:
@@ -3437,9 +3432,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     if (_deviceCompromised) return 'Device Blocked';
     switch (_fpState) {
       case _FpState.idle:
-        return 'Fingerprint\nRequired';
+        return 'Device\nAuth Required';
       case _FpState.scanning:
-        return 'Scanning\nFingerprint...';
+        return 'Authenticating...';
       case _FpState.success:
         return 'Verified!';
       case _FpState.error:
@@ -3449,7 +3444,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   String get _stateSubtitle {
     if (_fingerprintLocked) {
-      return 'Fingerprint access has been blocked by Admin.\n'
+      return 'Device authentication has been blocked by Admin.\n'
           'Please use Face Scan or contact Admin.';
     }
     if (_isDemo) {
@@ -3470,11 +3465,11 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       switch (_fpState) {
         case _FpState.idle:
-          return 'Tap the scanner to open fingerprint prompt.\n\n'
+          return 'Tap the scanner to open device auth prompt.\n\n'
               'Demo mode: real biometric prompt,\n'
               'but continues even if cancelled.';
         case _FpState.scanning:
-          return 'Waiting for biometric prompt...';
+          return 'Waiting for device auth prompt...';
         case _FpState.success:
           return 'Demo verification complete.\nProceeding to Clock-In...';
         case _FpState.error:
@@ -3497,9 +3492,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           'Wait 30 seconds before retrying.';
     }
 
-    // ✅ Standalone + no biometrics → custom message
     if (!_biometricAvailable && _biometricCheckDone && widget.standaloneMode) {
-      return 'No fingerprint sensor on this device.\n\n'
+      return 'No device security (biometrics/PIN) set up.\n\n'
           'Tap the scanner to proceed to\n'
           'Clock In / Clock Out.';
     }
@@ -3513,17 +3507,17 @@ class _FingerprintScreenState extends State<FingerprintScreen>
               'and synced automatically when online.';
         }
         return 'Tap the scanner icon to verify.\n\n'
-            'Use the fingerprint you set up in\n'
-            'your device Settings.\n\n'
-            'Wipe the sensor if it feels dirty.';
+            'Uses your device\'s built-in security\n'
+            '(biometrics or PIN).\n\n'
+            'No in-app registration needed.';
       case _FpState.scanning:
         return kIsWeb
             ? 'Preparing camera...'
-            : 'Place your finger flat on the sensor\nand hold steady...';
+            : 'Place your finger flat on the sensor\nor use your device PIN...';
       case _FpState.success:
-        return 'Biometric match confirmed.';
+        return 'Device authentication confirmed.';
       case _FpState.error:
-        return 'Fingerprint not recognized.\nTap to try again.';
+        return 'Device auth failed.\nTap to try again.';
     }
   }
 }
@@ -3558,5 +3552,5 @@ class _DashRingPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_DashRingPainter old) => old.color != color;
+  bool shouldRepaint(covariant _DashRingPainter old) => old.color != color;
 }

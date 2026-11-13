@@ -1,4 +1,5 @@
 // lib/screens/reports_screen.dart
+// v2.7: 🔧 Fixed PayrollBreakdown initialization missing earnedBasic & earnedAllowance.
 // v2.6: 🔓 Admin can manually unlock payslips (bypasses end-of-month rule).
 import 'dart:async';
 import 'dart:convert';
@@ -185,9 +186,8 @@ class _ReportsScreenState extends State<ReportsScreen>
   bool _downloading = false;
   bool _sendingSupport = false;
   bool _loadingPassword = false;
-  DateTime? _lastSupportRequestAt; // 🆕 Rate limiter para sa Contact HR
+  DateTime? _lastSupportRequestAt;
 
-  // 🆕 Payslip Unlock State
   bool _isPayslipUnlocked = false;
 
   String _bankName = '—';
@@ -226,7 +226,7 @@ class _ReportsScreenState extends State<ReportsScreen>
   Timer? _heartbeatTimer;
   Timer? _inactivityTimer;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sessionSub;
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub; // 🆕 Listener para sa Admin Lock
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
   bool _sessionValidated = false;
   bool _loggedOut = false;
   bool? _cachedSessionValid;
@@ -234,9 +234,6 @@ class _ReportsScreenState extends State<ReportsScreen>
 
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
-  // ═══════════════════════════════════════════════════════════════
-  // PAYSLIP PERIOD
-  // ═══════════════════════════════════════════════════════════════
   DateTime get _periodStart {
     final n = DateTime.now();
     return DateTime(n.year, n.month, 1, 0, 0, 0);
@@ -253,9 +250,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     return '$start – $end';
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // DOWNLOAD WINDOW
-  // ═══════════════════════════════════════════════════════════════
   int get _lastDayOfMonth {
     final n = DateTime.now();
     return DateTime(n.year, n.month + 1, 0).day;
@@ -267,7 +261,7 @@ class _ReportsScreenState extends State<ReportsScreen>
   }
 
   bool get _isDownloadWindowOpen {
-    if (_isDemo || _isPayslipUnlocked) return true; // 🆕 Allow if unlocked
+    if (_isDemo || _isPayslipUnlocked) return true;
 
     final now = DateTime.now();
     return now.day >= _firstAllowedDay;
@@ -312,7 +306,6 @@ class _ReportsScreenState extends State<ReportsScreen>
       return;
     }
 
-    // NORMAL MODE
     try {
       _networkSub =
           ConnectivityService.instance.onStatusChange.listen((online) {
@@ -344,7 +337,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     }
 
     _startSecurityMonitoring();
-    _startEmployeeListener(); // 🆕 Para mag-lock/unlock agad
+    _startEmployeeListener();
 
     _checkNetworkOnEntry().then((_) {
       if (mounted) {
@@ -509,7 +502,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     });
   }
 
-  // 🆕 Listener para mag-lock/unlock agad ang payslip kapag pinindot ni Admin
   void _startEmployeeListener() {
     if (_isDemo) return;
     final docId = widget.initialEmployee?.id;
@@ -651,7 +643,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     _heartbeatTimer?.cancel();
     _inactivityTimer?.cancel();
     _sessionSub?.cancel();
-    _employeeSub?.cancel(); // 🆕
+    _employeeSub?.cancel();
     super.dispose();
   }
 
@@ -757,6 +749,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     return PayrollBreakdown(
       regularPay: demo['regularPay'] ?? 22000.0,
       basicSalary: demo['basicSalary'] ?? 22000.0,
+      earnedBasic: demo['basicSalary'] ?? 22000.0, // 🆕 Added
       basicHours: demo['basicHours'] ?? 176.0,
       absentAmount: demo['absentAmount'] ?? 0.0,
       absentHours: demo['absentHours'] ?? 0.0,
@@ -772,6 +765,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       nightDiffHours: demo['nightDiffHours'] ?? 12.0,
       holidayAmount: demo['holidayAmount'] ?? 600.0,
       otherIncomeAllowance: demo['otherIncomeAllowance'] ?? 0.0,
+      earnedAllowance: demo['otherIncomeAllowance'] ?? 0.0, // 🆕 Added
       totalAdjustmentsMade: demo['totalAdjustmentsMade'] ?? 0.0,
       grossPay: demo['grossPay'] ?? 25750.0,
       thirteenthMonth: 0,
@@ -829,7 +823,7 @@ class _ReportsScreenState extends State<ReportsScreen>
         _workingDaysPerMonth = 22;
         _salarySource = 'demo';
         _role = 'Demo';
-        _isPayslipUnlocked = true; // Always unlocked in demo
+        _isPayslipUnlocked = true;
 
         _displayName = DemoModeService.demoEmployee.fullName;
         _displayEmpId = DemoModeService.demoEmployee.employeeId;
@@ -839,7 +833,6 @@ class _ReportsScreenState extends State<ReportsScreen>
       return;
     }
 
-    // NORMAL MODE
     final valid = await _validateSession(forceRefresh: true);
     if (!valid) {
       if (mounted) {
@@ -907,7 +900,6 @@ class _ReportsScreenState extends State<ReportsScreen>
       final salarySource = (data?['salarySource'] as String?) ?? 'manual';
       final roleFromData = (data?['role'] as String?) ?? '';
 
-      // 🆕 READ UNLOCK STATUS
       final isUnlocked = data?['payslipUnlocked'] == true;
 
       final effectiveDaily = dailyFromData > 0
@@ -950,7 +942,7 @@ class _ReportsScreenState extends State<ReportsScreen>
         _workingDaysPerMonth = workingDays > 0 ? workingDays : 22;
         _salarySource = salarySource;
         _role = roleFromData;
-        _isPayslipUnlocked = isUnlocked; // 🆕 Set state
+        _isPayslipUnlocked = isUnlocked;
 
         _displayName = displayName.isNotEmpty ? displayName : '—';
         _displayEmpId = displayId.isNotEmpty ? displayId : '—';
@@ -1104,7 +1096,6 @@ class _ReportsScreenState extends State<ReportsScreen>
 
       if (!_isDemo) {
         try {
-          // ⚖️ Naka-wrap sa Load Balancer para hindi mag-crash sa dami ng sabay-sabay na writes
           await _executeWithLoadBalancer(() =>
               FirebaseFirestore.instance.collection('pdf_exports').add({
                 'employee_id': effectiveEmp.employeeId,
@@ -1437,7 +1428,6 @@ class _ReportsScreenState extends State<ReportsScreen>
       return;
     }
 
-    // ⏳ RATE LIMITER: Check kung naka-send na recently (2 mins cooldown)
     final now = DateTime.now();
     if (_lastSupportRequestAt != null && now.difference(_lastSupportRequestAt!).inMinutes < 2) {
       final remainSec = 120 - now.difference(_lastSupportRequestAt!).inSeconds;
@@ -1679,7 +1669,7 @@ class _ReportsScreenState extends State<ReportsScreen>
 
       if (ok) {
         _showSnack('✓ Sent to HR. Please wait for their response.');
-        _lastSupportRequestAt = DateTime.now(); // 🆕 I-save ang timestamp
+        _lastSupportRequestAt = DateTime.now();
       } else {
         _showSnack('Failed to send. Please check your internet.', error: true);
       }
@@ -1762,7 +1752,6 @@ class _ReportsScreenState extends State<ReportsScreen>
 
                           _buildPayslipCard(tc, thisMonth),
 
-                          // Show download window info ONLY if locked
                           if (!_isDownloadWindowOpen && !_isDemo) ...[
                             const SizedBox(height: 14),
                             _buildDownloadLockedBanner(tc),

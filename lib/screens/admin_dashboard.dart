@@ -1,4 +1,6 @@
 // lib/screens/admin_dashboard.dart
+// v2.1: 🆕 Payroll Rates (admin_payroll_settings_page.dart) opens inside the
+//       Payroll tab (tab 6) so the sidebar stays visible.
 // v2.0: 🆕 Support Reports nav item + live pending badge.
 //       Admin can now act on employee "Contact Admin" reports
 //       (unlock fingerprint / re-register / clear lockout / reply).
@@ -20,6 +22,7 @@ import 'admin_activity_page.dart';
 import 'admin_tracking_page.dart';
 import 'admin_payroll_page.dart';
 import 'admin_payroll_management_page.dart';
+import 'admin_payroll_settings_page.dart'; // 🆕 Payroll Rates
 import 'admin_create_leave_request_page.dart';
 import 'admin_assign_client_meeting_page.dart';
 import 'admin_add_client_location_page.dart';
@@ -90,6 +93,7 @@ class AdminDashboardState extends State<AdminDashboard>
   String? _verifyLogId;
   Map<String, dynamic>? _verifyLogData;
   Map<String, dynamic>? _selectedPayrollEmployee;
+  bool _showPayrollSettings = false; // 🆕 Payroll Rates sub-page
 
   bool _showCreateLeave = false;
 
@@ -410,6 +414,17 @@ class AdminDashboardState extends State<AdminDashboard>
     });
   }
 
+  // 🆕 Payroll Rates (HR-editable settings)
+  void openPayrollSettings() {
+    debugPrint('🟢 openPayrollSettings');
+    setState(() => _showPayrollSettings = true);
+  }
+
+  void closePayrollSettings() {
+    debugPrint('🔵 closePayrollSettings: back to payroll list');
+    setState(() => _showPayrollSettings = false);
+  }
+
   void _openCreateLeaveRequest() {
     setState(() => _showCreateLeave = true);
   }
@@ -429,6 +444,7 @@ class AdminDashboardState extends State<AdminDashboard>
       _tab = index;
       _search = '';
       _selectedPayrollEmployee = null;
+      _showPayrollSettings = false; // 🆕
       if (_showCreateLeave) _showCreateLeave = false;
     });
   }
@@ -2153,6 +2169,13 @@ class AdminDashboardState extends State<AdminDashboard>
           distanceCalculator: _getDistance,
         );
       case 6:
+      // 🆕 Payroll Rates sub-page (sidebar stays visible)
+        if (_showPayrollSettings && !_isDemo) {
+          return PayrollSettingsPage(
+            key: const ValueKey('payroll_settings'),
+            onBack: closePayrollSettings,
+          );
+        }
         if (_selectedPayrollEmployee != null) {
           final empId =
               _selectedPayrollEmployee!['id']?.toString() ?? 'unknown';
@@ -2166,6 +2189,7 @@ class AdminDashboardState extends State<AdminDashboard>
           employees: _employees,
           userLogs: _userLogs,
           onSelectEmployee: (emp) => openPayrollManagement(emp),
+          onOpenSettings: _isDemo ? null : openPayrollSettings, // 🆕
         );
       case 7:
         return const AdminPresenceMonitorScreen();

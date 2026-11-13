@@ -1,11 +1,13 @@
 // lib/screens/admin_attendance_page.dart
-// v2.4: Added Manual Clock In/Out entry (HR-override password gated + audited).
+// v2.6: 🔒 HR overrides now REQUIRE a resolvable HR name (no anonymous
+//       overrides). Edits/manual entries also sync `time` and `date`
+//       so the employee's history always renders the edited values.
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:syncfusion_flutter_datepicker/datepicker.dart';
@@ -22,6 +24,7 @@ import '../widgets/bootstrap_grid.dart';
 const int kMaxCsvExportRows = 5000;
 const int kMaxVisiblePages = 7;
 const int kMaxBase64PhotoBytes = 2 * 1024 * 1024; // 2MB
+const int kMinOverrideReasonLength = 10;
 
 const Set<String> _csvSensitiveFields = {
   'email',
@@ -108,7 +111,53 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   // ─── Actor context ───
   String get _actorUid => FirebaseAuth.instance.currentUser?.uid ?? 'unknown';
   String get _actorEmail =>
-  FirebaseAuth.instance.currentUser?.email?.toLowerCase().trim() ?? 'unknown';
+      FirebaseAuth.instance.currentUser?.email?.toLowerCase().trim() ?? 'unknown';
+
+  Map<String, dynamic>? get _actorEmployee {
+    final email = _actorEmail;
+    if (email.isEmpty || email == 'unknown') return null;
+    return _employeeLookup['email:$email'];
+  }
+
+  String get _actorName {
+    final emp = _actorEmployee;
+    if (emp != null) {
+      final n = _sanitizeKey(emp['name'] ?? emp['fullName']);
+      if (n.isNotEmpty) return n;
+      final first = _sanitizeKey(emp['firstName'] ?? emp['first_name']);
+      final last = _sanitizeKey(emp['lastName'] ?? emp['last_name']);
+      final combo = '$first $last'.trim();
+      if (combo.isNotEmpty) return combo;
+    }
+    final dn = FirebaseAuth.instance.currentUser?.displayName;
+    if (dn != null && dn.trim().isNotEmpty) return dn.trim();
+    final email = _actorEmail;
+    if (email != 'unknown' && email.contains('@')) {
+      return email.split('@').first;
+    }
+    return 'Unknown HR';
+  }
+
+  String get _actorRole {
+    final emp = _actorEmployee;
+    if (emp != null) {
+      final r = _sanitizeKey(emp['role'] ?? emp['position'] ?? 'HR');
+      if (r.isNotEmpty) return r;
+    }
+    return 'HR';
+  }
+
+  /// Returns true if the current actor has a resolvable, non-anonymous name.
+  /// Used to PREVENT anonymous HR overrides — every override must be
+  /// attributed to a real person.
+  bool _actorHasRealName() {
+    final n = _actorName.trim();
+    if (n.isEmpty) return false;
+    final lower = n.toLowerCase();
+    if (lower == 'unknown hr') return false;
+    if (lower == 'unknown') return false;
+    return true;
+  }
 
   @override
   void initState() {
@@ -125,12 +174,12 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   void didUpdateWidget(covariant AdminAttendancePage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.employees != widget.employees ||
-      oldWidget.employees.length != widget.employees.length) {
+        oldWidget.employees.length != widget.employees.length) {
       if (widget.employees.isNotEmpty) {
         _localEmployees = widget.employees;
         _buildEmployeeLookup();
       }
-      }
+    }
   }
 
   @override
@@ -204,9 +253,9 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   void _listenToEmployees() {
     _empSub = AdminDatabase.streamEmployees()
-    .timeout(const Duration(seconds: 30))
-    .listen(
-      (emps) {
+        .timeout(const Duration(seconds: 30))
+        .listen(
+          (emps) {
         if (!mounted) return;
         final bounded = emps.length > 5000 ? emps.sublist(0, 5000) : emps;
         setState(() {
@@ -230,8 +279,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       final email = _sanitizeKey(emp['email']).toLowerCase();
       final name = _sanitizeKey(
         emp['name'] ??
-        emp['fullName'] ??
-        '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}',
+            emp['fullName'] ??
+            '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}',
       ).toLowerCase();
 
       if (id.isNotEmpty) map[id] = emp;
@@ -374,8 +423,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   bool _isSafeUrl(String url) {
     if (url.startsWith('data:image/')) return true;
     if (url.startsWith('https://')) return true;
-      if (url.startsWith('http://')) return true;
-        return false;
+    if (url.startsWith('http://')) return true;
+    return false;
   }
 
   String? _resolveRegisteredDevice(Map<String, dynamic> log) {
@@ -471,14 +520,14 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
     if (department != 'All Departments') {
       filtered = filtered
-      .where((log) => _resolveDepartment(log) == department)
-      .toList();
+          .where((log) => _resolveDepartment(log) == department)
+          .toList();
     }
 
     if (position != 'All Positions') {
       filtered = filtered
-      .where((log) => _resolvePosition(log) == position)
-      .toList();
+          .where((log) => _resolvePosition(log) == position)
+          .toList();
     }
 
     if (year != 'All Years') {
@@ -496,7 +545,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         final dt = _toDateTime(log['timestamp']);
         if (dt == null) return false;
         return dt.isAfter(dateRange.start.subtract(const Duration(days: 1))) &&
-        dt.isBefore(dateRange.end.add(const Duration(days: 1)));
+            dt.isBefore(dateRange.end.add(const Duration(days: 1)));
       }).toList();
     }
 
@@ -578,9 +627,33 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Enter the HR Assistant override password to edit attendance times. '
-              'This action will be logged for audit.',
-              style: TextStyle(color: tc.textMuted, fontSize: 13, height: 1.4),
+                'Enter the HR Assistant override password to edit attendance '
+                    'times. Every override is recorded — who, what, when, why — '
+                    'and will be visible to the employee.',
+                style: TextStyle(color: tc.textMuted, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: tc.orange.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: tc.orange.withValues(alpha: 0.35)),
+                ),
+                child: Row(children: [
+                  Icon(Icons.verified_user_outlined, size: 16, color: tc.orange),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Performed by: $_actorName ($_actorRole)',
+                      style: TextStyle(
+                        color: tc.orangeText,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ]),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -592,15 +665,15 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                   labelText: 'Override Password',
                   labelStyle: TextStyle(color: tc.muted),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        obscure ? Icons.visibility_off : Icons.visibility,
-                        size: 18,
-                        color: tc.muted,
-                      ),
-                      onPressed: () => setDlgState(() => obscure = !obscure),
+                      borderRadius: BorderRadius.circular(8)),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      obscure ? Icons.visibility_off : Icons.visibility,
+                      size: 18,
+                      color: tc.muted,
                     ),
+                    onPressed: () => setDlgState(() => obscure = !obscure),
+                  ),
                 ),
                 onSubmitted: (_) => Navigator.pop(ctx, true),
               ),
@@ -615,7 +688,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: tc.orange,
                 foregroundColor: tc.isDark ? tc.onOrange : Colors.white,
-                  shape: RoundedRectangleBorder(
+                shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8)),
               ),
               onPressed: () => Navigator.pop(ctx, true),
@@ -636,10 +709,10 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
     try {
       final cfg = await FirebaseFirestore.instance
-      .collection('system_config')
-      .doc('attendance_override')
-      .get()
-      .timeout(const Duration(seconds: 10));
+          .collection('system_config')
+          .doc('attendance_override')
+          .get()
+          .timeout(const Duration(seconds: 10));
 
       final storedHash =
       (cfg.data()?['passwordHash'] ?? '').toString().toLowerCase();
@@ -655,13 +728,15 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       try {
         await FirebaseFirestore.instance.collection('admin_audit_log').add({
           'action': ok
-          ? 'attendance_override_granted'
-        : 'attendance_override_denied',
-        'targetType': 'override',
-        'targetId': 'attendance_edit',
-        'actorUid': _actorUid,
-        'actorEmail': _actorEmail,
-        'timestamp': FieldValue.serverTimestamp(),
+              ? 'attendance_override_granted'
+              : 'attendance_override_denied',
+          'targetType': 'override',
+          'targetId': 'attendance_edit',
+          'actorUid': _actorUid,
+          'actorEmail': _actorEmail,
+          'actorName': _actorName,
+          'actorRole': _actorRole,
+          'timestamp': FieldValue.serverTimestamp(),
         });
       } catch (_) {}
 
@@ -735,9 +810,9 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                       filled: true,
                       fillColor: tc.surface,
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: tc.border)),
-                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: tc.border)),
+                      enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(8),
                           borderSide: BorderSide(color: tc.border)),
                     ),
@@ -746,19 +821,19 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                   const SizedBox(height: 12),
                   Expanded(
                     child: filtered.isEmpty
-                    ? Center(
+                        ? Center(
                       child: Text(
                         employees.isEmpty
-                        ? 'No employees loaded.'
-                      : 'No matching employees.',
-                      style:
-                      TextStyle(color: tc.muted, fontSize: 13),
+                            ? 'No employees loaded.'
+                            : 'No matching employees.',
+                        style:
+                        TextStyle(color: tc.muted, fontSize: 13),
                       ),
                     )
-                    : ListView.separated(
+                        : ListView.separated(
                       itemCount: filtered.length,
                       separatorBuilder: (_, __) =>
-                      Divider(color: tc.border, height: 1),
+                          Divider(color: tc.border, height: 1),
                       itemBuilder: (_, i) {
                         final e = filtered[i];
                         final name = _empDisplayName(e);
@@ -773,18 +848,18 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                             fontSize: 13,
                           ),
                           title: Text(name,
-                                      style: TextStyle(
-                                        color: tc.text,
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600)),
-                                        subtitle: Text(
-                                          dept.isNotEmpty
-                                          ? '$id · $dept'
-                                        : (id.isNotEmpty ? id : '—'),
-                                        style: TextStyle(
-                                          color: tc.muted, fontSize: 12),
-                                        ),
-                                        onTap: () => Navigator.pop(ctx, e),
+                              style: TextStyle(
+                                  color: tc.text,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600)),
+                          subtitle: Text(
+                            dept.isNotEmpty
+                                ? '$id · $dept'
+                                : (id.isNotEmpty ? id : '—'),
+                            style:
+                            TextStyle(color: tc.muted, fontSize: 12),
+                          ),
+                          onTap: () => Navigator.pop(ctx, e),
                         );
                       },
                     ),
@@ -820,8 +895,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             label,
             style: TextStyle(
               color: active
-              ? (tc.isDark ? tc.onOrange : Colors.white)
-              : tc.text,
+                  ? (tc.isDark ? tc.onOrange : Colors.white)
+                  : tc.text,
               fontWeight: FontWeight.w700,
               fontSize: 13,
             ),
@@ -834,21 +909,30 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   Future<void> _manualEntry() async {
     if (_isDemo) return _demoBlock();
 
-    // ✅ Gate 1 — HR Assistant override password BEFORE opening the form
+    // 🔒 Block anonymous overrides — every entry must be attributed.
+    if (!_actorHasRealName()) {
+      _showSnack(
+        'Cannot create manual entry: your account is not linked to an '
+            'employee record. Every override must be attributed.',
+        error: true,
+      );
+      return;
+    }
+
     final authorized = await _verifyHrOverridePassword();
     if (!authorized) return;
 
-    // Form state
     Map<String, dynamic>? selectedEmp;
     String entryType = 'IN';
     DateTime selectedDt = DateTime.now();
-    final noteCtrl = TextEditingController();
+    final reasonCtrl = TextEditingController();
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlg) {
           final canSave = selectedEmp != null;
+          String? reasonError;
 
           return AlertDialog(
             backgroundColor: tc.card,
@@ -866,9 +950,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Employee picker
                     _buildFilterField(
-                      label: 'EMPLOYEE',
+                      label: 'EMPLOYEE *',
                       child: InkWell(
                         onTap: () async {
                           final emp = await _pickEmployeeDialog();
@@ -878,53 +961,51 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                         },
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 14),
-                            decoration: BoxDecoration(
-                              color: tc.surface,
-                              border: Border.all(
+                              horizontal: 12, vertical: 14),
+                          decoration: BoxDecoration(
+                            color: tc.surface,
+                            border: Border.all(
                                 color: selectedEmp == null
-                                ? tc.border
-                                : tc.orange),
-                                borderRadius: BorderRadius.circular(8),
+                                    ? tc.border
+                                    : tc.orange),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(children: [
+                            Icon(Icons.person_outline,
+                                size: 18, color: tc.muted),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                selectedEmp == null
+                                    ? 'Select employee'
+                                    : '${_empDisplayName(selectedEmp!)} (${_empDisplayId(selectedEmp!)})',
+                                style: TextStyle(
+                                  color: selectedEmp == null
+                                      ? tc.muted
+                                      : tc.text,
+                                  fontSize: 14,
+                                  fontWeight: selectedEmp == null
+                                      ? FontWeight.normal
+                                      : FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                            child: Row(children: [
-                              Icon(Icons.person_outline,
-                                   size: 18, color: tc.muted),
-                                   const SizedBox(width: 10),
-                                   Expanded(
-                                     child: Text(
-                                       selectedEmp == null
-                                       ? 'Select employee'
-                                     : '${_empDisplayName(selectedEmp!)} (${_empDisplayId(selectedEmp!)})',
-                                     style: TextStyle(
-                                       color: selectedEmp == null
-                                       ? tc.muted
-                                       : tc.text,
-                                       fontSize: 14,
-                                       fontWeight: selectedEmp == null
-                                       ? FontWeight.normal
-                                       : FontWeight.w600,
-                                     ),
-                                     overflow: TextOverflow.ellipsis,
-                                     ),
-                                   ),
-                                   Icon(Icons.chevron_right_rounded,
-                                        size: 18, color: tc.muted),
-                            ]),
+                            Icon(Icons.chevron_right_rounded,
+                                size: 18, color: tc.muted),
+                          ]),
                         ),
                       ),
                     ),
                     const SizedBox(height: 14),
-
-                    // Type
                     _buildFilterField(
-                      label: 'EVENT TYPE',
+                      label: 'EVENT TYPE *',
                       child: Row(children: [
                         Expanded(
                           child: _typeChip(
                             'CLOCK IN',
                             entryType == 'IN',
-                            () => setDlg(() => entryType = 'IN'),
+                                () => setDlg(() => entryType = 'IN'),
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -932,16 +1013,14 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                           child: _typeChip(
                             'CLOCK OUT',
                             entryType == 'OUT',
-                            () => setDlg(() => entryType = 'OUT'),
+                                () => setDlg(() => entryType = 'OUT'),
                           ),
                         ),
                       ]),
                     ),
                     const SizedBox(height: 14),
-
-                    // Date
                     _buildFilterField(
-                      label: 'DATE',
+                      label: 'DATE *',
                       child: InkWell(
                         onTap: () async {
                           final picked = await showDatePicker(
@@ -949,7 +1028,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                             initialDate: selectedDt,
                             firstDate: DateTime(2020),
                             lastDate: DateTime.now()
-                            .add(const Duration(days: 1)),
+                                .add(const Duration(days: 1)),
                           );
                           if (picked != null) {
                             setDlg(() => selectedDt = DateTime(
@@ -968,10 +1047,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                       ),
                     ),
                     const SizedBox(height: 14),
-
-                    // Time
                     _buildFilterField(
-                      label: 'TIME',
+                      label: 'TIME *',
                       child: InkWell(
                         onTap: () async {
                           final picked = await showTimePicker(
@@ -995,28 +1072,66 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                       ),
                     ),
                     const SizedBox(height: 14),
-
-                    // Note
                     _buildFilterField(
-                      label: 'NOTE (OPTIONAL)',
+                      label: 'REASON FOR MANUAL ENTRY *',
                       child: TextField(
-                        controller: noteCtrl,
-                        maxLength: 200,
-                        maxLines: 2,
+                        controller: reasonCtrl,
+                        maxLength: 300,
+                        maxLines: 3,
                         style: TextStyle(color: tc.text),
                         decoration: InputDecoration(
-                          hintText: 'Reason for manual entry…',
+                          hintText:
+                          'e.g. Biometric scanner offline, employee was on site',
                           hintStyle: TextStyle(color: tc.muted),
+                          errorText: reasonError,
                           filled: true,
                           fillColor: tc.surface,
                           border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                          enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(color: tc.border)),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(color: tc.border)),
+                            borderSide: BorderSide(color: tc.border),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide:
+                            BorderSide(color: tc.orange, width: 1.4),
+                          ),
                         ),
                       ),
+                    ),
+                    Text(
+                      'Minimum $kMinOverrideReasonLength characters. This reason will be visible to the employee.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: tc.muted,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: tc.orange.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: tc.orange.withValues(alpha: 0.35)),
+                      ),
+                      child: Row(children: [
+                        Icon(Icons.verified_user_outlined,
+                            size: 16, color: tc.orange),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Performed by: $_actorName ($_actorRole)',
+                            style: TextStyle(
+                              color: tc.orangeText,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ]),
                     ),
                   ],
                 ),
@@ -1028,11 +1143,21 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                 child: Text('Cancel', style: TextStyle(color: tc.muted)),
               ),
               ElevatedButton(
-                onPressed: canSave ? () => Navigator.pop(ctx, true) : null,
+                onPressed: canSave
+                    ? () {
+                  final r = reasonCtrl.text.trim();
+                  if (r.length < kMinOverrideReasonLength) {
+                    setDlg(() => reasonError =
+                    'Reason must be at least $kMinOverrideReasonLength characters.');
+                    return;
+                  }
+                  Navigator.pop(ctx, true);
+                }
+                    : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: tc.orange,
                   foregroundColor: tc.isDark ? tc.onOrange : Colors.white,
-                    shape: RoundedRectangleBorder(
+                  shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
                 ),
                 child: const Text('Save Entry'),
@@ -1045,75 +1170,148 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
     if (confirmed != true || selectedEmp == null) return;
 
-    // Save to Firestore
     try {
       final emp = selectedEmp!;
       final empId = _empDisplayId(emp);
       final empName = _empDisplayName(emp);
+      final empDocId = _sanitizeKey(emp['id'] ?? '');
       final dept = _sanitizeKey(emp['department'] ?? emp['dept'] ?? '');
       final pos = _sanitizeKey(emp['position'] ?? emp['role'] ?? '');
-      final note = AdminEmployeeService.sanitize(noteCtrl.text, maxLen: 200);
+      final reason =
+      AdminEmployeeService.sanitize(reasonCtrl.text, maxLen: 300);
 
       if (empId.isEmpty && empName.isEmpty) {
         _showSnack('Employee has no ID or name.', error: true);
         return;
       }
+      if (reason.length < kMinOverrideReasonLength) {
+        _showSnack(
+          'Reason must be at least $kMinOverrideReasonLength characters.',
+          error: true,
+        );
+        return;
+      }
 
-      final docRef =
+      // ✅ Sync `time` and `date` string fields with the timestamp so the
+      //    employee's attendance history renders the correct values.
+      final date = selectedDt.toIso8601String().split('T').first;
+      final timeStr = '${selectedDt.hour.toString().padLeft(2, '0')}:'
+          '${selectedDt.minute.toString().padLeft(2, '0')}:'
+          '${selectedDt.second.toString().padLeft(2, '0')}';
+
+      final logRef =
       FirebaseFirestore.instance.collection('attendance_logs').doc();
+      final overrideRef =
+      FirebaseFirestore.instance.collection('attendance_overrides').doc();
 
-      await docRef.set({
-        'employee_id': empId,
-        'employee_name': empName,
-        'type': entryType,
-        'timestamp': Timestamp.fromDate(selectedDt),
-        'department': dept,
-        'position': pos,
-        'manualEntry': true,
-        'manualNote': note,
-        'overrideUsed': true,
-        'createdBy': _actorEmail,
-        'createdByUid': _actorUid,
-        'createdAt': FieldValue.serverTimestamp(),
-        'reviewStatus': 'approved',
-        'reviewedBy': _actorEmail,
-        'reviewedByUid': _actorUid,
-        'reviewedAt': FieldValue.serverTimestamp(),
-      }).timeout(const Duration(seconds: 10));
+      await FirebaseFirestore.instance.runTransaction((txn) async {
+        // 1) Audit trail (who / what / when / why)
+        txn.set(overrideRef, {
+          'overrideId': overrideRef.id,
+          'attendanceLogId': logRef.id,
+          'employeeId': empId,
+          'employeeName': empName,
+          'employeeDocId': empDocId,
+          'date': date,
+          'action': 'CREATE',
+          'field': 'type',
+          'fieldType': entryType, // IN or OUT
+          'oldValue': null,
+          'newValue': entryType,
+          'reason': reason,
+          'performedBy': _actorUid,
+          'performedByName': _actorName,
+          'performedByEmail': _actorEmail,
+          'performedByRole': _actorRole,
+          'performedAt': FieldValue.serverTimestamp(),
+          'device': kIsWeb ? 'Web Browser' : 'Mobile App',
+          'platform': kIsWeb ? 'web' : 'mobile',
+          'acknowledgedByEmployee': false,
+          'acknowledgedAt': null,
+        });
+
+        // 2) Attendance log with override metadata inline
+        txn.set(logRef, {
+          'employee_id': empId,
+          'employee_name': empName,
+          'employeeDocId': empDocId,
+          'type': entryType,
+          'timestamp': Timestamp.fromDate(selectedDt),
+          'time': timeStr, // ✅ kept in sync with timestamp
+          'date': date,
+          'department': dept,
+          'position': pos,
+          'manualEntry': true,
+          'isOverridden': true,
+          'overrideId': overrideRef.id,
+          'overriddenBy': _actorUid,
+          'overriddenByName': _actorName,
+          'overriddenByEmail': _actorEmail,
+          'overriddenByRole': _actorRole,
+          'overrideReason': reason,
+          'overrideAt': FieldValue.serverTimestamp(),
+          'originalTimestamp': null, // manual = no original
+          // legacy fields for backward compat
+          'manualNote': reason,
+          'overrideUsed': true,
+          'createdBy': _actorEmail,
+          'createdByUid': _actorUid,
+          'createdAt': FieldValue.serverTimestamp(),
+          'reviewStatus': 'approved',
+          'reviewedBy': _actorEmail,
+          'reviewedByUid': _actorUid,
+          'reviewedAt': FieldValue.serverTimestamp(),
+        });
+      }, timeout: const Duration(seconds: 15));
 
       try {
         await FirebaseFirestore.instance.collection('admin_audit_log').add({
           'action': 'attendance_manual_entry_created',
           'targetType': 'attendance_log',
-          'targetId': docRef.id,
+          'targetId': logRef.id,
+          'overrideId': overrideRef.id,
           'actorUid': _actorUid,
           'actorEmail': _actorEmail,
+          'actorName': _actorName,
+          'actorRole': _actorRole,
           'details': {
             'employeeId': empId,
             'employeeName': empName,
             'type': entryType,
             'timestamp': selectedDt.toIso8601String(),
-            'note': note,
+            'reason': reason,
           },
           'timestamp': FieldValue.serverTimestamp(),
         });
       } catch (_) {}
 
-      _showSnack('Manual $entryType entry created for $empName.');
+      _showSnack(
+          'Manual $entryType entry created. Employee will see the override.');
       widget.onRefreshNeeded();
     } catch (e) {
       debugPrint('Manual entry failed: $e');
       _showSnack('Failed to create manual entry. Please try again.',
-                 error: true);
+          error: true);
     }
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // EDIT TIME (also HR-override gated)
+  // EDIT TIME (HR-override gated + reason required + override audited)
   // ═══════════════════════════════════════════════════════════════════════
 
   Future<void> _editLogTime(Map<String, dynamic> log) async {
     if (_isDemo) return _demoBlock();
+
+    // 🔒 Block anonymous overrides — every edit must be attributed.
+    if (!_actorHasRealName()) {
+      _showSnack(
+        'Cannot override: your account is not linked to an employee record. '
+            'Every override must be attributed. Contact a super-admin to link '
+            'your account first.',
+        error: true,
+      );
+      return;
+    }
 
     final logId = (log['id'] ?? '').toString();
     if (logId.isEmpty) {
@@ -1126,137 +1324,300 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
     final currentDt = _toDateTime(log['timestamp']);
     DateTime selected = currentDt ?? DateTime.now();
+    final reasonCtrl = TextEditingController();
 
-    final newDt = await showDialog<DateTime>(
+    final result = await showDialog<Map<String, dynamic>?>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
-          backgroundColor: tc.card,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: Row(children: [
-            Icon(Icons.edit_calendar_rounded, color: tc.orange, size: 22),
-            const SizedBox(width: 10),
-            Text('Edit Clock Time', style: TextStyle(color: tc.text)),
-          ]),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Employee: ${_resolveName(log)}',
-              style: TextStyle(
-                color: tc.text,
-                fontSize: 13,
-                fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Text(
-                  'Current: ${_fmtDate(log['timestamp'])} • ${_fmtTime(log['timestamp'])}',
-                  style: TextStyle(color: tc.textMuted, fontSize: 12),
+        builder: (ctx, setDlg) {
+          String? reasonError;
+          return AlertDialog(
+            backgroundColor: tc.card,
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            title: Row(children: [
+              Icon(Icons.edit_calendar_rounded, color: tc.orange, size: 22),
+              const SizedBox(width: 10),
+              Text('Edit Clock Time', style: TextStyle(color: tc.text)),
+            ]),
+            content: SizedBox(
+              width: 460,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: tc.surface,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: tc.border),
+                      ),
+                      child: Row(children: [
+                        Icon(Icons.person_outline, size: 16, color: tc.muted),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _resolveName(log),
+                            style: TextStyle(
+                              color: tc.text,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ]),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Current: ${_fmtDate(log['timestamp'])} • ${_fmtTime(log['timestamp'])}',
+                      style: TextStyle(color: tc.textMuted, fontSize: 12),
+                    ),
+                    const SizedBox(height: 16),
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: ctx,
+                          initialDate: selected,
+                          firstDate: DateTime(2020),
+                          lastDate:
+                          DateTime.now().add(const Duration(days: 1)),
+                        );
+                        if (picked != null) {
+                          setDlg(() => selected = DateTime(
+                            picked.year,
+                            picked.month,
+                            picked.day,
+                            selected.hour,
+                            selected.minute,
+                          ));
+                        }
+                      },
+                      child: _editFieldRow(
+                        icon: Icons.calendar_today_rounded,
+                        label: DateFormat('MMM d, yyyy').format(selected),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showTimePicker(
+                          context: ctx,
+                          initialTime: TimeOfDay.fromDateTime(selected),
+                        );
+                        if (picked != null) {
+                          setDlg(() => selected = DateTime(
+                            selected.year,
+                            selected.month,
+                            selected.day,
+                            picked.hour,
+                            picked.minute,
+                          ));
+                        }
+                      },
+                      child: _editFieldRow(
+                        icon: Icons.access_time_rounded,
+                        label: DateFormat('hh:mm a').format(selected),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'REASON FOR OVERRIDE *',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: tc.textMuted,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: reasonCtrl,
+                      maxLength: 300,
+                      maxLines: 3,
+                      style: TextStyle(color: tc.text),
+                      decoration: InputDecoration(
+                        hintText:
+                        'e.g. Employee forgot to clock out, verified via CCTV',
+                        hintStyle: TextStyle(color: tc.muted),
+                        errorText: reasonError,
+                        filled: true,
+                        fillColor: tc.surface,
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: tc.border),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: tc.orange, width: 1.4),
+                        ),
+                      ),
+                    ),
+                    Text(
+                      'Minimum $kMinOverrideReasonLength characters. This reason will be visible to the employee.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: tc.muted,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: tc.orange.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: tc.orange.withValues(alpha: 0.35)),
+                      ),
+                      child: Row(children: [
+                        Icon(Icons.verified_user_outlined,
+                            size: 16, color: tc.orange),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Performed by: $_actorName ($_actorRole)',
+                            style: TextStyle(
+                              color: tc.orangeText,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 16),
-                InkWell(
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: ctx,
-                      initialDate: selected,
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime.now().add(const Duration(days: 1)),
-                    );
-                    if (picked != null) {
-                      setDlg(() => selected = DateTime(
-                        picked.year,
-                        picked.month,
-                        picked.day,
-                        selected.hour,
-                        selected.minute,
-                      ));
-                    }
-                  },
-                  child: _editFieldRow(
-                    icon: Icons.calendar_today_rounded,
-                    label: DateFormat('MMM d, yyyy').format(selected),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                InkWell(
-                  onTap: () async {
-                    final picked = await showTimePicker(
-                      context: ctx,
-                      initialTime: TimeOfDay.fromDateTime(selected),
-                    );
-                    if (picked != null) {
-                      setDlg(() => selected = DateTime(
-                        selected.year,
-                        selected.month,
-                        selected.day,
-                        picked.hour,
-                        picked.minute,
-                      ));
-                    }
-                  },
-                  child: _editFieldRow(
-                    icon: Icons.access_time_rounded,
-                    label: DateFormat('hh:mm a').format(selected),
-                  ),
-                ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text('Cancel', style: TextStyle(color: tc.muted)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: tc.orange,
-                foregroundColor: tc.isDark ? tc.onOrange : Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
               ),
-              onPressed: () => Navigator.pop(ctx, selected),
-              child: const Text('Save Override'),
             ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Cancel', style: TextStyle(color: tc.muted)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: tc.orange,
+                  foregroundColor: tc.isDark ? tc.onOrange : Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: () {
+                  final r = reasonCtrl.text.trim();
+                  if (r.length < kMinOverrideReasonLength) {
+                    setDlg(() => reasonError =
+                    'Reason must be at least $kMinOverrideReasonLength characters.');
+                    return;
+                  }
+                  Navigator.pop(ctx, {'timestamp': selected, 'reason': r});
+                },
+                child: const Text('Save Override'),
+              ),
+            ],
+          );
+        },
       ),
     );
 
-    if (newDt == null) return;
+    if (result == null) return;
+
+    final newDt = result['timestamp'] as DateTime;
+    final reason = result['reason'] as String;
 
     try {
       final oldDt = _toDateTime(log['timestamp']);
+      final empId =
+      _sanitizeKey(log['employee_id'] ?? log['employeeId'] ?? '');
+      final empName = _resolveName(log);
+      final empDocId = _sanitizeKey(
+          log['employeeDocId'] ?? _findEmployee(log)?['id'] ?? '');
 
-      await FirebaseFirestore.instance
-      .collection('attendance_logs')
-      .doc(logId)
-      .set({
-        'timestamp': Timestamp.fromDate(newDt),
-        'editedBy': _actorEmail,
-        'editedByUid': _actorUid,
-        'editedAt': FieldValue.serverTimestamp(),
-        'originalTimestamp':
-        oldDt != null ? Timestamp.fromDate(oldDt) : null,
-        'editOverrideUsed': true,
-      }, SetOptions(merge: true))
-      .timeout(const Duration(seconds: 10));
+      final logType = _sanitizeKey(log['type'] ?? '').toUpperCase();
+      // ✅ Sync `date` and `time` fields with newDt so history renders them.
+      final newDateStr = newDt.toIso8601String().split('T').first;
+      final newTimeStr = '${newDt.hour.toString().padLeft(2, '0')}:'
+          '${newDt.minute.toString().padLeft(2, '0')}:'
+          '${newDt.second.toString().padLeft(2, '0')}';
+
+      final overrideRef =
+      FirebaseFirestore.instance.collection('attendance_overrides').doc();
+      final logRef =
+      FirebaseFirestore.instance.collection('attendance_logs').doc(logId);
+
+      await FirebaseFirestore.instance.runTransaction((txn) async {
+        txn.set(overrideRef, {
+          'overrideId': overrideRef.id,
+          'attendanceLogId': logId,
+          'employeeId': empId,
+          'employeeName': empName,
+          'employeeDocId': empDocId,
+          'date': newDateStr,
+          'action': 'UPDATE',
+          'field': 'timestamp',
+          'fieldType': logType, // IN or OUT
+          'oldValue': oldDt?.toIso8601String(),
+          'newValue': newDt.toIso8601String(),
+          'reason': reason,
+          'performedBy': _actorUid,
+          'performedByName': _actorName,
+          'performedByEmail': _actorEmail,
+          'performedByRole': _actorRole,
+          'performedAt': FieldValue.serverTimestamp(),
+          'device': kIsWeb ? 'Web Browser' : 'Mobile App',
+          'platform': kIsWeb ? 'web' : 'mobile',
+          'acknowledgedByEmployee': false,
+          'acknowledgedAt': null,
+        });
+
+        txn.set(logRef, {
+          'timestamp': Timestamp.fromDate(newDt),
+          'time': newTimeStr, // ✅ synced
+          'date': newDateStr, // ✅ synced
+          'isOverridden': true,
+          'overrideId': overrideRef.id,
+          'overriddenBy': _actorUid,
+          'overriddenByName': _actorName,
+          'overriddenByEmail': _actorEmail,
+          'overriddenByRole': _actorRole,
+          'overrideReason': reason,
+          'overrideAt': FieldValue.serverTimestamp(),
+          'originalTimestamp':
+          oldDt != null ? Timestamp.fromDate(oldDt) : null,
+          // legacy fields for backward compat
+          'editedBy': _actorEmail,
+          'editedByUid': _actorUid,
+          'editedAt': FieldValue.serverTimestamp(),
+          'editOverrideUsed': true,
+        }, SetOptions(merge: true));
+      }, timeout: const Duration(seconds: 15));
 
       try {
         await FirebaseFirestore.instance.collection('admin_audit_log').add({
           'action': 'attendance_time_edited',
           'targetType': 'attendance_log',
           'targetId': logId,
+          'overrideId': overrideRef.id,
           'actorUid': _actorUid,
           'actorEmail': _actorEmail,
+          'actorName': _actorName,
+          'actorRole': _actorRole,
           'details': {
-            'employeeName': _resolveName(log),
+            'employeeName': empName,
+            'fieldType': logType,
             'oldTimestamp': oldDt?.toIso8601String(),
             'newTimestamp': newDt.toIso8601String(),
+            'reason': reason,
             'overrideUsed': true,
           },
           'timestamp': FieldValue.serverTimestamp(),
         });
       } catch (_) {}
 
-      _showSnack('Attendance time updated.');
+      _showSnack('Attendance time updated. Employee will see the override.');
       widget.onRefreshNeeded();
     } catch (e) {
       debugPrint('Edit time failed: $e');
@@ -1276,12 +1637,12 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         Icon(icon, size: 16, color: tc.muted),
         const SizedBox(width: 10),
         Text(label,
-             style: TextStyle(
-               color: tc.text,
-               fontSize: 14,
-               fontWeight: FontWeight.w500)),
-               const Spacer(),
-               Icon(Icons.chevron_right_rounded, size: 18, color: tc.muted),
+            style: TextStyle(
+                color: tc.text,
+                fontSize: 14,
+                fontWeight: FontWeight.w500)),
+        const Spacer(),
+        Icon(Icons.chevron_right_rounded, size: 18, color: tc.muted),
       ]),
     );
   }
@@ -1299,7 +1660,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       if (elapsed < _exportCooldown) {
         final remaining = (_exportCooldown - elapsed).inSeconds;
         _showSnack('Please wait ${remaining}s before exporting again.',
-                   error: true);
+            error: true);
         return;
       }
     }
@@ -1330,8 +1691,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         ]),
         content: Text(
           'You are about to export ${logs.length} attendance record(s) to CSV.\n\n'
-        'Employee emails will be masked for privacy. This action will be logged for audit.',
-        style: TextStyle(color: tc.text, fontSize: 13, height: 1.5),
+              'Employee emails will be masked for privacy. This action will be logged for audit.',
+          style: TextStyle(color: tc.text, fontSize: 13, height: 1.5),
         ),
         actions: [
           TextButton(
@@ -1343,8 +1704,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             style: ElevatedButton.styleFrom(
               backgroundColor: tc.orange,
               foregroundColor: Colors.white,
-                shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
             child: const Text('Export'),
           ),
@@ -1383,7 +1744,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           _sanitizeCsvCell((log['id'] ?? '').toString()),
           _sanitizeCsvCell(
             (log['employee_id'] ?? log['employeeId'] ?? log['employeeID'] ?? '')
-            .toString(),
+                .toString(),
           ),
           _sanitizeCsvCell(_resolveName(log)),
           email.isEmpty ? '' : _maskEmail(email),
@@ -1414,6 +1775,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           'targetId': 'attendance_logs',
           'actorUid': _actorUid,
           'actorEmail': _actorEmail,
+          'actorName': _actorName,
+          'actorRole': _actorRole,
           'details': {
             'recordCount': logs.length,
             'fileName': fileName,
@@ -1461,12 +1824,12 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       }
     }
     if (v.contains(',') ||
-      v.contains('"') ||
-      v.contains('\n') ||
-      v.contains('\r')) {
+        v.contains('"') ||
+        v.contains('\n') ||
+        v.contains('\r')) {
       return '"${v.replaceAll('"', '""')}"';
-      }
-      return v;
+    }
+    return v;
   }
 
   void _showSnack(String msg, {bool error = false}) {
@@ -1490,7 +1853,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       builder: (dialogCtx) {
         return Dialog(
           backgroundColor: tc.card,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           insetPadding: const EdgeInsets.all(24),
           child: Container(
             width: 640,
@@ -1522,15 +1886,15 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                     view: DateRangePickerView.month,
                     selectionMode: DateRangePickerSelectionMode.range,
                     initialSelectedRange: _selectedDateRange != null
-                    ? PickerDateRange(
-                      _selectedDateRange!.start, _selectedDateRange!.end)
-                    : null,
+                        ? PickerDateRange(
+                        _selectedDateRange!.start, _selectedDateRange!.end)
+                        : null,
                     minDate: DateTime(2020),
                     maxDate: DateTime.now(),
                     showActionButtons: false,
                     enablePastDates: true,
                     onSelectionChanged:
-                    (DateRangePickerSelectionChangedArgs args) {
+                        (DateRangePickerSelectionChangedArgs args) {
                       if (args.value is PickerDateRange) {
                         final range = args.value as PickerDateRange;
                         if (range.startDate != null) {
@@ -1553,11 +1917,11 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                     monthCellStyle: DateRangePickerMonthCellStyle(
                       textStyle: TextStyle(color: tc.text, fontSize: 13),
                       todayTextStyle: TextStyle(
-                        color: tc.orange, fontWeight: FontWeight.w700),
-                        trailingDatesTextStyle:
-                        TextStyle(color: tc.muted.withValues(alpha: 0.5)),
-                        leadingDatesTextStyle:
-                        TextStyle(color: tc.muted.withValues(alpha: 0.5)),
+                          color: tc.orange, fontWeight: FontWeight.w700),
+                      trailingDatesTextStyle:
+                      TextStyle(color: tc.muted.withValues(alpha: 0.5)),
+                      leadingDatesTextStyle:
+                      TextStyle(color: tc.muted.withValues(alpha: 0.5)),
                     ),
                     monthViewSettings: DateRangePickerMonthViewSettings(
                       viewHeaderStyle: DateRangePickerViewHeaderStyle(
@@ -1592,40 +1956,40 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                         Navigator.pop(dialogCtx, false);
                       },
                       icon: Icon(Icons.clear_rounded,
-                                 size: 14, color: tc.muted),
-                                 label: Text('CLEAR',
-                                             style: TextStyle(
-                                               color: tc.muted,
-                                               fontWeight: FontWeight.w700,
-                                               fontSize: 12)),
+                          size: 14, color: tc.muted),
+                      label: Text('CLEAR',
+                          style: TextStyle(
+                              color: tc.muted,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12)),
                     ),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogCtx, false),
-                      child: Text('CANCEL',
-                                  style: TextStyle(
-                                    color: tc.muted,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 12)),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogCtx, false),
+                    child: Text('CANCEL',
+                        style: TextStyle(
+                            color: tc.muted,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12)),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(dialogCtx, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: tc.orange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 22, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                      elevation: 0,
                     ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () => Navigator.pop(dialogCtx, true),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: tc.orange,
-                        foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 22, vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8)),
-                              elevation: 0,
-                      ),
-                      child: const Text('APPLY',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 12,
-                                          letterSpacing: 0.5)),
-                    ),
+                    child: const Text('APPLY',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                            letterSpacing: 0.5)),
+                  ),
                 ]),
               ],
             ),
@@ -1692,15 +2056,15 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
     try {
       await FirebaseFirestore.instance
-      .collection('attendance_logs')
-      .doc(logId)
-      .set({
+          .collection('attendance_logs')
+          .doc(logId)
+          .set({
         'reviewStatus': 'approved',
         'reviewedBy': _actorEmail,
         'reviewedByUid': _actorUid,
         'reviewedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true))
-      .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 10));
 
       try {
         await FirebaseFirestore.instance.collection('admin_audit_log').add({
@@ -1709,6 +2073,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           'targetId': logId,
           'actorUid': _actorUid,
           'actorEmail': _actorEmail,
+          'actorName': _actorName,
+          'actorRole': _actorRole,
           'details': {
             'employeeName': _resolveName(log),
           },
@@ -1772,7 +2138,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             style: ElevatedButton.styleFrom(
               backgroundColor: tc.red,
               foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
+              shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8)),
             ),
             onPressed: () => Navigator.pop(context, true),
@@ -1793,16 +2159,16 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
     try {
       await FirebaseFirestore.instance
-      .collection('attendance_logs')
-      .doc(logId)
-      .set({
+          .collection('attendance_logs')
+          .doc(logId)
+          .set({
         'reviewStatus': 'flagged',
         'reviewReason': reason,
         'reviewedBy': _actorEmail,
         'reviewedByUid': _actorUid,
         'reviewedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true))
-      .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 10));
 
       try {
         await FirebaseFirestore.instance.collection('admin_audit_log').add({
@@ -1811,6 +2177,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           'targetId': logId,
           'actorUid': _actorUid,
           'actorEmail': _actorEmail,
+          'actorName': _actorName,
+          'actorRole': _actorRole,
           'details': {
             'employeeName': _resolveName(log),
             'reason': reason,
@@ -1919,8 +2287,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           Text(
             'Monitor real-time employee check-ins and check-outs.',
             style: TextStyle(
-              fontSize: r.responsive<double>(xs: 13, md: 16),
-              color: tc.textMuted),
+                fontSize: r.responsive<double>(xs: 13, md: 16),
+                color: tc.textMuted),
           ),
         ],
       );
@@ -1934,7 +2302,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         borderColor: tc.border,
       );
 
-      // NEW: Manual Entry button
       final manualEntryBtn = _buildActionButton(
         icon: Icons.add_circle_outline,
         label: 'Manual Entry',
@@ -2009,10 +2376,10 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                 Expanded(
                   child: Text(
                     _selectedDateRange == null
-                    ? 'mm / dd / yyyy'
-                  : '${DateFormat('MM/dd/yyyy').format(_selectedDateRange!.start)} - ${DateFormat('MM/dd/yyyy').format(_selectedDateRange!.end)}',
-                  style: TextStyle(color: tc.text, fontSize: 14),
-                  overflow: TextOverflow.ellipsis,
+                        ? 'mm / dd / yyyy'
+                        : '${DateFormat('MM/dd/yyyy').format(_selectedDateRange!.start)} - ${DateFormat('MM/dd/yyyy').format(_selectedDateRange!.end)}',
+                    style: TextStyle(color: tc.text, fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 Icon(Icons.calendar_today, size: 16, color: tc.muted),
@@ -2052,7 +2419,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           onChanged: (val) {
             setState(() {
               _selectedDepartment = val ?? 'All Departments';
-            _selectedPosition = 'All Positions';
+              _selectedPosition = 'All Positions';
             });
           },
         ),
@@ -2076,9 +2443,9 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           style: ElevatedButton.styleFrom(
             backgroundColor: tc.orange,
             foregroundColor: tc.isDark ? tc.onOrange : Colors.white,
-              elevation: 0,
-              shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            elevation: 0,
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
           child: const Text(
             'Apply Filters',
@@ -2095,7 +2462,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           border: Border.all(color: tc.border),
         ),
         child: narrow
-        ? Column(
+            ? Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             dateField,
@@ -2111,7 +2478,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             applyBtn,
           ],
         )
-        : Row(
+            : Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Expanded(flex: 2, child: dateField),
@@ -2142,35 +2509,35 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       dropdownColor: tc.card,
       iconEnabledColor: tc.text,
       style: TextStyle(
-        color: tc.text, fontSize: 14, fontWeight: FontWeight.w500),
-        decoration: InputDecoration(
-          filled: true,
-          fillColor: tc.card,
-          contentPadding:
-          const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-          isDense: true,
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: tc.border),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: tc.orange, width: 1.4),
-          ),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: tc.border),
-          ),
+          color: tc.text, fontSize: 14, fontWeight: FontWeight.w500),
+      decoration: InputDecoration(
+        filled: true,
+        fillColor: tc.card,
+        contentPadding:
+        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        isDense: true,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: tc.border),
         ),
-        items: items
-        .map((e) => DropdownMenuItem<T>(
-          value: e,
-          child: Text('$e',
-                      style: TextStyle(color: tc.text),
-                      overflow: TextOverflow.ellipsis),
-        ))
-        .toList(),
-        onChanged: onChanged,
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: tc.orange, width: 1.4),
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: tc.border),
+        ),
+      ),
+      items: items
+          .map((e) => DropdownMenuItem<T>(
+        value: e,
+        child: Text('$e',
+            style: TextStyle(color: tc.text),
+            overflow: TextOverflow.ellipsis),
+      ))
+          .toList(),
+      onChanged: onChanged,
     );
   }
 
@@ -2188,13 +2555,13 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         child: Column(
           children: [
             if (!isMobile) _buildTableHeader(),
-              if (_paginatedLogs.isEmpty)
-                _buildEmptyState()
-                else if (isMobile)
-                  ..._paginatedLogs.map((log) => _buildMobileCard(log))
-                  else
-                    ..._paginatedLogs.map((log) => _buildRow(log)),
-                    if (_paginatedLogs.isNotEmpty) _buildPagination(),
+            if (_paginatedLogs.isEmpty)
+              _buildEmptyState()
+            else if (isMobile)
+              ..._paginatedLogs.map((log) => _buildMobileCard(log))
+            else
+              ..._paginatedLogs.map((log) => _buildRow(log)),
+            if (_paginatedLogs.isNotEmpty) _buildPagination(),
           ],
         ),
       );
@@ -2230,811 +2597,813 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         Icon(Icons.hourglass_empty, size: 64, color: tc.muted),
         const SizedBox(height: 16),
         Text('No attendance records found',
-             style: TextStyle(fontSize: 16, color: tc.muted)),
+            style: TextStyle(fontSize: 16, color: tc.muted)),
       ]),
     );
   }
 
   Widget _th(String label,
-             {required int flex, TextAlign align = TextAlign.left}) {
+      {required int flex, TextAlign align = TextAlign.left}) {
     return Expanded(
       flex: flex,
       child: Text(
         label,
         textAlign: align,
         style: TextStyle(
-          fontSize: 11, fontWeight: FontWeight.w700, color: tc.textMuted),
+            fontSize: 11, fontWeight: FontWeight.w700, color: tc.textMuted),
       ),
     );
-             }
+  }
 
-             Widget _buildAvatarWidget({
-               required String? photoUrl,
-               required String initials,
-               required double size,
-               required double fontSize,
-             }) {
-               if (photoUrl == null || photoUrl.isEmpty || photoUrl == '—') {
-                 return _initialsAvatar(
-                   initials: initials, size: size, fontSize: fontSize);
-               }
+  Widget _buildAvatarWidget({
+    required String? photoUrl,
+    required String initials,
+    required double size,
+    required double fontSize,
+  }) {
+    if (photoUrl == null || photoUrl.isEmpty || photoUrl == '—') {
+      return _initialsAvatar(
+          initials: initials, size: size, fontSize: fontSize);
+    }
 
-               if (photoUrl.startsWith('data:image')) {
-                 try {
-                   final b64 = photoUrl.split(',').last;
-                   if (b64.length > kMaxBase64PhotoBytes * 2) {
-                     return _initialsAvatar(
-                       initials: initials, size: size, fontSize: fontSize);
-                   }
-                   final bytes = base64Decode(b64);
-                   if (bytes.length > kMaxBase64PhotoBytes) {
-                     return _initialsAvatar(
-                       initials: initials, size: size, fontSize: fontSize);
-                   }
+    if (photoUrl.startsWith('data:image')) {
+      try {
+        final b64 = photoUrl.split(',').last;
+        if (b64.length > kMaxBase64PhotoBytes * 2) {
+          return _initialsAvatar(
+              initials: initials, size: size, fontSize: fontSize);
+        }
+        final bytes = base64Decode(b64);
+        if (bytes.length > kMaxBase64PhotoBytes) {
+          return _initialsAvatar(
+              initials: initials, size: size, fontSize: fontSize);
+        }
 
-                   return Container(
-                     width: size,
-                     height: size,
-                     clipBehavior: Clip.antiAlias,
-                     decoration: BoxDecoration(
-                       shape: BoxShape.circle,
-                       border:
-                       Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1.5),
-                     ),
-                     child: Image.memory(
-                       bytes,
-                       width: size,
-                       height: size,
-                       fit: BoxFit.cover,
-                       errorBuilder: (_, __, ___) => _initialsAvatar(
-                         initials: initials, size: size, fontSize: fontSize),
-                     ),
-                   );
-                 } catch (_) {
-                   return _initialsAvatar(
-                     initials: initials, size: size, fontSize: fontSize);
-                 }
-               }
+        return Container(
+          width: size,
+          height: size,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border:
+            Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1.5),
+          ),
+          child: Image.memory(
+            bytes,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _initialsAvatar(
+                initials: initials, size: size, fontSize: fontSize),
+          ),
+        );
+      } catch (_) {
+        return _initialsAvatar(
+            initials: initials, size: size, fontSize: fontSize);
+      }
+    }
 
-               return Container(
-                 width: size,
-                 height: size,
-                 clipBehavior: Clip.antiAlias,
-                 decoration: BoxDecoration(
-                   shape: BoxShape.circle,
-                   border: Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1.5),
-                 ),
-                 child: Image.network(
-                   photoUrl,
-                   width: size,
-                   height: size,
-                   fit: BoxFit.cover,
-                   errorBuilder: (_, __, ___) => _initialsAvatar(
-                     initials: initials, size: size, fontSize: fontSize),
-                     loadingBuilder: (_, child, progress) {
-                       if (progress == null) return child;
-                       return _initialsAvatar(
-                         initials: initials, size: size, fontSize: fontSize);
-                     },
-                 ),
-               );
-             }
+    return Container(
+      width: size,
+      height: size,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1.5),
+      ),
+      child: Image.network(
+        photoUrl,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _initialsAvatar(
+            initials: initials, size: size, fontSize: fontSize),
+        loadingBuilder: (_, child, progress) {
+          if (progress == null) return child;
+          return _initialsAvatar(
+              initials: initials, size: size, fontSize: fontSize);
+        },
+      ),
+    );
+  }
 
-             Widget _initialsAvatar({
-               required String initials,
-               required double size,
-               required double fontSize,
-             }) {
-               return Container(
-                 width: size,
-                 height: size,
-                 decoration: BoxDecoration(
-                   color: tc.orange.withValues(alpha: 0.15),
-                   shape: BoxShape.circle,
-                   border: Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1),
-                 ),
-                 child: Center(
-                   child: Text(
-                     initials,
-                     style: TextStyle(
-                       fontWeight: FontWeight.w700,
-                       fontSize: fontSize,
-                       color: tc.orangeText,
-                     ),
-                   ),
-                 ),
-               );
-             }
+  Widget _initialsAvatar({
+    required String initials,
+    required double size,
+    required double fontSize,
+  }) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.15),
+        shape: BoxShape.circle,
+        border: Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1),
+      ),
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: fontSize,
+            color: tc.orangeText,
+          ),
+        ),
+      ),
+    );
+  }
 
-             String _initialsFor(String name) {
-               if (name.isEmpty || name == 'Unknown Employee') return '?';
-               final parts = name.trim().split(RegExp(r'\s+'));
-               if (parts.length >= 2) {
-                 return (parts[0][0] + parts[1][0]).toUpperCase();
-               }
-               return parts[0][0].toUpperCase();
-             }
+  String _initialsFor(String name) {
+    if (name.isEmpty || name == 'Unknown Employee') return '?';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return parts[0][0].toUpperCase();
+  }
 
-             Widget _buildRow(Map<String, dynamic> log) {
-               final type = (log['type'] ?? 'IN').toString().toUpperCase();
-               final isLogin = type == 'IN' || type == 'LOGIN';
-               final reviewStatus = log['reviewStatus']?.toString();
+  Widget _buildRow(Map<String, dynamic> log) {
+    final type = (log['type'] ?? 'IN').toString().toUpperCase();
+    final isLogin = type == 'IN' || type == 'LOGIN';
+    final reviewStatus = log['reviewStatus']?.toString();
 
-               final name = _resolveName(log);
-               final email = _resolveEmail(log);
-               final dept = _resolveDepartment(log);
-               final position = _resolvePosition(log);
-               final photoUrl = _resolvePhotoUrl(log);
-               final employeeId =
-               (log['employee_id'] ?? log['employeeId'] ?? '').toString();
+    final name = _resolveName(log);
+    final email = _resolveEmail(log);
+    final dept = _resolveDepartment(log);
+    final position = _resolvePosition(log);
+    final photoUrl = _resolvePhotoUrl(log);
+    final employeeId =
+    (log['employee_id'] ?? log['employeeId'] ?? '').toString();
 
-               final initials = _initialsFor(name);
-               final displayEmail = email.isNotEmpty
-               ? _maskEmail(email)
-               : (employeeId.isNotEmpty ? '$employeeId@company.com' : '—');
+    final initials = _initialsFor(name);
+    final displayEmail = email.isNotEmpty
+        ? _maskEmail(email)
+        : (employeeId.isNotEmpty ? '$employeeId@company.com' : '—');
 
-               final subtitle = <String>[];
-               if (dept.isNotEmpty && dept != 'No Department') subtitle.add(dept);
-               if (position.isNotEmpty) subtitle.add(position);
-               final subtitleText =
-               subtitle.isEmpty ? 'No Department' : subtitle.join(' · ');
+    final subtitle = <String>[];
+    if (dept.isNotEmpty && dept != 'No Department') subtitle.add(dept);
+    if (position.isNotEmpty) subtitle.add(position);
+    final subtitleText =
+    subtitle.isEmpty ? 'No Department' : subtitle.join(' · ');
 
-               return Container(
-                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                 decoration: BoxDecoration(
-                   border: Border(bottom: BorderSide(color: tc.border, width: 0.5)),
-                   color: reviewStatus == 'flagged'
-                 ? tc.pillErrBg.withValues(alpha: 0.1)
-                 : null,
-                 ),
-                 child: Row(children: [
-                   Expanded(
-                     flex: 3,
-                     child: Row(children: [
-                       _buildAvatarWidget(
-                         photoUrl: photoUrl,
-                         initials: initials,
-                         size: 40,
-                         fontSize: 15,
-                       ),
-                       const SizedBox(width: 12),
-                       Expanded(
-                         child: Column(
-                           crossAxisAlignment: CrossAxisAlignment.start,
-                           children: [
-                             Text(
-                               name,
-                               style: TextStyle(
-                                 fontSize: 15,
-                                 fontWeight: FontWeight.w700,
-                                 color: tc.text),
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 1,
-                             ),
-                             const SizedBox(height: 2),
-                             Text(
-                               subtitleText,
-                               style: TextStyle(
-                                 fontSize: 12,
-                                 fontWeight: FontWeight.w500,
-                                 color: subtitle.isEmpty ? tc.muted : tc.orangeText,
-                               ),
-                               overflow: TextOverflow.ellipsis,
-                               maxLines: 1,
-                             ),
-                           ],
-                         ),
-                       ),
-                     ]),
-                   ),
-                   Expanded(
-                     flex: 2,
-                     child: Text(
-                       displayEmail,
-                       style: TextStyle(fontSize: 13, color: tc.text),
-                       overflow: TextOverflow.ellipsis,
-                     ),
-                   ),
-                   Expanded(
-                     flex: 1,
-                     child: Text(_fmtDate(log['timestamp']),
-                     style: TextStyle(fontSize: 13, color: tc.text)),
-                   ),
-                   Expanded(
-                     flex: 1,
-                     child: Text(
-                       _fmtTime(log['timestamp']),
-                       style: TextStyle(
-                         fontSize: 13, fontWeight: FontWeight.w500, color: tc.text),
-                     ),
-                   ),
-                   Expanded(flex: 1, child: _buildEventPill(isLogin)),
-                   Expanded(flex: 2, child: _buildStatusPill(reviewStatus)),
-                   Expanded(flex: 1, child: _buildActions(log)),
-                 ]),
-               );
-             }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: tc.border, width: 0.5)),
+        color: reviewStatus == 'flagged'
+            ? tc.pillErrBg.withValues(alpha: 0.1)
+            : null,
+      ),
+      child: Row(children: [
+        Expanded(
+          flex: 3,
+          child: Row(children: [
+            _buildAvatarWidget(
+              photoUrl: photoUrl,
+              initials: initials,
+              size: 40,
+              fontSize: 15,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: tc.text),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitleText,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: subtitle.isEmpty ? tc.muted : tc.orangeText,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+              ),
+            ),
+          ]),
+        ),
+        Expanded(
+          flex: 2,
+          child: Text(
+            displayEmail,
+            style: TextStyle(fontSize: 13, color: tc.text),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        Expanded(
+          flex: 1,
+          child: Text(_fmtDate(log['timestamp']),
+              style: TextStyle(fontSize: 13, color: tc.text)),
+        ),
+        Expanded(
+          flex: 1,
+          child: Text(
+            _fmtTime(log['timestamp']),
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w500, color: tc.text),
+          ),
+        ),
+        Expanded(flex: 1, child: _buildEventPill(isLogin)),
+        Expanded(flex: 2, child: _buildStatusPill(reviewStatus)),
+        Expanded(flex: 1, child: _buildActions(log)),
+      ]),
+    );
+  }
 
-             Widget _buildMobileCard(Map<String, dynamic> log) {
-               final type = (log['type'] ?? 'IN').toString().toUpperCase();
-               final isLogin = type == 'IN' || type == 'LOGIN';
-               final reviewStatus = log['reviewStatus']?.toString();
+  Widget _buildMobileCard(Map<String, dynamic> log) {
+    final type = (log['type'] ?? 'IN').toString().toUpperCase();
+    final isLogin = type == 'IN' || type == 'LOGIN';
+    final reviewStatus = log['reviewStatus']?.toString();
 
-               final name = _resolveName(log);
-               final email = _resolveEmail(log);
-               final dept = _resolveDepartment(log);
-               final position = _resolvePosition(log);
-               final photoUrl = _resolvePhotoUrl(log);
-               final employeeId =
-               (log['employee_id'] ?? log['employeeId'] ?? '').toString();
+    final name = _resolveName(log);
+    final email = _resolveEmail(log);
+    final dept = _resolveDepartment(log);
+    final position = _resolvePosition(log);
+    final photoUrl = _resolvePhotoUrl(log);
+    final employeeId =
+    (log['employee_id'] ?? log['employeeId'] ?? '').toString();
 
-               final initials = _initialsFor(name);
-               final displayEmail = email.isNotEmpty
-               ? _maskEmail(email)
-               : (employeeId.isNotEmpty ? '$employeeId@company.com' : '—');
+    final initials = _initialsFor(name);
+    final displayEmail = email.isNotEmpty
+        ? _maskEmail(email)
+        : (employeeId.isNotEmpty ? '$employeeId@company.com' : '—');
 
-               final subtitle = <String>[];
-               if (dept.isNotEmpty && dept != 'No Department') subtitle.add(dept);
-               if (position.isNotEmpty) subtitle.add(position);
-               final subtitleText =
-               subtitle.isEmpty ? 'No Department' : subtitle.join(' · ');
+    final subtitle = <String>[];
+    if (dept.isNotEmpty && dept != 'No Department') subtitle.add(dept);
+    if (position.isNotEmpty) subtitle.add(position);
+    final subtitleText =
+    subtitle.isEmpty ? 'No Department' : subtitle.join(' · ');
 
-               return Container(
-                 padding: const EdgeInsets.all(16),
-                 decoration: BoxDecoration(
-                   border: Border(bottom: BorderSide(color: tc.border, width: 0.5)),
-                   color: reviewStatus == 'flagged'
-                 ? tc.pillErrBg.withValues(alpha: 0.1)
-                 : null,
-                 ),
-                 child: Column(
-                   crossAxisAlignment: CrossAxisAlignment.start,
-                   children: [
-                     Row(
-                       crossAxisAlignment: CrossAxisAlignment.start,
-                       children: [
-                         _buildAvatarWidget(
-                           photoUrl: photoUrl,
-                           initials: initials,
-                           size: 48,
-                           fontSize: 16,
-                         ),
-                         const SizedBox(width: 12),
-                         Expanded(
-                           child: Column(
-                             crossAxisAlignment: CrossAxisAlignment.start,
-                             children: [
-                               Text(
-                                 name,
-                                 style: TextStyle(
-                                   fontSize: 15,
-                                   fontWeight: FontWeight.w700,
-                                   color: tc.text),
-                                    overflow: TextOverflow.ellipsis,
-                               ),
-                               const SizedBox(height: 2),
-                               Text(
-                                 subtitleText,
-                                 style: TextStyle(
-                                   fontSize: 12,
-                                   fontWeight: FontWeight.w500,
-                                   color: subtitle.isEmpty ? tc.muted : tc.orangeText,
-                                 ),
-                                 overflow: TextOverflow.ellipsis,
-                               ),
-                               const SizedBox(height: 4),
-                               Text(displayEmail,
-                                    style: TextStyle(fontSize: 12, color: tc.textMuted),
-                                    overflow: TextOverflow.ellipsis),
-                             ],
-                           ),
-                         ),
-                         _buildActions(log),
-                       ],
-                     ),
-                     const SizedBox(height: 12),
-                     Row(children: [
-                       Icon(Icons.calendar_today_rounded, size: 13, color: tc.textMuted),
-                       const SizedBox(width: 6),
-                       Text(_fmtDate(log['timestamp']),
-                       style: TextStyle(fontSize: 12, color: tc.textMuted)),
-                       const SizedBox(width: 12),
-                       Icon(Icons.access_time_rounded, size: 13, color: tc.textMuted),
-                       const SizedBox(width: 6),
-                       Text(
-                         _fmtTime(log['timestamp']),
-                         style: TextStyle(
-                           fontSize: 12, fontWeight: FontWeight.w600, color: tc.text),
-                       ),
-                       const Spacer(),
-                       _buildEventPill(isLogin, compact: true),
-                       const SizedBox(width: 6),
-                       _buildStatusPill(reviewStatus),
-                     ]),
-                   ],
-                 ),
-               );
-             }
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: tc.border, width: 0.5)),
+        color: reviewStatus == 'flagged'
+            ? tc.pillErrBg.withValues(alpha: 0.1)
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildAvatarWidget(
+                photoUrl: photoUrl,
+                initials: initials,
+                size: 48,
+                fontSize: 16,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: tc.text),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitleText,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: subtitle.isEmpty ? tc.muted : tc.orangeText,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(displayEmail,
+                        style: TextStyle(fontSize: 12, color: tc.textMuted),
+                        overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              _buildActions(log),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(children: [
+            Icon(Icons.calendar_today_rounded,
+                size: 13, color: tc.textMuted),
+            const SizedBox(width: 6),
+            Text(_fmtDate(log['timestamp']),
+                style: TextStyle(fontSize: 12, color: tc.textMuted)),
+            const SizedBox(width: 12),
+            Icon(Icons.access_time_rounded, size: 13, color: tc.textMuted),
+            const SizedBox(width: 6),
+            Text(
+              _fmtTime(log['timestamp']),
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600, color: tc.text),
+            ),
+            const Spacer(),
+            _buildEventPill(isLogin, compact: true),
+            const SizedBox(width: 6),
+            _buildStatusPill(reviewStatus),
+          ]),
+        ],
+      ),
+    );
+  }
 
-             Widget _buildEventPill(bool isLogin, {bool compact = false}) {
-               return Container(
-                 padding:
-                 EdgeInsets.symmetric(horizontal: compact ? 10 : 12, vertical: 4),
-                 decoration: BoxDecoration(
-                   color: isLogin ? tc.pillGreenBg : tc.pillBlueBg,
-                   borderRadius: BorderRadius.circular(20),
-                 ),
-                 child: Text(
-                   isLogin ? 'IN' : 'OUT',
-                   textAlign: TextAlign.center,
-                   style: TextStyle(
-                     fontSize: 11,
-                     fontWeight: FontWeight.w700,
-                     color: isLogin ? tc.pillGreenTx : tc.pillBlueTx,
-                   ),
-                 ),
-               );
-             }
+  Widget _buildEventPill(bool isLogin, {bool compact = false}) {
+    return Container(
+      padding:
+      EdgeInsets.symmetric(horizontal: compact ? 10 : 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: isLogin ? tc.pillGreenBg : tc.pillBlueBg,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        isLogin ? 'IN' : 'OUT',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: isLogin ? tc.pillGreenTx : tc.pillBlueTx,
+        ),
+      ),
+    );
+  }
 
-             Widget _buildStatusPill(String? status) {
-               final s = (status ?? 'pending').toLowerCase();
-               Color bg;
-               Color fg;
-               String label;
+  Widget _buildStatusPill(String? status) {
+    final s = (status ?? 'pending').toLowerCase();
+    Color bg;
+    Color fg;
+    String label;
 
-               if (s == 'approved') {
-                 bg = tc.pillGreenBg;
-                 fg = tc.pillGreenTx;
-                 label = 'APPROVED';
-               } else if (s == 'flagged') {
-                 bg = tc.pillErrBg;
-                 fg = tc.pillErrTx;
-                 label = 'FLAGGED';
-               } else {
-                 bg = tc.surface;
-                 fg = tc.muted;
-                 label = 'PENDING';
-               }
+    if (s == 'approved') {
+      bg = tc.pillGreenBg;
+      fg = tc.pillGreenTx;
+      label = 'APPROVED';
+    } else if (s == 'flagged') {
+      bg = tc.pillErrBg;
+      fg = tc.pillErrTx;
+      label = 'FLAGGED';
+    } else {
+      bg = tc.surface;
+      fg = tc.muted;
+      label = 'PENDING';
+    }
 
-               return Container(
-                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                 decoration: BoxDecoration(
-                   color: bg,
-                   borderRadius: BorderRadius.circular(6),
-                   border: Border.all(color: fg.withValues(alpha: 0.3)),
-                 ),
-                 child: Text(
-                   label,
-                   textAlign: TextAlign.center,
-                   style: TextStyle(
-                     fontSize: 10,
-                     fontWeight: FontWeight.w800,
-                     color: fg,
-                     letterSpacing: 0.5,
-                   ),
-                 ),
-               );
-             }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: fg.withValues(alpha: 0.3)),
+      ),
+      child: Text(
+        label,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          color: fg,
+          letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
 
-             Widget _buildActions(Map<String, dynamic> log) {
-               return Row(
-                 mainAxisSize: MainAxisSize.min,
-                 mainAxisAlignment: MainAxisAlignment.end,
-                 children: [
-                   PopupMenuButton<String>(
-                     icon: Icon(Icons.more_vert, size: 20, color: tc.textMuted),
-                     color: tc.card,
-                     shape: RoundedRectangleBorder(
-                       borderRadius: BorderRadius.circular(10),
-                       side: BorderSide(color: tc.border),
-                     ),
-                     tooltip: 'Actions',
-                     onSelected: (value) {
-                       switch (value) {
-                         case 'verify':
-                           _openVerification(log);
-                           break;
-                         case 'edit':
-                           _editLogTime(log);
-                           break;
-                         case 'approve':
-                           _approveLog(log);
-                           break;
-                         case 'flag':
-                           _flagLog(log);
-                           break;
-                       }
-                     },
-                     itemBuilder: (_) => [
-                       PopupMenuItem<String>(
-                         value: 'verify',
-                         child: Row(children: [
-                           Icon(Icons.fact_check_outlined, size: 16, color: tc.orange),
-                           const SizedBox(width: 10),
-                           Text('View Verification',
-                                style: TextStyle(color: tc.text, fontSize: 13)),
-                         ]),
-                       ),
-                       PopupMenuItem<String>(
-                         value: 'edit',
-                         child: Row(children: [
-                           Icon(
-                             Icons.edit_calendar_outlined,
-                             size: 16,
-                             color: _isDemo ? tc.muted : tc.orange,
-                           ),
-                           const SizedBox(width: 10),
-                           Text(
-                             'Edit Time (Override)',
-                             style: TextStyle(
-                               color: _isDemo ? tc.muted : tc.text,
-                               fontSize: 13,
-                             ),
-                           ),
-                         ]),
-                       ),
-                       PopupMenuItem<String>(
-                         value: 'approve',
-                         child: Row(children: [
-                           Icon(Icons.check_circle_outline,
-                                size: 16, color: _isDemo ? tc.muted : tc.green),
-                                const SizedBox(width: 10),
-                                Text('Approve',
-                                     style: TextStyle(
-                                       color: _isDemo ? tc.muted : tc.text, fontSize: 13)),
-                         ]),
-                       ),
-                       PopupMenuItem<String>(
-                         value: 'flag',
-                         child: Row(children: [
-                           Icon(Icons.flag_outlined,
-                                size: 16, color: _isDemo ? tc.muted : tc.red),
-                                const SizedBox(width: 10),
-                                Text('Flag for Review',
-                                     style: TextStyle(
-                                       color: _isDemo ? tc.muted : tc.text, fontSize: 13)),
-                         ]),
-                       ),
-                     ],
-                   ),
-                   IconButton(
-                     icon:
-                     Icon(Icons.arrow_forward_rounded, size: 18, color: tc.textMuted),
-                     tooltip: 'Open verification',
-                     onPressed: () => _openVerification(log),
-                   ),
-                 ],
-               );
-             }
+  Widget _buildActions(Map<String, dynamic> log) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        PopupMenuButton<String>(
+          icon: Icon(Icons.more_vert, size: 20, color: tc.textMuted),
+          color: tc.card,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(color: tc.border),
+          ),
+          tooltip: 'Actions',
+          onSelected: (value) {
+            switch (value) {
+              case 'verify':
+                _openVerification(log);
+                break;
+              case 'edit':
+                _editLogTime(log);
+                break;
+              case 'approve':
+                _approveLog(log);
+                break;
+              case 'flag':
+                _flagLog(log);
+                break;
+            }
+          },
+          itemBuilder: (_) => [
+            PopupMenuItem<String>(
+              value: 'verify',
+              child: Row(children: [
+                Icon(Icons.fact_check_outlined, size: 16, color: tc.orange),
+                const SizedBox(width: 10),
+                Text('View Verification',
+                    style: TextStyle(color: tc.text, fontSize: 13)),
+              ]),
+            ),
+            PopupMenuItem<String>(
+              value: 'edit',
+              child: Row(children: [
+                Icon(
+                  Icons.edit_calendar_outlined,
+                  size: 16,
+                  color: _isDemo ? tc.muted : tc.orange,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'Edit Time (Override)',
+                  style: TextStyle(
+                    color: _isDemo ? tc.muted : tc.text,
+                    fontSize: 13,
+                  ),
+                ),
+              ]),
+            ),
+            PopupMenuItem<String>(
+              value: 'approve',
+              child: Row(children: [
+                Icon(Icons.check_circle_outline,
+                    size: 16, color: _isDemo ? tc.muted : tc.green),
+                const SizedBox(width: 10),
+                Text('Approve',
+                    style: TextStyle(
+                        color: _isDemo ? tc.muted : tc.text, fontSize: 13)),
+              ]),
+            ),
+            PopupMenuItem<String>(
+              value: 'flag',
+              child: Row(children: [
+                Icon(Icons.flag_outlined,
+                    size: 16, color: _isDemo ? tc.muted : tc.red),
+                const SizedBox(width: 10),
+                Text('Flag for Review',
+                    style: TextStyle(
+                        color: _isDemo ? tc.muted : tc.text, fontSize: 13)),
+              ]),
+            ),
+          ],
+        ),
+        IconButton(
+          icon:
+          Icon(Icons.arrow_forward_rounded, size: 18, color: tc.textMuted),
+          tooltip: 'Open verification',
+          onPressed: () => _openVerification(log),
+        ),
+      ],
+    );
+  }
 
-             Widget _buildPagination() {
-               return LayoutBuilder(builder: (_, c) {
-                 final r = BsResponsive(c.maxWidth);
-                 final narrow = !r.up(BsSize.md);
+  Widget _buildPagination() {
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      final narrow = !r.up(BsSize.md);
 
-                 final start = _filteredLogs.isEmpty
-                 ? 0
-                 : (_currentPage - 1) * _rowsPerPage + 1;
-                 final end = _currentPage * _rowsPerPage > _filteredLogs.length
-                 ? _filteredLogs.length
-                 : _currentPage * _rowsPerPage;
+      final start = _filteredLogs.isEmpty
+          ? 0
+          : (_currentPage - 1) * _rowsPerPage + 1;
+      final end = _currentPage * _rowsPerPage > _filteredLogs.length
+          ? _filteredLogs.length
+          : _currentPage * _rowsPerPage;
 
-                 final info = Text(
-                   'Showing $start to $end of ${_filteredLogs.length} entries',
-                   style: TextStyle(fontSize: 13, color: tc.textMuted),
-                   overflow: TextOverflow.ellipsis,
-                 );
+      final info = Text(
+        'Showing $start to $end of ${_filteredLogs.length} entries',
+        style: TextStyle(fontSize: 13, color: tc.textMuted),
+        overflow: TextOverflow.ellipsis,
+      );
 
-                 final totalPages = _totalPages;
-                 final visiblePages = _computeVisiblePages(totalPages);
+      final totalPages = _totalPages;
+      final visiblePages = _computeVisiblePages(totalPages);
 
-                 final controls = Row(
-                   mainAxisSize: MainAxisSize.min,
-                   children: [
-                     IconButton(
-                       onPressed: _currentPage > 1
-                       ? () => setState(() => _currentPage--)
-                       : null,
-                       icon: Icon(Icons.chevron_left,
-                                  size: 20, color: _currentPage > 1 ? tc.text : tc.muted),
-                     ),
-                     ...visiblePages.map((i) {
-                       final isActive = i == _currentPage;
-                       return Container(
-                         margin: const EdgeInsets.symmetric(horizontal: 4),
-                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                         decoration: BoxDecoration(
-                           color: isActive ? tc.orange : Colors.transparent,
-                           borderRadius: BorderRadius.circular(4),
-                           border: isActive ? null : Border.all(color: tc.border),
-                         ),
-                         child: InkWell(
-                           onTap: () => setState(() => _currentPage = i),
-                           child: Text(
-                             '$i',
-                             style: TextStyle(
-                               fontSize: 14,
-                               fontWeight: isActive ? FontWeight.w700 : FontWeight.normal,
-                               color: isActive
-                               ? (tc.isDark ? tc.onOrange : Colors.white)
-                               : tc.text,
-                             ),
-                           ),
-                         ),
-                       );
-                     }),
-                     IconButton(
-                       onPressed: _currentPage < totalPages
-                       ? () => setState(() => _currentPage++)
-                       : null,
-                       icon: Icon(Icons.chevron_right,
-                                  size: 20,
-                                  color: _currentPage < totalPages ? tc.text : tc.muted),
-                     ),
-                   ],
-                 );
+      final controls = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            onPressed: _currentPage > 1
+                ? () => setState(() => _currentPage--)
+                : null,
+            icon: Icon(Icons.chevron_left,
+                size: 20, color: _currentPage > 1 ? tc.text : tc.muted),
+          ),
+          ...visiblePages.map((i) {
+            final isActive = i == _currentPage;
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: isActive ? tc.orange : Colors.transparent,
+                borderRadius: BorderRadius.circular(4),
+                border: isActive ? null : Border.all(color: tc.border),
+              ),
+              child: InkWell(
+                onTap: () => setState(() => _currentPage = i),
+                child: Text(
+                  '$i',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight:
+                    isActive ? FontWeight.w700 : FontWeight.normal,
+                    color: isActive
+                        ? (tc.isDark ? tc.onOrange : Colors.white)
+                        : tc.text,
+                  ),
+                ),
+              ),
+            );
+          }),
+          IconButton(
+            onPressed: _currentPage < totalPages
+                ? () => setState(() => _currentPage++)
+                : null,
+            icon: Icon(Icons.chevron_right,
+                size: 20,
+                color: _currentPage < totalPages ? tc.text : tc.muted),
+          ),
+        ],
+      );
 
-                 return Container(
-                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                   decoration: BoxDecoration(
-                     color: tc.surface,
-                     borderRadius: const BorderRadius.only(
-                       bottomLeft: Radius.circular(12),
-                       bottomRight: Radius.circular(12),
-                     ),
-                   ),
-                   child: narrow
-                   ? Column(
-                     crossAxisAlignment: CrossAxisAlignment.start,
-                     children: [
-                       info,
-                       const SizedBox(height: 12),
-                       SingleChildScrollView(
-                         scrollDirection: Axis.horizontal, child: controls),
-                     ],
-                   )
-                   : Row(
-                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                     children: [info, controls],
-                   ),
-                 );
-               });
-             }
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: BoxDecoration(
+          color: tc.surface,
+          borderRadius: const BorderRadius.only(
+            bottomLeft: Radius.circular(12),
+            bottomRight: Radius.circular(12),
+          ),
+        ),
+        child: narrow
+            ? Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            info,
+            const SizedBox(height: 12),
+            SingleChildScrollView(
+                scrollDirection: Axis.horizontal, child: controls),
+          ],
+        )
+            : Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [info, controls],
+        ),
+      );
+    });
+  }
 
-             List<int> _computeVisiblePages(int totalPages) {
-               if (totalPages <= kMaxVisiblePages) {
-                 return List<int>.generate(totalPages, (i) => i + 1);
-               }
+  List<int> _computeVisiblePages(int totalPages) {
+    if (totalPages <= kMaxVisiblePages) {
+      return List<int>.generate(totalPages, (i) => i + 1);
+    }
 
-               final pages = <int>{1, totalPages, _currentPage};
-               for (var offset = 1; offset <= 2; offset++) {
-                 if (_currentPage - offset > 1) pages.add(_currentPage - offset);
-                 if (_currentPage + offset < totalPages) pages.add(_currentPage + offset);
-               }
+    final pages = <int>{1, totalPages, _currentPage};
+    for (var offset = 1; offset <= 2; offset++) {
+      if (_currentPage - offset > 1) pages.add(_currentPage - offset);
+      if (_currentPage + offset < totalPages) pages.add(_currentPage + offset);
+    }
 
-               final sorted = pages.toList()..sort();
+    final sorted = pages.toList()..sort();
 
-               final out = <int>[];
-               for (var i = 0; i < sorted.length; i++) {
-                 if (i > 0 && sorted[i] - sorted[i - 1] > 1) out.add(-1);
-                 out.add(sorted[i]);
-               }
-               return out;
-             }
+    final out = <int>[];
+    for (var i = 0; i < sorted.length; i++) {
+      if (i > 0 && sorted[i] - sorted[i - 1] > 1) out.add(-1);
+      out.add(sorted[i]);
+    }
+    return out;
+  }
 
-             Widget _buildBottomCards() {
-               return LayoutBuilder(builder: (_, c) {
-                 final r = BsResponsive(c.maxWidth);
-                 final stack = !r.up(BsSize.lg);
+  Widget _buildBottomCards() {
+    return LayoutBuilder(builder: (_, c) {
+      final r = BsResponsive(c.maxWidth);
+      final stack = !r.up(BsSize.lg);
 
-                 if (stack) {
-                   return Column(
-                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                     children: [
-                       _buildBiometricCard(),
-                       const SizedBox(height: 20),
-                       _buildAuditCard(),
-                     ],
-                   );
-                 }
-                 return Row(
-                   crossAxisAlignment: CrossAxisAlignment.start,
-                   children: [
-                     Expanded(child: _buildBiometricCard()),
-                     const SizedBox(width: 24),
-                     Expanded(child: _buildAuditCard()),
-                   ],
-                 );
-               });
-             }
+      if (stack) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildBiometricCard(),
+            const SizedBox(height: 20),
+            _buildAuditCard(),
+          ],
+        );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: _buildBiometricCard()),
+          const SizedBox(width: 24),
+          Expanded(child: _buildAuditCard()),
+        ],
+      );
+    });
+  }
 
-             Widget _buildBiometricCard() {
-               return Container(
-                 height: 300,
-                 clipBehavior: Clip.hardEdge,
-                 decoration: BoxDecoration(borderRadius: BorderRadius.circular(16)),
-                 child: Stack(
-                   fit: StackFit.expand,
-                   children: [
-                     Image.asset(
-                       'assets/images/logo1.png',
-                       fit: BoxFit.cover,
-                       errorBuilder: (context, error, stackTrace) {
-                         return Container(
-                           decoration: BoxDecoration(
-                             gradient: LinearGradient(
-                               begin: Alignment.topLeft,
-                               end: Alignment.bottomRight,
-                               colors: tc.isDark
-                               ? [
-                                 const Color(0xFF1F2937),
-                                 const Color(0xFF111827),
-                                 const Color(0xFF0F172A),
-                               ]
-                               : [
-                                 const Color(0xFF3B4A5F),
-                                 const Color(0xFF1F2937),
-                                 const Color(0xFF111827),
-                               ],
-                             ),
-                           ),
-                         );
-                       },
-                     ),
-                     Container(
-                       decoration: BoxDecoration(
-                         gradient: LinearGradient(
-                           begin: Alignment.topCenter,
-                           end: Alignment.bottomCenter,
-                           colors: [
-                             Colors.transparent,
-                             Colors.black.withValues(alpha: 0.4),
-                             Colors.black.withValues(alpha: 0.85),
-                           ],
-                           stops: const [0.0, 0.5, 1.0],
-                         ),
-                       ),
-                     ),
-                     Padding(
-                       padding: const EdgeInsets.all(24),
-                       child: Column(
-                         crossAxisAlignment: CrossAxisAlignment.start,
-                         mainAxisAlignment: MainAxisAlignment.end,
-                         children: const [
-                           Text(
-                             'Real-time Biometric Integration',
-                             style: TextStyle(
-                               fontSize: 22,
-                               fontWeight: FontWeight.w700,
-                               color: Colors.white,
-                               height: 1.2),
-                           ),
-                           SizedBox(height: 8),
-                           Text(
-                             'Every login and logout is synchronized instantly with central biometric hardware.',
-                             style: TextStyle(
-                               fontSize: 14, color: Colors.white70, height: 1.5),
-                           ),
-                         ],
-                       ),
-                     ),
-                   ],
-                 ),
-               );
-             }
+  Widget _buildBiometricCard() {
+    return Container(
+      height: 300,
+      clipBehavior: Clip.hardEdge,
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16)),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.asset(
+            'assets/images/logo1.png',
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) {
+              return Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: tc.isDark
+                        ? [
+                      const Color(0xFF1F2937),
+                      const Color(0xFF111827),
+                      const Color(0xFF0F172A),
+                    ]
+                        : [
+                      const Color(0xFF3B4A5F),
+                      const Color(0xFF1F2937),
+                      const Color(0xFF111827),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.4),
+                  Colors.black.withValues(alpha: 0.85),
+                ],
+                stops: const [0.0, 0.5, 1.0],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: const [
+                Text(
+                  'Real-time Biometric Integration',
+                  style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      height: 1.2),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Every login and logout is synchronized instantly with central biometric hardware.',
+                  style: TextStyle(
+                      fontSize: 14, color: Colors.white70, height: 1.5),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-             Widget _buildAuditCard() {
-               final Color onOrange =
-               tc.isDark ? tc.onOrange : const Color(0xFF623200);
+  Widget _buildAuditCard() {
+    final Color onOrange = tc.isDark ? tc.onOrange : const Color(0xFF623200);
 
-               return Container(
-                 height: 300,
-                 padding: const EdgeInsets.all(24),
-                 decoration: BoxDecoration(
-                   color: tc.orange,
-                   borderRadius: BorderRadius.circular(16),
-                 ),
-                 child: Column(
-                   crossAxisAlignment: CrossAxisAlignment.start,
-                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                   children: [
-                     Icon(Icons.security_rounded, size: 30, color: onOrange),
-                     Text(
-                       'Secure Audit Trail',
-                       style: TextStyle(
-                         fontSize: 22,
-                         fontWeight: FontWeight.w700,
-                         color: onOrange,
-                         height: 1.2),
-                     ),
-                     const SizedBox(height: 12),
-                     Text(
-                       'Detailed logs track timestamps, device IDs, and location data for administrative transparency.',
-                       style: TextStyle(
-                         fontSize: 14,
-                         color: onOrange.withValues(alpha: 0.9),
-                         height: 1.5),
-                     ),
-                     const Spacer(),
-                     SizedBox(
-                       width: double.infinity,
-                       child: ElevatedButton(
-                         onPressed: _isDemo
-                         ? _demoBlock
-                         : () {
-                           _showSnack('Compliance report coming soon.');
-                         },
-                         style: ElevatedButton.styleFrom(
-                           backgroundColor: onOrange,
-                           foregroundColor: tc.orange,
-                             padding: const EdgeInsets.symmetric(vertical: 14),
-                             shape: RoundedRectangleBorder(
-                               borderRadius: BorderRadius.circular(8)),
-                               elevation: 0,
-                         ),
-                         child: const Text('View Compliance Report',
-                                           style:
-                                           TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-                       ),
-                     ),
-                   ],
-                 ),
-               );
-             }
+    return Container(
+      height: 300,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: tc.orange,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Icon(Icons.security_rounded, size: 30, color: onOrange),
+          Text(
+            'Secure Audit Trail',
+            style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: onOrange,
+                height: 1.2),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Detailed logs track timestamps, device IDs, and location data for administrative transparency.',
+            style: TextStyle(
+              fontSize: 14,
+              color: onOrange.withValues(alpha: 0.9),
+              height: 1.5,
+            ),
+          ),
+          const Spacer(),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _isDemo
+                  ? _demoBlock
+                  : () {
+                _showSnack('Compliance report coming soon.');
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: onOrange,
+                foregroundColor: tc.orange,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+                elevation: 0,
+              ),
+              child: const Text('View Compliance Report',
+                  style:
+                  TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-             Widget _buildFilterField({required String label, required Widget child}) {
-               return Column(
-                 crossAxisAlignment: CrossAxisAlignment.start,
-                 children: [
-                   Text(
-                     label,
-                     style: TextStyle(
-                       fontSize: 12,
-                       fontWeight: FontWeight.w700,
-                       color: tc.textMuted,
-                       letterSpacing: 0.5),
-                   ),
-                   const SizedBox(height: 6),
-                   child,
-                 ],
-               );
-             }
+  Widget _buildFilterField({required String label, required Widget child}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: tc.textMuted,
+              letterSpacing: 0.5),
+        ),
+        const SizedBox(height: 6),
+        child,
+      ],
+    );
+  }
 
-             Widget _buildActionButton({
-               required IconData icon,
-               required String label,
-               required VoidCallback onPressed,
-               Color? bgColor,
-               Color? textColor,
-               Color? borderColor,
-               bool showSpinner = false,
-             }) {
-               return OutlinedButton.icon(
-                 onPressed: onPressed,
-                 icon: showSpinner
-                 ? SizedBox(
-                   width: 14,
-                   height: 14,
-                   child: CircularProgressIndicator(
-                     strokeWidth: 2,
-                     color: textColor ?? tc.textMuted,
-                   ),
-                 )
-                 : Icon(icon, size: 14, color: textColor ?? tc.textMuted),
-                 label: Text(
-                   label,
-                   style: TextStyle(
-                     fontSize: 14,
-                     fontWeight: FontWeight.w600,
-                     color: textColor ?? tc.textMuted),
-                 ),
-                 style: OutlinedButton.styleFrom(
-                   backgroundColor: bgColor ?? tc.card,
-                   side: BorderSide(color: borderColor ?? tc.border, width: 1),
-                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                   elevation: 0,
-                 ),
-               );
-             }
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+    Color? bgColor,
+    Color? textColor,
+    Color? borderColor,
+    bool showSpinner = false,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: showSpinner
+          ? SizedBox(
+        width: 14,
+        height: 14,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: textColor ?? tc.textMuted,
+        ),
+      )
+          : Icon(icon, size: 14, color: textColor ?? tc.textMuted),
+      label: Text(
+        label,
+        style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: textColor ?? tc.textMuted),
+      ),
+      style: OutlinedButton.styleFrom(
+        backgroundColor: bgColor ?? tc.card,
+        side: BorderSide(color: borderColor ?? tc.border, width: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        elevation: 0,
+      ),
+    );
+  }
 }

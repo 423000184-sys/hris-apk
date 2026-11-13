@@ -1,7 +1,10 @@
 // lib/screens/main_screen.dart
+// v2.5: 🚫 Removed fingerprint registration gate — clock in/out no longer
+//       requires fingerprint enrollment. No banner, no dialog, no FAB state,
+//       no web sidebar/profile badges.
 // v2.4: ⏱️ Added local clock marker — instant UI feedback on successful clock-in/out
 //       without waiting for the Firestore snapshot.
-// v2.3: 🛠️ Fixed infinite rebuild loops in Network and Fingerprint listeners.
+// v2.3: 🛠️ Fixed infinite rebuild loops in Network listener.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
@@ -32,7 +35,6 @@ import 'apply_leave_screen.dart';
 import 'itinerary_screen.dart';
 import 'profile_screen.dart';
 import 'landing_screen.dart';
-import 'fingerprint_screen.dart';
 import 'facial_recognition_screen.dart';
 
 void _secureLog(String message) {
@@ -158,11 +160,6 @@ class MainScreenState extends State<MainScreen>
   StreamSubscription<dynamic>? _geofenceZonesSub;
   bool _geofenceListenerStarted = false;
 
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _fpStreamSub;
-  bool _fingerprintEnrolled = true;
-  bool _fpStatusLoaded = false;
-  bool _fpPromptDismissed = false;
-
   bool _challengeScreenOpen = false;
   bool _missedSummaryShown = false;
 
@@ -219,82 +216,6 @@ class MainScreenState extends State<MainScreen>
       employeeIds: [emp.id, emp.employeeId],
       isClockIn: isClockIn,
     );
-  }
-
-  bool _isEnrolledFromData(Map<String, dynamic>? data) {
-    if (data == null) return false;
-    final v = data['fingerprintEnrolled'];
-    if (v is bool) return v;
-    if (v is String) return v.toLowerCase() == 'true';
-    return false;
-  }
-
-  void _startFingerprintListener() {
-    if (_isDemo) {
-      _fpStatusLoaded = true;
-      _fingerprintEnrolled = true;
-      return;
-    }
-    final id = widget.employee?.id;
-    if (id == null || id.isEmpty) {
-      _fpStatusLoaded = true;
-      return;
-    }
-    try {
-      _fpStreamSub?.cancel();
-      _fpStreamSub = FirebaseFirestore.instance
-          .collection('employees')
-          .doc(id)
-          .snapshots()
-          .listen(
-            (snap) {
-          if (!mounted) return;
-          final data = snap.data();
-          final enrolled = _isEnrolledFromData(data);
-
-          // ✅ FIX: Stop the loop! Only rebuild if status actually changed
-          if (_fingerprintEnrolled == enrolled && _fpStatusLoaded) {
-            return;
-          }
-
-          setState(() {
-            _fingerprintEnrolled = enrolled;
-            _fpStatusLoaded = true;
-            if (enrolled) _fpPromptDismissed = false;
-          });
-        },
-        onError: (e) {
-          if (mounted) setState(() => _fpStatusLoaded = true);
-        },
-      );
-    } catch (e) {
-      _fpStatusLoaded = true;
-    }
-  }
-
-  void _stopFingerprintListener() {
-    _fpStreamSub?.cancel();
-    _fpStreamSub = null;
-  }
-
-  Future<void> _openFingerprintRegistration() async {
-    if (_isDemo) return;
-    final emp = widget.employee;
-    if (emp == null) return;
-    if (!_isOnline) {
-      _showOfflineSnack('⚠️ Internet is required to register your fingerprint.');
-      return;
-    }
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => FingerprintScreen(
-          employee: emp,
-          standaloneMode: true,
-        ),
-      ),
-    );
-    if (!mounted) return;
-    unawaited(_recoverOvertimeReminders());
   }
 
   Future<void> _handlePresenceChallenge(ChallengeDue due) async {
@@ -606,7 +527,6 @@ class MainScreenState extends State<MainScreen>
       try {
         await OvertimeReminderService.instance.cancelAll();
       } catch (_) {}
-      // Demo mode doesn't persist markers, but clear defensively.
       try {
         final emp = DemoModeService.demoEmployee;
         await clearLocalClockMarkers([emp.id, emp.employeeId]);
@@ -732,10 +652,6 @@ class MainScreenState extends State<MainScreen>
       _showOfflineSnack('⚠️ No internet. Please check your connection.');
       return;
     }
-    if (!_fingerprintEnrolled) {
-      _showFingerprintRequiredDialog();
-      return;
-    }
     try {
       GeofenceService.instance.invalidateCache();
     } catch (e) {}
@@ -748,46 +664,6 @@ class MainScreenState extends State<MainScreen>
     } else {
       _openClockOverlay();
     }
-  }
-
-  void _showFingerprintRequiredDialog() {
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(children: const [
-          Icon(Icons.fingerprint_rounded, color: Color(0xFFFF8A00), size: 24),
-          SizedBox(width: 10),
-          Expanded(
-              child: Text('Fingerprint Required',
-                  style:
-                  TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
-        ]),
-        content: const Text(
-            'You need to register your fingerprint first before you can clock in/out.\n\nThis is a one-time setup. After that, your fingerprint will be used for every clock action.',
-            style: TextStyle(fontSize: 13, height: 1.5)),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Later')),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF8A00),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8))),
-            icon: const Icon(Icons.app_registration_rounded, size: 16),
-            label: const Text('Register Now',
-                style: TextStyle(fontWeight: FontWeight.w700)),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _openFingerprintRegistration();
-            },
-          ),
-        ],
-      ),
-    );
   }
 
   void _refreshDashboard() {
@@ -849,8 +725,6 @@ class MainScreenState extends State<MainScreen>
     WidgetsBinding.instance.addObserver(this);
 
     if (_isDemo) {
-      _fpStatusLoaded = true;
-      _fingerprintEnrolled = true;
       try {
         _isOnline = ConnectivityService.instance.isOnline;
       } catch (_) {
@@ -880,7 +754,6 @@ class MainScreenState extends State<MainScreen>
     });
 
     _startGeofenceListener();
-    _startFingerprintListener();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
@@ -963,7 +836,6 @@ class MainScreenState extends State<MainScreen>
     _resumeDebounce?.cancel();
     _markOffline();
     _stopGeofenceListener();
-    _stopFingerprintListener();
     _notifWatcher?.stop();
     PresenceMonitorService.instance.stop();
     MotionDetectionService.instance.stop();
@@ -1106,20 +978,6 @@ class MainScreenState extends State<MainScreen>
                       right: 0,
                       child:
                       SafeArea(bottom: false, child: _buildDemoBadge())),
-                if (_fpStatusLoaded &&
-                    !_fingerprintEnrolled &&
-                    !_fpPromptDismissed &&
-                    _isOnline &&
-                    !_isDemo &&
-                    widget.employee != null &&
-                    !_showClockOverlay)
-                  Positioned(
-                      top: !_isOnline ? 60 : 0,
-                      left: 0,
-                      right: 0,
-                      child: SafeArea(
-                          bottom: false,
-                          child: _buildFingerprintBanner())),
                 if (empId.isNotEmpty && !_isDemo)
                   Positioned(
                       top: 12,
@@ -1236,85 +1094,6 @@ class MainScreenState extends State<MainScreen>
     );
   }
 
-  Widget _buildFingerprintBanner() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-            colors: [Color(0xFFFF8A00), Color(0xFFF54900)]),
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-              color: const Color(0xFFFF8A00).withValues(alpha: 0.35),
-              blurRadius: 16,
-              offset: const Offset(0, 6))
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.22),
-                shape: BoxShape.circle,
-                border:
-                Border.all(color: Colors.white.withValues(alpha: 0.4), width: 1.2)),
-            child:
-            const Icon(Icons.fingerprint_rounded, color: Colors.white, size: 22),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Register Your Fingerprint',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.2)),
-                SizedBox(height: 2),
-                Text('Required for clock in/out.',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500)),
-              ],
-            ),
-          ),
-          const SizedBox(width: 6),
-          TextButton(
-            onPressed: _openFingerprintRegistration,
-            style: TextButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: const Color(0xFFFF8A00),
-                padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                minimumSize: const Size(0, 32),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-            child: const Text('Register',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.2)),
-          ),
-          IconButton(
-            onPressed: () => setState(() => _fpPromptDismissed = true),
-            icon: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
-            splashRadius: 18,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildClockFab(BuildContext context) {
     if (_isDemo) {
       final overlayOpen = _showClockOverlay;
@@ -1352,14 +1131,9 @@ class MainScreenState extends State<MainScreen>
     }
 
     final enabled = _isOnline;
-    final needsRegistration = _fpStatusLoaded && !_fingerprintEnrolled;
     final overlayOpen = _showClockOverlay;
 
-    final Color bg = !enabled
-        ? const Color(0xFF7A7A7A)
-        : (needsRegistration && !overlayOpen
-        ? const Color(0xFFDC2626)
-        : _navActive);
+    final Color bg = !enabled ? const Color(0xFF7A7A7A) : _navActive;
 
     final String iconKey;
     final IconData icon;
@@ -1369,9 +1143,6 @@ class MainScreenState extends State<MainScreen>
     } else if (overlayOpen) {
       iconKey = 'close';
       icon = Icons.close_rounded;
-    } else if (needsRegistration) {
-      iconKey = 'register';
-      icon = Icons.app_registration_rounded;
     } else {
       iconKey = 'fingerprint';
       icon = Icons.fingerprint_rounded;
@@ -1382,8 +1153,6 @@ class MainScreenState extends State<MainScreen>
       tooltip = 'Offline';
     } else if (overlayOpen) {
       tooltip = 'Close Clock Screen';
-    } else if (needsRegistration) {
-      tooltip = 'Register Fingerprint';
     } else {
       tooltip = 'Clock In / Out';
     }
@@ -1445,16 +1214,8 @@ class MainScreenState extends State<MainScreen>
                 ..._navItems.map((item) => _webNavItem(item)),
                 const Divider(height: 24),
                 _webQuickLink(
-                  label: _isDemo
-                      ? 'Clock In/Out'
-                      : (_fingerprintEnrolled
-                      ? 'Clock In/Out'
-                      : 'Register Fingerprint'),
-                  icon: _isDemo
-                      ? Icons.fingerprint_rounded
-                      : (_fingerprintEnrolled
-                      ? Icons.fingerprint_rounded
-                      : Icons.app_registration_rounded),
+                  label: 'Clock In/Out',
+                  icon: Icons.fingerprint_rounded,
                   onTap: _openClockOverlay,
                 ),
               ],
@@ -1593,43 +1354,18 @@ class MainScreenState extends State<MainScreen>
                   color: AppColors.orange.withValues(alpha: 0.12), width: 1))),
       child: Row(
         children: [
-          Stack(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                    gradient: AppColors.gradientOrange,
-                    borderRadius: BorderRadius.circular(4)),
-                child: Center(
-                    child: Text(emp?.initials ?? '?',
-                        style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800))),
-              ),
-              if (_fpStatusLoaded && !_isDemo)
-                Positioned(
-                  right: -2,
-                  bottom: -2,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                        color: _fingerprintEnrolled
-                            ? const Color(0xFF22C55E)
-                            : const Color(0xFFDC2626),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: AppColors.card, width: 2)),
-                    child: Icon(
-                        _fingerprintEnrolled
-                            ? Icons.check_rounded
-                            : Icons.priority_high_rounded,
-                        size: 8,
-                        color: Colors.white),
-                  ),
-                ),
-            ],
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+                gradient: AppColors.gradientOrange,
+                borderRadius: BorderRadius.circular(4)),
+            child: Center(
+                child: Text(emp?.initials ?? '?',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800))),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1658,25 +1394,6 @@ class MainScreenState extends State<MainScreen>
                               fontSize: 8,
                               fontWeight: FontWeight.w800,
                               color: _demoAccent,
-                              letterSpacing: 0.3)),
-                    ),
-                  ] else if (_fpStatusLoaded) ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                          color: _fingerprintEnrolled
-                              ? const Color(0xFFDCFCE7)
-                              : const Color(0xFFFEE2E2),
-                          borderRadius: BorderRadius.circular(4)),
-                      child: Text(_fingerprintEnrolled ? 'FP ✓' : 'No FP',
-                          style: TextStyle(
-                              fontSize: 8,
-                              fontWeight: FontWeight.w800,
-                              color: _fingerprintEnrolled
-                                  ? const Color(0xFF166534)
-                                  : const Color(0xFF991B1B),
                               letterSpacing: 0.3)),
                     ),
                   ],

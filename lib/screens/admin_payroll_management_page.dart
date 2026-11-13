@@ -1,7 +1,5 @@
 // lib/screens/admin_payroll_management_page.dart
-// v2.6: 🆕 HR can edit payroll per employee. Before saving, HR Assistant
-//       password is required for override authorization.
-//       Dual-signature audit logged.
+// v3.3: 🔧 Added fallback to fetch full employee data. Removed hardcoded values.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -51,8 +49,6 @@ class _AdminPayrollManagementPageState
     }
   }
 
-  // 🆕 Working copy of employee data so edits are reflected without
-  //    needing the parent widget to re-fetch
   Map<String, dynamic> _currentEmployeeData = {};
 
   PayrollBreakdown _b = PayrollBreakdown.empty;
@@ -63,7 +59,6 @@ class _AdminPayrollManagementPageState
   bool _unlockingPayslip = false;
   bool _isPayslipUnlocked = false;
 
-  // 🆕 Override flow guard
   bool _editing = false;
 
   final _SecurityGuard _guard = _SecurityGuard();
@@ -72,7 +67,6 @@ class _AdminPayrollManagementPageState
 
   static const Duration _notifyCooldown = Duration(minutes: 5);
 
-  // 🆕 HR Assistant override password storage
   static const String _kHrOverrideCollection = 'settings';
   static const String _kHrOverrideDoc = 'payroll_override';
   static const String _kHrOverrideField = 'hrAssistantPasswordHash';
@@ -108,12 +102,6 @@ class _AdminPayrollManagementPageState
       final uri = Uri.parse(url);
       if (uri.scheme != 'https') return false;
       if (!uri.hasAuthority) return false;
-      final host = uri.host.toLowerCase();
-      if (host.contains('firebasestorage.googleapis.com')) return true;
-      if (host.contains('storage.googleapis.com')) return true;
-      if (host.endsWith('.googleusercontent.com')) return true;
-      if (host.endsWith('.cloudinary.com')) return true;
-      if (host.endsWith('.amazonaws.com')) return true;
       return true;
     } catch (_) {
       return false;
@@ -177,9 +165,6 @@ class _AdminPayrollManagementPageState
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🆕 HR ASSISTANT OVERRIDE PASSWORD
-  // ═══════════════════════════════════════════════════════════════════════
   String _sha256Hex(String input) =>
       sha256.convert(utf8.encode(input)).toString();
 
@@ -220,9 +205,6 @@ class _AdminPayrollManagementPageState
     return _sha256Hex(plainPassword) == storedHash;
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // GETTERS
-  // ═══════════════════════════════════════════════════════════════════════
   String get _name {
     final raw = _currentEmployeeData['name'];
     if (raw != null && raw.toString().trim().isNotEmpty) {
@@ -291,78 +273,13 @@ class _AdminPayrollManagementPageState
     return '${m[s.month]} ${s.day} - ${m[e.month]} ${e.day}, ${e.year}';
   }
 
-  double get _autoOvertimePay {
-    if (_hours.totalOvertimeMinutes <= 0) return 0;
-    if (_b.dailyRate <= 0) return 0;
-    final hourlyRate = _b.dailyRate / 8;
-    return (_hours.totalOvertimeMinutes / 60.0) * hourlyRate;
-  }
-
-  double get _autoGrossPay {
-    return _b.basicSalary +
-        _b.otherIncomeAllowance +
-        _autoOvertimePay +
-        _b.nightDiffAmount;
-  }
-
-  double get _autoNetPay {
-    return _autoGrossPay - _b.totalDeductions;
-  }
-
-  PayrollBreakdown _getMockBreakdown() {
-    return PayrollBreakdown(
-      regularPay: 50000.0,
-      basicSalary: 45000.0,
-      basicHours: 176.0,
-      absentAmount: 2045.45,
-      absentHours: 8.0,
-      lateAmount: 0.0,
-      lateHours: 0.0,
-      undertimeAmount: 0.0,
-      undertimeHours: 0.0,
-      dayOffOtAmount: 0.0,
-      dayOffOtHours: 0.0,
-      overtimeAmount: 2500.0,
-      overtimeHours: 8.0,
-      nightDiffAmount: 0.0,
-      nightDiffHours: 0.0,
-      holidayAmount: 0.0,
-      otherIncomeAllowance: 5000.0,
-      totalAdjustmentsMade: 0.0,
-      grossPay: 52500.0,
-      thirteenthMonth: 3750.0,
-      silCredits: 10227.27,
-      totalBenefits: 13977.27,
-      workingDays: 22,
-      workingDaysPerMonth: 22,
-      presentDays: 21,
-      absentDays: 1,
-      dailyRate: 2045.45,
-      workRawMinutes: 10368,
-      workLunchMinutes: 1056,
-      workNetMinutes: 9312,
-      workOvertimeMinutes: 480,
-      daysWithLogs: 21,
-      daysWithLunchApplied: 21,
-      salarySource: 'manual',
-      sss: 2025.0,
-      philhealth: 1125.0,
-      pagibig: 900.0,
-      taxableIncome: 48450.0,
-      taxWithheld: 0.0,
-      totalLoanDeductions: 0.0,
-      totalDeductions: 6095.45,
-      netPay: 46404.55,
-      sickLeaveBalance: 120.0,
-      vacationLeaveBalance: 120.0,
-      riceAllowance: 0.0,
-    );
-  }
+  double get _autoOvertimePay => _b.overtimeAmount;
+  double get _autoGrossPay => _b.grossPay;
+  double get _autoNetPay => _b.netPay;
 
   @override
   void initState() {
     super.initState();
-    // 🆕 Working copy so edits reflect immediately
     _currentEmployeeData =
     Map<String, dynamic>.from(widget.employeeData);
     _verifyAndLoad();
@@ -372,17 +289,44 @@ class _AdminPayrollManagementPageState
     if (_isDemo) {
       setState(() {
         _isAdminVerified = true;
-        _b = _getMockBreakdown();
+        _loading = true;
+      });
+      // Generate dynamic Demo Data
+      final demoEmp = DemoModeService.demoEmployee;
+      final data = {
+        'id': demoEmp.id,
+        'employeeId': demoEmp.employeeId,
+        'name': demoEmp.fullName,
+        'department': demoEmp.department,
+        'basicSalary': 45000.0,
+        'basicAllowance': 5000.0,
+        'workingDaysPerMonth': 22,
+        'dateHired': DateTime.now().subtract(const Duration(days: 60)).toIso8601String(),
+      };
+      _currentEmployeeData = data;
+
+      final breakdown = await PayrollCalculator.compute(
+        employee: data,
+        periodStart: _periodStart,
+        periodEnd: _periodEnd,
+        presentDaysOverride: 22,
+        fetchAttendance: false,
+        fetchWorkHoursData: false,
+      );
+
+      setState(() {
+        _b = breakdown;
         _hours = EmployeeHoursSummary(
-          totalRawMinutes: 10368,
-          totalLunchDeductedMinutes: 1056,
-          totalNetMinutes: 9312,
-          totalOvertimeMinutes: 480,
-          daysWithLogs: 21,
-          daysWithLunchApplied: 21,
+          totalRawMinutes: 10560,
+          totalLunchDeductedMinutes: 1320,
+          totalNetMinutes: 9240,
+          totalOvertimeMinutes: 600,
+          daysWithLogs: 22,
+          daysWithLunchApplied: 22,
           dailyBreakdown: <DailyHours>[],
         );
         _loading = false;
+        _isPayslipUnlocked = true;
       });
       return;
     }
@@ -405,25 +349,60 @@ class _AdminPayrollManagementPageState
     setState(() => _loading = true);
 
     try {
+      // 0. Re-fetch employee to ensure full data (basicSalary, etc)
+      final docId = _docId;
+      if (docId.isNotEmpty) {
+        try {
+          final doc = await FirebaseFirestore.instance.collection('employees').doc(docId).get();
+          if (doc.exists && doc.data() != null) {
+            _currentEmployeeData = {
+              ...doc.data()!,
+              'id': doc.id,
+            };
+          }
+        } catch (e) {
+          debugPrint('⚠️ [PayrollMgmt] Refetch employee failed: $e');
+        }
+      }
+
+      // 1. Fetch bulk present days (tulad ng sa List Page)
+      final presentDaysMap = await PayrollCalculator.fetchPresentDaysMap(
+        periodStart: _periodStart,
+        periodEnd: _periodEnd,
+      );
+
+      int? present;
+      for (final k in ['id', 'employeeId', 'employee_id', 'nfcTagId', 'authUid']) {
+        final key = _currentEmployeeData[k]?.toString().trim();
+        if (key != null && key.isNotEmpty && presentDaysMap.containsKey(key)) {
+          present = presentDaysMap[key];
+          break;
+        }
+      }
+
+      // 2. Compute using the unified calculator
       final results = await Future.wait([
         PayrollCalculator.compute(
           employee: _currentEmployeeData,
           periodStart: _periodStart,
           periodEnd: _periodEnd,
+          presentDaysOverride: present,
+          fetchAttendance: false, // Skip single fetch para sure na tugma
         ),
         _loadHoursSummary(),
       ]);
 
       if (!mounted) return;
 
-      final docId = _docId;
       bool isUnlocked = false;
       if (docId.isNotEmpty) {
-        final empDoc = await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(docId)
-            .get();
-        isUnlocked = empDoc.data()?['payslipUnlocked'] == true;
+        try {
+          final empDoc = await FirebaseFirestore.instance
+              .collection('employees')
+              .doc(docId)
+              .get();
+          isUnlocked = empDoc.data()?['payslipUnlocked'] == true;
+        } catch (_) {}
       }
 
       setState(() {
@@ -478,9 +457,6 @@ class _AdminPayrollManagementPageState
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 🆕 HR EDIT + HR ASSISTANT OVERRIDE FLOW
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _openEditPayrollDialog() async {
     if (_isDemo) return _demoBlock();
     if (_editing) return;
@@ -496,7 +472,6 @@ class _AdminPayrollManagementPageState
       return;
     }
 
-    // Extract current source values for the dialog
     final current = {
       'basicSalary': PayrollCalculator.toDbl(
           _currentEmployeeData['basicSalary']),
@@ -530,7 +505,6 @@ class _AdminPayrollManagementPageState
 
     setState(() => _editing = true);
     try {
-      // Determine if this is first-time setup
       final storedHash = await _getStoredHrPasswordHash();
       final isSetup = storedHash == null || storedHash.isEmpty;
 
@@ -538,8 +512,6 @@ class _AdminPayrollManagementPageState
       if (approved != true) return;
 
       await _savePayrollOverride(result, isSetup: isSetup);
-
-      // Refetch and reload
       await _refetchEmployeeAndReload();
 
       if (mounted) {
@@ -580,7 +552,6 @@ class _AdminPayrollManagementPageState
       throw Exception('Admin session expired');
     }
 
-    // Build the update payload (all editable source fields)
     final payload = <String, dynamic>{
       'basicSalary': newValues['basicSalary'],
       'basicAllowance': newValues['basicAllowance'],
@@ -595,7 +566,6 @@ class _AdminPayrollManagementPageState
       'updatedAt': FieldValue.serverTimestamp(),
     };
 
-    // Before/after snapshot for audit
     final before = {
       'basicSalary':
       PayrollCalculator.toDbl(_currentEmployeeData['basicSalary']),
@@ -620,7 +590,6 @@ class _AdminPayrollManagementPageState
         .set(payload, SetOptions(merge: true))
         .timeout(const Duration(seconds: 12));
 
-    // Audit log — dual signature
     await _audit(
       action: isSetup
           ? 'payroll_override_edit_first_setup'
@@ -640,7 +609,6 @@ class _AdminPayrollManagementPageState
       },
     );
 
-    // Notify employee their payroll was adjusted
     try {
       await OneSignalSender.instance.sendToEmployee(
         employeeId: docId,
@@ -677,9 +645,6 @@ class _AdminPayrollManagementPageState
     await _load();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // PAYSLIP UNLOCK / LOCK
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _handleUnlockPayslip() async {
     if (_isDemo) return _demoBlock();
     if (_unlockingPayslip) return;
@@ -803,9 +768,6 @@ class _AdminPayrollManagementPageState
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // PDF
-  // ═══════════════════════════════════════════════════════════════════════
   String _pdfPeso(double amount) {
     final format = NumberFormat('#,##0.00');
     return '₱${format.format(amount)}';
@@ -905,7 +867,7 @@ class _AdminPayrollManagementPageState
               ),
               pw.SizedBox(height: 10),
               _pdfRow('Basic Pay', _pdfHrs(_b.basicHours),
-                  _pdfPeso(_b.basicSalary)),
+                  _pdfPeso(_b.earnedBasic)),
               _pdfRow('Absent', _pdfHrs(_b.absentHours),
                   '-${_pdfPeso(_b.absentAmount)}'),
               _pdfRow('Late', _pdfHrs(_b.lateHours),
@@ -920,7 +882,7 @@ class _AdminPayrollManagementPageState
                   _pdfPeso(_b.nightDiffAmount)),
               _pdfRow('Holiday', '', _pdfPeso(_b.holidayAmount)),
               _pdfRow('Other Income-Allowance', '',
-                  _pdfPeso(_b.otherIncomeAllowance)),
+                  _pdfPeso(_b.earnedAllowance)),
               _pdfRow('Total Adjustments Made', '',
                   _pdfPeso(_b.totalAdjustmentsMade)),
               pw.Divider(color: PdfColors.black, thickness: 1),
@@ -1283,9 +1245,6 @@ class _AdminPayrollManagementPageState
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // BUILD
-  // ═══════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     if (!_isAdminVerified && !_loading && !_isDemo) {
@@ -1536,7 +1495,6 @@ class _AdminPayrollManagementPageState
             spacing: 10,
             runSpacing: 8,
             children: [
-              // 🆕 Edit Payroll button (HR initiator)
               OutlinedButton.icon(
                 onPressed: (_editing || _isDemo)
                     ? null
@@ -1704,7 +1662,7 @@ class _AdminPayrollManagementPageState
               'Basic + Allowances + OT (auto)', false),
           _buildMetricCard('TOTAL DEDUCTIONS',
               PayrollCalculator.peso(_b.totalDeductions),
-              'Absences + Govt (9%)', true),
+              'Absences + Govt Deductions', true),
         ];
 
         if (wide) {
@@ -1827,10 +1785,10 @@ class _AdminPayrollManagementPageState
       badgeColor: tc.orange.withValues(alpha: 0.15),
       badgeTextColor: tc.orangeText,
       children: [
-        _item('Basic Salary', 'Regular monthly pay',
-            PayrollCalculator.peso(_b.basicSalary), false),
-        _item('Allowances', 'Housing / Transport / Special',
-            PayrollCalculator.peso(_b.otherIncomeAllowance), false),
+        _item('Basic Pay (Earned)', '${_b.presentDays} day(s) × daily rate',
+            PayrollCalculator.peso(_b.earnedBasic), false),
+        _item('Allowances (Earned)', '${_b.presentDays} day(s) × allowance rate',
+            PayrollCalculator.peso(_b.earnedAllowance), false),
         _item(
           'Overtime Pay',
           hasOT
@@ -2012,11 +1970,11 @@ class _AdminPayrollManagementPageState
       badgeColor: tc.pillErrBg,
       badgeTextColor: tc.pillErrTx,
       children: [
-        _item('SSS Contribution', '4.5% Employee Share',
+        _item('SSS Contribution', 'Standard Employee Share',
             '-${PayrollCalculator.peso(_b.sss)}', true),
-        _item('PhilHealth Contribution', '2.5% Employee Share',
+        _item('PhilHealth Contribution', 'Standard Employee Share',
             '-${PayrollCalculator.peso(_b.philhealth)}', true),
-        _item('Pag-IBIG Contribution', '2.0% Employee Share',
+        _item('Pag-IBIG Contribution', 'Standard Employee Share',
             '-${PayrollCalculator.peso(_b.pagibig)}', true),
         _item('Withholding Tax',
             'Calculated based on net taxable income',
@@ -2031,7 +1989,7 @@ class _AdminPayrollManagementPageState
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
-            'Total statutory deductions amount to 9% of the basic salary (${PayrollCalculator.peso(_b.basicSalary)}) for this pay period.',
+            'Total statutory deductions amount to ${PayrollCalculator.peso(total)} based on the employee\'s registered salary.',
             style: TextStyle(
                 fontSize: 11, color: tc.pillWarnTx, height: 1.4),
           ),
@@ -2138,9 +2096,6 @@ class _AdminPayrollManagementPageState
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// 🆕 PAYROLL EDIT DIALOG
-// ═══════════════════════════════════════════════════════════════════════
 class _PayrollEditDialog extends StatefulWidget {
   final String employeeName;
   final Map<String, dynamic> currentValues;
@@ -2309,7 +2264,7 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
                       decimal: true),
                   validator: (v) {
                     final t = (v ?? '').trim();
-                    if (t.isEmpty) return null; // 0 is fine
+                    if (t.isEmpty) return null;
                     final n = double.tryParse(t);
                     if (n == null) return 'Invalid number';
                     if (n < 0) return 'Cannot be negative';
@@ -2406,7 +2361,6 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
                 ),
                 const SizedBox(height: 16),
 
-                // Preview
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -2582,9 +2536,6 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// 🆕 HR ASSISTANT OVERRIDE PASSWORD DIALOG
-// ═══════════════════════════════════════════════════════════════════════
 class _OverridePasswordDialog extends StatefulWidget {
   final bool isSetup;
   final Future<void> Function(String password) onSetup;
@@ -2860,9 +2811,6 @@ class _OverridePasswordDialogState extends State<_OverridePasswordDialog> {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// RATE LIMITER
-// ═══════════════════════════════════════════════════════════════════════
 class _SecurityGuard {
   final Map<String, DateTime> _lastCall = {};
   static const Duration _minInterval = Duration(seconds: 3);

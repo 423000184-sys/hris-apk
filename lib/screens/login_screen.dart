@@ -1,3 +1,6 @@
+// lib/screens/login_screen.dart
+// v2.0: 🔧 Fixed PIN fetching for both PBKDF2 (v2$) and manual SHA256 formats.
+// Added plaintext backfill on successful scan to ensure future fast logins.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -47,24 +50,16 @@ class _ThemeColors {
 
   Color get bgTop => isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF);
   Color get bgMid => isDark ? const Color(0xFF0F0D0B) : const Color(0xFFFFF0E5);
-  Color get bgBottom =>
-      isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFE3D1);
-  Color get cardBg =>
-      isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
-  Color get cardBorder =>
-      isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
-  Color get optionBorder =>
-      isDark ? const Color(0xFF7C2D12) : const Color(0xFFFDBA74);
-  Color get hoverBg =>
-      isDark ? const Color(0xFF27272A) : const Color(0xFFFFF7ED);
+  Color get bgBottom => isDark ? const Color(0xFF1A0F05) : const Color(0xFFFFE3D1);
+  Color get cardBg => isDark ? const Color(0xFF18181B) : const Color(0xFFFFFFFF);
+  Color get cardBorder => isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
+  Color get optionBorder => isDark ? const Color(0xFF7C2D12) : const Color(0xFFFDBA74);
+  Color get hoverBg => isDark ? const Color(0xFF27272A) : const Color(0xFFFFF7ED);
   Color get textDark => isDark ? Colors.white : const Color(0xFF1F2937);
-  Color get textMuted =>
-      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
+  Color get textMuted => isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
   Color get infoBg => isDark ? const Color(0xFF1F1F23) : Colors.white;
-  Color get infoBorder =>
-      isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
-  Color get infoText =>
-      isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
+  Color get infoBorder => isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFEDD5);
+  Color get infoText => isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
   Color get methodIconBg => isDark ? const Color(0xFF27272A) : Colors.white;
 }
 
@@ -1616,101 +1611,185 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // PIN LOOKUP — ULTIMATE FALLBACK (v2.0)
+  // Handles v2$ PBKDF2, Admin SHA256(salt:pin), and Plaintext PIN
+  // ═══════════════════════════════════════════════════════════
   Future<Employee?> _findEmployeeByPin(String pin) async {
-    try {
-      final cleanPin = pin.trim();
-      final lookup = SecurityHardeningService.instance.pinLookupHash(cleanPin);
+    final cleanPin = pin.trim();
+    if (cleanPin.isEmpty) return null;
 
+    final lookup = _sha256Hex(cleanPin);
+
+    // ──────────────────────────────────────────────────────────
+    // METHOD 1: Fast indexed query by pinLookupHash
+    // ──────────────────────────────────────────────────────────
+    try {
       final snap = await FirebaseFirestore.instance
           .collection('employees')
           .where('pinLookupHash', isEqualTo: lookup)
           .limit(5)
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 10));
 
-      if (snap.docs.isNotEmpty) {
-        for (final doc in snap.docs) {
-          if (!_isEmployeeLoginable(doc.data())) continue;
+      for (final doc in snap.docs) {
+        if (!_isEmployeeLoginable(doc.data())) continue;
 
-          final data = doc.data();
-          final salt = data['pinSalt'] as String?;
-          final hash = data['pinHash'] as String?;
+        final data = doc.data();
+        final salt = data['pinSalt'] as String? ?? '';
+        final hash = data['pinHash'] as String?;
 
-          if (salt != null && hash != null) {
-            final ok = await SecurityHardeningService.instance
-                .verifyPinAsync(cleanPin, salt, hash);
-            if (!ok) continue;
-          }
-
-          final employee = _docToEmployee(doc);
-          if (!kIsWeb) {
-            try {
-              await DatabaseService.instance.insertEmployee(employee);
-            } catch (_) {}
-          }
-          return employee;
+        if (hash != null && hash.isNotEmpty) {
+          final ok = await SecurityHardeningService.instance
+              .verifyPinAsync(cleanPin, salt, hash);
+          if (!ok) continue;
         }
-      }
 
-      _secureLog('⚠️ [PIN Query] Falling back to legacy plaintext lookup');
+        _secureLog('✅ [PIN] Method 1 match: ${doc.id}');
+        final employee = _docToEmployee(doc);
+        if (!kIsWeb) { try { await DatabaseService.instance.insertEmployee(employee); } catch (_) {} }
+        return employee;
+      }
+    } catch (e) {
+      _secureLog('⚠️ [PIN] Method 1 failed: $e');
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // METHOD 2: Plaintext 'pin' field (used by AdminEmployeesPage)
+    // ──────────────────────────────────────────────────────────
+    try {
       final legacy = await FirebaseFirestore.instance
           .collection('employees')
           .where('pin', isEqualTo: cleanPin)
           .limit(5)
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 10));
 
       for (final doc in legacy.docs) {
-        if (_isEmployeeLoginable(doc.data())) {
-          await _logSecurityEvent(
-            type: 'legacy_pin_used',
-            severity: 'high',
-            details:
-            'Employee ${doc.id} used a legacy plaintext PIN — MIGRATE NOW',
-            employeeId: doc.id,
-          );
-          final employee = _docToEmployee(doc);
-          if (!kIsWeb) {
-            try {
-              await DatabaseService.instance.insertEmployee(employee);
-            } catch (_) {}
-          }
-          return employee;
-        }
-      }
+        if (!_isEmployeeLoginable(doc.data())) continue;
 
+        _secureLog('✅ [PIN] Method 2 (legacy str) match: ${doc.id}');
+        await _logSecurityEvent(
+          type: 'legacy_pin_used',
+          severity: 'high',
+          details: 'Employee ${doc.id} used legacy plaintext PIN — MIGRATE NOW',
+          employeeId: doc.id,
+        );
+        final employee = _docToEmployee(doc);
+        if (!kIsWeb) { try { await DatabaseService.instance.insertEmployee(employee); } catch (_) {} }
+        return employee;
+      }
+    } catch (e) {
+      _secureLog('⚠️ [PIN] Method 2 failed: $e');
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // METHOD 3: Legacy numeric pin
+    // ──────────────────────────────────────────────────────────
+    try {
       final pinInt = int.tryParse(cleanPin);
       if (pinInt != null) {
-        _secureLog('⚠️ [PIN Query] Trying legacy numeric pin ($pinInt)');
         final legacyInt = await FirebaseFirestore.instance
             .collection('employees')
             .where('pin', isEqualTo: pinInt)
             .limit(5)
-            .get();
+            .get()
+            .timeout(const Duration(seconds: 10));
 
         for (final doc in legacyInt.docs) {
-          if (_isEmployeeLoginable(doc.data())) {
-            await _logSecurityEvent(
-              type: 'legacy_pin_used',
-              severity: 'high',
-              details:
-              'Employee ${doc.id} used a legacy NUMERIC PIN — MIGRATE NOW',
-              employeeId: doc.id,
-            );
-            final employee = _docToEmployee(doc);
-            if (!kIsWeb) {
-              try {
-                await DatabaseService.instance.insertEmployee(employee);
-              } catch (_) {}
-            }
-            return employee;
-          }
+          if (!_isEmployeeLoginable(doc.data())) continue;
+
+          _secureLog('✅ [PIN] Method 3 (legacy int) match: ${doc.id}');
+          await _logSecurityEvent(
+            type: 'legacy_pin_used',
+            severity: 'high',
+            details: 'Employee ${doc.id} used legacy NUMERIC PIN — MIGRATE NOW',
+            employeeId: doc.id,
+          );
+          final employee = _docToEmployee(doc);
+          if (!kIsWeb) { try { await DatabaseService.instance.insertEmployee(employee); } catch (_) {} }
+          return employee;
         }
       }
-
-      return null;
     } catch (e) {
-      _secureLog('❌ _findEmployeeByPin error: $e');
-      return null;
+      _secureLog('⚠️ [PIN] Method 3 failed: $e');
     }
+
+    // ──────────────────────────────────────────────────────────
+    // METHOD 4: FULL SCAN + hash verify (SLOW pero SURE)
+    // ──────────────────────────────────────────────────────────
+    try {
+      _secureLog('⚠️ [PIN] Method 4 — full scan with hash verify');
+      final allDocs = await FirebaseFirestore.instance
+          .collection('employees')
+          .limit(500)
+          .get()
+          .timeout(const Duration(seconds: 20));
+
+      _secureLog('🔍 [PIN] Method 4 — scanning ${allDocs.docs.length} employees');
+
+      for (final doc in allDocs.docs) {
+        if (!_isEmployeeLoginable(doc.data())) continue;
+
+        final data = doc.data();
+        final salt = data['pinSalt'] as String? ?? '';
+        final hash = data['pinHash'] as String?;
+
+        if (hash == null || hash.isEmpty) continue;
+
+        bool ok = false;
+
+        // 4a. Try SecurityHardeningService (v2$... format)
+        try {
+          ok = await SecurityHardeningService.instance
+              .verifyPinAsync(cleanPin, salt, hash);
+        } catch (_) {}
+
+        // 4b. Try manual SHA256(salt:pin) — from AdminEmployeesPage
+        if (!ok) {
+          try {
+            final bytes = utf8.encode('$salt:$cleanPin');
+            final digest = sha256.convert(bytes).toString();
+            if (digest == hash) ok = true;
+          } catch (_) {}
+        }
+
+        // 4c. Try manual SHA256(pin) — just in case
+        if (!ok) {
+          try {
+            final digest = sha256.convert(utf8.encode(cleanPin)).toString();
+            if (digest == hash) ok = true;
+          } catch (_) {}
+        }
+
+        if (ok) {
+          _secureLog('✅ [PIN] Method 4 (full-scan) match: ${doc.id}');
+
+          // 🔧 Auto-backfill: Save plaintext PIN and pinLookupHash so Method 1 & 2 hit next time
+          try {
+            await FirebaseFirestore.instance
+                .collection('employees')
+                .doc(doc.id)
+                .update({
+              'pinLookupHash': lookup,
+              'pin': cleanPin,
+            });
+            _secureLog('🔧 [PIN] Backfilled pinLookupHash and plaintext pin for ${doc.id}');
+          } catch (e) {
+            _secureLog('⚠️ [PIN] Backfill failed: $e');
+          }
+
+          final employee = _docToEmployee(doc);
+          if (!kIsWeb) { try { await DatabaseService.instance.insertEmployee(employee); } catch (_) {} }
+          return employee;
+        }
+      }
+    } catch (e) {
+      _secureLog('⚠️ [PIN] Method 4 failed: $e');
+    }
+
+    _secureLog('❌ [PIN] No match after all methods');
+    return null;
   }
 
   Future<Employee?> _loadEmployeeById(String empId) async {
@@ -1858,7 +1937,8 @@ class _LoginScreenState extends State<LoginScreen>
         throw StateError('Session nonce invalid');
       }
 
-      final bindingStatus = await DeviceBindingService().checkBinding(employee.id);
+      final bindingStatus =
+      await DeviceBindingService().checkBinding(employee.id);
 
       debugPrint('🔍 [DeviceBinding] allowed=${bindingStatus.allowed}, '
           'needsBinding=${bindingStatus.needsBinding}, reason=${bindingStatus.reason}');
@@ -1900,6 +1980,55 @@ class _LoginScreenState extends State<LoginScreen>
 
       final deviceId = await DeviceInfoService.instance.getUniqueDeviceId();
       final deviceModel = await DeviceInfoService.instance.getDeviceModel();
+
+      // 🆕 DEVICE REGISTRATION CHECK (Tinitignan kung tugma sa Admin settings)
+      try {
+        final empDoc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(employee.id)
+            .get();
+        final empData = empDoc.data();
+
+        if (empData != null) {
+          final registeredDevice = (empData['deviceName'] ??
+              empData['registeredDevice'] ??
+              '')
+              .toString()
+              .trim();
+
+          if (registeredDevice.isNotEmpty) {
+            final currentDevice = deviceModel.toLowerCase();
+            final regDevice = registeredDevice.toLowerCase();
+
+            // Fuzzy match: tinitignan kung nagco-contain ang isa sa isa
+            final isMatch = currentDevice.contains(regDevice) ||
+                regDevice.contains(currentDevice);
+
+            if (!isMatch) {
+              _secureLog(
+                  '🚨 [DeviceAuth] Device mismatch. Registered: $registeredDevice, Current: $deviceModel');
+              if (mounted) {
+                setState(() => _isLoading = false);
+                _showBlockedDialog(
+                  title: 'Unauthorized Device',
+                  icon: Icons.phonelink_erase_rounded,
+                  iconColor: Colors.red,
+                  message: 'This account is registered to another device.\n\n'
+                      'Registered Device: $registeredDevice\n'
+                      'Current Device: $deviceModel\n\n'
+                      'Please contact HR/Admin to update your registered device.',
+                );
+              }
+              try {
+                await FirebaseAuth.instance.signOut();
+              } catch (_) {}
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        _secureLog('⚠️ [DeviceAuth] Failed to check device match: $e');
+      }
 
       final latestAttendance = await FirebaseFirestore.instance
           .collection('attendance_logs')
@@ -2159,7 +2288,7 @@ class _LoginScreenState extends State<LoginScreen>
     if (resolved != null && resolved.id == 'custom-emp-id') {
       _activeEmployee = resolved;
       _hasActiveMeeting = true;
-      _activeAssignment = null; // <--- GINAWANG NULL PARA WALANG ERROR
+      _activeAssignment = null;
 
       if (mounted) setState(() => _isLoading = false);
 
@@ -2320,7 +2449,7 @@ class _LoginScreenState extends State<LoginScreen>
 
     // 🚨 TEMPORARY BYPASS PARA MAKAPASOK KAHIT MALAYO SA EMULATOR 🚨
     double? distance = 0.0;
-    bool locationOk = true; // Pinipilit nating true para makalampas sa error
+    bool locationOk = true;
 
     return _ClientMeetingValidationResult(
       dateOk: dateOk,
@@ -4607,7 +4736,9 @@ class _LoginScreenState extends State<LoginScreen>
                   fontWeight: FontWeight.w500)),
           const SizedBox(height: 10),
           Text(
-            _isLoading ? 'Reading keyfob…' : 'Please tap your key fob on the reader...',
+            _isLoading
+                ? 'Reading keyfob…'
+                : 'Please tap your key fob on the reader...',
             textAlign: TextAlign.center,
             style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.85), fontSize: 14),

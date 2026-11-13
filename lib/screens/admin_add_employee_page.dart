@@ -1,7 +1,11 @@
 // lib/screens/admin_add_employee_page.dart
-// v2.1: 🎭 Demo Mode Mock Data & Action Blocking
+// v2.7: 🔧 Force-save PIN (plaintext, hash, salt, lookupHash) so LoginScreen can verify.
+// v2.6: 🖼️ Fixed instant photo reflection by directly updating the photoUrl
+//       in Firestore, bypassing the AdminEmployeeService whitelist.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -10,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:syncfusion_flutter_datepicker/datepicker.dart';
+import 'package:image/image.dart' as img;
 
 import 'admin_database.dart';
 import 'admin_theme.dart';
@@ -17,7 +22,7 @@ import '../services/face_matcher.dart';
 import '../services/admin_employee_service.dart';
 import '../utils/file_download.dart';
 import '../widgets/bootstrap_grid.dart';
-import '../services/demo_mode_service.dart'; // 🎭 Added
+import '../services/demo_mode_service.dart';
 
 // ══════════════════════════════════════════════════════════════
 // SALARY MATRIX
@@ -66,6 +71,9 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   String _selectedRole = 'Employee';
   final List<String> _roleOptions = ['Employee', 'Driver', 'Admin', 'Manager'];
 
+  // Department Options for Dropdown
+  final List<String> _departmentOptions = ['HR/Admin', 'Accounting', 'Operation'];
+
   String _selectedGender = 'male';
   final List<String> _genderOptions = ['male', 'female'];
 
@@ -74,7 +82,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
 
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -100,12 +107,35 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     );
   }
 
-  // 🎭 Demo Block Helper
   void _demoBlock() {
     _snack('Action disabled in Demo Mode.', error: true);
   }
 
-  // 🎭 MOCK DATA for Demo Mode
+  // COMPRESS IMAGE FOR INSTANT BASE64
+  Uint8List? _compressForFirestore(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      const maxDim = 600;
+      img.Image resized = decoded;
+      if (decoded.width > maxDim || decoded.height > maxDim) {
+        resized = img.copyResize(
+          decoded,
+          width: decoded.width >= decoded.height ? maxDim : null,
+          height: decoded.height > decoded.width ? maxDim : null,
+          interpolation: img.Interpolation.average,
+        );
+      }
+      var out = Uint8List.fromList(img.encodeJpg(resized, quality: 70));
+      if (out.length < 400 * 1024) return out;
+      out = Uint8List.fromList(img.encodeJpg(resized, quality: 50));
+      if (out.length < 400 * 1024) return out;
+      return Uint8List.fromList(img.encodeJpg(resized, quality: 35));
+    } catch (e) {
+      return bytes;
+    }
+  }
+
   List<Map<String, dynamic>> _getMockEmployees() {
     return [
       {
@@ -199,11 +229,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     }).toList();
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // CSV EXPORT WITH PII MASKING
-  // ══════════════════════════════════════════════════════════════
   Future<void> _exportEmployeesToCsv() async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
     if (_exporting) return;
 
     final confirmed = await showDialog<bool>(
@@ -385,9 +412,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     return v.toString();
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // DATE RANGE PICKER
-  // ══════════════════════════════════════════════════════════════
   Future<void> _pickDateRange() async {
     DateTimeRange? tempRange = _selectedDateRange;
 
@@ -560,7 +584,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // 🎭 DEMO BANNER
                           if (_isDemo) ...[
                             _buildDemoBanner(),
                             const SizedBox(height: 24),
@@ -597,9 +620,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🎭 DEMO BANNER
-  // ══════════════════════════════════════════════════════════════
   Widget _buildDemoBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -842,7 +862,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       final r = BsResponsive(c.maxWidth);
       final isMobile = !r.up(BsSize.md);
 
-      // 🎭 USE MOCK DATA IF IN DEMO MODE
       final stream = _isDemo
           ? Stream.value(_getMockEmployees())
           : AdminDatabase.streamEmployees();
@@ -1181,38 +1200,17 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
     required double fontSize,
   }) {
     if (photoUrl.isNotEmpty && photoUrl != '—') {
-      return Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border:
-          Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1.5),
-          color: tc.orange.withValues(alpha: 0.15),
-        ),
-        child: ClipOval(
-          child: Image.network(
-            photoUrl,
+      Widget imageWidget;
+
+      if (photoUrl.startsWith('data:image')) {
+        try {
+          final b64 = photoUrl.split(',').last.replaceAll(RegExp(r'\s'), '');
+          final bytes = base64Decode(b64);
+          imageWidget = Image.memory(
+            bytes,
             width: size,
             height: size,
             fit: BoxFit.cover,
-            loadingBuilder: (context, child, loadingProgress) {
-              if (loadingProgress == null) return child;
-              return Center(
-                child: SizedBox(
-                  width: size * 0.4,
-                  height: size * 0.4,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: tc.orange,
-                    value: loadingProgress.expectedTotalBytes != null
-                        ? loadingProgress.cumulativeBytesLoaded /
-                        loadingProgress.expectedTotalBytes!
-                        : null,
-                  ),
-                ),
-              );
-            },
             errorBuilder: (context, error, stackTrace) {
               return Center(
                 child: Text(initials,
@@ -1222,8 +1220,60 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                         fontWeight: FontWeight.w700)),
               );
             },
-          ),
+          );
+        } catch (e) {
+          imageWidget = Center(
+            child: Text(initials,
+                style: TextStyle(
+                    color: tc.orangeText,
+                    fontSize: fontSize,
+                    fontWeight: FontWeight.w700)),
+          );
+        }
+      } else {
+        imageWidget = Image.network(
+          photoUrl,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) return child;
+            return Center(
+              child: SizedBox(
+                width: size * 0.4,
+                height: size * 0.4,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: tc.orange,
+                  value: loadingProgress.expectedTotalBytes != null
+                      ? loadingProgress.cumulativeBytesLoaded /
+                      loadingProgress.expectedTotalBytes!
+                      : null,
+                ),
+              ),
+            );
+          },
+          errorBuilder: (context, error, stackTrace) {
+            return Center(
+              child: Text(initials,
+                  style: TextStyle(
+                      color: tc.orangeText,
+                      fontSize: fontSize,
+                      fontWeight: FontWeight.w700)),
+            );
+          },
+        );
+      }
+
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: tc.orange.withValues(alpha: 0.3), width: 1.5),
+          color: tc.orange.withValues(alpha: 0.15),
         ),
+        child: ClipOval(child: imageWidget),
       );
     }
 
@@ -1265,7 +1315,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       tooltip: 'Actions',
       onSelected: (value) async {
         if (docId.isEmpty) return;
-        if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+        if (_isDemo) return _demoBlock();
 
         switch (value) {
           case 'edit':
@@ -1306,7 +1356,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   }
 
   Future<void> _confirmTerminate(String docId, String name) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     final reasonCtrl = TextEditingController();
     final ok = await showDialog<bool>(
@@ -1399,11 +1449,8 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
             color: active ? tc.onOrange : tc.text)),
   );
 
-  // ══════════════════════════════════════════════════════════════
-  // SECURE ADD DIALOG
-  // ══════════════════════════════════════════════════════════════
   void _openAddDialog() {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
 
     _profileImageBytes = null;
     _saving = false;
@@ -1690,7 +1737,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       TextEditingController bankNameCtrl,
       TextEditingController accountNumberCtrl,
       ) async {
-    if (_isDemo) return _demoBlock(); // 🎭 Block in Demo
+    if (_isDemo) return _demoBlock();
     if (_saving) return;
 
     if (!(_fKey.currentState?.validate() ?? false)) return;
@@ -1779,6 +1826,73 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         return;
       }
 
+      // 🆕 ROBUST ID FETCHING: Check by employeeId first, then fallback to email.
+      String? targetDocId;
+      try {
+        var query = await FirebaseFirestore.instance
+            .collection('employees')
+            .where('employeeId', isEqualTo: empId)
+            .limit(1)
+            .get();
+
+        if (query.docs.isNotEmpty) {
+          targetDocId = query.docs.first.id;
+        } else {
+          query = await FirebaseFirestore.instance
+              .collection('employees')
+              .where('email', isEqualTo: email)
+              .limit(1)
+              .get();
+          if (query.docs.isNotEmpty) {
+            targetDocId = query.docs.first.id;
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to fetch real doc ID: $e');
+      }
+
+      // Fallback kung sakaling hindi pa nagrereflect agad sa query
+      if (targetDocId == null) {
+        targetDocId = empId;
+      }
+
+      // 🚨 FORCE SAVE PIN: Para siguradong mababasa ng Login Screen
+      if (targetDocId != null && plainPin.isNotEmpty) {
+        final lookupHash = sha256.convert(utf8.encode(plainPin)).toString();
+        final random = math.Random.secure();
+        final saltBytes = List<int>.generate(16, (_) => random.nextInt(256));
+        final salt = base64Url.encode(saltBytes);
+        final hash = sha256.convert(utf8.encode('$salt:$plainPin')).toString();
+
+        try {
+          await AdminDatabase.fs.collection('employees').doc(targetDocId).update({
+            'pin': plainPin,
+            'pinHash': hash,
+            'pinSalt': salt,
+            'pinLookupHash': lookupHash,
+            'pinUpdatedAt': FieldValue.serverTimestamp(),
+          });
+          debugPrint('✅ PIN force-saved for $targetDocId');
+        } catch (e) {
+          debugPrint('⚠️ Failed to force save PIN: $e');
+        }
+      }
+
+      String? base64Photo;
+      if (_profileImageBytes != null) {
+        try {
+          final compressed = _compressForFirestore(_profileImageBytes!);
+          if (compressed != null) {
+            final b64 = base64Encode(compressed).replaceAll(RegExp(r'\s'), '');
+            if (b64.length <= 900 * 1024) {
+              base64Photo = 'data:image/jpeg;base64,$b64';
+            }
+          }
+        } catch (e) {
+          debugPrint('Image compression failed: $e');
+        }
+      }
+
       try {
         final extra = <String, dynamic>{};
         if (deviceName.isNotEmpty) extra['deviceName'] = deviceName;
@@ -1788,8 +1902,17 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
           final parsed = DateTime.tryParse(birthdayCtrl.text.trim());
           if (parsed != null) extra['birthday'] = Timestamp.fromDate(parsed);
         }
-        if (extra.isNotEmpty) {
-          await _svc.updateEmployee(docId: empId, patch: extra);
+
+        // I-save ang ibang fields via service (whitelisted)
+        if (extra.isNotEmpty && targetDocId != null) {
+          await _svc.updateEmployee(docId: targetDocId, patch: extra);
+        }
+
+        // 🚨 DIRECT SAVE FOR PHOTO (Bypass whitelist)
+        if (base64Photo != null && targetDocId != null) {
+          await AdminDatabase.fs.collection('employees').doc(targetDocId).update({
+            'photoUrl': base64Photo,
+          });
         }
       } catch (e) {
         debugPrint('Non-critical field save failed: $e');
@@ -1802,7 +1925,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
 
       if (mounted) {
         _snack(capturedBytes != null
-            ? 'Employee "$empId" saved. Processing photo...'
+            ? 'Employee "$empId" saved with photo.'
             : 'Employee "$empId" saved.');
         widget.onRefreshNeeded();
       }
@@ -1820,7 +1943,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
 
   Future<void> _processFaceWithFeedback(
       String email, Uint8List imageBytes) async {
-    if (_isDemo) return; // 🎭 Block in Demo
+    if (_isDemo) return;
 
     try {
       final query = await FirebaseFirestore.instance
@@ -1836,22 +1959,6 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       final empId = empDoc.id;
 
       try {
-        final photoUrl = await FaceMatcher.uploadEmployeePhoto(
-          empId,
-          imageBytes,
-        ).timeout(const Duration(seconds: 60));
-
-        if (photoUrl != null) {
-          await _svc.updateEmployee(
-            docId: empId,
-            patch: {'photoUrl': photoUrl},
-          );
-        }
-      } catch (e) {
-        debugPrint('Photo upload failed: $e');
-      }
-
-      try {
         final embedding = await FaceMatcher.generateEmbedding(imageBytes)
             .timeout(const Duration(seconds: 20));
 
@@ -1864,7 +1971,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       }
 
       if (mounted) {
-        _snack('Photo and face data saved.');
+        _snack('Face data saved.');
         widget.onRefreshNeeded();
       }
     } catch (e) {
@@ -2038,14 +2145,12 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                       'EMAIL ADDRESS', emailCtrl, 'Email Address', dialogTc,
                       required: true, maxLen: 120),
                   const SizedBox(height: 12),
-                  _buildBirthdayPicker(birthdayCtrl, dialogTc),
+                  _buildBirthdayPicker(birthdayCtrl, dialogTc, setS),
                   const SizedBox(height: 12),
                   _buildInput('PHONE NO.', phoneCtrl, 'Phone No.', dialogTc,
                       maxLen: 20),
                   const SizedBox(height: 12),
-                  _buildInput(
-                      'DEPARTMENT', deptCtrl, 'Department', dialogTc,
-                      required: true, maxLen: 40),
+                  _buildDepartmentDropdown(deptCtrl, dialogTc, setS),
                   const SizedBox(height: 12),
                   _buildInput('EMPLOYEE ID', idCtrl, 'e.g., emp-01-2026',
                       dialogTc,
@@ -2076,7 +2181,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                 const SizedBox(height: 12),
                 Row(children: [
                   Expanded(
-                      child: _buildBirthdayPicker(birthdayCtrl, dialogTc)),
+                      child: _buildBirthdayPicker(birthdayCtrl, dialogTc, setS)),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildInput(
@@ -2087,9 +2192,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
                 const SizedBox(height: 12),
                 Row(children: [
                   Expanded(
-                    child: _buildInput('DEPARTMENT', deptCtrl, 'Department',
-                        dialogTc,
-                        required: true, maxLen: 40),
+                    child: _buildDepartmentDropdown(deptCtrl, dialogTc, setS),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -2285,9 +2388,9 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              Icon(Icons.fingerprint, size: 16, color: dialogTc.orange),
+              Icon(Icons.security_rounded, size: 16, color: dialogTc.orange),
               const SizedBox(width: 8),
-              Text('Biometric Credentials',
+              Text('Security Credentials',
                   style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
@@ -2356,6 +2459,69 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
         ),
       ),
     ]);
+  }
+
+  Widget _buildDepartmentDropdown(
+      TextEditingController deptCtrl, AdminColors dialogTc, StateSetter setS) {
+    String? safeValue =
+    _departmentOptions.contains(deptCtrl.text) ? deptCtrl.text : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Text('DEPARTMENT',
+              style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: dialogTc.muted,
+                  letterSpacing: 0.5)),
+          const SizedBox(width: 4),
+          Text('*',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: dialogTc.orange)),
+        ]),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: dialogTc.surface,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: dialogTc.border),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: safeValue,
+              isExpanded: true,
+              hint: Text(
+                'Select department',
+                style: TextStyle(fontSize: 12, color: dialogTc.muted),
+              ),
+              dropdownColor: dialogTc.card,
+              style: TextStyle(
+                  fontSize: 12,
+                  color: dialogTc.text,
+                  fontWeight: FontWeight.w500),
+              icon: Icon(Icons.keyboard_arrow_down_rounded,
+                  size: 16, color: dialogTc.muted),
+              items: _departmentOptions.map((d) {
+                return DropdownMenuItem<String>(
+                  value: d,
+                  child: Text(d),
+                );
+              }).toList(),
+              onChanged: (val) {
+                if (val != null) {
+                  setS(() => deptCtrl.text = val);
+                }
+              },
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _buildPinField(
@@ -2437,7 +2603,7 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
   }
 
   Widget _buildBirthdayPicker(
-      TextEditingController birthdayCtrl, AdminColors dialogTc) {
+      TextEditingController birthdayCtrl, AdminColors dialogTc, StateSetter setS) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2457,7 +2623,9 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
               lastDate: DateTime.now(),
             );
             if (picked != null) {
-              birthdayCtrl.text = DateFormat('yyyy-MM-dd').format(picked);
+              setS(() {
+                birthdayCtrl.text = DateFormat('yyyy-MM-dd').format(picked);
+              });
             }
           },
           child: Container(

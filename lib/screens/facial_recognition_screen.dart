@@ -1,7 +1,6 @@
 // lib/screens/facial_recognition_screen.dart
-// v3.1: 📨 Complete Admin Actions + English Translations
-//       • Fixed FaceMatcher.clearTemplate missing error.
-//       • Removed unused variables causing IDE warnings.
+// v3.3: 🏷️ Removed all biometric matching/enrollment logic.
+//       Renamed to "Face Liveness Check" everywhere.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -16,7 +15,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/employee.dart';
-import '../services/face_matcher.dart';
+import '../services/face_matcher.dart'; // Kept for cleanup only
 import '../services/clock_status_service.dart';
 import '../services/geofence_service.dart';
 import '../services/admin_notification_service.dart';
@@ -58,8 +57,6 @@ class _ThemeColors {
 
 enum _NetState { online, offline, checking }
 
-enum _AuthMode { unknown, enroll, verify }
-
 class FacialRecognitionScreen extends StatefulWidget {
   final Employee employee;
   final DateTime? arrivalTime;
@@ -83,7 +80,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
   _FaceState _faceState = _FaceState.idle;
-  _AuthMode _authMode = _AuthMode.unknown;
   String? _errorMessage;
   _FaceWarning _faceWarning = _FaceWarning.none;
 
@@ -95,20 +91,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   bool _isScanning = false;
   String? _camError;
 
-  double _matchScore = 0.0;
-  double _matchPercent = 0.0;
-  bool _faceMatched = false;
-
-  int _enrollCaptureCount = 0;
-  static const int _requiredEnrollCaptures = 3;
-  bool _isSavingEnroll = false;
-  String _enrollHint = 'Look straight at the camera.';
-  DateTime? _lastEnrollCaptureAt;
-  static const Duration _enrollCaptureCooldown = Duration(milliseconds: 1200);
-
   bool _isCheckingGeofence = false;
-  bool _isCheckingTemplate = false;
-  bool _selfHealTriggered = false;
 
   bool _geofenceVerifiedOffline = false;
   int _pendingCount = 0;
@@ -117,7 +100,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   String _deviceModel = 'Unknown Device';
 
-  static const double _matchThreshold = 0.68;
   static const double _minFaceAreaRatio = 0.06;
   static const double _maxFaceAreaRatio = 0.65;
   static const double _maxHeadYawDeg = 22.0;
@@ -151,10 +133,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   DateTime? _livenessStartTime;
   static const int _livenessTimeoutMs = 25000;
-
-  static const int _verifySampleCount = 3;
-  static const int _maxVerifyAttempts = 2;
-  int _verifyAttempts = 0;
 
   static const double _cameraBoxSize = 300.0;
 
@@ -198,7 +176,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   late AnimationController _scanLineCtrl;
   late AnimationController _warningCtrl;
   late AnimationController _flashCtrl;
-  late AnimationController _matchCountCtrl;
 
   late Animation<double> _pulseAnim;
   late Animation<double> _ringAnim;
@@ -208,7 +185,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   late Animation<double> _scanLineAnim;
   late Animation<double> _warningAnim;
   late Animation<double> _flashAnim;
-  late Animation<double> _matchCountAnim;
 
   static const _white = Color(0xFFFFFFFF);
   static const _orange = Color(0xFFF05000);
@@ -248,7 +224,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _scanLineCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800));
     _warningCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
     _flashCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
-    _matchCountCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
 
     _pulseAnim = Tween<double>(begin: 0.93, end: 1.07).animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
     _ringAnim = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(parent: _ringCtrl, curve: Curves.linear));
@@ -258,7 +233,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _scanLineAnim = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(parent: _scanLineCtrl, curve: Curves.easeInOut));
     _warningAnim = Tween<double>(begin: 0.7, end: 1.0).animate(CurvedAnimation(parent: _warningCtrl, curve: Curves.easeInOut));
     _flashAnim = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(parent: _flashCtrl, curve: Curves.easeOut));
-    _matchCountAnim = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(parent: _matchCountCtrl, curve: Curves.easeOutCubic));
 
     _pulseCtrl.repeat(reverse: true);
     _ringCtrl.repeat();
@@ -266,7 +240,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] FacialRecognitionScreen — internet required');
-      _authMode = _AuthMode.verify;
       _preAuthValid = true;
       _networkState = _NetState.online;
 
@@ -313,7 +286,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _checkNetworkAndProceed();
-      await _detectMode();
       if (mounted) {
         Future.delayed(const Duration(milliseconds: 600), () {
           if (mounted) setState(() => _isInitialLoading = false);
@@ -349,29 +321,23 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       if (resetAt > lastReset) {
         await prefs.setInt(_kLastFaceResetKey, resetAt);
 
-        // Clear local template safely (dynamic fallback prevents compile errors)
         try {
-          await (FaceMatcher as dynamic).clearTemplate(widget.employee.id);
-        } catch (_) {
-          try {
-            const prefixes = <String>[
-              'face_template_', 'face_enrolled_', 'face_photo_url_',
-              'face_samples_', 'face_embedding_', 'face_version_', 'face_count_'
-            ];
-            final id = widget.employee.id;
-            final stale = prefs.getKeys().where((k) => k.contains(id) && prefixes.any(k.startsWith)).toList();
-            for (final k in stale) { await prefs.remove(k); }
-          } catch (_) {}
-        }
+          const prefixes = <String>[
+            'face_template_', 'face_enrolled_', 'face_photo_url_',
+            'face_samples_', 'face_embedding_', 'face_version_', 'face_count_'
+          ];
+          final id = widget.employee.id;
+          final stale = prefs.getKeys().where((k) => k.contains(id) && prefixes.any(k.startsWith)).toList();
+          for (final k in stale) { await prefs.remove(k); }
+        } catch (_) {}
 
         if (mounted) {
           setState(() {
-            _authMode = _AuthMode.enroll;
             _faceState = _FaceState.idle;
             _errorMessage = null;
             _faceWarning = _FaceWarning.none;
           });
-          _showInfoSnack('🔄 Admin reset your face data. Please register again.');
+          _showInfoSnack('🔄 Admin reset your liveness status. Please try again.');
         }
       }
     } catch (e) {
@@ -423,10 +389,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   static const List<({String key, String label})> _reportCategories = [
-    (key: 'face_not_recognized', label: 'Face not recognized'),
-    (key: 'camera_error',        label: 'Camera problem'),
     (key: 'liveness_failed',     label: 'Liveness failed'),
-    (key: 'no_enrollment',       label: 'No face registered'),
+    (key: 'camera_error',        label: 'Camera problem'),
     (key: 'geofence_issue',      label: 'Location issue'),
     (key: 'security_issue',      label: 'Security error'),
     (key: 'other',               label: 'Other'),
@@ -449,11 +413,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   String _defaultReportCategory() {
-    if (_authMode == _AuthMode.enroll) return 'no_enrollment';
     final err = (_errorMessage ?? '').toLowerCase();
     if (err.contains('camera')) return 'camera_error';
     if (err.contains('liveness')) return 'liveness_failed';
-    if (err.contains('match') || err.contains('recognized')) return 'face_not_recognized';
     if (err.contains('compromised') || err.contains('security')) return 'security_issue';
     if (err.contains('geofence') || err.contains('location')) return 'geofence_issue';
     return 'other';
@@ -465,14 +427,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   String _buildReportMessage({required String category, required String notes}) {
     final buf = StringBuffer();
-    buf.writeln('Employee reported a facial recognition issue: ${_labelForReportCategory(category)}.');
+    buf.writeln('Employee reported an issue: ${_labelForReportCategory(category)}.');
     if (_errorMessage != null && _errorMessage!.isNotEmpty) {
       buf.writeln('Error shown: ${_errorMessage!.replaceAll('\n', ' ')}');
     }
-    buf.writeln('Stage: ${_faceState.name} • Mode: ${_authMode.name}');
-    if (_matchPercent > 0) {
-      buf.writeln('Last match: ${_matchPercent.toStringAsFixed(1)}%');
-    }
+    buf.writeln('Stage: ${_faceState.name} • Mode: Liveness');
     buf.writeln('Device: $_deviceModel • Network: ${_networkState.name}');
     if (notes.isNotEmpty) buf.writeln('\nNotes from employee: $notes');
     return buf.toString().trim();
@@ -524,10 +483,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         subCategory: category,
         issueMessage: _buildReportMessage(category: category, notes: notes),
         additionalNotes: notes.isEmpty ? null : notes,
-        faceMatchPercent: _matchPercent > 0 ? _matchPercent : null,
+        faceMatchPercent: null,
         deviceModel: _deviceModel,
         zoneType: _computeZoneType(),
-        authMode: _authMode.name,
+        authMode: 'liveness',
         stage: _faceState.name,
         errorDetail: _errorMessage,
       );
@@ -642,7 +601,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text('Contact Admin', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: textCol)),
-                            Text('Tell us what went wrong with your face scan.', style: TextStyle(fontSize: 11.5, color: mutedCol)),
+                            Text('Tell us what went wrong with your liveness check.', style: TextStyle(fontSize: 11.5, color: mutedCol)),
                           ],
                         ),
                       ),
@@ -682,8 +641,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                           Text('INCLUDED AUTOMATICALLY', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: mutedCol, letterSpacing: 0.6)),
                           const SizedBox(height: 6),
                           ctxRow('Stage', _faceState.name),
-                          ctxRow('Mode', _authMode.name),
-                          if (_matchPercent > 0) ctxRow('Match', '${_matchPercent.toStringAsFixed(1)}%'),
+                          ctxRow('Mode', 'Liveness'),
                           if (_errorMessage != null && _errorMessage!.isNotEmpty) ctxRow('Error', _errorMessage!.replaceAll('\n', ' ')),
                           ctxRow('Device', _deviceModel),
                           ctxRow('Network', _networkState.name),
@@ -758,77 +716,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final c = await OfflineAttendanceService.instance.getPendingCount();
       if (mounted) setState(() => _pendingCount = c);
     } catch (_) {}
-  }
-
-  Future<void> _detectMode() async {
-    if (_isDemo) {
-      _authMode = _AuthMode.verify;
-      return;
-    }
-
-    if (kIsWeb) {
-      _authMode = _AuthMode.verify;
-      return;
-    }
-
-    try {
-      _secureLog('🔍 Detecting mode for ${widget.employee.id}...');
-      bool hasFace = await FaceMatcher.hasRegisteredFace(widget.employee.id);
-
-      if (!hasFace && !kIsWeb) {
-        try {
-          final status = await FaceMatcher.debugTemplateStatus(widget.employee.id);
-          final hasPhoto = status['hasPhotoUrl'] == true;
-          if (hasPhoto && NetworkGuard.instance.isOnline) {
-            _secureLog('🔄 Generating face template from admin profile picture...');
-            final healed = await FaceMatcher.autoUpgradeFromExistingPhoto(widget.employee.id);
-            if (healed) {
-              hasFace = true;
-              _selfHealTriggered = true;
-              _secureLog('✅ Template successfully generated from profile picture!');
-            }
-          }
-        } catch (e) {
-          _secureLog('⚠️ Photo to template failed: $e');
-        }
-      }
-
-      if (!mounted) return;
-
-      if (_isChallenge && !hasFace) {
-        _secureLog('❌ [Challenge] No registered face — abort');
-        setState(() {
-          _authMode = _AuthMode.verify;
-          _faceState = _FaceState.error;
-          _errorMessage = 'Your account has no registered face yet.\n'
-              'Please have it enrolled by an admin before verifying.';
-        });
-        _shakeCtrl.forward(from: 0);
-
-        unawaited(_recordChallengeFailure('no_registered_face'));
-
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) Navigator.of(context).pop(false);
-        });
-        return;
-      }
-
-      setState(() {
-        _authMode = hasFace ? _AuthMode.verify : _AuthMode.enroll;
-      });
-
-      if (hasFace) {
-        _secureLog('✅ Mode: VERIFY${_isChallenge ? " (challenge)" : ""}');
-      } else {
-        _secureLog('🆕 Mode: ENROLL');
-        _enrollHint = 'First time — you need to register your face.';
-      }
-    } catch (e) {
-      _secureLog('⚠️ _detectMode error: $e');
-      if (mounted) {
-        setState(() => _authMode = _AuthMode.verify);
-      }
-    }
   }
 
   void _updateRotationCompensation() {
@@ -1007,7 +894,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             'employeeId': widget.employee.id, 'employeeName': widget.employee.fullName,
             'sessionNonce': _sessionNonce, 'deviceBinding': _deviceBinding,
             'deviceCompromised': _deviceCompromised,
-            'stage': _isChallenge ? 'presence_challenge' : 'facial_recognition',
+            'stage': _isChallenge ? 'presence_challenge' : 'liveness_check',
             if (_isChallenge) 'challengeId': widget.challenge!.id,
             'platform': kIsWeb ? 'web' : 'mobile', 'timestamp': DateTime.now(),
           },
@@ -1023,7 +910,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         'employeeId': widget.employee.id, 'employeeName': widget.employee.fullName,
         'sessionNonce': _sessionNonce, 'deviceHash': hashDevice,
         'deviceBinding': _deviceBinding, 'deviceCompromised': _deviceCompromised,
-        'stage': _isChallenge ? 'presence_challenge' : 'facial_recognition',
+        'stage': _isChallenge ? 'presence_challenge' : 'liveness_check',
         if (_isChallenge) 'challengeId': widget.challenge!.id,
         'platform': kIsWeb ? 'web' : 'mobile', 'timestamp': FieldValue.serverTimestamp(),
       });
@@ -1062,7 +949,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _adminActionSub?.cancel();
     _overlayDelayTimer?.cancel();
     _pulseCtrl.dispose(); _ringCtrl.dispose(); _fadeCtrl.dispose(); _shakeCtrl.dispose();
-    _successCtrl.dispose(); _scanLineCtrl.dispose(); _warningCtrl.dispose(); _flashCtrl.dispose(); _matchCountCtrl.dispose();
+    _successCtrl.dispose(); _scanLineCtrl.dispose(); _warningCtrl.dispose(); _flashCtrl.dispose();
 
     final ctrl = _camCtrl;
     if (ctrl != null) {
@@ -1079,7 +966,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (_isDemo || !_isChallenge || widget.challenge == null || _cancelRecorded) return;
     _cancelRecorded = true;
     try {
-      await PresenceChallengeService.instance.recordFailedAttempt(widget.challenge!, faceScore: _matchPercent, reason: reason);
+      await PresenceChallengeService.instance.recordFailedAttempt(widget.challenge!, faceScore: 0.0, reason: reason);
       unawaited(_logSecurityEvent(
         type: 'presence_challenge_cancelled', severity: 'medium',
         details: 'User cancelled challenge ${widget.challenge!.id} — reason=$reason',
@@ -1151,8 +1038,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   Future<void> _startScan() async {
-    if (!mounted || _isScanning || _isCheckingTemplate) return;
-    if (_authMode == _AuthMode.unknown) return;
+    if (!mounted || _isScanning) return;
 
     _firstAttemptTime ??= DateTime.now();
 
@@ -1164,8 +1050,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       }
 
       _isScanning = true; _blinkDone = false; _smileDone = false; _eyesWereClosed = false;
-      _closedFrames = 0; _openFramesAfterClose = 0; _facePresent = false; _faceMatched = false;
-      _matchScore = 0.0; _matchPercent = 0.0; _verifyAttempts = 0;
+      _closedFrames = 0; _openFramesAfterClose = 0; _facePresent = false;
       _livenessStep = _LivenessStep.waitingForFace; _livenessStartTime = DateTime.now();
 
       setState(() {
@@ -1219,15 +1104,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return;
     }
 
-    if (_authMode == _AuthMode.verify) {
-      await _checkTemplateAvailability();
-    }
-
     _isScanning = true; _blinkDone = false; _smileDone = false; _eyesWereClosed = false;
-    _closedFrames = 0; _openFramesAfterClose = 0; _facePresent = false; _faceMatched = false;
-    _matchScore = 0.0; _matchPercent = 0.0; _selfHealTriggered = false;
+    _closedFrames = 0; _openFramesAfterClose = 0; _facePresent = false;
     _livenessStep = _LivenessStep.waitingForFace; _livenessStartTime = DateTime.now();
-    _enrollCaptureCount = 0; _verifyAttempts = 0;
 
     setState(() {
       _faceState = _FaceState.scanning;
@@ -1258,14 +1137,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
 
     _isScanning = false; _scanLineCtrl.stop();
-    _matchScore = 1.0; _matchPercent = 100.0; _faceMatched = true; _blinkDone = true; _smileDone = true; _facePresent = true;
+    _blinkDone = true; _smileDone = true; _facePresent = true;
 
     setState(() {
       _faceState = _FaceState.success;
       _errorMessage = null;
     });
 
-    _successCtrl.forward(from: 0); _matchCountCtrl.forward(from: 0); _pulseCtrl.stop(); _ringCtrl.stop();
+    _successCtrl.forward(from: 0); _pulseCtrl.stop(); _ringCtrl.stop();
 
     await Future.delayed(const Duration(milliseconds: 1400));
     if (!mounted) return;
@@ -1282,25 +1161,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return;
     }
     _proceedToNext();
-  }
-
-  Future<void> _checkTemplateAvailability() async {
-    if (_isDemo || kIsWeb) return;
-    try {
-      _isCheckingTemplate = true;
-      final status = await FaceMatcher.debugTemplateStatus(widget.employee.id);
-      final hasTemplate = status['hasJson'] == true && (status['count'] as int? ?? 0) > 0 && status['version'] == 4;
-      if (!hasTemplate) {
-        final hasPhoto = status['hasPhotoUrl'] == true;
-        if (hasPhoto && NetworkGuard.instance.isOnline) {
-          final healed = await FaceMatcher.autoUpgradeFromExistingPhoto(widget.employee.id);
-          if (healed) _selfHealTriggered = true;
-        }
-      }
-    } catch (_) {
-    } finally {
-      _isCheckingTemplate = false;
-    }
   }
 
   Future<void> _runMockScan() async {
@@ -1322,12 +1182,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
       if (mounted && !_facePresent) setState(() => _facePresent = true);
 
-      if (_authMode == _AuthMode.enroll) {
-        _isScanning = false; _scanLineCtrl.stop();
-        if (mounted) _onFailure('Enrollment is not supported on web. Please use the mobile app.');
-        return;
-      }
-
       if (!_blinkDone) {
         final ear = result.eyeOpenScore;
         if (ear < _webEyeClosedThreshold) {
@@ -1347,7 +1201,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         continue;
       }
 
-      _isScanning = false; _scanLineCtrl.stop(); _onFaceMismatch();
+      _isScanning = false; _scanLineCtrl.stop(); _onLivenessFailed();
       return;
     }
   }
@@ -1473,105 +1327,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       }
 
       final face = faces.first;
-      if (_authMode == _AuthMode.enroll) {
-        await _handleEnrollFrame(image, face);
-      } else {
-        await _handleVerifyFrame(image, face);
-      }
+      await _handleVerifyFrame(image, face);
     } catch (_) {}
-    _isProcessing = false;
-  }
-
-  Future<void> _handleEnrollFrame(CameraImage image, Face face) async {
-    if (_isSavingEnroll) { _isProcessing = false; return; }
-    if (_lastEnrollCaptureAt != null && DateTime.now().difference(_lastEnrollCaptureAt!) < _enrollCaptureCooldown) {
-      _isProcessing = false; return;
-    }
-
-    final warning = _assessEnrollQuality(face, image);
-    if (warning != _FaceWarning.none) {
-      _eyesWereClosed = false; _closedFrames = 0; _openFramesAfterClose = 0;
-      if (mounted) setState(() => _faceWarning = warning);
-      _warningCtrl.repeat(reverse: true); _isProcessing = false; return;
-    }
-
-    final leftOpen = face.leftEyeOpenProbability ?? 1.0;
-    final rightOpen = face.rightEyeOpenProbability ?? 1.0;
-    final avgOpen = (leftOpen + rightOpen) / 2;
-
-    if (!_blinkDone) {
-      if (avgOpen < _blinkClosedThreshold) {
-        _closedFrames++; _openFramesAfterClose = 0; _eyesWereClosed = true;
-        if (_closedFrames > _maxClosedFramesBeforeStuck) {
-          _eyesWereClosed = false; _closedFrames = 0;
-          if (mounted) setState(() => _faceWarning = _FaceWarning.eyesClosed);
-          _warningCtrl.repeat(reverse: true); _isProcessing = false; return;
-        }
-      } else if (avgOpen > _blinkOpenThreshold) {
-        if (_eyesWereClosed && _closedFrames >= _minClosedFrames) {
-          _openFramesAfterClose++;
-          if (_openFramesAfterClose >= _minOpenFrames) {
-            _blinkDone = true; _eyesWereClosed = false; _closedFrames = 0; _openFramesAfterClose = 0;
-            if (mounted) {
-              setState(() { _faceWarning = _FaceWarning.none; _enrollHint = 'Good! Hold steady — capturing 3 samples.'; });
-            }
-          }
-        }
-      } else {
-        if (_eyesWereClosed && _closedFrames < _minClosedFrames) {
-          _eyesWereClosed = false; _closedFrames = 0;
-        }
-      }
-      _isProcessing = false; return;
-    }
-
-    _lastEnrollCaptureAt = DateTime.now();
-    _warningCtrl.stop(); _warningCtrl.reset();
-    if (mounted) setState(() => _faceWarning = _FaceWarning.none);
-
-    try {
-      _isSavingEnroll = true;
-      if (mounted) setState(() {});
-
-      await _waitForFocusAndCapture();
-      final picture = await _camCtrl!.takePicture();
-      final bytes = await picture.readAsBytes();
-      try { final f = File(picture.path); if (await f.exists()) await f.delete(); } catch (_) {}
-
-      _flashCtrl.forward(from: 0);
-      final result = await FaceMatcher.enrollFace(widget.employee.id, bytes, source: 'mobile_enrollment');
-      _isSavingEnroll = false;
-
-      if (!result.success) {
-        if (mounted) setState(() => _enrollHint = 'Capture failed. Try again — look at the camera.');
-        _isProcessing = false; return;
-      }
-
-      _enrollCaptureCount = result.samplesSoFar;
-      if (!mounted) return;
-
-      if (_enrollCaptureCount >= _requiredEnrollCaptures) {
-        await _camCtrl!.stopImageStream();
-        _isScanning = false; _scanLineCtrl.stop();
-        await _logSecurityEvent(type: 'face_enrolled', severity: 'info', details: 'Face enrolled with $_enrollCaptureCount samples on first use');
-        if (mounted) {
-          setState(() { _faceState = _FaceState.success; _enrollHint = 'Your face has been registered successfully!'; });
-          _successCtrl.forward();
-        }
-        await Future.delayed(const Duration(milliseconds: 1800));
-        if (!mounted) return;
-        _proceedToNext(); return;
-      }
-
-      if (mounted) {
-        setState(() {
-          _enrollHint = 'Sample ${_enrollCaptureCount + 1} of $_requiredEnrollCaptures — hold steady.';
-          _closedFrames = 0; _openFramesAfterClose = 0;
-        });
-      }
-    } catch (_) {
-      _isSavingEnroll = false;
-    }
     _isProcessing = false;
   }
 
@@ -1621,8 +1378,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         _smileDone = true;
         await _camCtrl!.stopImageStream();
         _isScanning = false; _scanLineCtrl.stop();
-        final matched = await _verifyFaceMatch();
-        if (matched) { await _onSuccess(); } else { await _handleVerifyFailure(); }
+
+        // Liveness passed
+        await _onSuccess();
         _isProcessing = false; return;
       }
     }
@@ -1637,54 +1395,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
 
     if (mounted) setState(() => _faceWarning = _FaceWarning.none);
-  }
-
-  Future<void> _handleVerifyFailure() async {
-    if (_isDemo) { await _demoAutoSucceed(); return; }
-    _verifyAttempts++;
-
-    if (_verifyAttempts < _maxVerifyAttempts) {
-      if (!mounted) return;
-      _blinkDone = true; _smileDone = false; _eyesWereClosed = false;
-      _closedFrames = 0; _openFramesAfterClose = 0; _livenessStep = _LivenessStep.smile;
-      _livenessStartTime = DateTime.now(); _isScanning = true; _faceMatched = false;
-      _matchScore = 0.0; _matchPercent = 0.0;
-
-      setState(() { _faceState = _FaceState.scanning; _errorMessage = null; _faceWarning = _FaceWarning.none; });
-      _scanLineCtrl.repeat(reverse: true);
-
-      try {
-        await _camCtrl!.startImageStream(_onCameraImage);
-      } catch (_) {
-        _onFaceMismatch();
-      }
-      return;
-    }
-    _onFaceMismatch();
-  }
-
-  _FaceWarning _assessEnrollQuality(Face face, CameraImage image) {
-    final yaw = face.headEulerAngleY ?? 0.0;
-    final roll = face.headEulerAngleZ ?? 0.0;
-    final pitch = face.headEulerAngleX ?? 0.0;
-    if (yaw.abs() > _maxHeadYawDeg || roll.abs() > _maxHeadRollDeg || pitch.abs() > _maxHeadPitchDeg) return _FaceWarning.headAngle;
-
-    final faceArea = (face.boundingBox.width * face.boundingBox.height).toDouble();
-    final imageArea = (image.width * image.height).toDouble();
-    final areaRatio = faceArea / imageArea;
-
-    if (areaRatio < _minFaceAreaRatio) return _FaceWarning.tooFar;
-    if (areaRatio > _maxFaceAreaRatio) return _FaceWarning.tooClose;
-
-    if (face.landmarks[FaceLandmarkType.leftEye] == null || face.landmarks[FaceLandmarkType.rightEye] == null) return _FaceWarning.occluded;
-    if (face.landmarks[FaceLandmarkType.noseBase] == null) return _FaceWarning.occluded;
-
-    if (!kIsWeb && image.planes.isNotEmpty) {
-      final brightness = _estimateBrightness(image);
-      if (brightness < 25) return _FaceWarning.tooDark;
-      if (brightness > 240) return _FaceWarning.tooBright;
-    }
-    return _FaceWarning.none;
   }
 
   _FaceWarning _assessVerifyQuality(Face face, CameraImage image) {
@@ -1756,88 +1466,26 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (mounted) setState(() => _faceWarning = _FaceWarning.none);
   }
 
-  double _effectiveThreshold() {
-    double t = _matchThreshold;
-    if (_faceWarning == _FaceWarning.none && _facePresent) t -= 0.02;
-    if (_faceWarning != _FaceWarning.none) t += 0.03;
-    return t.clamp(0.58, 0.85);
-  }
-
-  Future<bool> _verifyFaceMatch() async {
-    if (_isDemo) {
-      _matchScore = 1.0; _matchPercent = 100.0; _faceMatched = true; return true;
-    }
-
-    try {
-      if (_camCtrl == null || !_camCtrl!.value.isInitialized || !_preAuthValid || _deviceCompromised) return false;
-
-      final threshold = _effectiveThreshold();
-      final List<double> scores = [];
-      final List<Uint8List> frames = [];
-
-      for (int i = 0; i < _verifySampleCount; i++) {
-        try {
-          await _waitForFocusAndCapture();
-          final picture = await _camCtrl!.takePicture();
-          final bytes = await picture.readAsBytes();
-          try { final f = File(picture.path); if (await f.exists()) await f.delete(); } catch (_) {}
-          frames.add(bytes);
-        } catch (_) {}
-        if (i < _verifySampleCount - 1) await Future.delayed(const Duration(milliseconds: 180));
-      }
-
-      if (frames.isEmpty) return false;
-
-      double bestScore = 0.0;
-      for (final bytes in frames) {
-        try {
-          final r = await FaceMatcher.verify(widget.employee.id, bytes, threshold: threshold);
-          if (!r.hasEmbedding) continue;
-          scores.add(r.score);
-          if (r.score > bestScore) bestScore = r.score;
-        } catch (_) {}
-      }
-
-      if (scores.isEmpty) {
-        _matchScore = 0.0; _matchPercent = 0.0; _faceMatched = false; return false;
-      }
-
-      final avg = scores.reduce((a, b) => a + b) / scores.length;
-      final blended = (avg * 0.7) + (bestScore * 0.3);
-      _matchScore = blended; _matchPercent = blended * 100.0; _faceMatched = blended >= threshold;
-      return _faceMatched;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  void _onFaceMismatch() {
+  void _onLivenessFailed() {
     if (_isDemo || !mounted) return;
     _isScanning = false; _scanLineCtrl.stop();
 
     if (_isChallenge) {
       unawaited(PresenceChallengeService.instance.recordFailedAttempt(
-        widget.challenge!, faceScore: _matchPercent, reason: 'face_mismatch_${_matchPercent.toStringAsFixed(1)}',
+        widget.challenge!, faceScore: 0.0, reason: 'liveness_failed',
       ));
       unawaited(_logSecurityEvent(
         type: 'presence_challenge_failed', severity: 'high',
-        details: 'Challenge ${widget.challenge!.id} FAILED — face mismatch (${_matchPercent.toStringAsFixed(1)}%)',
+        details: 'Challenge ${widget.challenge!.id} FAILED — liveness failed',
       ));
       _cancelRecorded = true;
     }
 
-    final String reason;
-    if (_matchPercent < 40) {
-      reason = 'Face could not be detected properly.\nTry in a brighter area.';
-    } else if (_matchPercent < 55) {
-      reason = 'Face match is unclear.\nRemove glasses/mask and look directly at the camera.';
-    } else {
-      reason = 'Face does not match the registered one.\nIf you are new, have it enrolled by Admin.';
-    }
+    const reason = 'Liveness check failed.\nPlease try again in a well-lit area and follow the prompts.';
 
     setState(() {
       _faceState = _FaceState.error;
-      _errorMessage = '$reason\n\nSimilarity: ${_matchPercent.toStringAsFixed(1)}%';
+      _errorMessage = reason;
     });
     _shakeCtrl.forward(from: 0);
 
@@ -1850,7 +1498,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       if (mounted && _faceState == _FaceState.error) {
         setState(() {
           _faceState = _FaceState.idle; _errorMessage = null;
-          _faceWarning = _FaceWarning.none; _verifyAttempts = 0;
+          _faceWarning = _FaceWarning.none;
         });
       }
     });
@@ -1918,20 +1566,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
-  Color _matchColor(double percent) {
-    if (percent >= 95) return const Color(0xFF16A34A);
-    if (percent >= 80) return const Color(0xFF3B82F6);
-    if (percent >= 65) return const Color(0xFFF59E0B);
-    return const Color(0xFFEF4444);
-  }
-
-  String _matchLabel(double percent) {
-    if (percent >= 95) return 'EXCELLENT MATCH';
-    if (percent >= 80) return 'STRONG MATCH';
-    if (percent >= 65) return 'ACCEPTABLE MATCH';
-    return 'WEAK MATCH';
-  }
-
   String get _employeeIdForAttendance {
     if (_isDemo) return DemoModeService.demoEmployee.employeeId;
     final empId = widget.employee.employeeId;
@@ -1981,7 +1615,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         try {
           await TrustedTimeService.instance.syncWithServer(force: true);
           if (TrustedTimeService.instance.isTampered) {
-            await TrustedTimeService.instance.logTamperEvent(employeeId: employeeId, employeeName: employeeName, context: 'clock_in_facial');
+            await TrustedTimeService.instance.logTamperEvent(employeeId: employeeId, employeeName: employeeName, context: 'clock_in_liveness');
           }
         } catch (_) {}
       } else {
@@ -2018,7 +1652,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final deviceName = _deviceModel;
       final zoneType = _computeZoneType();
 
-      final baseRemarks = _geofenceVerifiedOffline ? 'face_match:${_matchPercent.toStringAsFixed(0)}|pending_geofence_verification' : 'face_match:${_matchPercent.toStringAsFixed(0)}';
+      final baseRemarks = _geofenceVerifiedOffline ? 'liveness:passed|pending_geofence_verification' : 'liveness:passed';
       final remarks = delayMinutes >= 1 ? '$baseRemarks|first_attempt_delay:${delayMinutes}m' : baseRemarks;
 
       await _onAttendanceTypeDetermined(isClockIn: isClockIn, employeeId: employeeId, employeeName: employeeName);
@@ -2041,8 +1675,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         'type': attendanceType, 'date': todayStr, 'time': timeStr, 'timestamp': FieldValue.serverTimestamp(),
         'first_attempt_at': Timestamp.fromDate(effectiveTime), 'success_at': Timestamp.fromDate(now),
         'attempt_delay_minutes': delayMinutes, 'device': deviceName, 'device_binding': _deviceBinding,
-        'zone_type': zoneType, 'face_match_percent': _matchPercent, 'match_score': _matchScore,
-        'session_nonce': _sessionNonce, 'device_compromised': _deviceCompromised, 'self_heal_used': _selfHealTriggered,
+        'zone_type': zoneType, 'liveness_passed': true,
+        'session_nonce': _sessionNonce, 'device_compromised': _deviceCompromised,
         'remarks': remarks, if (_geofenceVerifiedOffline) 'pending_geofence_verification': true,
       };
 
@@ -2051,9 +1685,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       } catch (_) {}
 
       final activityPayload = <String, dynamic>{
-        'type': isClockIn ? 'clock_in' : 'clock_out', 'action': isClockIn ? 'Clocked In (Face)' : 'Clocked Out (Face)',
+        'type': isClockIn ? 'clock_in' : 'clock_out', 'action': isClockIn ? 'Clocked In (Liveness)' : 'Clocked Out (Liveness)',
         'employeeId': widget.employee.id, 'employee_id': employeeId, 'employee_name': employeeName,
-        'email': employeeEmail, 'face_match_percent': _matchPercent, 'match_score': _matchScore,
+        'email': employeeEmail, 'liveness_passed': true,
         'zone_type': zoneType, 'time': timeStr, 'date': todayStr,
         'first_attempt_at': Timestamp.fromDate(effectiveTime), 'success_at': Timestamp.fromDate(now),
         'attempt_delay_minutes': delayMinutes, 'device': deviceName, 'device_binding': _deviceBinding,
@@ -2076,9 +1710,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
       try {
         if (isClockIn) {
-          AdminNotificationService.instance.notifyClockIn(employeeId: employeeId, employeeName: employeeName, timeStr: timeStr, faceMatchPercent: _matchPercent, wfh: widget.employee.wfhAccess, inRange: true, zoneType: zoneType);
+          AdminNotificationService.instance.notifyClockIn(employeeId: employeeId, employeeName: employeeName, timeStr: timeStr, faceMatchPercent: null, wfh: widget.employee.wfhAccess, inRange: true, zoneType: zoneType);
         } else {
-          AdminNotificationService.instance.notifyClockOut(employeeId: employeeId, employeeName: employeeName, timeStr: timeStr, faceMatchPercent: _matchPercent, wfh: widget.employee.wfhAccess, inRange: true, zoneType: zoneType);
+          AdminNotificationService.instance.notifyClockOut(employeeId: employeeId, employeeName: employeeName, timeStr: timeStr, faceMatchPercent: null, wfh: widget.employee.wfhAccess, inRange: true, zoneType: zoneType);
         }
       } catch (_) {}
     } catch (_) {}
@@ -2087,7 +1721,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   Future<void> _onSuccess() async {
     if (!mounted) return;
     setState(() { _faceState = _FaceState.success; _errorMessage = null; });
-    _pulseCtrl.stop(); _ringCtrl.stop(); _successCtrl.forward(); _matchCountCtrl.forward(from: 0);
+    _pulseCtrl.stop(); _ringCtrl.stop(); _successCtrl.forward();
 
     if (_isChallenge) { await _finishChallenge(); return; }
 
@@ -2136,7 +1770,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     final canProceed = await _checkRoleAndGeofence();
     if (!canProceed) {
-      unawaited(PresenceChallengeService.instance.recordFailedAttempt(ch, faceScore: _matchPercent, reason: 'geofence_failed_at_verify'));
+      unawaited(PresenceChallengeService.instance.recordFailedAttempt(ch, faceScore: 0.0, reason: 'geofence_failed_at_verify'));
       await _logSecurityEvent(type: 'challenge_failed_geofence', severity: 'high', details: 'Challenge ${ch.id} FAILED — outside work zone at verification');
       await Future.delayed(const Duration(seconds: 2));
       if (!mounted) return;
@@ -2151,18 +1785,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           collection: 'presence_challenges', docId: ch.id,
           data: {
             'id': ch.id, 'employeeId': widget.employee.id, 'status': 'passed',
-            'faceScore': _matchPercent, 'zone': zone, 'deviceBinding': _deviceBinding,
+            'liveness_passed': true, 'zone': zone, 'deviceBinding': _deviceBinding,
             'verifiedAt': DateTime.now(), 'verificationMode': 'offline',
           },
         );
       } catch (_) {}
     } else {
       try {
-        await PresenceChallengeService.instance.submitPassed(ch, faceScore: _matchPercent, zone: zone, deviceBinding: _deviceBinding);
+        await PresenceChallengeService.instance.submitPassed(ch, faceScore: 0.0, zone: zone, deviceBinding: _deviceBinding);
       } catch (_) {}
     }
 
-    await _logSecurityEvent(type: 'challenge_passed', severity: 'info', details: 'Random face check passed (score=${_matchPercent.toStringAsFixed(1)}%, zone=$zone)');
+    await _logSecurityEvent(type: 'challenge_passed', severity: 'info', details: 'Random face check passed (liveness)');
     await Future.delayed(const Duration(milliseconds: 1500));
     if (!mounted) return;
     Navigator.of(context).pop(true);
@@ -2176,8 +1810,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         builder: (_) => ClockInSuccessScreen(
           employee: widget.employee,
           arrivalTime: _effectiveAttendanceTime,
-          faceMatchPercent: _matchPercent,
-          verificationMethod: _authMode == _AuthMode.enroll ? 'face_enrolled' : 'face_match',
+          faceMatchPercent: 100.0,
+          verificationMethod: 'liveness_check',
           onContinue: () {
             navigator.pushAndRemoveUntil(
               MaterialPageRoute(builder: (_) => MainScreen(employee: widget.employee)),
@@ -2195,11 +1829,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     setState(() { _faceState = _FaceState.error; _errorMessage = msg; });
     _shakeCtrl.forward(from: 0);
 
-    unawaited(_logSecurityEvent(type: 'face_auth_failed', severity: 'medium', details: msg));
+    unawaited(_logSecurityEvent(type: 'liveness_auth_failed', severity: 'medium', details: msg));
 
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted && _faceState == _FaceState.error) {
-        setState(() { _faceState = _FaceState.idle; _errorMessage = null; _verifyAttempts = 0; });
+        setState(() { _faceState = _FaceState.idle; _errorMessage = null; });
       }
     });
   }
@@ -2359,14 +1993,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           Positioned(
             left: 24, top: 95.99,
             child: Text(
-              _isDemo ? 'Demo Check' : (_isChallenge ? 'Random Check' : (_authMode == _AuthMode.enroll ? 'Face Registration' : 'Auth & Clock In')),
+              _isDemo ? 'Demo Check' : (_isChallenge ? 'Random Check' : 'Liveness & Clock In'),
               style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w700, color: Colors.white, height: 0.9),
             ),
           ),
           Positioned(
             left: 24, top: 136.99,
             child: Text(
-              _isDemo ? 'Real camera + liveness — always pass' : (_isChallenge ? 'Presence verification required' : (_authMode == _AuthMode.enroll ? 'First-time face enrollment' : 'Face + Liveness verification')),
+              _isDemo ? 'Real camera + liveness — always pass' : (_isChallenge ? 'Presence verification required' : 'Liveness verification'),
               style: const TextStyle(fontSize: 14, color: Colors.white, height: 0.9),
             ),
           ),
@@ -2443,7 +2077,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            _isDemo ? 'Demo Mode' : (_isChallenge ? 'Presence Check' : (_authMode == _AuthMode.enroll ? 'Step 3: Face Registration' : 'Step 3: Facial Recognition')),
+            _isDemo ? 'Demo Mode' : (_isChallenge ? 'Presence Check' : 'Step 3: Face Liveness'),
             textAlign: TextAlign.center,
             style: TextStyle(color: _isDemo ? _demoAccent : tc.stepLabelColor, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5),
           ),
@@ -2485,18 +2119,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           ),
           if (isScanning) ...[
             const SizedBox(height: 16),
-            if (_authMode == _AuthMode.enroll && !_isDemo) _buildEnrollProgressBar() else _buildScanProgressBar(),
+            _buildScanProgressBar(),
           ],
           const SizedBox(height: 20),
-          if (isSuccess && _authMode == _AuthMode.verify) ...[
-            _buildMatchPercentBadge(),
+          if (isSuccess) ...[
+            _buildLivenessVerifiedBadge(),
             const SizedBox(height: 14),
           ],
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
             child: Text(
               _stateTitle.replaceAll('\n', ' '),
-              key: ValueKey('title_${_faceState}_$_authMode-$_isDemo'),
+              key: ValueKey('title_${_faceState}-$_isDemo'),
               textAlign: TextAlign.center,
               style: const TextStyle(color: _white, fontSize: 20, fontWeight: FontWeight.w700),
             ),
@@ -2526,14 +2160,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.3), borderRadius: BorderRadius.circular(6)),
               child: Text('⚠️ $_camError', textAlign: TextAlign.center, style: const TextStyle(color: _warning, fontSize: 10)),
             ),
-          ],
-          if (_isSavingEnroll && !_isDemo) ...[
-            const SizedBox(height: 12),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
-              const SizedBox(width: 8),
-              Text('Saving sample...', style: TextStyle(color: _white.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600)),
-            ]),
           ],
           if (_isOffline && _pendingCount > 0 && !_isDemo) ...[
             const SizedBox(height: 10),
@@ -2585,7 +2211,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             Icon(Icons.support_agent_rounded, color: isError ? _white : _white.withValues(alpha: 0.72), size: 15),
             const SizedBox(width: 6),
             Text(
-              isError ? 'Face scan issue? Contact Admin' : 'Having trouble? Contact Admin',
+              isError ? 'Liveness issue? Contact Admin' : 'Having trouble? Contact Admin',
               style: TextStyle(color: isError ? _white : _white.withValues(alpha: 0.72), fontSize: 12, fontWeight: isError ? FontWeight.w700 : FontWeight.w600),
             ),
           ],
@@ -2594,40 +2220,30 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     );
   }
 
-  Widget _buildMatchPercentBadge() {
-    final percent = _matchPercent;
-    final color = _isDemo ? _demoAccent : _matchColor(percent);
-    final label = _isDemo ? 'DEMO VERIFIED' : _matchLabel(percent);
+  Widget _buildLivenessVerifiedBadge() {
+    final color = _isDemo ? _demoAccent : _verifiedGreen;
 
-    return AnimatedBuilder(
-      animation: _matchCountAnim,
-      builder: (_, __) {
-        final animatedPercent = (percent * _matchCountAnim.value);
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.35),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: color.withValues(alpha: 0.7), width: 2),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.7), width: 2),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'LIVENESS VERIFIED',
+            style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w900, letterSpacing: 1.2),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.0)),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Text(animatedPercent.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w900, letterSpacing: -1)),
-                  Text('%', style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 18, fontWeight: FontWeight.w800)),
-                ],
-              ),
-            ],
+          const SizedBox(height: 2),
+          const Text(
+            'Face is live',
+            style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w500),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
@@ -2746,7 +2362,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.6), borderRadius: BorderRadius.circular(20)),
                       child: Text(
-                        _authMode == _AuthMode.enroll ? _enrollHintShort : _livenessHint,
+                        _livenessHint,
                         style: const TextStyle(color: _faceGreen, fontSize: 8, fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -2768,13 +2384,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     );
   }
 
-  String get _enrollHintShort {
-    if (!_blinkDone) return 'Blink to prove live';
-    if (_enrollCaptureCount == 0) return 'Sample 1/3 — stay still';
-    if (_enrollCaptureCount == 1) return 'Sample 2/3 — stay still';
-    return 'Sample 3/3 — stay still';
-  }
-
   Widget _buildCancelButton(_ThemeColors tc) {
     return GestureDetector(
       onTap: _onCancelTapped,
@@ -2789,7 +2398,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             duration: const Duration(milliseconds: 200),
             style: TextStyle(color: _isDemo ? _demoAccent : tc.cancelText, fontSize: 14, fontWeight: FontWeight.w600),
             child: Text(
-              _isDemo ? 'Exit Demo' : (_isChallenge ? 'Cancel Verification' : (_authMode == _AuthMode.enroll ? 'Cancel Registration' : 'Cancel Authentication')),
+              _isDemo ? 'Exit Demo' : (_isChallenge ? 'Cancel Verification' : 'Cancel Authentication'),
             ),
           ),
         ),
@@ -2821,22 +2430,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     return 'Looking for face';
   }
 
-  double get _enrollProgress {
-    if (_faceState == _FaceState.success) return 1.0;
-    if (!_facePresent) return 0.05;
-    if (_faceWarning != _FaceWarning.none) return 0.15;
-    if (!_blinkDone) return 0.25;
-    return 0.3 + (_enrollCaptureCount / _requiredEnrollCaptures) * 0.65;
-  }
-
-  String get _enrollProgressLabel {
-    if (_faceState == _FaceState.success) return 'Registered!';
-    if (_faceWarning != _FaceWarning.none) return _warningHintText;
-    if (!_facePresent) return 'Find your face in the frame';
-    if (!_blinkDone) return 'Blink your eyes to prove you are live';
-    return 'Sample $_enrollCaptureCount/$_requiredEnrollCaptures captured';
-  }
-
   Widget _buildScanProgressBar() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2864,48 +2457,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     );
   }
 
-  Widget _buildEnrollProgressBar() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('ENROLLMENT PROGRESS', style: TextStyle(color: _white.withValues(alpha: 0.7), fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.0)),
-            Text('$_enrollCaptureCount / $_requiredEnrollCaptures', style: const TextStyle(color: _white, fontSize: 11, fontWeight: FontWeight.w800)),
-          ],
-        ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            height: 10, width: double.infinity,
-            color: Colors.black.withValues(alpha: 0.22),
-            child: LayoutBuilder(builder: (context, constraints) {
-              return Align(
-                alignment: Alignment.centerLeft,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  width: constraints.maxWidth * _enrollProgress, height: 10,
-                  decoration: BoxDecoration(color: _faceWarning != _FaceWarning.none ? _warning : _faceGreen, borderRadius: BorderRadius.circular(20)),
-                ),
-              );
-            }),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(_enrollProgressLabel, style: TextStyle(color: _white.withValues(alpha: 0.85), fontSize: 11, fontWeight: FontWeight.w600)),
-      ],
-    );
-  }
-
   String get _statusBadgeText {
     if (_faceState == _FaceState.success) {
-      return _authMode == _AuthMode.enroll ? 'ENROLLED ✓' : '${_matchPercent.toStringAsFixed(0)}% ✓';
-    }
-    if (_authMode == _AuthMode.enroll) {
-      if (_facePresent) return 'ENROLLING';
-      return 'SCANNING';
+      return 'VERIFIED ✓';
     }
     if (_smileDone && _blinkDone) return 'VERIFYING';
     if (_facePresent) return 'FACE FOUND';
@@ -2936,29 +2490,15 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   String get _stateTitle {
     if (_isCheckingGeofence) return 'Verifying\nLocation...';
 
-    if (_authMode == _AuthMode.enroll) {
-      switch (_faceState) {
-        case _FaceState.idle: return 'Face\nRegistration';
-        case _FaceState.scanning:
-          if (!_facePresent) return 'Scanning\nFace...';
-          if (_faceWarning != _FaceWarning.none) return 'Quality\nCheck Failed';
-          if (!_blinkDone) return 'Liveness\nCheck';
-          return 'Capturing...';
-        case _FaceState.success: return 'Enrolled!';
-        case _FaceState.error: return 'Try Again';
-        case _FaceState.enrolling: return 'Face\nRegistration';
-      }
-    }
-
     switch (_faceState) {
-      case _FaceState.idle: return _isChallenge ? 'Presence\nCheck' : 'Facial\nRecognition';
+      case _FaceState.idle: return _isChallenge ? 'Presence\nCheck' : 'Liveness\nCheck';
       case _FaceState.scanning:
-        if (_smileDone && _blinkDone) return 'Verifying\nIdentity...';
+        if (_smileDone && _blinkDone) return 'Verifying\nLiveness...';
         if (_facePresent) return _faceWarning != _FaceWarning.none ? 'Quality\nCheck Failed' : 'Liveness\nCheck';
         return 'Scanning\nFace...';
-      case _FaceState.success: return _isChallenge ? 'Verified!\n${_matchPercent.toStringAsFixed(1)}%' : 'Matched!\n${_matchPercent.toStringAsFixed(1)}%';
+      case _FaceState.success: return 'Verified!';
       case _FaceState.error: return 'Try Again';
-      case _FaceState.enrolling: return 'Facial\nRecognition';
+      case _FaceState.enrolling: return 'Liveness\nCheck'; // Unused but required by enum
     }
   }
 
@@ -2975,35 +2515,21 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       }
     }
 
-    if (_authMode == _AuthMode.enroll) {
-      switch (_faceState) {
-        case _FaceState.idle: return 'No registered face yet.\nTap to start registration.';
-        case _FaceState.scanning:
-          if (_faceWarning != _FaceWarning.none) return _warningHintText;
-          if (!_facePresent) return 'Center your face in the frame';
-          if (!_blinkDone) return 'Blink your eyes 👁️ to prove you are live';
-          return _enrollHint;
-        case _FaceState.success: return 'Success! Saved to admin database.';
-        case _FaceState.error: return 'Not completed. Tap to try again.';
-        case _FaceState.enrolling: return 'Tap to start';
-      }
-    }
-
     switch (_faceState) {
       case _FaceState.idle:
         if (_isOffline) return '📴 Offline mode — tap to scan.\nAttendance will be saved locally\nand synced automatically when online.';
-        return _isChallenge ? 'Tap to start random verification' : 'Tap the camera icon to start\nfacial scan';
+        return _isChallenge ? 'Tap to start random verification' : 'Tap the camera icon to start\nliveness check';
       case _FaceState.scanning:
-        if (_smileDone && _blinkDone) return 'Matching your face\nwith registered photo...';
+        if (_smileDone && _blinkDone) return 'Checking liveness...';
         if (_facePresent) {
           if (_faceWarning != _FaceWarning.none) return _warningHintText;
           if (!_blinkDone) return 'Step 1 of 2: Blink your eyes 👁️';
           if (!_smileDone) return 'Step 2 of 2: Smile for the camera 😊';
         }
         return 'Center your face in the frame';
-      case _FaceState.success: return 'Similarity: ${_matchPercent.toStringAsFixed(1)}%\nIdentity confirmed.${_isChallenge ? " Returning..." : " Proceeding..."}';
-      case _FaceState.error: return 'Face not recognized.\nTap to try again.';
-      case _FaceState.enrolling: return 'Tap the camera icon to start\nfacial scan';
+      case _FaceState.success: return 'Liveness confirmed.${_isChallenge ? " Returning..." : " Proceeding..."}';
+      case _FaceState.error: return 'Liveness check failed.\nTap to try again.';
+      case _FaceState.enrolling: return 'Tap the camera icon to start\nliveness check';
     }
   }
 }
@@ -3073,7 +2599,7 @@ class _FaceBracketPainter extends CustomPainter {
     canvas.drawLine(Offset(xr, yb - r), Offset(xr, yb - r - len), paint);
   }
   @override
-  bool shouldRepaint(_FaceBracketPainter old) => old.color != color;
+  bool shouldRepaint(covariant _FaceBracketPainter old) => old.color != color;
 }
 
 class _VerifiedBadgePainter extends CustomPainter {
@@ -3095,5 +2621,5 @@ class _VerifiedBadgePainter extends CustomPainter {
     canvas.drawPath(Path()..moveTo(49.9897 * s, 55.9889 * s)..lineTo(53.9894 * s, 59.9886 * s)..lineTo(61.9887 * s, 51.9893 * s), strokePaint);
   }
   @override
-  bool shouldRepaint(_VerifiedBadgePainter old) => old.color != color;
+  bool shouldRepaint(covariant _VerifiedBadgePainter old) => old.color != color;
 }

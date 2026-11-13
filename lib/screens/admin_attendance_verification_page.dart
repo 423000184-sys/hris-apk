@@ -1,8 +1,7 @@
 // lib/screens/admin_attendance_verification_page.dart
-// v1.2: 🎭 Demo Mode Support (Skip Firebase Fetch & Block Actions)
-//       ➕ Manual Clock Out — for employees who forgot to clock out
-//       ➕ Modify Log — to correct or add clock-out time on existing logs
-//       🔒 Both actions require admin reason + write full audit trail
+// v1.3: 🔒 Fully audited overrides — Manual Clock Out and Modify Log now
+//       write atomic transactions to attendance_logs + attendance_overrides
+//       (who, what, when, why). Minimum reason length bumped to 10.
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -78,6 +77,17 @@ class _AdminAttendanceVerificationPageState
     } catch (_) {}
     return 'Admin';
   }
+
+  String get _adminName {
+    try {
+      final u = FirebaseAuth.instance.currentUser;
+      return u?.displayName ?? u?.email?.split('@').first ?? 'HR Admin';
+    } catch (_) {
+      return 'HR Admin';
+    }
+  }
+
+  String get _adminRole => 'HR/Admin';
 
   @override
   void initState() {
@@ -956,9 +966,9 @@ class _AdminAttendanceVerificationPageState
                     ? null
                     : () async {
                   final reason = reasonCtrl.text.trim();
-                  if (reason.length < 5) {
+                  if (reason.length < 10) {
                     setDlg(() => errMsg =
-                    'Please provide a clear reason (min 5 chars).');
+                    'Please provide a clear reason (min 10 chars).');
                     return;
                   }
                   setDlg(() {
@@ -1021,47 +1031,77 @@ class _AdminAttendanceVerificationPageState
       final adminId = _adminIdentifier;
       final fs = FirebaseFirestore.instance;
 
-      // ✅ IDAGDAG ITO: Kunin ang original employee_id (badge ID) mula sa logData
       final originalEmpId = (widget.logData['employee_id'] ??
           widget.logData['employeeId'] ??
           employeeDocId)
           .toString();
 
-      // ✅ Dito na mag-write ang payload gamit ang originalEmpId
-      final payload = <String, dynamic>{
-        'employee_id': originalEmpId,      // For employee stream filter
-        'employeeId': originalEmpId,       // For camelCase fallback
-        'employeeDocId': employeeDocId,    // Keep for admin lookups
-        'employee_name': employeeName,
-        'employeeName': employeeName,
-        'type': 'OUT',
-        'action': 'Manual Clock Out (Admin)',
-        'details': 'Admin manually clocked out employee',
-        'description': 'Manual clock-out by $adminId',
-        'remarks': 'manual_clock_out_by_admin',
-        'date': DateFormat('yyyy-MM-dd').format(clockOutAt),
-        'time': DateFormat('HH:mm:ss').format(clockOutAt),
-        'timestamp': Timestamp.fromDate(clockOutAt),
-        'status': 'approved',
-        'payrollStatus': 'Pending',
-        'source': 'admin_manual',
-        'original_log_id': widget.logId,
-        'modified_by_admin': adminId,
-        'modification_reason': reason,
-        'modified_at': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(),
-      };
+      final logRef = fs.collection('attendance_logs').doc();
+      final overrideRef = fs.collection('attendance_overrides').doc();
 
-      final ref = await fs.collection('attendance_logs').add(payload);
+      // 🔒 ATOMIC TRANSACTION: Save to logs AND overrides
+      await fs.runTransaction((txn) async {
+        // 1. Save the Audit Override Record
+        txn.set(overrideRef, {
+          'overrideId': overrideRef.id,
+          'attendanceLogId': logRef.id,
+          'employeeId': originalEmpId,
+          'employeeName': employeeName,
+          'employeeDocId': employeeDocId,
+          'date': DateFormat('yyyy-MM-dd').format(clockOutAt),
+          'action': 'CREATE',
+          'field': 'type',
+          'oldValue': null,
+          'newValue': 'OUT',
+          'reason': reason,
+          'performedBy': adminId,
+          'performedByName': _adminName,
+          'performedByEmail': adminId,
+          'performedByRole': _adminRole,
+          'performedAt': FieldValue.serverTimestamp(),
+          'device': 'Admin Web Portal',
+          'platform': 'web',
+          'acknowledgedByEmployee': false,
+        });
 
-      // Audit trail
+        // 2. Save the Attendance Log
+        txn.set(logRef, {
+          'employee_id': originalEmpId,
+          'employeeId': originalEmpId,
+          'employeeDocId': employeeDocId,
+          'employee_name': employeeName,
+          'employeeName': employeeName,
+          'type': 'OUT',
+          'action': 'Manual Clock Out (Admin)',
+          'details': 'Admin manually clocked out employee',
+          'date': DateFormat('yyyy-MM-dd').format(clockOutAt),
+          'time': DateFormat('HH:mm:ss').format(clockOutAt),
+          'timestamp': Timestamp.fromDate(clockOutAt),
+          'status': 'approved',
+          'payrollStatus': 'Pending',
+          'source': 'admin_manual',
+          'original_log_id': widget.logId,
+          // 🆕 OVERRIDE METADATA
+          'isOverridden': true,
+          'overrideId': overrideRef.id,
+          'overriddenBy': adminId,
+          'overriddenByName': _adminName,
+          'overriddenByRole': _adminRole,
+          'overrideReason': reason,
+          'overrideAt': FieldValue.serverTimestamp(),
+        });
+      });
+
+      // Audit trail (Legacy)
       try {
         await fs.collection('admin_audit_logs').add({
           'action': 'manual_clock_out',
           'admin': adminId,
+          'adminName': _adminName,
           'employeeId': employeeDocId,
           'employeeName': employeeName,
-          'newLogId': ref.id,
+          'newLogId': logRef.id,
+          'overrideId': overrideRef.id,
           'originalLogId': widget.logId,
           'clockOutAt': Timestamp.fromDate(clockOutAt),
           'reason': reason,
@@ -1077,10 +1117,7 @@ class _AdminAttendanceVerificationPageState
       debugPrint('❌ Manual clock out failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed: $e'),
-            backgroundColor: tc.red,
-          ),
+          SnackBar(content: Text('Failed: $e'), backgroundColor: tc.red),
         );
       }
       return false;
@@ -1321,9 +1358,9 @@ class _AdminAttendanceVerificationPageState
                     ? null
                     : () async {
                   final reason = reasonCtrl.text.trim();
-                  if (reason.length < 5) {
+                  if (reason.length < 10) {
                     setDlg(() => errMsg =
-                    'Please provide a clear reason (min 5 chars).');
+                    'Please provide a clear reason (min 10 chars).');
                     return;
                   }
                   setDlg(() {
@@ -1430,44 +1467,72 @@ class _AdminAttendanceVerificationPageState
     try {
       final adminId = _adminIdentifier;
       final fs = FirebaseFirestore.instance;
-
       final beforeSnapshot = Map<String, dynamic>.from(widget.logData);
 
-      final updates = <String, dynamic>{
-        'timestamp': Timestamp.fromDate(newTimestamp),
-        'date': DateFormat('yyyy-MM-dd').format(newTimestamp),
-        'time': DateFormat('HH:mm:ss').format(newTimestamp),
-        'type': newType,
-        'modified_by_admin': adminId,
-        'modification_reason': reason,
-        'modified_at': FieldValue.serverTimestamp(),
-        'previous_value': {
-          'timestamp': beforeSnapshot['timestamp'],
-          'type': beforeSnapshot['type'],
-        },
-      };
+      final empId = (widget.logData['employee_id'] ?? widget.logData['employeeId'] ?? '').toString();
+      final empName = _s(widget.logData['employee_name'] ?? widget.logData['name'], 'Employee');
+      final empDocId = _s(_employeeData?['id'] ?? '', '');
 
-      await fs
-          .collection('attendance_logs')
-          .doc(widget.logId)
-          .update(updates);
+      final logRef = fs.collection('attendance_logs').doc(widget.logId);
+      final overrideRef = fs.collection('attendance_overrides').doc();
 
-      // Audit trail
+      await fs.runTransaction((txn) async {
+        // 1. Save Override Audit
+        txn.set(overrideRef, {
+          'overrideId': overrideRef.id,
+          'attendanceLogId': widget.logId,
+          'employeeId': empId,
+          'employeeName': empName,
+          'employeeDocId': empDocId,
+          'date': DateFormat('yyyy-MM-dd').format(newTimestamp),
+          'action': 'UPDATE',
+          'field': 'timestamp/type',
+          'oldValue': '${beforeSnapshot['type']} @ ${beforeSnapshot['timestamp']}',
+          'newValue': '$newType @ $newTimestamp',
+          'reason': reason,
+          'performedBy': adminId,
+          'performedByName': _adminName,
+          'performedByEmail': adminId,
+          'performedByRole': _adminRole,
+          'performedAt': FieldValue.serverTimestamp(),
+          'device': 'Admin Web Portal',
+          'platform': 'web',
+          'acknowledgedByEmployee': false,
+        });
+
+        // 2. Update Attendance Log
+        txn.update(logRef, {
+          'timestamp': Timestamp.fromDate(newTimestamp),
+          'date': DateFormat('yyyy-MM-dd').format(newTimestamp),
+          'time': DateFormat('HH:mm:ss').format(newTimestamp),
+          'type': newType,
+          'modified_by_admin': adminId,
+          'modification_reason': reason,
+          'modified_at': FieldValue.serverTimestamp(),
+          // 🆕 OVERRIDE METADATA
+          'isOverridden': true,
+          'overrideId': overrideRef.id,
+          'overriddenBy': adminId,
+          'overriddenByName': _adminName,
+          'overriddenByRole': _adminRole,
+          'overrideReason': reason,
+          'overrideAt': FieldValue.serverTimestamp(),
+          'previous_value': {
+            'timestamp': beforeSnapshot['timestamp'],
+            'type': beforeSnapshot['type'],
+          },
+        });
+      });
+
+      // Legacy Audit
       try {
         await fs.collection('admin_audit_logs').add({
           'action': 'modify_attendance_log',
           'admin': adminId,
+          'adminName': _adminName,
           'logId': widget.logId,
-          'employeeId': widget.logData['employee_id'] ??
-              widget.logData['employeeId'],
-          'before': {
-            'timestamp': beforeSnapshot['timestamp'],
-            'type': beforeSnapshot['type'],
-          },
-          'after': {
-            'timestamp': Timestamp.fromDate(newTimestamp),
-            'type': newType,
-          },
+          'overrideId': overrideRef.id,
+          'employeeId': empId,
           'reason': reason,
           'timestamp': FieldValue.serverTimestamp(),
           'platform': 'admin_panel',
@@ -1481,10 +1546,7 @@ class _AdminAttendanceVerificationPageState
       debugPrint('❌ Modify log failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed: $e'),
-            backgroundColor: tc.red,
-          ),
+          SnackBar(content: Text('Failed: $e'), backgroundColor: tc.red),
         );
       }
       return false;
@@ -1541,6 +1603,35 @@ class _AdminAttendanceVerificationPageState
                 _buildDemoBanner(),
                 const SizedBox(height: 16),
               ],
+
+              // 🆕 OVERRIDE BANNER
+              if (widget.logData['isOverridden'] == true) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7ED),
+                    border: Border.all(color: const Color(0xFFF59E0B)),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.edit_note_rounded, color: Color(0xFFF59E0B)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Edited by: ${widget.logData['overriddenByName'] ?? 'HR'}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF92400E))),
+                            Text('Reason: ${widget.logData['overrideReason'] ?? 'No reason provided'}', style: const TextStyle(color: Color(0xFFB45309))),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
               _buildBreadcrumb(tc),
               const SizedBox(height: 8),
               _buildPageHeader(context, tc),
@@ -1712,7 +1803,7 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // PAGE HEADER — v1.2 with Manual Clock Out + Modify Log
+  // PAGE HEADER — v1.3 with Manual Clock Out + Modify Log
   // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeader(BuildContext context, AdminColors tc) {
     return LayoutBuilder(builder: (_, c) {

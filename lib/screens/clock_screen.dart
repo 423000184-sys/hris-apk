@@ -1,8 +1,10 @@
 // lib/screens/clock_screen.dart
-// v1.6: ⏱️ Writes local clock marker at the exact moment of successful
-//       clock-in/out so the UI reacts instantly (no Firestore wait).
-// v1.5: 🔒 One-device-one-login — session nonce = SecurityService token.
-// v1.4: 🚪 Auto sign-out pagkatapos mag-clock out (Real & Demo mode).
+// v1.8: 🔧 Clock display sync fix (same pattern as Dashboard v4.0)
+//   • Merges 3 attendance streams + poll into one list (no more overwriting)
+//   • Pending serverTimestamp logs treated as "now" (not oldest)
+//   • Exact-match IN/OUT type parsing (same sets as Dashboard/LandingScreen)
+//   • _loadCachedTimes tries BOTH employeeId & docId, reads `_at_` keys
+//   • Kept v1.7 override banner (Who & Why)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
@@ -28,9 +30,6 @@ import '../services/demo_mode_service.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../widgets/skeleton_screens.dart';
 import 'login_screen.dart';
-// ⏱️ Local clock marker — shared with MainScreen so the UI can react
-//    instantly after a successful clock-in/out without waiting on
-//    the Firestore snapshot.
 import 'main_screen.dart' show saveLocalClockMarker;
 
 class _ThemeColors {
@@ -119,6 +118,26 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   static const Duration _normalSkeletonDuration = Duration(milliseconds: 600);
   static const Duration _attendancePollInterval = Duration(seconds: 30);
 
+  // ✅ Exact-match log types (parehas sa Dashboard)
+  static const Set<String> _inTypes = {
+    'IN',
+    'CLOCK_IN',
+    'CLOCKIN',
+    'TIME_IN',
+    'TIMEIN',
+    'CHECK_IN',
+    'CHECKIN',
+  };
+  static const Set<String> _outTypes = {
+    'OUT',
+    'CLOCK_OUT',
+    'CLOCKOUT',
+    'TIME_OUT',
+    'TIMEOUT',
+    'CHECK_OUT',
+    'CHECKOUT',
+  };
+
   late bool _isInRange;
   late bool _wfhAccess;
   bool _checkingGeofence = false;
@@ -142,9 +161,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
   StreamSubscription<QuerySnapshot>? _attendanceSub;
   StreamSubscription<QuerySnapshot>? _attendanceSubCamel;
+  StreamSubscription<QuerySnapshot>? _attendanceSubCamelEmpId; // ✅ NEW
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sessionSub;
   StreamSubscription<bool>? _connectivitySub;
+
+  // ✅ NEW: docs ng bawat source — pinagsasama bago i-process
+  final Map<String, List<QueryDocumentSnapshot>> _attendanceBySource = {};
 
   static const Duration _clockActionCooldown = Duration(seconds: 5);
   static const Duration _clockSessionWatchdog = Duration(minutes: 30);
@@ -169,6 +192,12 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
   bool? _cachedSessionValid;
   DateTime? _sessionCacheTime;
+
+  // ── OVERRIDE STATE ──
+  bool _todayIsOverridden = false;
+  String? _todayOverrideBy;
+  String? _todayOverrideReason;
+  String? _todayOverrideAt;
 
   final Map<String, DateTime> _recentSecurityLogs = {};
 
@@ -260,7 +289,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
       setState(() => _networkState = _NetworkState.online);
 
-      _loadCachedTimes(); // 🎭 RESTORE SAVED DEMO TIMES HERE
+      _loadCachedTimes();
 
       Future.delayed(_demoSkeletonDuration, () {
         if (!mounted) return;
@@ -286,7 +315,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     _startEmployeeListener();
     _startSessionRevocationListener();
     _loadDeviceModel();
-    _loadCachedTimes(); // 🆕 I-load agad ang saved time pagka-open ng screen
+    _loadCachedTimes();
     _startSecurityMonitoring();
     _syncServerTime();
 
@@ -417,7 +446,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
-  // ⚖️ LOAD BALANCER — Jitter & Exponential Backoff for Firestore
   Future<T> _executeWithLoadBalancer<T>(Future<T> Function() operation) async {
     int retries = 0;
     const maxRetries = 3;
@@ -432,8 +460,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         if (retries >= maxRetries) rethrow;
         retries++;
 
-        final backoff = (math.pow(2, retries) * 1000).toInt() + math.Random().nextInt(500);
-        debugPrint('⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
+        final backoff = (math.pow(2, retries) * 1000).toInt() +
+            math.Random().nextInt(500);
+        debugPrint(
+            '⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
         await Future.delayed(Duration(milliseconds: backoff));
       }
     }
@@ -483,9 +513,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       }
       _recentSecurityLogs[key] = now;
 
-      await FirebaseFirestore.instance
-          .collection('security_events')
-          .add({
+      await FirebaseFirestore.instance.collection('security_events').add({
         'type': type,
         'severity': severity,
         'details': details,
@@ -511,9 +539,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     if (_isDemo) return;
 
     try {
-      final ref = FirebaseFirestore.instance
-          .collection('_time_sync')
-          .doc('ping');
+      final ref =
+      FirebaseFirestore.instance.collection('_time_sync').doc('ping');
       final before = DateTime.now();
       await ref
           .set({'ping': FieldValue.serverTimestamp()}, SetOptions(merge: true))
@@ -556,6 +583,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     _attendanceSub?.cancel();
     _attendanceSubCamel?.cancel();
+    _attendanceSubCamelEmpId?.cancel(); // ✅ NEW
     _employeeSub?.cancel();
     _sessionSub?.cancel();
     _sessionWatchdog?.cancel();
@@ -597,7 +625,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     );
   }
 
-  // 🆕 AUTO SIGN OUT (Works for both Demo and Real mode)
   Future<void> _autoSignOut() async {
     if (!mounted) return;
     _loggedOut = true;
@@ -605,6 +632,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     _attendanceSub?.cancel();
     _attendanceSubCamel?.cancel();
+    _attendanceSubCamelEmpId?.cancel(); // ✅ NEW
     _employeeSub?.cancel();
     _sessionSub?.cancel();
     _sessionWatchdog?.cancel();
@@ -699,8 +727,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     }
   }
 
-  // 🔒 ONE-DEVICE-ONE-LOGIN: ikinukumpara ang server nonce sa LOKAL na
-  // session token ng SecurityService (hindi na sa random _sessionNonce).
   void _startSessionRevocationListener() {
     if (_isDemo) return;
 
@@ -717,7 +743,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         .listen(
           (snap) async {
         if (!mounted || _loggedOut) return;
-        if (snap.metadata.hasPendingWrites) return; // huwag i-react sa sariling write
+        if (snap.metadata.hasPendingWrites) return;
         final data = snap.data();
         if (data == null) return;
 
@@ -867,7 +893,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     }
   }
 
-  // 🆕 BABASahin ang naka-save na oras sa device para instant lumabas
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ CACHED TIMES — try BOTH ids, read `_at_` keys with legacy fallback,
+  //    IN vs OUT comparison (IN → OUT → IN safe)
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _loadCachedTimes() async {
     if (_isDemo) {
       try {
@@ -875,7 +904,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         final todayStr = _todayStr;
         final savedDate = prefs.getString('demo_clock_date');
 
-        if (savedDate != todayStr) return; // Ignore old dates
+        if (savedDate != todayStr) return;
 
         final inStr = prefs.getString('demo_clock_in_iso');
         final outStr = prefs.getString('demo_clock_out_iso');
@@ -890,42 +919,56 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
             _clockInTime = inTime;
             _clockOutTime = outTime;
           });
-          debugPrint('🎭 [DemoMode] Restored clock times: in=$inTime, out=$outTime');
+          debugPrint(
+              '🎭 [DemoMode] Restored clock times: in=$inTime, out=$outTime');
         }
       } catch (_) {}
       return;
     }
-    final empId = _employeeId;
-    if (empId == null) return;
+
+    // ── NON-DEMO: pareho ng Dashboard ──
+    final ids = <String>{
+      if (_employeeId != null) _employeeId!,
+      if (_employeeDocId != null) _employeeDocId!,
+    };
+    if (ids.isEmpty) return;
+
     try {
       final prefs = await SharedPreferences.getInstance();
-      final inStr = prefs.getString('last_clock_in_$empId');
-      final outStr = prefs.getString('last_clock_out_$empId');
-      if (!mounted) return;
-
       final now = DateTime.now();
-      DateTime? inTime;
-      DateTime? outTime;
 
-      if (inStr != null) {
-        final dt = DateTime.tryParse(inStr);
-        if (dt != null && dt.year == now.year && dt.month == now.month && dt.day == now.day) {
-          inTime = dt;
-        }
-      }
-      if (outStr != null) {
-        final dt = DateTime.tryParse(outStr);
-        if (dt != null && dt.year == now.year && dt.month == now.month && dt.day == now.day) {
-          outTime = dt;
-        }
+      DateTime? inDt;
+      DateTime? outDt;
+      for (final id in ids) {
+        final i = DateTime.tryParse(
+            prefs.getString('last_clock_in_at_$id') ??
+                prefs.getString('last_clock_in_$id') ??
+                '');
+        final o = DateTime.tryParse(
+            prefs.getString('last_clock_out_at_$id') ??
+                prefs.getString('last_clock_out_$id') ??
+                '');
+        if (i != null && (inDt == null || i.isAfter(inDt))) inDt = i;
+        if (o != null && (outDt == null || o.isAfter(outDt))) outDt = o;
       }
 
-      if (inTime != null || outTime != null) {
-        setState(() {
-          _clockInTime = inTime;
-          _clockOutTime = outTime;
-        });
-      }
+      bool isToday(DateTime d) =>
+          d.year == now.year && d.month == now.month && d.day == now.day;
+
+      final inToday = (inDt != null && isToday(inDt)) ? inDt : null;
+      final outToday = (outDt != null && isToday(outDt)) ? outDt : null;
+
+      if (!mounted) return;
+      if (inToday == null && outToday == null) return;
+
+      // ✅ IN→OUT→IN safe: kung mas bago ang IN kaysa OUT, null ang OUT
+      final clockedIn =
+          inToday != null && (outToday == null || inToday.isAfter(outToday));
+
+      setState(() {
+        _clockInTime = inToday;
+        _clockOutTime = (!clockedIn && outToday != null) ? outToday : null;
+      });
     } catch (_) {}
   }
 
@@ -961,6 +1004,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _attendanceSub?.cancel();
     _attendanceSubCamel?.cancel();
+    _attendanceSubCamelEmpId?.cancel(); // ✅ NEW
     _employeeSub?.cancel();
     _sessionSub?.cancel();
     _connectivitySub?.cancel();
@@ -1006,7 +1050,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     return defaultTargetPlatform.name;
   }
 
-  // 🆕 RATE LIMITER: Check kung naka-clock in na ngayong araw
   Future<bool> _hasClockedInToday() async {
     if (_isDemo) return false;
     final empId = _employeeId;
@@ -1016,11 +1059,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       final prefs = await SharedPreferences.getInstance();
       final lastClockIn = prefs.getString('last_clock_in_date_$empId');
 
-      // Mabilis na local check
       if (lastClockIn == _todayStr) return true;
       if (!_isOnline) return false;
 
-      // Fallback check sa Firestore
       final q = await FirebaseFirestore.instance
           .collection('attendance_logs')
           .where('employee_id', isEqualTo: empId)
@@ -1310,7 +1351,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         if (!mounted) return;
         debugPrint('🔄 [ClockScreen] Reload: found ${allDocs.length} docs '
             '(empId=$empId, docId=$docId)');
-        _processAttendance(allDocs);
+        // ✅ Ihalo sa stream docs (union) — hindi ma-overwrite ng stale server
+        _attendanceBySource['get'] = allDocs;
+        _mergeAndProcessAttendance();
         return;
       } catch (e) {
         debugPrint('⚠️ Attendance load attempt ${attempt + 1}: $e');
@@ -1348,6 +1391,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ ATTENDANCE STREAMS — merged, hindi na nag-o-overwrite
+  // ═══════════════════════════════════════════════════════════════
   void _startAttendanceStream() {
     if (_isDemo) return;
 
@@ -1355,34 +1401,45 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     final docId = _employeeDocId;
     if (empId == null) return;
 
+    _attendanceBySource.clear();
+    final col = FirebaseFirestore.instance.collection('attendance_logs');
+
+    // 1) snake_case employee_id = empId
     _attendanceSub?.cancel();
-    _attendanceSub = FirebaseFirestore.instance
-        .collection('attendance_logs')
+    _attendanceSub = col
         .where('employee_id', isEqualTo: empId)
         .where('date', isEqualTo: _todayStr)
         .snapshots()
-        .listen(
-          (snap) {
-        if (!mounted) return;
-        _processAttendance(snap.docs);
-      },
-      onError: (e) => debugPrint('❌ Primary attendance stream error: $e'),
-    );
+        .listen((snap) {
+      if (!mounted) return;
+      _attendanceBySource['snake'] = snap.docs;
+      _mergeAndProcessAttendance();
+    }, onError: (e) => debugPrint('❌ Primary stream error: $e'));
 
-    if (docId != null && docId.isNotEmpty) {
+    // 2) camelCase employeeId = empId
+    _attendanceSubCamelEmpId?.cancel();
+    _attendanceSubCamelEmpId = col
+        .where('employeeId', isEqualTo: empId)
+        .where('date', isEqualTo: _todayStr)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      _attendanceBySource['camelEmp'] = snap.docs;
+      _mergeAndProcessAttendance();
+    }, onError: (e) => debugPrint('❌ Camel emp stream error: $e'));
+
+    // 3) camelCase employeeId = docId (legacy rows na doc id ang nakalagay)
+    if (docId != null && docId.isNotEmpty && docId != empId) {
       _attendanceSubCamel?.cancel();
-      _attendanceSubCamel = FirebaseFirestore.instance
-          .collection('attendance_logs')
+      _attendanceSubCamel = col
           .where('employeeId', isEqualTo: docId)
           .where('date', isEqualTo: _todayStr)
           .snapshots()
-          .listen(
-            (snap) {
-          if (!mounted) return;
-          _processAttendance(snap.docs);
-        },
-        onError: (e) => debugPrint('❌ Secondary attendance stream error: $e'),
-      );
+          .listen((snap) {
+        if (!mounted) return;
+        _attendanceBySource['camelDoc'] = snap.docs;
+        _mergeAndProcessAttendance();
+      }, onError: (e) => debugPrint('❌ Camel doc stream error: $e'));
     }
   }
 
@@ -1485,30 +1542,78 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     return null;
   }
 
+  /// true = IN, false = OUT, null = ignore (e.g. BREAK_IN)
+  bool? _logTypeIsIn(dynamic raw) {
+    final t = (raw ?? '')
+        .toString()
+        .toUpperCase()
+        .trim()
+        .replaceAll(RegExp(r'[\s\-]+'), '_');
+    if (_outTypes.contains(t)) return false;
+    if (_inTypes.contains(t)) return true;
+    return null;
+  }
+
+  /// Pinagsasama ang docs ng lahat ng source (by doc id) para hindi
+  /// mag-flip ang state kapag isang stream lang ang nag-update.
+  void _mergeAndProcessAttendance() {
+    final seen = <String>{};
+    final merged = <QueryDocumentSnapshot>[];
+    for (final list in _attendanceBySource.values) {
+      for (final d in list) {
+        if (seen.add(d.id)) merged.add(d);
+      }
+    }
+    _processAttendance(merged);
+  }
+
   void _processAttendance(List<QueryDocumentSnapshot> docs) {
     DateTime? inTime;
     DateTime? outTime;
+    Map<String, dynamic>? inOverride;
+    Map<String, dynamic>? outOverride;
 
     final sorted = [...docs]..sort((a, b) {
       final aData = a.data() as Map<String, dynamic>;
       final bData = b.data() as Map<String, dynamic>;
-      final aTime = _extractDateTime(aData) ?? DateTime(2000);
-      final bTime = _extractDateTime(bData) ?? DateTime(2000);
+      // ✅ Pending serverTimestamp (null pa) = pinakabago, hindi pinakaluma
+      final aTime = _extractDateTime(aData) ??
+          (a.metadata.hasPendingWrites ? DateTime.now() : DateTime(2000));
+      final bTime = _extractDateTime(bData) ??
+          (b.metadata.hasPendingWrites ? DateTime.now() : DateTime(2000));
       return aTime.compareTo(bTime);
     });
 
     for (final doc in sorted) {
       final data = doc.data() as Map<String, dynamic>;
-      final type = data['type']?.toString().toUpperCase();
-      final parsed = _extractDateTime(data);
+      final isIn = _logTypeIsIn(data['type'] ?? data['action']);
+      if (isIn == null) continue;
+
+      DateTime? parsed = _extractDateTime(data);
+      if (parsed == null && doc.metadata.hasPendingWrites) {
+        parsed = DateTime.now();
+      }
       if (parsed == null) continue;
 
-      if (type == 'IN' || type == 'CLOCK_IN') {
+      // Extract override details if present
+      final overrideInfo = data['isOverridden'] == true
+          ? {
+        'by': data['overriddenByName']?.toString() ?? 'Admin/HR',
+        'reason': data['overrideReason']?.toString() ??
+            'No reason provided',
+      }
+          : null;
+
+      if (isIn) {
         inTime = parsed;
-        outTime = null;
-      } else if (type == 'OUT' || type == 'CLOCK_OUT') {
+        outTime = null; // reset OUT kapag bagong IN (IN→OUT→IN safe)
+        inOverride = overrideInfo;
+        outOverride = null;
+      } else {
+        // OUT — only if may naunang IN na mas maaga
         if (inTime != null && parsed.isAfter(inTime)) {
           outTime = parsed;
+          outOverride = overrideInfo;
         }
       }
     }
@@ -1524,9 +1629,15 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     if (!changed) return;
 
+    // OUT override ang priority, else IN override
+    final activeOverride = outOverride ?? inOverride;
+
     setState(() {
       _clockInTime = inTime;
       _clockOutTime = outTime;
+      _todayIsOverridden = activeOverride != null;
+      _todayOverrideBy = activeOverride?['by'];
+      _todayOverrideReason = activeOverride?['reason'];
     });
 
     final recentOwnAction = _lastOwnClockActionAt != null &&
@@ -1545,24 +1656,28 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         inTime != null &&
         prevIn.millisecondsSinceEpoch != inTime.millisecondsSinceEpoch;
 
+    String byStr(Map<String, dynamic>? o) => o?['by'] ?? 'HR';
+    String whyStr(Map<String, dynamic>? o) =>
+        o?['reason'] ?? 'No reason provided';
+
     if (adminAddedOut) {
       _showSnack(
-        '📝 Admin recorded your clock OUT at ${_formatTime(outTime)}',
+        '📝 ${byStr(outOverride)} recorded your clock OUT at ${_formatTime(outTime!)}.\nReason: ${whyStr(outOverride)}',
       );
     } else if (adminAddedIn) {
       _showSnack(
-        '📝 Admin recorded your clock IN at ${_formatTime(inTime)}',
+        '📝 ${byStr(inOverride)} recorded your clock IN at ${_formatTime(inTime!)}.\nReason: ${whyStr(inOverride)}',
       );
     } else if (adminChangedOut) {
       _showSnack(
-        '📝 Admin updated your clock OUT to ${_formatTime(outTime)}',
+        '📝 ${byStr(outOverride)} changed your clock OUT to ${_formatTime(outTime!)}.\nReason: ${whyStr(outOverride)}',
       );
     } else if (adminChangedIn) {
       _showSnack(
-        '📝 Admin updated your clock IN to ${_formatTime(inTime)}',
+        '📝 ${byStr(inOverride)} changed your clock IN to ${_formatTime(inTime!)}.\nReason: ${whyStr(inOverride)}',
       );
     } else {
-      _showSnack('📝 Admin updated your attendance.');
+      _showSnack('📝 Your attendance was updated by HR.');
     }
   }
 
@@ -1591,7 +1706,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     if (_isDemo) {
       debugPrint('🎭 [DemoMode] Simulating $type at $time — NO DB WRITE');
       await Future.delayed(const Duration(milliseconds: 400));
-      // 🎭 Persist to SharedPreferences (NOT Firestore)
       try {
         final prefs = await SharedPreferences.getInstance();
         final todayStr = _todayStr;
@@ -1661,7 +1775,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       _showSnack('💾 Saved offline. Will auto-sync once internet returns.');
     }
 
-    // 🆕 I-SAVE SA LOCAL CACHE PARA INSTANT ANG UPDATE SA SUSUNOD
     try {
       final prefs = await SharedPreferences.getInstance();
       if (isClockIn) {
@@ -1672,7 +1785,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       }
     } catch (_) {}
 
-    // 🆕 I-SAVE SA LOCAL CACHE PARA MABILIS ANG CHECK BUKAS
     if (isClockIn && !_isDemo) {
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -1680,9 +1792,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       } catch (_) {}
     }
 
-    // ⏱️ INSTANT LOCAL MARKER — lets MainScreen / Dashboard react
-    // immediately without waiting for the Firestore snapshot to fire.
-    // Written at the exact moment the attendance write succeeds.
     try {
       final emp = _employee;
       if (emp != null) {
@@ -1784,14 +1893,15 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       'timestamp': FieldValue.serverTimestamp(),
     };
 
-    // ⚖️ Naka-load balance para hindi mag-crash ang app sa dami ng sabay-sabay na writes
-    unawaited(_executeWithLoadBalancer(() =>
-        FirebaseFirestore.instance.collection('activity logs').add(activityLogPayload)
-    ).catchError((e) => debugPrint('⚠️ activity logs FAILED: $e')));
+    unawaited(_executeWithLoadBalancer(() => FirebaseFirestore.instance
+        .collection('activity logs')
+        .add(activityLogPayload)).catchError(
+            (e) => debugPrint('⚠️ activity logs FAILED: $e')));
 
-    unawaited(_executeWithLoadBalancer(() =>
-        FirebaseFirestore.instance.collection('activity_logs').add(historyLogPayload)
-    ).catchError((e) => debugPrint('⚠️ activity_logs FAILED: $e')));
+    unawaited(_executeWithLoadBalancer(() => FirebaseFirestore.instance
+        .collection('activity_logs')
+        .add(historyLogPayload)).catchError(
+            (e) => debugPrint('⚠️ activity_logs FAILED: $e')));
 
     try {
       if (isClockIn) {
@@ -1967,7 +2077,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       return false;
     }
 
-    // 🔒 ONE-DEVICE-ONE-LOGIN: tiyaking tayo pa rin ang may-ari ng session.
     final ownerDocId = _employeeDocId;
     if (ownerDocId != null &&
         !await SecurityService.instance.isServerSessionOwner(ownerDocId)) {
@@ -2049,10 +2158,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         return;
       }
 
-      // 🆕 RATE LIMITER: Check kung naka-IN na ngayong araw
       final alreadyClockedInToday = await _hasClockedInToday();
       if (alreadyClockedInToday) {
-        _showSnack('⚠️ You have already clocked in today. Only one clock-in is allowed per day.');
+        _showSnack(
+            '⚠️ You have already clocked in today. Only one clock-in is allowed per day.');
         return;
       }
 
@@ -2115,9 +2224,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       );
       widget.onClockOut?.call();
 
-      // 🚪 AUTO SIGN-OUT AFTER 2 SECONDS (Real mode only)
-      // 🎭 Demo mode: stay on screen so the user can actually SEE the
-      //    clocked-out state (and re-test). Still NO DB write either way.
       if (!_isDemo) {
         await Future.delayed(const Duration(seconds: 2));
         if (mounted) {
@@ -2216,7 +2322,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
               ),
             ),
           ),
-
           Column(
             children: [
               Expanded(
@@ -2234,9 +2339,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const SizedBox(height: 8),
-
                           if (_isDemo) _buildDemoClockBadge(),
-
                           if (_mockLocationDetected && !_isDemo) ...[
                             Padding(
                               padding:
@@ -2253,10 +2356,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                               ),
                             ),
                           ],
-
                           _buildHeader(tc, empName),
                           const SizedBox(height: 24),
                           _buildHeroCard(),
+                          if (_todayIsOverridden) _buildOverrideBanner(tc),
                           const SizedBox(height: 21),
                           _buildClockInOutSection(),
                           const SizedBox(height: 23),
@@ -2273,7 +2376,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
               _buildBottomNav(tc),
             ],
           ),
-
           if ((isOffline || isChecking) && !_isDemo)
             Positioned.fill(
               child: AnimatedOpacity(
@@ -2321,6 +2423,56 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.3,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOverrideBanner(_ThemeColors tc) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: tc.isDark ? const Color(0xFF2D2211) : const Color(0xFFFFF7ED),
+          border: Border.all(color: const Color(0xFFF59E0B), width: 1.15),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.edit_note_rounded,
+                color: Color(0xFFF59E0B), size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Attendance Edited by $_todayOverrideBy',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: tc.isDark
+                          ? const Color(0xFFFBBF24)
+                          : const Color(0xFF92400E),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Reason: ${_todayOverrideReason ?? "—"}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: tc.isDark
+                          ? const Color(0xFFFCD34D)
+                          : const Color(0xFFB45309),
+                      height: 1.3,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -2471,7 +2623,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   Widget _buildHeader(_ThemeColors tc, String name) {
     final initials = name.trim().isEmpty
         ? '?'
-        : name.trim().split(' ').map((w) => w[0]).take(2).join().toUpperCase();
+        : name
+        .trim()
+        .split(' ')
+        .map((w) => w[0])
+        .take(2)
+        .join()
+        .toUpperCase();
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
@@ -2524,8 +2682,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                               ? const Color(0xFF14371F)
                               : const Color(0xFFDCFCE7),
                           borderRadius: BorderRadius.circular(999),
-                          border:
-                          Border.all(color: const Color(0xFF22C55E)),
+                          border: Border.all(color: const Color(0xFF22C55E)),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
