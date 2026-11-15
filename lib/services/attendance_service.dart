@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'geofence_service.dart';
+import 'field_proof_service.dart'; // <-- NEW IMPORT
 import 'admin_notification_service.dart';
 import 'device_info_service.dart';
 
@@ -22,9 +23,6 @@ class AttendanceService {
 
   final _col = FirebaseFirestore.instance.collection('attendance_logs');
 
-  /// Reads the latest record for this employee.
-  /// Needs a composite index: employeeId (asc) + timestamp (desc).
-  /// Call this when the attendance screen loads.
   Future<ClockStatus> getClockStatus(String employeeId) async {
     final snap = await _col
         .where('employeeId', isEqualTo: employeeId)
@@ -42,8 +40,6 @@ class AttendanceService {
     );
   }
 
-  /// Returns an error message if this device is not the active session device,
-  /// or null if OK. Fails open on offline/errors so employees are never blocked.
   Future<String?> _checkActiveDevice(String deviceId) async {
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -82,36 +78,65 @@ class AttendanceService {
       return AttendanceResult(success: false, zone: 'blocked', message: deviceError);
     }
 
-    // Block duplicate clock-in for today. A clock-in left open from a
-    // previous day does not block today's clock-in.
     try {
       final status = await getClockStatus(employeeId);
       if (status.isClockedIn && status.date == dateStr) {
         return AttendanceResult(
           success: false,
           zone: 'blocked',
-          message:
-          'Naka-clock in ka na${status.deviceModel != null ? ' sa ${status.deviceModel}' : ''}.',
+          message: 'Naka-clock in ka na${status.deviceModel != null ? ' sa ${status.deviceModel}' : ''}.',
         );
       }
     } catch (e) {
       debugPrint('[Attendance] Status check skipped: $e');
     }
 
-    final geo = await GeofenceService.instance.checkGeofence();
+    // ── NEW: Use checkGeofenceForEmployee to get field proof logic ──
+    final geo = await GeofenceService.instance.checkGeofenceForEmployee(
+      employeeId: employeeId, // assuming this is the doc ID for employees collection
+    );
 
+    // ── NEW: Handle Field Worker needing selfie proof ──
+    if (geo.needsProof) {
+      try {
+        final proofId = await FieldProofService.instance.captureAndSubmit(
+          employeeId: employeeId,
+          employeeDocId: employeeId, // Adjust if your Auth UID is different from employeeId
+          attendanceType: 'IN',
+          nearestSiteName: geo.matchedLocationName,
+        );
+        return AttendanceResult(
+          success: false,
+          needsProof: true,
+          proofId: proofId,
+          zone: 'pending_proof',
+          message: 'Selfie proof submitted.\nWaiting for HR approval.',
+          distanceMeters: geo.distanceMeters,
+        );
+      } on FieldProofException catch (e) {
+        return AttendanceResult(
+          success: false,
+          needsProof: true,
+          zone: 'blocked',
+          message: e.message,
+          distanceMeters: geo.distanceMeters,
+        );
+      }
+    }
+
+    // ── Validate Zone ──
     String zone;
     if (isWFH) {
       zone = 'wfh';
     } else if (isDriver) {
       zone = 'driver';
-    } else if (geo.isInside) {
+    } else if (geo.isAllowed) { // geo.isAllowed covers exact inside, tolerance, and exempted
       zone = 'inside';
     } else {
       zone = 'outside';
     }
 
-    if (zone == 'outside') {
+    if (zone == 'outside' || (!geo.isAllowed && !isWFH && !isDriver)) {
       await AdminNotificationService.instance.notifyGeofenceAlert(
         employeeId: employeeId,
         employeeName: employeeName,
@@ -121,7 +146,7 @@ class AttendanceService {
       );
       return AttendanceResult(
         success: false,
-        zone: zone,
+        zone: 'outside',
         message: geo.message,
         distanceMeters: geo.distanceMeters,
       );
@@ -196,7 +221,6 @@ class AttendanceService {
       return AttendanceResult(success: false, zone: 'blocked', message: deviceError);
     }
 
-    // Block clock-out when there is nothing to clock out from.
     try {
       final status = await getClockStatus(employeeId);
       if (!status.isClockedIn) {
@@ -210,19 +234,51 @@ class AttendanceService {
       debugPrint('[Attendance] Status check skipped: $e');
     }
 
-    final geo = await GeofenceService.instance.checkGeofence();
+    // ── NEW: Use checkGeofenceForEmployee ──
+    final geo = await GeofenceService.instance.checkGeofenceForEmployee(
+      employeeId: employeeId,
+    );
+
+    // ── NEW: Handle Field Worker needing selfie proof for Clock Out ──
+    if (geo.needsProof) {
+      try {
+        final proofId = await FieldProofService.instance.captureAndSubmit(
+          employeeId: employeeId,
+          employeeDocId: employeeId,
+          attendanceType: 'OUT',
+          nearestSiteName: geo.matchedLocationName,
+        );
+        return AttendanceResult(
+          success: false,
+          needsProof: true,
+          proofId: proofId,
+          zone: 'pending_proof',
+          message: 'Selfie proof submitted.\nWaiting for HR approval.',
+          distanceMeters: geo.distanceMeters,
+        );
+      } on FieldProofException catch (e) {
+        return AttendanceResult(
+          success: false,
+          needsProof: true,
+          zone: 'blocked',
+          message: e.message,
+          distanceMeters: geo.distanceMeters,
+        );
+      }
+    }
 
     String zone;
     if (isWFH) {
       zone = 'wfh';
     } else if (isDriver) {
       zone = 'driver';
-    } else if (geo.isInside) {
+    } else if (geo.isAllowed) {
       zone = 'inside';
     } else {
       zone = 'outside';
     }
 
+    // Your original logic allows clocking OUT even if outside
     await _col.add({
       'employeeId': employeeId,
       'employee_id': employeeId,
@@ -257,7 +313,7 @@ class AttendanceService {
         employeeName: employeeName,
         timeStr: timeStr,
         wfh: false,
-        inRange: geo.isInside,
+        inRange: geo.isAllowed, // <-- updated to use isAllowed
         zoneType: zone,
         distanceMeters: geo.distanceMeters,
       );
@@ -272,16 +328,25 @@ class AttendanceService {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════
+// UPDATED RESULT MODEL
+// ══════════════════════════════════════════════════════════════════
 class AttendanceResult {
   final bool success;
   final String zone;
   final String message;
   final double? distanceMeters;
 
+  // NEW FIELDS
+  final bool needsProof;
+  final String? proofId;
+
   const AttendanceResult({
     required this.success,
     required this.zone,
     required this.message,
     this.distanceMeters,
+    this.needsProof = false,
+    this.proofId,
   });
 }

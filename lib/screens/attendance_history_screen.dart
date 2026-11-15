@@ -2,6 +2,8 @@
 // ✅ v3.5: HR overrides now render as a full audit trail:
 //          WHO (name + role) • WHAT (field, old→new) • WHEN • WHY.
 //          Supports multiple overrides per day (IN and OUT).
+// ✅ v3.6: Overrides fetched on web too; attribution + reason strictly
+//          honest (no fake "Admin/HR" / "No reason provided" fallbacks).
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -88,7 +90,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
 
   // ── OVERRIDE DATA MAP (per day, list of overrides) ──
   // Each entry: { fieldType, by, byRole, byEmail, reason,
-  //               originalTime, newTime, at, isManualEntry }
+  //               originalTime, newTime, at, isManualEntry, attributed }
   final Map<String, List<Map<String, dynamic>>> _overrideInfoByDate = {};
 
   bool _loading = true;
@@ -733,6 +735,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
             'newTime': '18:30:00',
             'at': DateTime.now().subtract(const Duration(hours: 1)),
             'isManualEntry': false,
+            'attributed': true,
           },
         ];
       }
@@ -795,6 +798,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     if (empId.isEmpty) {
       return;
     }
+    // ✅ Web also needs override info (previously only mobile fetched it).
+    _overrideInfoByDate.clear();
+    await _fetchRemoteAttendance(empId);
     try {
       final Query loginQuery = FirebaseFirestore.instance
           .collection('activity_logs')
@@ -1165,25 +1171,24 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
               ? rawTime
               : _timeStrFromTs(log['timestamp']);
 
+          // ✅ EDIT A — honest attribution: empty byName never becomes
+          // "Admin/HR"; 'attributed' flag tells the renderer whether to
+          // show a real name or "Not recorded".
           if (log['isOverridden'] == true) {
             final originalTs = log['originalTimestamp'];
+            final byName = (log['overriddenByName'] ?? '').toString().trim();
             overrides.add({
               'fieldType': type, // IN or OUT
-              'by': (log['overriddenByName'] ??
-                  log['editedBy'] ??
-                  'Admin/HR')
-                  .toString(),
-              'byRole': (log['overriddenByRole'] ?? '').toString(),
-              'byEmail': (log['overriddenByEmail'] ??
-                  log['editedBy'] ??
-                  '')
-                  .toString(),
-              'reason': (log['overrideReason'] ?? 'No reason provided')
-                  .toString(),
+              'by': byName, // empty => rendered as "not recorded"
+              'byRole': (log['overriddenByRole'] ?? '').toString().trim(),
+              'byEmail':
+              (log['overriddenByEmail'] ?? log['editedBy'] ?? '').toString(),
+              'reason': (log['overrideReason'] ?? '').toString().trim(),
               'originalTime': _timeStrFromTs(originalTs),
               'newTime': effectiveTime,
               'at': log['overrideAt'] ?? log['editedAt'],
               'isManualEntry': log['manualEntry'] == true,
+              'attributed': byName.isNotEmpty,
             });
           }
 
@@ -2058,9 +2063,12 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
       ) {
     final fieldType = (o['fieldType'] ?? '').toString();
     final isManual = o['isManualEntry'] == true;
-    final by = (o['by'] ?? 'Admin/HR').toString();
+
+    // ✅ EDIT C-1 — no fake defaults: empty => rendered as "Not recorded".
+    final by = (o['by'] ?? '').toString();
     final byRole = (o['byRole'] ?? '').toString().trim();
-    final reason = (o['reason'] ?? 'No reason provided').toString();
+    final reason = (o['reason'] ?? '').toString();
+
     final originalTime = (o['originalTime'] ?? '').toString();
     final newTime = (o['newTime'] ?? '').toString();
     final atStr = _fmtOverrideWhen(o['at']);
@@ -2078,8 +2086,12 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
       action = '$fieldType edited';
     }
 
-    // WHO
-    final byLine = byRole.isNotEmpty ? '$by ($byRole)' : by;
+    // ✅ EDIT C-2 — WHO: honest attribution fallback.
+    final attributed = o['attributed'] != false && by.isNotEmpty;
+    final byLine = attributed
+        ? (byRole.isNotEmpty ? '$by ($byRole)' : by)
+        : 'Not recorded — please ask HR to confirm';
+    final reasonText = reason.trim().isEmpty ? 'Not recorded' : reason;
 
     final badgeColor = fieldType == 'IN'
         ? AppColors.success
@@ -2177,8 +2189,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
                   size: 11, color: Color(0xFFF59E0B)),
               const SizedBox(width: 4),
               Expanded(
+                // ✅ EDIT C-3 — use reasonText (empty => "Not recorded").
                 child: Text(
-                  'Reason: $reason',
+                  'Reason: $reasonText',
                   style: TextStyle(fontSize: 10, color: bodyColor),
                 ),
               ),

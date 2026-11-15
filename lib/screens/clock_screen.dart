@@ -1,10 +1,7 @@
 // lib/screens/clock_screen.dart
-// v1.8: 🔧 Clock display sync fix (same pattern as Dashboard v4.0)
-//   • Merges 3 attendance streams + poll into one list (no more overwriting)
-//   • Pending serverTimestamp logs treated as "now" (not oldest)
-//   • Exact-match IN/OUT type parsing (same sets as Dashboard/LandingScreen)
-//   • _loadCachedTimes tries BOTH employeeId & docId, reads `_at_` keys
-//   • Kept v1.7 override banner (Who & Why)
+// v2.0: 📍 GPS SAVING FIX
+//   • Now extracts and saves latitude/longitude from geofence result.
+//   • Passes coordinates to OfflineAttendanceService and activity_logs.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
@@ -19,6 +16,7 @@ import 'package:flutter/foundation.dart'
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/employee.dart';
 import '../services/geofence_service.dart';
+import '../services/field_proof_service.dart';
 import '../services/network_guard.dart';
 import '../services/offline_attendance_service.dart';
 import '../services/presence_monitor_service.dart';
@@ -118,7 +116,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   static const Duration _normalSkeletonDuration = Duration(milliseconds: 600);
   static const Duration _attendancePollInterval = Duration(seconds: 30);
 
-  // ✅ Exact-match log types (parehas sa Dashboard)
   static const Set<String> _inTypes = {
     'IN',
     'CLOCK_IN',
@@ -161,12 +158,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
   StreamSubscription<QuerySnapshot>? _attendanceSub;
   StreamSubscription<QuerySnapshot>? _attendanceSubCamel;
-  StreamSubscription<QuerySnapshot>? _attendanceSubCamelEmpId; // ✅ NEW
+  StreamSubscription<QuerySnapshot>? _attendanceSubCamelEmpId;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sessionSub;
   StreamSubscription<bool>? _connectivitySub;
 
-  // ✅ NEW: docs ng bawat source — pinagsasama bago i-process
   final Map<String, List<QueryDocumentSnapshot>> _attendanceBySource = {};
 
   static const Duration _clockActionCooldown = Duration(seconds: 5);
@@ -197,7 +193,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   bool _todayIsOverridden = false;
   String? _todayOverrideBy;
   String? _todayOverrideReason;
-  String? _todayOverrideAt;
+  bool _todayOverrideUnattributed = false;
+
+  String? _fieldProofId;
 
   final Map<String, DateTime> _recentSecurityLogs = {};
 
@@ -583,7 +581,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     _attendanceSub?.cancel();
     _attendanceSubCamel?.cancel();
-    _attendanceSubCamelEmpId?.cancel(); // ✅ NEW
+    _attendanceSubCamelEmpId?.cancel();
     _employeeSub?.cancel();
     _sessionSub?.cancel();
     _sessionWatchdog?.cancel();
@@ -632,7 +630,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     _attendanceSub?.cancel();
     _attendanceSubCamel?.cancel();
-    _attendanceSubCamelEmpId?.cancel(); // ✅ NEW
+    _attendanceSubCamelEmpId?.cancel();
     _employeeSub?.cancel();
     _sessionSub?.cancel();
     _sessionWatchdog?.cancel();
@@ -893,10 +891,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // ✅ CACHED TIMES — try BOTH ids, read `_at_` keys with legacy fallback,
-  //    IN vs OUT comparison (IN → OUT → IN safe)
-  // ═══════════════════════════════════════════════════════════════
   Future<void> _loadCachedTimes() async {
     if (_isDemo) {
       try {
@@ -926,7 +920,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       return;
     }
 
-    // ── NON-DEMO: pareho ng Dashboard ──
     final ids = <String>{
       if (_employeeId != null) _employeeId!,
       if (_employeeDocId != null) _employeeDocId!,
@@ -961,7 +954,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       if (inToday == null && outToday == null) return;
 
-      // ✅ IN→OUT→IN safe: kung mas bago ang IN kaysa OUT, null ang OUT
       final clockedIn =
           inToday != null && (outToday == null || inToday.isAfter(outToday));
 
@@ -1004,7 +996,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _attendanceSub?.cancel();
     _attendanceSubCamel?.cancel();
-    _attendanceSubCamelEmpId?.cancel(); // ✅ NEW
+    _attendanceSubCamelEmpId?.cancel();
     _employeeSub?.cancel();
     _sessionSub?.cancel();
     _connectivitySub?.cancel();
@@ -1351,7 +1343,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         if (!mounted) return;
         debugPrint('🔄 [ClockScreen] Reload: found ${allDocs.length} docs '
             '(empId=$empId, docId=$docId)');
-        // ✅ Ihalo sa stream docs (union) — hindi ma-overwrite ng stale server
         _attendanceBySource['get'] = allDocs;
         _mergeAndProcessAttendance();
         return;
@@ -1391,9 +1382,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // ✅ ATTENDANCE STREAMS — merged, hindi na nag-o-overwrite
-  // ═══════════════════════════════════════════════════════════════
   void _startAttendanceStream() {
     if (_isDemo) return;
 
@@ -1404,7 +1392,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     _attendanceBySource.clear();
     final col = FirebaseFirestore.instance.collection('attendance_logs');
 
-    // 1) snake_case employee_id = empId
     _attendanceSub?.cancel();
     _attendanceSub = col
         .where('employee_id', isEqualTo: empId)
@@ -1416,7 +1403,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       _mergeAndProcessAttendance();
     }, onError: (e) => debugPrint('❌ Primary stream error: $e'));
 
-    // 2) camelCase employeeId = empId
     _attendanceSubCamelEmpId?.cancel();
     _attendanceSubCamelEmpId = col
         .where('employeeId', isEqualTo: empId)
@@ -1428,7 +1414,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       _mergeAndProcessAttendance();
     }, onError: (e) => debugPrint('❌ Camel emp stream error: $e'));
 
-    // 3) camelCase employeeId = docId (legacy rows na doc id ang nakalagay)
     if (docId != null && docId.isNotEmpty && docId != empId) {
       _attendanceSubCamel?.cancel();
       _attendanceSubCamel = col
@@ -1567,6 +1552,19 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     _processAttendance(merged);
   }
 
+  // ✅ honest attribution helpers (used by banner + snackbar)
+  String _byLabel(Map<String, dynamic> o) {
+    final by = (o['by'] ?? '').toString().trim();
+    final role = (o['role'] ?? '').toString().trim();
+    if (by.isEmpty) return 'an unidentified editor';
+    return role.isEmpty ? by : '$by ($role)';
+  }
+
+  String _whyLabel(Map<String, dynamic> o) {
+    final r = (o['reason'] ?? '').toString().trim();
+    return r.isEmpty ? 'Not recorded' : r;
+  }
+
   void _processAttendance(List<QueryDocumentSnapshot> docs) {
     DateTime? inTime;
     DateTime? outTime;
@@ -1576,7 +1574,6 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     final sorted = [...docs]..sort((a, b) {
       final aData = a.data() as Map<String, dynamic>;
       final bData = b.data() as Map<String, dynamic>;
-      // ✅ Pending serverTimestamp (null pa) = pinakabago, hindi pinakaluma
       final aTime = _extractDateTime(aData) ??
           (a.metadata.hasPendingWrites ? DateTime.now() : DateTime(2000));
       final bTime = _extractDateTime(bData) ??
@@ -1595,22 +1592,21 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       }
       if (parsed == null) continue;
 
-      // Extract override details if present
+      // ✅ honest extraction: no "Admin/HR" / "No reason provided"
       final overrideInfo = data['isOverridden'] == true
-          ? {
-        'by': data['overriddenByName']?.toString() ?? 'Admin/HR',
-        'reason': data['overrideReason']?.toString() ??
-            'No reason provided',
+          ? <String, dynamic>{
+        'by': (data['overriddenByName'] ?? '').toString().trim(),
+        'role': (data['overriddenByRole'] ?? '').toString().trim(),
+        'reason': (data['overrideReason'] ?? '').toString().trim(),
       }
           : null;
 
       if (isIn) {
         inTime = parsed;
-        outTime = null; // reset OUT kapag bagong IN (IN→OUT→IN safe)
+        outTime = null;
         inOverride = overrideInfo;
         outOverride = null;
       } else {
-        // OUT — only if may naunang IN na mas maaga
         if (inTime != null && parsed.isAfter(inTime)) {
           outTime = parsed;
           outOverride = overrideInfo;
@@ -1622,62 +1618,57 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     final prevIn = _clockInTime;
     final prevOut = _clockOutTime;
+    final activeOverride = outOverride ?? inOverride;
 
-    final changed =
+    final newBy = activeOverride == null ? null : _byLabel(activeOverride);
+    final newWhy = activeOverride == null ? null : _whyLabel(activeOverride);
+
+    final timesChanged =
         prevIn?.millisecondsSinceEpoch != inTime?.millisecondsSinceEpoch ||
             prevOut?.millisecondsSinceEpoch != outTime?.millisecondsSinceEpoch;
+    final overrideChanged = (activeOverride != null) != _todayIsOverridden ||
+        newBy != _todayOverrideBy ||
+        newWhy != _todayOverrideReason;
 
-    if (!changed) return;
-
-    // OUT override ang priority, else IN override
-    final activeOverride = outOverride ?? inOverride;
+    if (!timesChanged && !overrideChanged) return;
 
     setState(() {
       _clockInTime = inTime;
       _clockOutTime = outTime;
       _todayIsOverridden = activeOverride != null;
-      _todayOverrideBy = activeOverride?['by'];
-      _todayOverrideReason = activeOverride?['reason'];
+      _todayOverrideBy = newBy;
+      _todayOverrideReason = newWhy;
+      _todayOverrideUnattributed = activeOverride != null &&
+          (activeOverride['by'] ?? '').toString().trim().isEmpty;
     });
+
+    if (!timesChanged) return;
 
     final recentOwnAction = _lastOwnClockActionAt != null &&
         DateTime.now().difference(_lastOwnClockActionAt!).inSeconds < 5;
-    if (recentOwnAction) {
-      debugPrint('🔄 Attendance updated (own action, no snackbar)');
-      return;
+    if (recentOwnAction) return;
+
+    final addedOut = prevOut == null && outTime != null;
+    final addedIn = prevIn == null && inTime != null;
+    final changedOut = prevOut != null && outTime != null;
+    final changedIn = prevIn != null && inTime != null;
+
+    String msg(String verb, String what, DateTime t, Map<String, dynamic>? o) {
+      if (o == null) return '📝 Your attendance was updated.';
+      return '📝 ${_byLabel(o)} $verb your clock $what at ${_formatTime(t)}.'
+          '\nReason: ${_whyLabel(o)}';
     }
 
-    final adminAddedOut = prevOut == null && outTime != null;
-    final adminAddedIn = prevIn == null && inTime != null;
-    final adminChangedOut = prevOut != null &&
-        outTime != null &&
-        prevOut.millisecondsSinceEpoch != outTime.millisecondsSinceEpoch;
-    final adminChangedIn = prevIn != null &&
-        inTime != null &&
-        prevIn.millisecondsSinceEpoch != inTime.millisecondsSinceEpoch;
-
-    String byStr(Map<String, dynamic>? o) => o?['by'] ?? 'HR';
-    String whyStr(Map<String, dynamic>? o) =>
-        o?['reason'] ?? 'No reason provided';
-
-    if (adminAddedOut) {
-      _showSnack(
-        '📝 ${byStr(outOverride)} recorded your clock OUT at ${_formatTime(outTime!)}.\nReason: ${whyStr(outOverride)}',
-      );
-    } else if (adminAddedIn) {
-      _showSnack(
-        '📝 ${byStr(inOverride)} recorded your clock IN at ${_formatTime(inTime!)}.\nReason: ${whyStr(inOverride)}',
-      );
-    } else if (adminChangedOut) {
-      _showSnack(
-        '📝 ${byStr(outOverride)} changed your clock OUT to ${_formatTime(outTime!)}.\nReason: ${whyStr(outOverride)}',
-      );
-    } else if (adminChangedIn) {
-      _showSnack(
-        '📝 ${byStr(inOverride)} changed your clock IN to ${_formatTime(inTime!)}.\nReason: ${whyStr(inOverride)}',
-      );
+    if (addedOut) {
+      _showSnack(msg('recorded', 'OUT', outTime!, outOverride));
+    } else if (addedIn) {
+      _showSnack(msg('recorded', 'IN', inTime!, inOverride));
+    } else if (changedOut) {
+      _showSnack(msg('changed', 'OUT', outTime!, outOverride));
+    } else if (changedIn) {
+      _showSnack(msg('changed', 'IN', inTime!, inOverride));
     } else {
-      _showSnack('📝 Your attendance was updated by HR.');
+      _showSnack('📝 Your attendance was updated.');
     }
   }
 
@@ -1743,17 +1734,32 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     double? distanceMeters;
     String? locationName;
+
+    // ✅ NEW: GPS VARIABLES
+    double? lat;
+    double? lng;
+
     if (zoneType == 'outside' || zoneType == 'inside') {
       try {
         final geo = await _checkGeofenceWithFallback();
         if (geo != null) {
           distanceMeters = geo.distanceMeters;
           locationName = geo.matchedLocationName;
+
+          // ✅ NEW: Extract GPS Coordinates
+          if (geo.position != null) {
+            lat = geo.position!.latitude;
+            lng = geo.position!.longitude;
+          }
         }
       } catch (e) {
         debugPrint('⚠️ distance/location capture failed: $e');
       }
     }
+
+    final proofTag = _fieldProofId != null ? '|field_selfie_pending|proof:$_fieldProofId' : '';
+    final baseRemarks = zoneType;
+    final remarks = '$baseRemarks$proofTag';
 
     final result = await OfflineAttendanceService.instance.logAttendance(
       employeeId: empId,
@@ -1762,8 +1768,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       type: type,
       timestamp: time,
       device: deviceName,
-      remarks: zoneType,
+      remarks: remarks,
       zoneType: zoneType,
+      // ✅ NEW: Pass GPS to DB
+      latitude: lat,
+      longitude: lng,
     );
 
     if (!result.success) {
@@ -1821,6 +1830,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       distanceMeters: distanceMeters,
       locationName: locationName,
       txnId: txnId,
+      // ✅ NEW: Pass to activity logs
+      latitude: lat,
+      longitude: lng,
     );
 
     PresenceMonitorService.instance.checkNow();
@@ -1838,6 +1850,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     double? distanceMeters,
     String? locationName,
     required String txnId,
+    // ✅ NEW: Accept coordinates
+    double? latitude,
+    double? longitude,
   }) {
     if (_isDemo) {
       debugPrint('🎭 [DemoMode] Skipping secondary logs');
@@ -1870,6 +1885,14 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       'transaction_id': txnId,
       'session_nonce': _sessionNonce,
       'mock_location': _mockLocationDetected,
+      if (_fieldProofId != null) 'fieldProofId': _fieldProofId,
+
+      // ✅ NEW: Save coordinates
+      if (latitude != null) 'latitude': latitude,
+      if (longitude != null) 'longitude': longitude,
+      if (latitude != null && longitude != null)
+        'coordinates': GeoPoint(latitude, longitude),
+
       'device_hash': sha256
           .convert(utf8.encode(deviceName + empId))
           .toString()
@@ -1890,6 +1913,14 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       'location': effectiveLocation,
       'transaction_id': txnId,
       'session_nonce': _sessionNonce,
+      if (_fieldProofId != null) 'fieldProofId': _fieldProofId,
+
+      // ✅ NEW: Save coordinates
+      if (latitude != null) 'latitude': latitude,
+      if (longitude != null) 'longitude': longitude,
+      if (latitude != null && longitude != null)
+        'coordinates': GeoPoint(latitude, longitude),
+
       'timestamp': FieldValue.serverTimestamp(),
     };
 
@@ -2064,6 +2095,44 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     return true;
   }
 
+  Future<String?> _requestFieldSelfie(GeofenceResult geo, String action) async {
+    if (!mounted) return null;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Not at an assigned site'),
+        content: Text('${geo.message}\n\nYour attendance will be marked '
+            '"pending review" until HR approves it.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Take selfie')),
+        ],
+      ),
+    );
+    if (go != true) return null;
+    try {
+      final empId = _employeeId;
+      if (empId == null) return null;
+      final docId = _employeeDocId ?? empId;
+
+      final attendanceType = action.toLowerCase().contains('in') ? 'IN' : 'OUT';
+
+      return await FieldProofService.instance.captureAndSubmit(
+        employeeId: empId,
+        employeeDocId: docId,
+        attendanceType: attendanceType,
+        nearestSiteName: geo.matchedLocationName,
+      );
+    } on FieldProofException catch (e) {
+      _showSnack(e.message);
+      return null;
+    }
+  }
+
   Future<bool> _preClockCheck(String action) async {
     if (_isDemo) {
       debugPrint('🎭 [DemoMode] Bypassing pre-clock check for $action');
@@ -2116,6 +2185,16 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
         final stillInside = fresh.isInside ||
             fresh.status == GeofenceStatus.insideWithTolerance;
+
+        if (fresh.needsProof) {
+          final id = await _requestFieldSelfie(fresh, action);
+          if (id != null) {
+            _fieldProofId = id;
+            setState(() => _isInRange = true);
+            return true;
+          }
+          return false;
+        }
 
         if (!stillInside && !fresh.isExempted) {
           setState(() {
@@ -2452,7 +2531,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Attendance Edited by $_todayOverrideBy',
+                    _todayOverrideUnattributed
+                        ? 'Attendance edited — editor not recorded'
+                        : 'Attendance edited by $_todayOverrideBy',
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w800,
@@ -2463,7 +2544,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Reason: ${_todayOverrideReason ?? "—"}',
+                    _todayOverrideUnattributed
+                        ? 'Reason: ${_todayOverrideReason ?? "Not recorded"}\n'
+                        'Please ask HR to confirm this change.'
+                        : 'Reason: ${_todayOverrideReason ?? "Not recorded"}',
                     style: TextStyle(
                       fontSize: 12,
                       color: tc.isDark

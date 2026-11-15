@@ -1,11 +1,14 @@
 ﻿// lib/screens/clock_in_success_screen.dart
 // ═══════════════════════════════════════════════════════════════════
-// CLOCK IN SUCCESS SCREEN  v1.4
+// CLOCK IN SUCCESS SCREEN  v1.5
 //   - Demo mode: no Firestore write, DEMO badge
 //   - onContinue() navigation is called (not auto-pop)
 //   - ✅ v1.3: Adaptive Light/Dark mode support
 //   - ✅ v1.4: FIXED back button — arrow and "Back" text now aligned
-//             (matches biometric_method_screen.dart exactly)
+//   - ✅ v1.5: Removed faceMatchPercent (liveness has no match score).
+//             Receipt now stores `livenessChecked` boolean instead of
+//             a fake percentage. Title and badge no longer claim
+//             identity verification — liveness only.
 // ═══════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
@@ -27,25 +30,21 @@ class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
 
-  // Backgrounds
   Color get scaffoldBg => isDark ? const Color(0xFF0A0A0A) : Colors.white;
   Color get bgLayer => isDark ? const Color(0xFF0F0D0B) : Colors.white;
   Color get scrim =>
       isDark ? Colors.black.withValues(alpha: 0.55) : const Color(0xFF09090B).withValues(alpha: 0.44);
 
-  // Cards
   Color get cardBg => isDark ? const Color(0xFF18181B) : Colors.white;
   Color get cardBorder =>
       isDark ? const Color(0xFF3F3F46) : const Color(0xFFFFA500);
   Color get methodIconBg =>
       isDark ? const Color(0xFF27272A) : const Color(0xFFF8FAFC);
 
-  // Text
   Color get textDark => isDark ? Colors.white : const Color(0xFF0F172A);
   Color get textMuted =>
       isDark ? const Color(0xFFB0B0B0) : const Color(0xFF6B7280);
 
-  // Watermark
   double get watermarkOpacity => isDark ? 0.15 : 0.80;
   double get topWatermarkOpacity => isDark ? 0.08 : 0.25;
 }
@@ -53,7 +52,7 @@ class _ThemeColors {
 class ClockInSuccessScreen extends StatefulWidget {
   final Employee? employee;
   final DateTime? arrivalTime;
-  final double? faceMatchPercent;
+  // ✅ v1.5: faceMatchPercent removed — liveness has no match score.
   final String? verificationMethod;
   final String? subtitle;
   final String type;
@@ -67,7 +66,6 @@ class ClockInSuccessScreen extends StatefulWidget {
     super.key,
     this.employee,
     this.arrivalTime,
-    this.faceMatchPercent,
     this.verificationMethod,
     this.subtitle,
     this.type = 'IN',
@@ -128,6 +126,10 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   static const double _stepCardHPad = 24.0;
 
   bool get _isDemo => DemoModeService.instance.isEnabled;
+
+  /// True only when the mobile pipeline explicitly ran a liveness check.
+  bool get _isLivenessCheck =>
+      (widget.verificationMethod ?? '').toLowerCase() == 'liveness_check';
 
   @override
   void initState() {
@@ -198,11 +200,12 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         await prefs.setString(_kReceiptSecretKey, secret);
       }
 
-      // 🎭 NEW: I-SAVE ANG DEMO TIME SA SHARED PREFERENCES
-      // Ito ang mag-a-update ng oras sa Dashboard at Clock Screen
+      // ✅ v1.5 — Demo-time persistence (single copy; was duplicated 4×).
       if (_isDemo) {
         final now = DateTime.now();
-        final todayStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        final todayStr = '${now.year}-'
+            '${now.month.toString().padLeft(2, '0')}-'
+            '${now.day.toString().padLeft(2, '0')}';
         await prefs.setString('demo_clock_date', todayStr);
 
         final time = widget.arrivalTime ?? now;
@@ -214,53 +217,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         }
       }
 
-      // 🎭 NEW: I-SAVE ANG DEMO TIME SA SHARED PREFERENCES
-      // Ito ang mag-a-update ng oras sa Dashboard at Clock Screen
-      if (_isDemo) {
-        final now = DateTime.now();
-        final todayStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-        await prefs.setString('demo_clock_date', todayStr);
-
-        final time = widget.arrivalTime ?? now;
-        if (widget.type.toUpperCase() == 'IN') {
-          await prefs.setString('demo_clock_in_iso', time.toIso8601String());
-          await prefs.remove('demo_clock_out_iso');
-        } else {
-          await prefs.setString('demo_clock_out_iso', time.toIso8601String());
-        }
-      }
-
-      // 🎭 NEW: I-SAVE ANG DEMO TIME SA SHARED PREFERENCES
-      // Ito ang mag-a-update ng oras sa Dashboard at Clock Screen
-      if (_isDemo) {
-        final now = DateTime.now();
-        final todayStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-        await prefs.setString('demo_clock_date', todayStr);
-
-        final time = widget.arrivalTime ?? now;
-        if (widget.type.toUpperCase() == 'IN') {
-          await prefs.setString('demo_clock_in_iso', time.toIso8601String());
-          await prefs.remove('demo_clock_out_iso');
-        } else {
-          await prefs.setString('demo_clock_out_iso', time.toIso8601String());
-        }
-      }
-
-      // 🎭 NEW: I-SAVE ANG DEMO TIME SA SHARED PREFERENCES
-      // Ito ang mag-a-update ng oras sa Dashboard at Clock Screen
-      if (_isDemo) {
-        final now = DateTime.now();
-        final todayStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-        await prefs.setString('demo_clock_date', todayStr);
-
-        final time = widget.arrivalTime ?? now;
-        if (widget.type.toUpperCase() == 'IN') {
-          await prefs.setString('demo_clock_in_iso', time.toIso8601String());
-          await prefs.remove('demo_clock_out_iso');
-        } else {
-          await prefs.setString('demo_clock_out_iso', time.toIso8601String());
-        }
-      }
       _receiptGeneratedAt = DateTime.now();
       final payload = <String, dynamic>{
         'txnId': _transactionId,
@@ -268,7 +224,8 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         'employeeId': widget.employee?.id ?? '',
         'type': widget.type,
         'method': widget.verificationMethod ?? '',
-        'facePercent': widget.faceMatchPercent ?? 0,
+        // ✅ v1.5 — honest flag instead of a fake match score.
+        'livenessChecked': _isLivenessCheck,
         'location': widget.locationName ?? '',
         'arrivalMs': widget.arrivalTime?.millisecondsSinceEpoch ?? 0,
         'generatedMs': _receiptGeneratedAt!.millisecondsSinceEpoch,
@@ -296,7 +253,8 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
             'employeeEmail': widget.employee!.email,
             'type': widget.type,
             'method': widget.verificationMethod,
-            'facePercent': widget.faceMatchPercent,
+            // ✅ v1.5 — honest flag instead of fake percentage.
+            'livenessChecked': _isLivenessCheck,
             'locationName': widget.locationName,
             'arrivalTime': widget.arrivalTime,
             'generatedAt': FieldValue.serverTimestamp(),
@@ -339,6 +297,7 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         'transactionId': _transactionId,
         'sessionNonce': _sessionNonce,
         'receiptHash': _receiptHash,
+        'livenessChecked': _isLivenessCheck,
         'platform': kIsWeb ? 'web' : 'mobile',
         'stage': 'clock_in_success',
         'timestamp': FieldValue.serverTimestamp(),
@@ -454,10 +413,8 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     return Stack(
       clipBehavior: Clip.hardEdge,
       children: [
-        // Adaptive background
         Positioned.fill(child: Container(color: tc.scaffoldBg)),
 
-        // Top watermark — subtle in both modes
         Positioned(
           top: -180,
           right: -200,
@@ -471,7 +428,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
           ),
         ),
 
-        // Bottom watermark — orange tinted
         Positioned(
           bottom: -130,
           left: -150,
@@ -489,7 +445,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
           ),
         ),
 
-        // Orange auth header — SAME in both modes
         Positioned(
           top: 0,
           left: 0,
@@ -515,9 +470,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
             ),
             child: Stack(
               children: [
-                // ✅ FIXED v1.4: Back button — arrow + text aligned
-                // Explicitly centered on cross axis, and Text has
-                // height: 1.0 so it matches the arrow box perfectly.
                 Positioned(
                   left: 24,
                   top: 48,
@@ -562,7 +514,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
           ),
         ),
 
-        // Step 1 card — adaptive
         Positioned(
           top: _stepCardTop,
           left: _stepCardHPad,
@@ -667,7 +618,8 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   Widget _buildSuccessCard() {
     final isClockIn = widget.type.toUpperCase() == 'IN';
     final accent = isClockIn ? _neonGreen : const Color(0xFFC4FF0A);
-    final title = isClockIn ? 'Verified &\nClocked In!' : 'Clocked Out!';
+    // ✅ v1.5 — no longer claims identity verification; liveness only.
+    final title = isClockIn ? 'Clocked In!' : 'Clocked Out!';
     final subtitle = widget.subtitle ??
         (isClockIn
             ? 'Starting your shift and redirecting...'
@@ -750,13 +702,15 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
                   Icon(
                     _isDemo
                         ? Icons.science_rounded
-                        : Icons.verified_rounded,
+                    // ✅ v1.5 — neutral icon; no "verified identity" claim.
+                        : Icons.check_circle_outline_rounded,
                     color: Colors.white.withValues(alpha: 0.7),
                     size: 9,
                   ),
                   const SizedBox(width: 3),
                   Text(
-                    _isDemo ? 'DEMO' : 'VERIFIED',
+                    // ✅ v1.5 — honest label: liveness only.
+                    _isDemo ? 'DEMO' : 'LIVENESS OK',
                     style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.7),
                         fontSize: 7,
@@ -836,12 +790,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// _BackArrowPainter — v1.4
-//   ✅ FIX: Uses the same coordinates as biometric_method_screen.dart
-//   so the arrow looks identical across all screens.
-//   Design space: 19.99 × 19.99 — arrow vertically centered.
-// ═══════════════════════════════════════════════════════════════
 class _BackArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -854,7 +802,6 @@ class _BackArrowPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
-    // Same coordinates as biometric screen — arrow centered in box
     Offset p(double x, double y) => Offset(x * s, y * s);
 
     final path = Path()

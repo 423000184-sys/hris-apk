@@ -1,4 +1,9 @@
 // lib/screens/admin_tracking_page.dart
+// v3.4: 🔴 REAL-TIME DELETE DETECTION
+//       • Snackbar warning when selected location is deleted by another admin.
+//       • Snackbar when ALL locations get deleted.
+//       • Local delete tracking suppresses redundant warnings.
+//       • Stream errors surface immediately via snackbar.
 // v3.3: Removed GLOBAL DEFAULT RADIUS slider from Active Locations panel.
 //       Global radius is still loaded from Firestore as a fallback default.
 // v3.2: WEB SAFETY HARDENING — disposed guards, deferred map moves, throttled cache.
@@ -103,14 +108,15 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   bool _entryReminders = false;
   bool _eventAndHoliday = false;
 
-  // 🆕 Removed: Timer? _radiusDebounce (only used by the removed slider)
-
   StreamSubscription<QuerySnapshot>? _locSub;
   List<Map<String, dynamic>> _zones = [];
   bool _loadingZones = true;
 
   final _SecurityGuard _guard = _SecurityGuard();
   final Set<String> _inFlight = <String>{};
+  // ✅ NEW: Suppresses redundant "deleted by another admin" warnings
+  // when THIS admin initiated the delete.
+  final Set<String> _locallyDeletedIds = <String>{};
   bool _notifyingAll = false;
 
   void _demoBlock() {
@@ -162,6 +168,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     _locSub?.cancel();
     _locSub = null;
     _inFlight.clear();
+    _locallyDeletedIds.clear(); // ✅ NEW
     super.dispose();
   }
 
@@ -233,6 +240,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
   }
 
+  // ══════════════════════════════════════════════════════════════════
+  // ✅ v3.4 — REAL-TIME DELETE DETECTION
+  // ══════════════════════════════════════════════════════════════════
   void _listenToLocations() {
     _locSub?.cancel();
     _locSub = FirebaseFirestore.instance
@@ -245,18 +255,84 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
         final list = snap.docs
             .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
             .toList();
+
+        // Capture current selection BEFORE updating state
+        // so we can detect if it was deleted.
+        String? prevSelectedId;
+        String prevSelectedName = 'Location';
+        if (_zones.isNotEmpty &&
+            _selectedLocationIndex >= 0 &&
+            _selectedLocationIndex < _zones.length) {
+          prevSelectedId =
+              (_zones[_selectedLocationIndex]['id'] ?? '').toString();
+          prevSelectedName = _sanitize(
+              _zones[_selectedLocationIndex]['name'] ?? 'Location',
+              maxLen: 40);
+        }
+        final prevCount = _zones.length;
+
         _safeSetState(() {
           _zones = list;
           _loadingZones = false;
         });
+
+        // 🔴 REAL-TIME: previously selected location was deleted
+        final selectedGone = prevSelectedId != null &&
+            prevSelectedId.isNotEmpty &&
+            !list.any((z) => (z['id'] ?? '').toString() == prevSelectedId);
+
+        if (selectedGone) {
+          final wasLocalDelete = _locallyDeletedIds.remove(prevSelectedId);
+
+          _safeSetState(() {
+            _selectedLocationIndex = 0;
+            if (list.isNotEmpty) {
+              final first = list.first;
+              final lat = (first['lat'] as num?)?.toDouble();
+              final lng = (first['lng'] as num?)?.toDouble();
+              if (lat != null &&
+                  lng != null &&
+                  _isValidLat(lat) &&
+                  _isValidLng(lng)) {
+                _currentLat = lat;
+                _currentLng = lng;
+                _moveMapToPosition(lat, lng);
+              }
+            }
+          });
+
+          // Only show the warning if another admin deleted it
+          if (!wasLocalDelete) {
+            _snack(
+              '⚠️ "$prevSelectedName" was deleted by another admin — view reset.',
+              error: true,
+            );
+          }
+          return;
+        }
+
+        // 🔴 REAL-TIME: ALL locations were deleted → warn immediately
+        if (list.isEmpty && prevCount > 0) {
+          _snack(
+            '⚠️ All locations have been deleted — geofence clock-in is blocked.',
+            error: true,
+          );
+          return;
+        }
+
+        // Standard index correction (non-fatal)
         if (list.isNotEmpty && _selectedLocationIndex >= list.length) {
-          _selectedLocationIndex = 0;
+          _safeSetState(() => _selectedLocationIndex = 0);
         }
       },
       onError: (e) {
         debugPrint('⚠️ [Tracking] locations stream error: $e');
         if (!_safe) return;
         _safeSetState(() => _loadingZones = false);
+        _snack(
+          '⚠️ Lost connection to locations. Retrying...',
+          error: true,
+        );
       },
     );
   }
@@ -571,6 +647,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     if (ok != true) return;
 
     _inFlight.add('del_$id');
+    // ✅ NEW: Mark as local delete to suppress redundant warning
+    _locallyDeletedIds.add(id);
     try {
       final admin = await _currentAdmin();
       if (!_safe) return;
@@ -590,6 +668,8 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
 
       _snack('Location deleted.');
     } catch (e) {
+      // Rollback flag on failure
+      _locallyDeletedIds.remove(id);
       _snack(_safeError(e), error: true);
     } finally {
       _inFlight.remove('del_$id');
@@ -1056,7 +1136,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
                 );
               }).toList(),
             ),
-          // 🆕 GLOBAL DEFAULT RADIUS slider section REMOVED
         ],
       ),
     );

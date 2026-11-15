@@ -50,6 +50,9 @@ class GeofenceResult {
   bool get isError =>
       status == GeofenceStatus.error ||
           status == GeofenceStatus.serviceDisabled;
+
+  /// Field worker is outside every assigned zone and must submit a selfie.
+  bool get needsProof => status == GeofenceStatus.fieldNeedsProof;
 }
 
 enum GeofenceStatus {
@@ -62,6 +65,7 @@ enum GeofenceStatus {
   loading,
   exempted,
   insideWithTolerance,
+  fieldNeedsProof,
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -74,6 +78,7 @@ class _LocationZone {
   final double lat;
   final double lng;
   final double radius;
+  final String type; // 'office' | 'client'
 
   const _LocationZone({
     required this.id,
@@ -82,6 +87,7 @@ class _LocationZone {
     required this.lat,
     required this.lng,
     required this.radius,
+    this.type = 'office',
   });
 }
 
@@ -94,8 +100,6 @@ class GeofenceService {
 
   // ══════════════════════════════════════════════════════════════════
   // EMERGENCY ZONES — gagamitin LANG kapag pumalya ang Firestore
-  // (network/permission error). Hindi gagamitin kung successful ang
-  // Firestore pero walang active zone.
   // ══════════════════════════════════════════════════════════════════
   static const List<Map<String, dynamic>> _emergencyZones = [
     {
@@ -116,9 +120,7 @@ class GeofenceService {
     },
   ];
 
-  // Legacy values (iniwan para hindi masira ang ibang screen na gumagamit)
-  // ⚠️ Ang coordinates dito ay ~350m ang layo sa emergency zone ng
-  // 629 J. Nepomuceno. I-check kung alin ang tama.
+  // Legacy values
   static const double _officeLat = 14.59805;
   static const double _officeLng = 120.98917;
   static const String _officeAddress =
@@ -128,13 +130,8 @@ class GeofenceService {
   // ══════════════════════════════════════════════════════════════════
   // GPS ACCURACY / TOLERANCE
   // ══════════════════════════════════════════════════════════════════
-  // Dating 80 / 150. Binawasan para hindi lumuwag nang sobra ang zone.
   static const double _baseToleranceMeters = 30.0;
   static const double _maxAccuracyConsidered = 60.0;
-
-  // Kapag mas mahina pa rito ang GPS accuracy, hindi tatanggapin ang
-  // reading (magpapa-ulit). Itaas kung maraming nahihirapan sa loob
-  // ng building (hal. 150).
   static const double _maxAcceptableAccuracy = 100.0;
 
   // ══════════════════════════════════════════════════════════════════
@@ -197,8 +194,6 @@ class GeofenceService {
           return active == null || active == true;
         }).toList();
 
-        // Kahit empty, ina-update. Ibig sabihin walang active zone ngayon
-        // (hindi babalik sa emergency zones).
         final zones = _parseZones(activeDocs);
         _cachedZones = zones;
         _zonesLoaded = true;
@@ -207,7 +202,7 @@ class GeofenceService {
 
         _log('🔔 [Geofence] ZONES UPDATED FROM FIRESTORE: ${zones.length}');
         for (int i = 0; i < zones.length; i++) {
-          _log('   [$i] "${zones[i].name}"');
+          _log('   [$i] "${zones[i].name}" (type=${zones[i].type})');
         }
       },
       onError: (e) {
@@ -240,6 +235,7 @@ class GeofenceService {
         lat: lat,
         lng: lng,
         radius: radius,
+        type: (d['type'] ?? 'office').toString().toLowerCase().trim(),
       ));
     }
     return zones;
@@ -256,12 +252,11 @@ class GeofenceService {
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // LOAD ZONES — Firestore → Emergency (kapag FAILED lang)
+  // LOAD ZONES — Firestore → Emergency
   // ══════════════════════════════════════════════════════════════════
   Future<void> _loadZonesOneTime() async {
     _log('🌐 [Geofence] Fetching locations from Firestore...');
 
-    // ═══ ATTEMPT 1: with active filter ═══
     try {
       final snap = await FirebaseFirestore.instance
           .collection('locations')
@@ -275,13 +270,10 @@ class GeofenceService {
         _log('✅ [Geofence] LOADED ${zones.length} ZONE(S) (active query)');
         return;
       }
-      // Empty — baka walang 'active' field ang mga dokumento.
-      // Subukan ang full fetch sa attempt 2.
     } catch (e) {
       _log('❌ [Geofence] Active query FAILED: $e');
     }
 
-    // ═══ ATTEMPT 2: fetch ALL, filter locally ═══
     try {
       final snap = await FirebaseFirestore.instance
           .collection('locations')
@@ -293,8 +285,6 @@ class GeofenceService {
         return active == null || active == true;
       }).toList();
 
-      // Successful ang Firestore. Kahit empty ang resulta, ito ang totoo
-      // (walang active zone) — HINDI babalik sa emergency zones.
       final zones = _parseZones(activeDocs);
       _setFirestoreZones(zones);
       _log('✅ [Geofence] LOADED ${zones.length} zone(s) (full fetch)');
@@ -303,7 +293,6 @@ class GeofenceService {
       _log('❌ [Geofence] Full fetch FAILED: $e');
     }
 
-    // ═══ ATTEMPT 3: EMERGENCY — pumalya ang Firestore ═══
     _log('🚨 [Geofence] FIRESTORE FAILED — using EMERGENCY zones');
     _cachedZones = _buildEmergencyZones();
     _zonesLoaded = true;
@@ -319,8 +308,6 @@ class GeofenceService {
   }
 
   Future<void> _ensureZonesLoaded() async {
-    // Gagamitin lang ang cache kung may timestamp (kaya gumagana na
-    // ang invalidateCache) at hindi pa luma.
     if (_zonesLoaded && _zonesLoadedAt != null) {
       final age = DateTime.now().difference(_zonesLoadedAt!);
       final cacheSecs = _isUsingEmergency ? 60 : 30;
@@ -335,22 +322,39 @@ class GeofenceService {
   }
 
   // ══════════════════════════════════════════════════════════════════
+  // ZONE SELECTION
+  // ══════════════════════════════════════════════════════════════════
+  List<_LocationZone> _zonesFor(List<String>? siteIds) {
+    final office = _cachedZones.where((z) => z.type != 'client');
+    if (siteIds == null) return office.toList();
+    final ids = siteIds.toSet();
+    return [
+      ...office,
+      ..._cachedZones.where((z) => z.type == 'client' && ids.contains(z.id)),
+    ];
+  }
+
+  // ══════════════════════════════════════════════════════════════════
   // CHECK GEOFENCE
   // ══════════════════════════════════════════════════════════════════
-  Future<GeofenceResult> checkGeofence({bool forceRefresh = false}) async {
+  Future<GeofenceResult> checkGeofence({
+    bool forceRefresh = false,
+    List<String>? siteIds,
+  }) async {
     _log('🌍 [Geofence] Starting check...');
 
     startZonesListener();
-
     if (forceRefresh) invalidateCache();
-
     await _ensureZonesLoaded();
 
     _log('📏 [Geofence] Zones: ${_cachedZones.length} | '
         'Emergency: $_isUsingEmergency');
 
-    if (kIsWeb) return _checkGeofenceWeb();
-    return _checkGeofenceNative();
+    final zones = _zonesFor(siteIds);
+    _log('📏 [Geofence] Zones considered for this check: ${zones.length}');
+
+    if (kIsWeb) return _checkGeofenceWeb(zones);
+    return _checkGeofenceNative(zones);
   }
 
   Future<GeofenceResult> checkGeofenceForEmployee({
@@ -361,6 +365,8 @@ class GeofenceService {
     if (empId.isEmpty) return checkGeofence(forceRefresh: forceRefresh);
 
     bool isExempted = false;
+    bool isFieldWorker = false;
+    List<String> siteIds = const [];
     String exemptionReason = '';
 
     try {
@@ -374,8 +380,7 @@ class GeofenceService {
         final d = empDoc.data() ?? {};
         final wfh = d['wfhAccess'] == true;
         final role = (d['role'] ?? '').toString().toLowerCase().trim();
-        final position =
-        (d['position'] ?? '').toString().toLowerCase().trim();
+        final position = (d['position'] ?? '').toString().toLowerCase().trim();
         final dept = (d['department'] ?? '').toString().toLowerCase().trim();
 
         bool has(String s) => s.contains('driver') || s.contains('rider');
@@ -384,8 +389,10 @@ class GeofenceService {
           isExempted = true;
           exemptionReason = 'WFH access is enabled';
         } else if (has(role) || has(position) || has(dept)) {
-          isExempted = true;
-          exemptionReason = 'Company driver';
+          isFieldWorker = true;
+          siteIds = ((d['assignedSiteIds'] as List?) ?? const [])
+              .map((e) => e.toString())
+              .toList();
         }
       }
     } catch (e) {
@@ -401,7 +408,31 @@ class GeofenceService {
       ));
     }
 
+    if (isFieldWorker) return _checkFieldWorker(siteIds, forceRefresh);
+
     return checkGeofence(forceRefresh: forceRefresh);
+  }
+
+  Future<GeofenceResult> _checkFieldWorker(
+      List<String> siteIds, bool forceRefresh) async {
+    final r = await checkGeofence(forceRefresh: forceRefresh, siteIds: siteIds);
+
+    if (r.isAllowed || r.isMockLocation || r.status != GeofenceStatus.outside) {
+      return r;
+    }
+
+    return _emit(GeofenceResult(
+      isAllowed: false,
+      status: GeofenceStatus.fieldNeedsProof,
+      distanceMeters: r.distanceMeters,
+      accuracyMeters: r.accuracyMeters,
+      radiusUsed: r.radiusUsed,
+      matchedLocationName: r.matchedLocationName,
+      position: r.position,
+      message: siteIds.isEmpty
+          ? 'No client site is assigned to you.\nSubmit a selfie for HR review.'
+          : 'You are not at an assigned client site.\nSubmit a selfie for HR review.',
+    ));
   }
 
   Future<Position?> _getBestAccuracyPosition() async {
@@ -411,9 +442,6 @@ class GeofenceService {
     for (int i = 0; i < 3; i++) {
       try {
         _log('📍 [Geofence] GPS attempt ${i + 1}/3...');
-
-        // Kung magka-deprecation/build error sa bagong geolocator,
-        // palitan ng: locationSettings: LocationSettings(accuracy: LocationAccuracy.best)
         final p = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.best,
         ).timeout(
@@ -424,8 +452,6 @@ class GeofenceService {
         _log('📍 [Geofence] Attempt ${i + 1}: '
             'acc=${p.accuracy.toStringAsFixed(1)}m mocked=${p.isMocked}');
 
-        // Kapag may mock sa kahit isang reading, itatago natin
-        // para hindi ito mawala sa best-accuracy selection.
         if (p.isMocked) {
           bestPos = p;
           break;
@@ -449,7 +475,7 @@ class GeofenceService {
     return bestPos;
   }
 
-  Future<GeofenceResult> _checkGeofenceNative() async {
+  Future<GeofenceResult> _checkGeofenceNative(List<_LocationZone> zones) async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       return _emit(const GeofenceResult(
@@ -478,10 +504,10 @@ class GeofenceService {
       ));
     }
 
-    return _fetchAndEvaluate();
+    return _fetchAndEvaluate(zones);
   }
 
-  Future<GeofenceResult> _checkGeofenceWeb() async {
+  Future<GeofenceResult> _checkGeofenceWeb(List<_LocationZone> zones) async {
     LocationPermission permission;
     try {
       permission = await Geolocator.checkPermission();
@@ -500,10 +526,10 @@ class GeofenceService {
       ));
     }
 
-    return _fetchAndEvaluate();
+    return _fetchAndEvaluate(zones);
   }
 
-  Future<GeofenceResult> _fetchAndEvaluate() async {
+  Future<GeofenceResult> _fetchAndEvaluate(List<_LocationZone> zones) async {
     _emit(const GeofenceResult(
       isAllowed: false,
       status: GeofenceStatus.loading,
@@ -519,7 +545,7 @@ class GeofenceService {
           message: 'Hindi makuha ang location.',
         ));
       }
-      return _evaluate(position);
+      return _evaluate(position, zones: zones);
     } catch (e) {
       return _emit(GeofenceResult(
         isAllowed: false,
@@ -557,8 +583,6 @@ class GeofenceService {
     _positionSub = null;
   }
 
-  /// Hindi na sinasara ang stream controller dahil singleton ang service
-  /// at magagamit pa ulit pagkatapos.
   void dispose() {
     stopMonitoring();
     stopZonesListener();
@@ -597,12 +621,13 @@ class GeofenceService {
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // EVALUATE — checks ALL zones
+  // EVALUATE
   // ══════════════════════════════════════════════════════════════════
-  GeofenceResult _evaluate(Position position) {
+  GeofenceResult _evaluate(Position position, {List<_LocationZone>? zones}) {
+    final zs = zones ?? _zonesFor(null);
     final isMock = position.isMocked;
 
-    if (_cachedZones.isEmpty) {
+    if (zs.isEmpty) {
       return _emit(GeofenceResult(
         isAllowed: false,
         status: GeofenceStatus.outside,
@@ -613,8 +638,6 @@ class GeofenceService {
 
     final rawAccuracy = position.accuracy;
 
-    // Masyadong mahina ang GPS — huwag mag-judge, magpa-ulit.
-    // (Hindi ito ginagawa kapag mock, para ma-flag pa rin ang fake GPS.)
     if (!isMock && rawAccuracy > _maxAcceptableAccuracy) {
       return _emit(GeofenceResult(
         isAllowed: false,
@@ -629,7 +652,7 @@ class GeofenceService {
     final clampedAccuracy = rawAccuracy.clamp(0.0, _maxAccuracyConsidered);
     final totalTolerance = _baseToleranceMeters + clampedAccuracy;
 
-    _log('🔍 [Geofence] CHECKING ${_cachedZones.length} ZONE(S) | '
+    _log('🔍 [Geofence] CHECKING ${zs.length} ZONE(S) | '
         'acc=±${rawAccuracy.toStringAsFixed(0)}m '
         'tol=${totalTolerance.toStringAsFixed(0)}m mock=$isMock');
 
@@ -642,8 +665,8 @@ class GeofenceService {
     _LocationZone? tolZone;
     double tolDist = double.infinity;
 
-    for (int i = 0; i < _cachedZones.length; i++) {
-      final z = _cachedZones[i];
+    for (int i = 0; i < zs.length; i++) {
+      final z = zs[i];
       final d = _haversineDistance(
         lat1: position.latitude,
         lng1: position.longitude,
@@ -663,7 +686,6 @@ class GeofenceService {
       }
 
       if (d <= z.radius) {
-        // Pinakamalapit na exact match
         if (exactZone == null || d < exactDist) {
           exactZone = z;
           exactDist = d;
@@ -671,7 +693,6 @@ class GeofenceService {
         continue;
       }
 
-      // Pinakamalapit na tolerance match (hindi na "huling zone")
       if (d <= effectiveRad && d < tolDist) {
         tolZone = z;
         tolDist = d;

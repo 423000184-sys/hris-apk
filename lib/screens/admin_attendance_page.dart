@@ -1,7 +1,5 @@
 // lib/screens/admin_attendance_page.dart
-// v2.6: 🔒 HR overrides now REQUIRE a resolvable HR name (no anonymous
-//       overrides). Edits/manual entries also sync `time` and `date`
-//       so the employee's history always renders the edited values.
+// v2.8: 🧹 Removed Map, Manual Entry, and Edit Time features based on request.
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -82,8 +80,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   // ─── Export state ───
   bool _exporting = false;
-
-  // ─── Rate limiting ───
   DateTime? _lastExportAt;
   static const Duration _exportCooldown = Duration(seconds: 5);
 
@@ -96,7 +92,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   final List<String> _eventTypes = ['All Events', 'IN', 'OUT'];
 
-  // ─── Predefined departments ───
   static const Map<String, List<String>> _predefinedDeptRoles = {
     'HR/Admin': ['Driver', 'Messenger'],
     'Accounting': ['Accountant'],
@@ -147,9 +142,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return 'HR';
   }
 
-  /// Returns true if the current actor has a resolvable, non-anonymous name.
-  /// Used to PREVENT anonymous HR overrides — every override must be
-  /// attributed to a real person.
   bool _actorHasRealName() {
     final n = _actorName.trim();
     if (n.isEmpty) return false;
@@ -164,10 +156,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     super.initState();
     _localEmployees = widget.employees;
     _buildEmployeeLookup();
-
-    if (!_isDemo) {
-      _listenToEmployees();
-    }
+    if (!_isDemo) _listenToEmployees();
   }
 
   @override
@@ -263,16 +252,13 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           _buildEmployeeLookup();
         });
       },
-      onError: (e) {
-        debugPrint('[Attendance] Employee stream error: $e');
-      },
+      onError: (e) => debugPrint('[Attendance] Employee stream error: $e'),
     );
   }
 
   void _buildEmployeeLookup() {
     final source = _localEmployees.isNotEmpty ? _localEmployees : widget.employees;
     final map = <String, Map<String, dynamic>>{};
-
     for (final emp in source) {
       final id = _sanitizeKey(emp['id']);
       final empId = _sanitizeKey(emp['employeeId'] ?? emp['employee_id']);
@@ -282,13 +268,11 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             emp['fullName'] ??
             '${emp['firstName'] ?? ''} ${emp['lastName'] ?? ''}',
       ).toLowerCase();
-
       if (id.isNotEmpty) map[id] = emp;
       if (empId.isNotEmpty) map[empId] = emp;
       if (email.isNotEmpty) map['email:$email'] = emp;
       if (name.isNotEmpty) map['name:$name'] = emp;
     }
-
     _employeeLookup = map;
   }
 
@@ -310,19 +294,16 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     if (id.isNotEmpty && _employeeLookup.containsKey(id)) {
       return _employeeLookup[id];
     }
-
     final email = _sanitizeKey(log['email']).toLowerCase();
     if (email.isNotEmpty && _employeeLookup.containsKey('email:$email')) {
       return _employeeLookup['email:$email'];
     }
-
     final name = _sanitizeKey(
       log['employee_name'] ?? log['employeeName'] ?? log['name'],
     ).toLowerCase();
     if (name.isNotEmpty && _employeeLookup.containsKey('name:$name')) {
       return _employeeLookup['name:$name'];
     }
-
     return null;
   }
 
@@ -330,7 +311,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     final fromLog =
     _sanitizeKey(log['department'] ?? log['dept'] ?? log['section']);
     if (fromLog.isNotEmpty) return fromLog;
-
     final emp = _findEmployee(log);
     if (emp != null) {
       final dept =
@@ -345,7 +325,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       log['position'] ?? log['role'] ?? log['jobTitle'] ?? log['job_title'],
     );
     if (fromLog.isNotEmpty) return fromLog;
-
     final emp = _findEmployee(log);
     if (emp != null) {
       final pos = _sanitizeKey(
@@ -361,12 +340,10 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       log['employee_name'] ?? log['employeeName'] ?? log['name'],
     );
     if (fromLog.isNotEmpty) return fromLog;
-
     final emp = _findEmployee(log);
     if (emp != null) {
       final full = _sanitizeKey(emp['name'] ?? emp['fullName']);
       if (full.isNotEmpty) return full;
-
       final first = _sanitizeKey(emp['firstName'] ?? emp['first_name']);
       final last = _sanitizeKey(emp['lastName'] ?? emp['last_name']);
       final combo = '$first $last'.trim();
@@ -378,7 +355,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   String _resolveEmail(Map<String, dynamic> log) {
     final fromLog = _sanitizeKey(log['email']);
     if (fromLog.isNotEmpty) return fromLog;
-
     final emp = _findEmployee(log);
     if (emp != null) return _sanitizeKey(emp['email']);
     return '';
@@ -390,15 +366,12 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     if (at <= 0) return email;
     final local = email.substring(0, at);
     final domain = email.substring(at);
-    if (local.length <= 2) {
-      return '${local[0]}***$domain';
-    }
+    if (local.length <= 2) return '${local[0]}***$domain';
     return '${local[0]}${'*' * (local.length - 2)}${local[local.length - 1]}$domain';
   }
 
   String? _resolvePhotoUrl(Map<String, dynamic> log) {
     const keys = ['photoUrl', 'photo', 'imageUrl', 'image', 'avatar'];
-
     for (final key in keys) {
       final v = _sanitizeKey(log[key]);
       if (v.isNotEmpty && v != '—' && v != 'null') {
@@ -406,7 +379,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         return v;
       }
     }
-
     final emp = _findEmployee(log);
     if (emp != null) {
       for (final key in keys) {
@@ -434,7 +406,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     if (fromLog.isNotEmpty && fromLog != '—' && fromLog != 'null') {
       return fromLog;
     }
-
     final emp = _findEmployee(log);
     if (emp != null) {
       final dev = _sanitizeKey(
@@ -447,19 +418,16 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   List<String> get _departments {
     final depts = <String>{..._predefinedDeptRoles.keys};
-
     for (final log in (_isDemo ? _getMockLogs() : widget.logs)) {
       final dept = _resolveDepartment(log);
       if (dept.isNotEmpty && dept != 'No Department') depts.add(dept);
     }
-
     final sorted = depts.toList()..sort();
     return ['All Departments', ...sorted];
   }
 
   List<String> get _positions {
     final positions = <String>{};
-
     if (_selectedDepartment == 'All Departments') {
       for (final roles in _predefinedDeptRoles.values) {
         positions.addAll(roles);
@@ -471,7 +439,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     } else {
       final predefined = _predefinedDeptRoles[_selectedDepartment];
       if (predefined != null) positions.addAll(predefined);
-
       for (final log in (_isDemo ? _getMockLogs() : widget.logs)) {
         if (_resolveDepartment(log) == _selectedDepartment) {
           final pos = _resolvePosition(log);
@@ -479,7 +446,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         }
       }
     }
-
     final sorted = positions.toList()..sort();
     return ['All Positions', ...sorted];
   }
@@ -517,19 +483,16 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         return type == eventType;
       }).toList();
     }
-
     if (department != 'All Departments') {
       filtered = filtered
           .where((log) => _resolveDepartment(log) == department)
           .toList();
     }
-
     if (position != 'All Positions') {
       filtered = filtered
           .where((log) => _resolvePosition(log) == position)
           .toList();
     }
-
     if (year != 'All Years') {
       final y = int.tryParse(year);
       if (y != null) {
@@ -539,7 +502,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         }).toList();
       }
     }
-
     if (dateRange != null) {
       filtered = filtered.where((log) {
         final dt = _toDateTime(log['timestamp']);
@@ -593,12 +555,11 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // HR OVERRIDE PASSWORD VERIFICATION
+  // HR OVERRIDE PASSWORD (For editing/approving if needed)
   // ═══════════════════════════════════════════════════════════════════════
 
   String _sha256Hash(String input) {
-    final bytes = utf8.encode(input);
-    return sha256.convert(bytes).toString();
+    return sha256.convert(utf8.encode(input)).toString();
   }
 
   Future<bool> _verifyHrOverridePassword() async {
@@ -606,7 +567,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       _demoBlock();
       return false;
     }
-
     final pwdCtrl = TextEditingController();
     bool obscure = true;
 
@@ -753,7 +713,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // MANUAL CLOCK IN / OUT ENTRY
+  // MANUAL CLOCK IN / OUT (Hidden from UI but kept in code for safety)
   // ═══════════════════════════════════════════════════════════════════════
 
   String _empDisplayName(Map<String, dynamic> emp) {
@@ -787,8 +747,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
           return AlertDialog(
             backgroundColor: tc.card,
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             title: Row(children: [
               Icon(Icons.person_search_rounded, color: tc.orange, size: 22),
               const SizedBox(width: 10),
@@ -826,8 +785,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                         employees.isEmpty
                             ? 'No employees loaded.'
                             : 'No matching employees.',
-                        style:
-                        TextStyle(color: tc.muted, fontSize: 13),
+                        style: TextStyle(color: tc.muted, fontSize: 13),
                       ),
                     )
                         : ListView.separated(
@@ -838,12 +796,10 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                         final e = filtered[i];
                         final name = _empDisplayName(e);
                         final id = _empDisplayId(e);
-                        final dept =
-                        _sanitizeKey(e['department'] ?? e['dept']);
-                        final initials = _initialsFor(name);
+                        final dept = _sanitizeKey(e['department'] ?? e['dept']);
                         return ListTile(
                           leading: _initialsAvatar(
-                            initials: initials,
+                            initials: _initialsFor(name),
                             size: 36,
                             fontSize: 13,
                           ),
@@ -856,8 +812,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                             dept.isNotEmpty
                                 ? '$id · $dept'
                                 : (id.isNotEmpty ? id : '—'),
-                            style:
-                            TextStyle(color: tc.muted, fontSize: 12),
+                            style: TextStyle(color: tc.muted, fontSize: 12),
                           ),
                           onTap: () => Navigator.pop(ctx, e),
                         );
@@ -894,9 +849,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           child: Text(
             label,
             style: TextStyle(
-              color: active
-                  ? (tc.isDark ? tc.onOrange : Colors.white)
-                  : tc.text,
+              color: active ? (tc.isDark ? tc.onOrange : Colors.white) : tc.text,
               fontWeight: FontWeight.w700,
               fontSize: 13,
             ),
@@ -906,724 +859,9 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     );
   }
 
-  Future<void> _manualEntry() async {
-    if (_isDemo) return _demoBlock();
-
-    // 🔒 Block anonymous overrides — every entry must be attributed.
-    if (!_actorHasRealName()) {
-      _showSnack(
-        'Cannot create manual entry: your account is not linked to an '
-            'employee record. Every override must be attributed.',
-        error: true,
-      );
-      return;
-    }
-
-    final authorized = await _verifyHrOverridePassword();
-    if (!authorized) return;
-
-    Map<String, dynamic>? selectedEmp;
-    String entryType = 'IN';
-    DateTime selectedDt = DateTime.now();
-    final reasonCtrl = TextEditingController();
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) {
-          final canSave = selectedEmp != null;
-          String? reasonError;
-
-          return AlertDialog(
-            backgroundColor: tc.card,
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            title: Row(children: [
-              Icon(Icons.add_circle_outline, color: tc.orange, size: 22),
-              const SizedBox(width: 10),
-              Text('Manual Clock Entry', style: TextStyle(color: tc.text)),
-            ]),
-            content: SizedBox(
-              width: 460,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildFilterField(
-                      label: 'EMPLOYEE *',
-                      child: InkWell(
-                        onTap: () async {
-                          final emp = await _pickEmployeeDialog();
-                          if (emp != null) {
-                            setDlg(() => selectedEmp = emp);
-                          }
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 14),
-                          decoration: BoxDecoration(
-                            color: tc.surface,
-                            border: Border.all(
-                                color: selectedEmp == null
-                                    ? tc.border
-                                    : tc.orange),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(children: [
-                            Icon(Icons.person_outline,
-                                size: 18, color: tc.muted),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                selectedEmp == null
-                                    ? 'Select employee'
-                                    : '${_empDisplayName(selectedEmp!)} (${_empDisplayId(selectedEmp!)})',
-                                style: TextStyle(
-                                  color: selectedEmp == null
-                                      ? tc.muted
-                                      : tc.text,
-                                  fontSize: 14,
-                                  fontWeight: selectedEmp == null
-                                      ? FontWeight.normal
-                                      : FontWeight.w600,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            Icon(Icons.chevron_right_rounded,
-                                size: 18, color: tc.muted),
-                          ]),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    _buildFilterField(
-                      label: 'EVENT TYPE *',
-                      child: Row(children: [
-                        Expanded(
-                          child: _typeChip(
-                            'CLOCK IN',
-                            entryType == 'IN',
-                                () => setDlg(() => entryType = 'IN'),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: _typeChip(
-                            'CLOCK OUT',
-                            entryType == 'OUT',
-                                () => setDlg(() => entryType = 'OUT'),
-                          ),
-                        ),
-                      ]),
-                    ),
-                    const SizedBox(height: 14),
-                    _buildFilterField(
-                      label: 'DATE *',
-                      child: InkWell(
-                        onTap: () async {
-                          final picked = await showDatePicker(
-                            context: ctx,
-                            initialDate: selectedDt,
-                            firstDate: DateTime(2020),
-                            lastDate: DateTime.now()
-                                .add(const Duration(days: 1)),
-                          );
-                          if (picked != null) {
-                            setDlg(() => selectedDt = DateTime(
-                              picked.year,
-                              picked.month,
-                              picked.day,
-                              selectedDt.hour,
-                              selectedDt.minute,
-                            ));
-                          }
-                        },
-                        child: _editFieldRow(
-                          icon: Icons.calendar_today_rounded,
-                          label: DateFormat('MMM d, yyyy').format(selectedDt),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    _buildFilterField(
-                      label: 'TIME *',
-                      child: InkWell(
-                        onTap: () async {
-                          final picked = await showTimePicker(
-                            context: ctx,
-                            initialTime: TimeOfDay.fromDateTime(selectedDt),
-                          );
-                          if (picked != null) {
-                            setDlg(() => selectedDt = DateTime(
-                              selectedDt.year,
-                              selectedDt.month,
-                              selectedDt.day,
-                              picked.hour,
-                              picked.minute,
-                            ));
-                          }
-                        },
-                        child: _editFieldRow(
-                          icon: Icons.access_time_rounded,
-                          label: DateFormat('hh:mm a').format(selectedDt),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    _buildFilterField(
-                      label: 'REASON FOR MANUAL ENTRY *',
-                      child: TextField(
-                        controller: reasonCtrl,
-                        maxLength: 300,
-                        maxLines: 3,
-                        style: TextStyle(color: tc.text),
-                        decoration: InputDecoration(
-                          hintText:
-                          'e.g. Biometric scanner offline, employee was on site',
-                          hintStyle: TextStyle(color: tc.muted),
-                          errorText: reasonError,
-                          filled: true,
-                          fillColor: tc.surface,
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8)),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(color: tc.border),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide:
-                            BorderSide(color: tc.orange, width: 1.4),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Text(
-                      'Minimum $kMinOverrideReasonLength characters. This reason will be visible to the employee.',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: tc.muted,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: tc.orange.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: tc.orange.withValues(alpha: 0.35)),
-                      ),
-                      child: Row(children: [
-                        Icon(Icons.verified_user_outlined,
-                            size: 16, color: tc.orange),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Performed by: $_actorName ($_actorRole)',
-                            style: TextStyle(
-                              color: tc.orangeText,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ]),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: Text('Cancel', style: TextStyle(color: tc.muted)),
-              ),
-              ElevatedButton(
-                onPressed: canSave
-                    ? () {
-                  final r = reasonCtrl.text.trim();
-                  if (r.length < kMinOverrideReasonLength) {
-                    setDlg(() => reasonError =
-                    'Reason must be at least $kMinOverrideReasonLength characters.');
-                    return;
-                  }
-                  Navigator.pop(ctx, true);
-                }
-                    : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: tc.orange,
-                  foregroundColor: tc.isDark ? tc.onOrange : Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                child: const Text('Save Entry'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-
-    if (confirmed != true || selectedEmp == null) return;
-
-    try {
-      final emp = selectedEmp!;
-      final empId = _empDisplayId(emp);
-      final empName = _empDisplayName(emp);
-      final empDocId = _sanitizeKey(emp['id'] ?? '');
-      final dept = _sanitizeKey(emp['department'] ?? emp['dept'] ?? '');
-      final pos = _sanitizeKey(emp['position'] ?? emp['role'] ?? '');
-      final reason =
-      AdminEmployeeService.sanitize(reasonCtrl.text, maxLen: 300);
-
-      if (empId.isEmpty && empName.isEmpty) {
-        _showSnack('Employee has no ID or name.', error: true);
-        return;
-      }
-      if (reason.length < kMinOverrideReasonLength) {
-        _showSnack(
-          'Reason must be at least $kMinOverrideReasonLength characters.',
-          error: true,
-        );
-        return;
-      }
-
-      // ✅ Sync `time` and `date` string fields with the timestamp so the
-      //    employee's attendance history renders the correct values.
-      final date = selectedDt.toIso8601String().split('T').first;
-      final timeStr = '${selectedDt.hour.toString().padLeft(2, '0')}:'
-          '${selectedDt.minute.toString().padLeft(2, '0')}:'
-          '${selectedDt.second.toString().padLeft(2, '0')}';
-
-      final logRef =
-      FirebaseFirestore.instance.collection('attendance_logs').doc();
-      final overrideRef =
-      FirebaseFirestore.instance.collection('attendance_overrides').doc();
-
-      await FirebaseFirestore.instance.runTransaction((txn) async {
-        // 1) Audit trail (who / what / when / why)
-        txn.set(overrideRef, {
-          'overrideId': overrideRef.id,
-          'attendanceLogId': logRef.id,
-          'employeeId': empId,
-          'employeeName': empName,
-          'employeeDocId': empDocId,
-          'date': date,
-          'action': 'CREATE',
-          'field': 'type',
-          'fieldType': entryType, // IN or OUT
-          'oldValue': null,
-          'newValue': entryType,
-          'reason': reason,
-          'performedBy': _actorUid,
-          'performedByName': _actorName,
-          'performedByEmail': _actorEmail,
-          'performedByRole': _actorRole,
-          'performedAt': FieldValue.serverTimestamp(),
-          'device': kIsWeb ? 'Web Browser' : 'Mobile App',
-          'platform': kIsWeb ? 'web' : 'mobile',
-          'acknowledgedByEmployee': false,
-          'acknowledgedAt': null,
-        });
-
-        // 2) Attendance log with override metadata inline
-        txn.set(logRef, {
-          'employee_id': empId,
-          'employee_name': empName,
-          'employeeDocId': empDocId,
-          'type': entryType,
-          'timestamp': Timestamp.fromDate(selectedDt),
-          'time': timeStr, // ✅ kept in sync with timestamp
-          'date': date,
-          'department': dept,
-          'position': pos,
-          'manualEntry': true,
-          'isOverridden': true,
-          'overrideId': overrideRef.id,
-          'overriddenBy': _actorUid,
-          'overriddenByName': _actorName,
-          'overriddenByEmail': _actorEmail,
-          'overriddenByRole': _actorRole,
-          'overrideReason': reason,
-          'overrideAt': FieldValue.serverTimestamp(),
-          'originalTimestamp': null, // manual = no original
-          // legacy fields for backward compat
-          'manualNote': reason,
-          'overrideUsed': true,
-          'createdBy': _actorEmail,
-          'createdByUid': _actorUid,
-          'createdAt': FieldValue.serverTimestamp(),
-          'reviewStatus': 'approved',
-          'reviewedBy': _actorEmail,
-          'reviewedByUid': _actorUid,
-          'reviewedAt': FieldValue.serverTimestamp(),
-        });
-      }, timeout: const Duration(seconds: 15));
-
-      try {
-        await FirebaseFirestore.instance.collection('admin_audit_log').add({
-          'action': 'attendance_manual_entry_created',
-          'targetType': 'attendance_log',
-          'targetId': logRef.id,
-          'overrideId': overrideRef.id,
-          'actorUid': _actorUid,
-          'actorEmail': _actorEmail,
-          'actorName': _actorName,
-          'actorRole': _actorRole,
-          'details': {
-            'employeeId': empId,
-            'employeeName': empName,
-            'type': entryType,
-            'timestamp': selectedDt.toIso8601String(),
-            'reason': reason,
-          },
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-      } catch (_) {}
-
-      _showSnack(
-          'Manual $entryType entry created. Employee will see the override.');
-      widget.onRefreshNeeded();
-    } catch (e) {
-      debugPrint('Manual entry failed: $e');
-      _showSnack('Failed to create manual entry. Please try again.',
-          error: true);
-    }
-  }
-
   // ═══════════════════════════════════════════════════════════════════════
-  // EDIT TIME (HR-override gated + reason required + override audited)
+  // EDIT TIME (Hidden from UI, kept in code)
   // ═══════════════════════════════════════════════════════════════════════
-
-  Future<void> _editLogTime(Map<String, dynamic> log) async {
-    if (_isDemo) return _demoBlock();
-
-    // 🔒 Block anonymous overrides — every edit must be attributed.
-    if (!_actorHasRealName()) {
-      _showSnack(
-        'Cannot override: your account is not linked to an employee record. '
-            'Every override must be attributed. Contact a super-admin to link '
-            'your account first.',
-        error: true,
-      );
-      return;
-    }
-
-    final logId = (log['id'] ?? '').toString();
-    if (logId.isEmpty) {
-      _showSnack('Missing log ID.', error: true);
-      return;
-    }
-
-    final authorized = await _verifyHrOverridePassword();
-    if (!authorized) return;
-
-    final currentDt = _toDateTime(log['timestamp']);
-    DateTime selected = currentDt ?? DateTime.now();
-    final reasonCtrl = TextEditingController();
-
-    final result = await showDialog<Map<String, dynamic>?>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) {
-          String? reasonError;
-          return AlertDialog(
-            backgroundColor: tc.card,
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            title: Row(children: [
-              Icon(Icons.edit_calendar_rounded, color: tc.orange, size: 22),
-              const SizedBox(width: 10),
-              Text('Edit Clock Time', style: TextStyle(color: tc.text)),
-            ]),
-            content: SizedBox(
-              width: 460,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: tc.surface,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: tc.border),
-                      ),
-                      child: Row(children: [
-                        Icon(Icons.person_outline, size: 16, color: tc.muted),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _resolveName(log),
-                            style: TextStyle(
-                              color: tc.text,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ]),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Current: ${_fmtDate(log['timestamp'])} • ${_fmtTime(log['timestamp'])}',
-                      style: TextStyle(color: tc.textMuted, fontSize: 12),
-                    ),
-                    const SizedBox(height: 16),
-                    InkWell(
-                      onTap: () async {
-                        final picked = await showDatePicker(
-                          context: ctx,
-                          initialDate: selected,
-                          firstDate: DateTime(2020),
-                          lastDate:
-                          DateTime.now().add(const Duration(days: 1)),
-                        );
-                        if (picked != null) {
-                          setDlg(() => selected = DateTime(
-                            picked.year,
-                            picked.month,
-                            picked.day,
-                            selected.hour,
-                            selected.minute,
-                          ));
-                        }
-                      },
-                      child: _editFieldRow(
-                        icon: Icons.calendar_today_rounded,
-                        label: DateFormat('MMM d, yyyy').format(selected),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    InkWell(
-                      onTap: () async {
-                        final picked = await showTimePicker(
-                          context: ctx,
-                          initialTime: TimeOfDay.fromDateTime(selected),
-                        );
-                        if (picked != null) {
-                          setDlg(() => selected = DateTime(
-                            selected.year,
-                            selected.month,
-                            selected.day,
-                            picked.hour,
-                            picked.minute,
-                          ));
-                        }
-                      },
-                      child: _editFieldRow(
-                        icon: Icons.access_time_rounded,
-                        label: DateFormat('hh:mm a').format(selected),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'REASON FOR OVERRIDE *',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: tc.textMuted,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: reasonCtrl,
-                      maxLength: 300,
-                      maxLines: 3,
-                      style: TextStyle(color: tc.text),
-                      decoration: InputDecoration(
-                        hintText:
-                        'e.g. Employee forgot to clock out, verified via CCTV',
-                        hintStyle: TextStyle(color: tc.muted),
-                        errorText: reasonError,
-                        filled: true,
-                        fillColor: tc.surface,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(color: tc.border),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(color: tc.orange, width: 1.4),
-                        ),
-                      ),
-                    ),
-                    Text(
-                      'Minimum $kMinOverrideReasonLength characters. This reason will be visible to the employee.',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: tc.muted,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: tc.orange.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: tc.orange.withValues(alpha: 0.35)),
-                      ),
-                      child: Row(children: [
-                        Icon(Icons.verified_user_outlined,
-                            size: 16, color: tc.orange),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Performed by: $_actorName ($_actorRole)',
-                            style: TextStyle(
-                              color: tc.orangeText,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ]),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: Text('Cancel', style: TextStyle(color: tc.muted)),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: tc.orange,
-                  foregroundColor: tc.isDark ? tc.onOrange : Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: () {
-                  final r = reasonCtrl.text.trim();
-                  if (r.length < kMinOverrideReasonLength) {
-                    setDlg(() => reasonError =
-                    'Reason must be at least $kMinOverrideReasonLength characters.');
-                    return;
-                  }
-                  Navigator.pop(ctx, {'timestamp': selected, 'reason': r});
-                },
-                child: const Text('Save Override'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-
-    if (result == null) return;
-
-    final newDt = result['timestamp'] as DateTime;
-    final reason = result['reason'] as String;
-
-    try {
-      final oldDt = _toDateTime(log['timestamp']);
-      final empId =
-      _sanitizeKey(log['employee_id'] ?? log['employeeId'] ?? '');
-      final empName = _resolveName(log);
-      final empDocId = _sanitizeKey(
-          log['employeeDocId'] ?? _findEmployee(log)?['id'] ?? '');
-
-      final logType = _sanitizeKey(log['type'] ?? '').toUpperCase();
-      // ✅ Sync `date` and `time` fields with newDt so history renders them.
-      final newDateStr = newDt.toIso8601String().split('T').first;
-      final newTimeStr = '${newDt.hour.toString().padLeft(2, '0')}:'
-          '${newDt.minute.toString().padLeft(2, '0')}:'
-          '${newDt.second.toString().padLeft(2, '0')}';
-
-      final overrideRef =
-      FirebaseFirestore.instance.collection('attendance_overrides').doc();
-      final logRef =
-      FirebaseFirestore.instance.collection('attendance_logs').doc(logId);
-
-      await FirebaseFirestore.instance.runTransaction((txn) async {
-        txn.set(overrideRef, {
-          'overrideId': overrideRef.id,
-          'attendanceLogId': logId,
-          'employeeId': empId,
-          'employeeName': empName,
-          'employeeDocId': empDocId,
-          'date': newDateStr,
-          'action': 'UPDATE',
-          'field': 'timestamp',
-          'fieldType': logType, // IN or OUT
-          'oldValue': oldDt?.toIso8601String(),
-          'newValue': newDt.toIso8601String(),
-          'reason': reason,
-          'performedBy': _actorUid,
-          'performedByName': _actorName,
-          'performedByEmail': _actorEmail,
-          'performedByRole': _actorRole,
-          'performedAt': FieldValue.serverTimestamp(),
-          'device': kIsWeb ? 'Web Browser' : 'Mobile App',
-          'platform': kIsWeb ? 'web' : 'mobile',
-          'acknowledgedByEmployee': false,
-          'acknowledgedAt': null,
-        });
-
-        txn.set(logRef, {
-          'timestamp': Timestamp.fromDate(newDt),
-          'time': newTimeStr, // ✅ synced
-          'date': newDateStr, // ✅ synced
-          'isOverridden': true,
-          'overrideId': overrideRef.id,
-          'overriddenBy': _actorUid,
-          'overriddenByName': _actorName,
-          'overriddenByEmail': _actorEmail,
-          'overriddenByRole': _actorRole,
-          'overrideReason': reason,
-          'overrideAt': FieldValue.serverTimestamp(),
-          'originalTimestamp':
-          oldDt != null ? Timestamp.fromDate(oldDt) : null,
-          // legacy fields for backward compat
-          'editedBy': _actorEmail,
-          'editedByUid': _actorUid,
-          'editedAt': FieldValue.serverTimestamp(),
-          'editOverrideUsed': true,
-        }, SetOptions(merge: true));
-      }, timeout: const Duration(seconds: 15));
-
-      try {
-        await FirebaseFirestore.instance.collection('admin_audit_log').add({
-          'action': 'attendance_time_edited',
-          'targetType': 'attendance_log',
-          'targetId': logId,
-          'overrideId': overrideRef.id,
-          'actorUid': _actorUid,
-          'actorEmail': _actorEmail,
-          'actorName': _actorName,
-          'actorRole': _actorRole,
-          'details': {
-            'employeeName': empName,
-            'fieldType': logType,
-            'oldTimestamp': oldDt?.toIso8601String(),
-            'newTimestamp': newDt.toIso8601String(),
-            'reason': reason,
-            'overrideUsed': true,
-          },
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-      } catch (_) {}
-
-      _showSnack('Attendance time updated. Employee will see the override.');
-      widget.onRefreshNeeded();
-    } catch (e) {
-      debugPrint('Edit time failed: $e');
-      _showSnack('Failed to update time. Please try again.', error: true);
-    }
-  }
 
   Widget _editFieldRow({required IconData icon, required String label}) {
     return Container(
@@ -1704,8 +942,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             style: ElevatedButton.styleFrom(
               backgroundColor: tc.orange,
               foregroundColor: Colors.white,
-              shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
             child: const Text('Export'),
           ),
@@ -2047,13 +1285,11 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   Future<void> _approveLog(Map<String, dynamic> log) async {
     if (_isDemo) return _demoBlock();
-
     final logId = (log['id'] ?? '').toString();
     if (logId.isEmpty) {
       _showSnack('Missing log ID.', error: true);
       return;
     }
-
     try {
       await FirebaseFirestore.instance
           .collection('attendance_logs')
@@ -2075,9 +1311,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           'actorEmail': _actorEmail,
           'actorName': _actorName,
           'actorRole': _actorRole,
-          'details': {
-            'employeeName': _resolveName(log),
-          },
+          'details': {'employeeName': _resolveName(log)},
           'timestamp': FieldValue.serverTimestamp(),
         });
       } catch (_) {}
@@ -2092,7 +1326,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   Future<void> _flagLog(Map<String, dynamic> log) async {
     if (_isDemo) return _demoBlock();
-
     final logId = (log['id'] ?? '').toString();
     if (logId.isEmpty) {
       _showSnack('Missing log ID.', error: true);
@@ -2123,8 +1356,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
               decoration: InputDecoration(
                 labelText: 'Reason',
                 labelStyle: TextStyle(color: tc.muted),
-                border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8)),
               ),
             ),
           ],
@@ -2150,8 +1383,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
     if (confirmed != true) return;
 
-    final reason =
-    AdminEmployeeService.sanitize(reasonCtrl.text, maxLen: 200);
+    final reason = AdminEmployeeService.sanitize(reasonCtrl.text, maxLen: 200);
     if (reason.isEmpty) {
       _showSnack('Reason is required to flag.', error: true);
       return;
@@ -2179,10 +1411,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           'actorEmail': _actorEmail,
           'actorName': _actorName,
           'actorRole': _actorRole,
-          'details': {
-            'employeeName': _resolveName(log),
-            'reason': reason,
-          },
+          'details': {'employeeName': _resolveName(log), 'reason': reason},
           'timestamp': FieldValue.serverTimestamp(),
         });
       } catch (_) {}
@@ -2302,14 +1531,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         borderColor: tc.border,
       );
 
-      final manualEntryBtn = _buildActionButton(
-        icon: Icons.add_circle_outline,
-        label: 'Manual Entry',
-        onPressed: _isDemo ? () {} : _manualEntry,
-        bgColor: _isDemo ? tc.border : tc.card,
-        textColor: _isDemo ? tc.muted : tc.orange,
-        borderColor: _isDemo ? tc.border : tc.orange,
-      );
+      // ⚠️ TINANGGAL NA ANG MANUAL ENTRY BUTTON DITO
 
       final exportBtn = _buildActionButton(
         icon: Icons.download_rounded,
@@ -2331,7 +1553,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: [refreshBtn, manualEntryBtn, exportBtn],
+              children: [refreshBtn, exportBtn],
             ),
           ],
         );
@@ -2344,8 +1566,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           Expanded(child: title),
           Row(children: [
             refreshBtn,
-            const SizedBox(width: 12),
-            manualEntryBtn,
             const SizedBox(width: 12),
             exportBtn,
           ]),
@@ -2394,9 +1614,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         child: _buildDropdown<String>(
           value: _selectedYear,
           items: _years,
-          onChanged: (val) => setState(() {
-            _selectedYear = val ?? 'All Years';
-          }),
+          onChanged: (val) => setState(() => _selectedYear = val ?? 'All Years'),
         ),
       );
 
@@ -2405,9 +1623,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         child: _buildDropdown<String>(
           value: _selectedEventType,
           items: _eventTypes,
-          onChanged: (val) => setState(() {
-            _selectedEventType = val ?? 'All Events';
-          }),
+          onChanged: (val) =>
+              setState(() => _selectedEventType = val ?? 'All Events'),
         ),
       );
 
@@ -2430,9 +1647,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         child: _buildDropdown<String>(
           value: _selectedPosition,
           items: _positions,
-          onChanged: (val) => setState(() {
-            _selectedPosition = val ?? 'All Positions';
-          }),
+          onChanged: (val) =>
+              setState(() => _selectedPosition = val ?? 'All Positions'),
         ),
       );
 
@@ -2508,8 +1724,8 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       isExpanded: true,
       dropdownColor: tc.card,
       iconEnabledColor: tc.text,
-      style: TextStyle(
-          color: tc.text, fontSize: 14, fontWeight: FontWeight.w500),
+      style:
+      TextStyle(color: tc.text, fontSize: 14, fontWeight: FontWeight.w500),
       decoration: InputDecoration(
         filled: true,
         fillColor: tc.card,
@@ -2584,6 +1800,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         _th('DATE', flex: 1),
         _th('TIME', flex: 1),
         _th('EVENT', flex: 1),
+        // ⚠️ TINANGGAL NA ANG LOCATION COLUMN DITO
         _th('STATUS', flex: 2),
         _th('ACTIONS', flex: 1, align: TextAlign.right),
       ]),
@@ -2638,7 +1855,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           return _initialsAvatar(
               initials: initials, size: size, fontSize: fontSize);
         }
-
         return Container(
           width: size,
           height: size,
@@ -2816,6 +2032,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           ),
         ),
         Expanded(flex: 1, child: _buildEventPill(isLogin)),
+        // ⚠️ TINANGGAL NA ANG LOCATION CHIP DITO
         Expanded(flex: 2, child: _buildStatusPill(reviewStatus)),
         Expanded(flex: 1, child: _buildActions(log)),
       ]),
@@ -2919,6 +2136,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             const SizedBox(width: 6),
             _buildStatusPill(reviewStatus),
           ]),
+          // ⚠️ TINANGGAL NA ANG LOCATION CHIP DITO
         ],
       ),
     );
@@ -2999,11 +2217,9 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
           tooltip: 'Actions',
           onSelected: (value) {
             switch (value) {
+            // ⚠️ TINANGGAL NA ANG 'map' at 'edit' cases dito
               case 'verify':
                 _openVerification(log);
-                break;
-              case 'edit':
-                _editLogTime(log);
                 break;
               case 'approve':
                 _approveLog(log);
@@ -3014,6 +2230,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             }
           },
           itemBuilder: (_) => [
+            // ⚠️ TINANGGAL NA ANG "View on Map" at "Edit Time" dito
             PopupMenuItem<String>(
               value: 'verify',
               child: Row(children: [
@@ -3021,24 +2238,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                 const SizedBox(width: 10),
                 Text('View Verification',
                     style: TextStyle(color: tc.text, fontSize: 13)),
-              ]),
-            ),
-            PopupMenuItem<String>(
-              value: 'edit',
-              child: Row(children: [
-                Icon(
-                  Icons.edit_calendar_outlined,
-                  size: 16,
-                  color: _isDemo ? tc.muted : tc.orange,
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  'Edit Time (Override)',
-                  style: TextStyle(
-                    color: _isDemo ? tc.muted : tc.text,
-                    fontSize: 13,
-                  ),
-                ),
               ]),
             ),
             PopupMenuItem<String>(
@@ -3174,15 +2373,12 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     if (totalPages <= kMaxVisiblePages) {
       return List<int>.generate(totalPages, (i) => i + 1);
     }
-
     final pages = <int>{1, totalPages, _currentPage};
     for (var offset = 1; offset <= 2; offset++) {
       if (_currentPage - offset > 1) pages.add(_currentPage - offset);
       if (_currentPage + offset < totalPages) pages.add(_currentPage + offset);
     }
-
     final sorted = pages.toList()..sort();
-
     final out = <int>[];
     for (var i = 0; i < sorted.length; i++) {
       if (i > 0 && sorted[i] - sorted[i - 1] > 1) out.add(-1);
@@ -3195,7 +2391,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
       final stack = !r.up(BsSize.lg);
-
       if (stack) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3294,7 +2489,6 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
 
   Widget _buildAuditCard() {
     final Color onOrange = tc.isDark ? tc.onOrange : const Color(0xFF623200);
-
     return Container(
       height: 300,
       padding: const EdgeInsets.all(24),
@@ -3330,9 +2524,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             child: ElevatedButton(
               onPressed: _isDemo
                   ? _demoBlock
-                  : () {
-                _showSnack('Compliance report coming soon.');
-              },
+                  : () => _showSnack('Compliance report coming soon.'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: onOrange,
                 foregroundColor: tc.orange,

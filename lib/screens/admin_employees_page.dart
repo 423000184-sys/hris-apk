@@ -1,6 +1,9 @@
 // lib/screens/admin_employees_page.dart
-// v3.0: 🏷️ "Liveness Check" only (Blink + Smile).
+// v3.1: 🏷️ "Liveness Check" only (Blink + Smile).
 //       No face templates, no embeddings, no identity verification.
+//       Legacy biometric fields (faceEmbedding*) are STILL PURGED on reset,
+//       but they no longer count as a valid liveness state. Only the new
+//       schema (livenessVerified / livenessVerifiedAt) is trusted.
 //       Demo Mode removed — always operates on real Firestore data.
 import 'dart:async';
 import 'dart:convert';
@@ -33,24 +36,9 @@ const int kWorkingDaysPerMonth = 22;
 // ═════════════════════════════════════════════════════════════════════
 // LIVENESS — NOT biometric identity verification
 // ═════════════════════════════════════════════════════════════════════
-// The mobile app runs a "Blink + Smile" challenge to confirm a live
-// person is present. It does NOT create face templates, does NOT
-// store embeddings, and does NOT perform 1:1 face matching.
-//
-// Fields the mobile app should write after a successful challenge
-// (either one alone is enough):
-//   livenessVerified   : bool
-//   livenessVerifiedAt : Timestamp
-//
-// Legacy faceEmbedding* fields are still read for backward compat
-// with pre-v2.7 docs. No new code writes them.
 const String kLivenessVerifiedField = 'livenessVerified';
 const String kLivenessVerifiedAtField = 'livenessVerifiedAt';
 const Duration kLivenessValidity = Duration(hours: 24);
-
-/// Legacy constant retained so external references still compile.
-/// Liveness no longer uses embedding versions.
-const int kLegacyFaceVersion = 4;
 
 const Map<String, Map<String, double>> kRoleSalaryMatrix = {
   'Employee': {'basicSalary': 18000.0, 'allowances': 2000.0},
@@ -383,65 +371,24 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   // ═════════════════════════════════════════════════════════════════
   // Liveness detection (boolean, NOT biometric)
   // ═════════════════════════════════════════════════════════════════
-  /// True if the employee has a valid, non-expired liveness check.
-  /// Accepts new schema (livenessVerified / livenessVerifiedAt) and
-  /// legacy pre-v2.7 schema (faceEmbedding*), so old docs that
-  /// already passed the challenge still render correctly.
   bool _isLivenessVerified(Map<String, dynamic> e) {
-    // (1) Explicit boolean flag — preferred, written by mobile app.
-    if (e[kLivenessVerifiedField] == true) return true;
-    if (e['isLivenessVerified'] == true) return true;
-    if (e['hasLiveness'] == true) return true;
-    if (e['faceVerified'] == true) return true;
-    if (e['faceEnrolled'] == true) return true;
-
-    // (2) Timestamp within validity window.
-    final ts = _toDateTime(
-      e[kLivenessVerifiedAtField] ??
-          e['livenessLastVerifiedAt'] ??
-          e['lastLivenessCheckAt'],
-    );
-    if (ts != null) {
-      return DateTime.now().difference(ts) <= kLivenessValidity;
-    }
-
-    // (3) LEGACY: pre-v2.7 biometric-era docs. Only a positive
-    //     count OR non-empty payload OR v4+ version implies a
-    //     completed enrollment. Bare v1–v3 without a count are
-    //     treated as NOT enrolled (may be aborted enrollments).
-    final legacyCount = _safeInt(e['faceEmbeddingsCount'], 0);
-    if (legacyCount > 0) return true;
-    for (final key in const ['faceEmbeddingsJson', 'faceEmbeddings']) {
-      final v = e[key];
-      if (v is String && v.trim().isNotEmpty && v.trim() != '[]') return true;
-      if (v is List && v.isNotEmpty) return true;
-    }
-    if (_safeInt(e['faceEmbeddingVersion'], 0) >= kLegacyFaceVersion) {
-      return true;
-    }
-
-    return false;
+    if (e[kLivenessVerifiedField] != true) return false;
+    final ts = _toDateTime(e[kLivenessVerifiedAtField]);
+    if (ts == null) return false;
+    return DateTime.now().difference(ts) <= kLivenessValidity;
   }
 
-  DateTime? _livenessVerifiedAt(Map<String, dynamic> e) => _toDateTime(
-    e[kLivenessVerifiedAtField] ??
-        e['livenessLastVerifiedAt'] ??
-        e['faceEmbeddingUpdatedAt'],
-  );
+  DateTime? _livenessVerifiedAt(Map<String, dynamic> e) =>
+      _toDateTime(e[kLivenessVerifiedAtField]);
 
   String _livenessSourceOf(Map<String, dynamic> e) =>
-      _s(e['livenessSource'] ?? e['faceEmbeddingSource'], '—');
+      _s(e['livenessSource'], '—');
 
   int _livenessCheckCountOf(Map<String, dynamic> e) {
-    final v = _safeInt(e['livenessCheckCount'] ?? e['faceEmbeddingsCount'], -1);
+    final v = _safeInt(e['livenessCheckCount'], -1);
     if (v >= 0) return v;
     return _isLivenessVerified(e) ? 1 : 0;
   }
-
-  // Legacy aliases — kept so nothing else in the tree breaks.
-  bool _isFaceEnrolled(Map<String, dynamic> e) => _isLivenessVerified(e);
-  DateTime? _faceEnrolledAt(Map<String, dynamic> e) => _livenessVerifiedAt(e);
-  String _faceSourceOf(Map<String, dynamic> e) => _livenessSourceOf(e);
 
   int _annualLeaveTotalOf(Map<String, dynamic> e) {
     final v = _safeInt(e['annualLeaveTotal'], -1);
@@ -1635,7 +1582,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                   final form = Column(children: [
                     _addPersonalCard(),
                     const SizedBox(height: 24),
-                    _addBiometricCard(),
+                    _addSecurityCard(),
                     const SizedBox(height: 24),
                     _addActions(),
                   ]);
@@ -1831,7 +1778,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  Widget _addBiometricCard() {
+  Widget _addSecurityCard() {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -2534,12 +2481,13 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _editRoleCtrl.text = _s(emp['role'], '');
     _editDeptCtrl.text = _s(emp['department'], '');
     _editKeyfobCtrl.text = _s(emp['nfcTagId'], _s(emp['nfcId'], ''));
-    final savedPin = _s(emp['pin'], '').trim();
-    final hasSavedPin = savedPin.isNotEmpty && savedPin != '—';
-    _editPinCtrl.text = hasSavedPin ? savedPin : '';
+
+    // 🚨 SECURITY FIX: Do not read plaintext PIN from Firestore.
+    _editPinCtrl.text = '';
     _editPinJustGenerated = false;
     _editPinVisible = false;
     _editPinSaving = false;
+
     _editDeviceNameCtrl.text = _s(emp['deviceName'], '');
     _editEmployeeIdCtrl.text = empId;
     _editOriginalEmployeeId = empId;
@@ -2624,7 +2572,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     const SizedBox(height: 16),
                     _editSalaryCard(),
                     const SizedBox(height: 16),
-                    _editBiometricCard(),
+                    _editSecurityCard(),
                     const SizedBox(height: 16),
                     _editActions(emp),
                   ]);
@@ -3489,7 +3437,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     ]);
   }
 
-  Widget _editBiometricCard() {
+  Widget _editSecurityCard() {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -3987,7 +3935,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       PendingEditRestore.newPin = newPin;
 
       await docRef.update({
-        'pin': newPin,
+        // 🚨 REMOVED: Do not save plaintext PIN to Firestore
+        // 'pin': newPin,
         'pinHash': hash,
         'pinSalt': salt,
         'pinUpdatedAt': FieldValue.serverTimestamp(),
@@ -4008,7 +3957,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         if (_selectedProfileEmp != null) {
           _selectedProfileEmp = {
             ..._selectedProfileEmp!,
-            'pin': newPin,
+            // 🚨 REMOVED: Do not hold plaintext PIN in local state
+            // 'pin': newPin,
             'pinUpdatedAt': DateTime.now(),
             'requiresPinChange': true,
           };
@@ -4466,11 +4416,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                 const SizedBox(height: 16),
                 Row(children: [
                   Expanded(
-                    child: _bioItem(Icons.photo_camera_rounded, 'Photo',
+                    child: _statusItem(Icons.photo_camera_rounded, 'Photo',
                         hasPhoto, 'Uploaded', 'No Photo'),
                   ),
                   Expanded(
-                    child: _bioItem(Icons.verified_user_rounded, 'Liveness',
+                    child: _statusItem(Icons.verified_user_rounded, 'Liveness',
                         verified, 'Passed', 'Not Passed'),
                   ),
                 ]),
@@ -4733,7 +4683,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  Widget _bioItem(IconData icon, String label, bool enabled,
+  Widget _statusItem(IconData icon, String label, bool enabled,
       String enabledText, String disabledText) {
     return Column(children: [
       Icon(icon,
@@ -4851,7 +4801,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'livenessSource': FieldValue.delete(),
         'livenessResetAt': FieldValue.serverTimestamp(),
         'livenessResetBy': _actorEmail,
-        // LEGACY cleanup
+        // LEGACY cleanup — purge old biometric fields from Firestore.
+        // These no longer count as proof of liveness, but we still
+        // remove them to avoid stale data lingering.
         'faceEmbedding': FieldValue.delete(),
         'faceEmbeddings': FieldValue.delete(),
         'faceEmbeddingsJson': FieldValue.delete(),

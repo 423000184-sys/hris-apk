@@ -1,7 +1,8 @@
 // lib/screens/fingerprint_screen.dart
-// v5.2: 🏷️ Renamed to "Device Auth" — reports honestly that this uses device-level biometrics/PIN.
-//       🚫 Removed the "you must register" gate. If no biometrics are enrolled, it gracefully
-//       falls back to face scan (or bypasses in standalone mode).
+// v5.4: 📍 GPS SAVING & FIELD PROOF INTEGRATION COMPLETE
+//   • Extracts and saves latitude/longitude from geofence to DB.
+//   • Handles off-site selfie proof (FieldProofService) seamlessly.
+//   • Honest attribution: "Device Unlock", not identity verification.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -20,6 +21,7 @@ import '../data/local/dao/connectivity_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/clock_status_service.dart';
 import '../services/geofence_service.dart';
+import '../services/field_proof_service.dart'; // ✅ IMPORTED
 import '../services/admin_notification_service.dart';
 import '../services/network_guard.dart';
 import '../services/offline_attendance_service.dart';
@@ -92,6 +94,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   bool _biometricAvailable = false;
   bool _biometricCheckDone = false;
 
+  bool _unlockBypassed = false;
   bool _sendingAdminReport = false;
 
   static const String _kLastReportKey = 'last_fp_report_time';
@@ -114,6 +117,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   static const String _logoAsset = 'assets/images/logo.png';
 
+  // ✅ GPS Variables
   GeofenceResult? _lastGeoResult;
   double? _lastDistanceMeters;
   double? _lastAccuracyMeters;
@@ -125,6 +129,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   bool _lastUsedTolerance = false;
   bool _lastMockLocationDetected = false;
   bool _geofenceVerifiedOffline = false;
+
+  // ✅ Field Proof Tracking
+  String? _fieldProofId;
 
   bool _fingerprintLocked = false;
   bool _initialLockSynced = false;
@@ -538,7 +545,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         subCategory: category,
         issueMessage: _buildReportMessage(category: category, notes: notes),
         additionalNotes: notes.isEmpty ? null : notes,
-        faceMatchPercent: null,
         deviceModel: _deviceModel,
         zoneType: _computeZoneType(),
         authMode: 'device_auth',
@@ -1563,6 +1569,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         _secureLog(
             '⏭️ [FP] Bypass scan (standalone, no biometrics) → clock-in');
 
+        _unlockBypassed = true;
+        _showInfoSnack('No device lock on this phone. '
+            'Clocking in without a device check.');
+
         setState(() {
           _fpState = _FpState.success;
           _errorMessage = null;
@@ -1654,7 +1664,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final authenticated = await _localAuth
           .authenticate(
         localizedReason:
-        'Verify your identity to clock in',
+        'Unlock your device to continue clocking in',
         options: const AuthenticationOptions(
           biometricOnly: false, // Allows PIN fallback if biometrics fail
           stickyAuth: true,
@@ -1677,7 +1687,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
         await _recordFailedAuthAttempt();
         await _logSecurityEvent(
-          type: 'device_auth_failed',
+          type: 'device_unlock_failed',
           severity: _authFailedAttempts >= 2 ? 'high' : 'medium',
           details: 'Failed attempt #$_authFailedAttempts '
               'sessionFail=$_sessionFailCount',
@@ -1722,9 +1732,9 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       _sessionFailCount = 0;
 
       await _logSecurityEvent(
-        type: 'device_auth_success',
+        type: 'device_unlock_success',
         severity: 'info',
-        details: 'Device auth verified in ${durationMs}ms',
+        details: 'Device unlock passed in ${durationMs}ms',
       );
       await _onSuccess();
     } on TimeoutException {
@@ -1863,7 +1873,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
     if (!_isDemo) {
       final logPayload = <String, dynamic>{
-        'type': 'device_auth_verified',
+        'type': 'device_unlock_passed',
         'employeeId': widget.employee.id,
         'employee_id': widget.employee.id,
         'employee_name': widget.employee.fullName,
@@ -2028,6 +2038,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         _lastUsedTolerance = geoResult.usedTolerance;
         _geofenceVerifiedOffline = false;
 
+        // ✅ EXTRACT GPS COORDINATES
         try {
           final pos = geoResult.position;
           if (pos != null) {
@@ -2045,6 +2056,25 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       final isAllowed = geoResult?.isAllowed ?? false;
       final isExempted = geoResult?.isExempted ?? false;
+
+      // ✅ FIELD PROOF CHECK
+      if (geoResult != null && geoResult.needsProof) {
+        final id = await _requestFieldSelfie(geoResult);
+        if (id != null) {
+          _fieldProofId = id;
+          if (mounted) setState(() => _isCheckingGeofence = false);
+          return true; // Allowed, but flagged pending HR review below
+        }
+        if (mounted) {
+          setState(() {
+            _fpState = _FpState.error;
+            _errorMessage = geoResult!.message.replaceAll('\n', ' ');
+            _isCheckingGeofence = false;
+          });
+          _shakeCtrl.forward(from: 0);
+        }
+        return false;
+      }
 
       if (isAllowed || isExempted) {
         _secureLog('✅ [FP] Geofence allowed');
@@ -2066,10 +2096,14 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           severity: 'high',
           details: 'Geofence returned null — blocking clock-in',
         );
+        // ✅ IMPROVED: clearer message for deleted/missing work zones
         if (mounted) {
           setState(() {
             _fpState = _FpState.error;
-            _errorMessage = 'Unable to verify location.\nPlease try again.';
+            _errorMessage = '📍 Unable to verify location.\n\n'
+                'Your assigned work zone may have been removed\n'
+                'or is temporarily unavailable.\n\n'
+                'Please contact Admin.';
           });
           _shakeCtrl.forward(from: 0);
         }
@@ -2100,6 +2134,43 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         return true;
       }
       return false;
+    }
+  }
+
+  // ✅ NEW: Helper to request selfie for field workers
+  Future<String?> _requestFieldSelfie(GeofenceResult geo) async {
+    if (!mounted) return null;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Not at an assigned site'),
+        content: Text('${geo.message}\n\nYour attendance will be marked '
+            '"pending review" until HR approves it.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Take selfie')),
+        ],
+      ),
+    );
+    if (go != true) return null;
+    try {
+      final empId = _employeeIdForAttendance;
+      final alreadyClockedIn = await ClockStatusService.instance.isCurrentlyClockedIn(empId);
+      final attendanceType = alreadyClockedIn ? 'OUT' : 'IN';
+
+      return await FieldProofService.instance.captureAndSubmit(
+        employeeId: empId,
+        employeeDocId: widget.employee.id,
+        attendanceType: attendanceType,
+        nearestSiteName: geo.matchedLocationName,
+      );
+    } on FieldProofException catch (e) {
+      _showInfoSnack(e.message);
+      return null;
     }
   }
 
@@ -2245,9 +2316,19 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final employeeEmail = widget.employee.email;
       final zoneType = _computeZoneType();
 
-      final baseRemarks = _geofenceVerifiedOffline
-          ? 'device_auth|pending_geofence_verification'
-          : 'device_auth';
+      // ✅ v5.3 — honest remarks; flag device bypass if it happened.
+      String baseRemarks = _geofenceVerifiedOffline
+          ? 'device_unlock|no_identity_check|pending_geofence_verification'
+          : 'device_unlock|no_identity_check';
+      if (_unlockBypassed) {
+        baseRemarks += '|device_unlock_bypassed';
+      }
+
+      // ✅ NEW: Tag the log so HR can find the proof
+      final proofTag =
+      _fieldProofId != null ? '|field_selfie_pending|proof:$_fieldProofId' : '';
+      baseRemarks += proofTag;
+
       final remarks = delayMinutes >= 1
           ? '$baseRemarks|first_attempt_delay:${delayMinutes}m'
           : baseRemarks;
@@ -2266,8 +2347,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           employeeEmail: employeeEmail,
           type: attendanceType,
           timestamp: effectiveTime,
-          latitude: _lastLatitude,
-          longitude: _lastLongitude,
+          latitude: _lastLatitude,      // ✅ SAVES GPS
+          longitude: _lastLongitude,    // ✅ SAVES GPS
           distance: _lastDistanceMeters,
           insideZone: !_geofenceVerifiedOffline,
           device: _deviceModel,
@@ -2288,6 +2369,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       final online = _networkState == _NetworkState.online;
 
+      // ✅ SAVES GPS SA ACTIVITY LOGS
       final locationPayload = <String, dynamic>{
         if (_lastLatitude != null) 'latitude': _lastLatitude,
         if (_lastLongitude != null) 'longitude': _lastLongitude,
@@ -2312,13 +2394,14 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final activityPayload = <String, dynamic>{
         'type': isClockIn ? 'clock_in' : 'clock_out',
         'action': isClockIn
-            ? 'Clocked In (Device Auth)'
-            : 'Clocked Out (Device Auth)',
+            ? 'Clocked In (Device Unlock)'
+            : 'Clocked Out (Device Unlock)',
         'employeeId': widget.employee.id,
         'employee_id': employeeId,
         'employee_name': employeeName,
         'email': employeeEmail,
-        'verification_method': 'device_biometric',
+        'verification_method': 'device_unlock',
+        'identity_verified': false,
         'zone_type': zoneType,
         'time': timeStr,
         'date': todayStr,
@@ -2331,7 +2414,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         'platform': kIsWeb ? 'web' : 'mobile',
         'session_nonce': _sessionNonce,
         'timestamp': FieldValue.serverTimestamp(),
-        ...locationPayload,
+        ...locationPayload, // ✅ INAYOS NA ITO
       };
 
       if (!online) {
@@ -2397,7 +2480,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
               employeeId: employeeId,
               employeeName: employeeName,
               timeStr: timeStr,
-              faceMatchPercent: null, // Honest: no face match, just device auth
               wfh: widget.employee.wfhAccess,
               inRange: true,
               zoneType: zoneType,
@@ -2408,7 +2490,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
               employeeId: employeeId,
               employeeName: employeeName,
               timeStr: timeStr,
-              faceMatchPercent: null,
               wfh: widget.employee.wfhAccess,
               inRange: true,
               zoneType: zoneType,
@@ -2449,8 +2530,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         pageBuilder: (_, __, ___) => ClockInSuccessScreen(
           employee: widget.employee,
           arrivalTime: effective,
-          faceMatchPercent: 100.0, // Static 100 for UI compatibility
-          verificationMethod: 'device_auth',
+          verificationMethod: 'device_unlock',
           locationName: _isDemo ? 'Demo Location' : _lastLocationName,
           onContinue: () {
             navigator.pushAndRemoveUntil(
@@ -3274,7 +3354,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
                       ? const Icon(Icons.lock_rounded,
                       color: _error, size: 48)
                       : _fpState == _FpState.success
-                      ? Icon(Icons.verified_user_rounded,
+                      ? Icon(Icons.lock_open_rounded,
                       color: iconColor, size: 46)
                       : _buildCurrentIcon(iconColor),
                 ),
@@ -3386,9 +3466,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   }
 
   String _buildCancelLabel() {
-    return widget.standaloneMode
-        ? 'Cancel Verification'
-        : 'Cancel Authentication';
+    return widget.standaloneMode ? 'Cancel Verification' : 'Cancel';
   }
 
   void _onCancelTapped() async {
@@ -3423,7 +3501,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         case _FpState.scanning:
           return 'Scanning...';
         case _FpState.success:
-          return 'Demo\nVerified!';
+          return 'Demo\nUnlocked';
         case _FpState.error:
           return 'Try Again';
       }
@@ -3436,7 +3514,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       case _FpState.scanning:
         return 'Authenticating...';
       case _FpState.success:
-        return 'Verified!';
+        return 'Device\nUnlocked';
       case _FpState.error:
         return 'Try Again';
     }
@@ -3506,16 +3584,16 @@ class _FingerprintScreenState extends State<FingerprintScreen>
               'Your attendance will be saved locally\n'
               'and synced automatically when online.';
         }
-        return 'Tap the scanner icon to verify.\n\n'
-            'Uses your device\'s built-in security\n'
-            '(biometrics or PIN).\n\n'
-            'No in-app registration needed.';
+        return 'Tap the scanner icon to unlock.\n\n'
+            'Uses your phone\'s fingerprint, face unlock or PIN.\n'
+            'Any method enrolled on this phone is accepted.';
       case _FpState.scanning:
         return kIsWeb
-            ? 'Preparing camera...'
-            : 'Place your finger flat on the sensor\nor use your device PIN...';
+            ? 'Preparing...'
+            : 'Waiting for your device unlock prompt...';
       case _FpState.success:
-        return 'Device authentication confirmed.';
+        return 'Device unlock confirmed.\n'
+            'This does not verify who you are.';
       case _FpState.error:
         return 'Device auth failed.\nTap to try again.';
     }

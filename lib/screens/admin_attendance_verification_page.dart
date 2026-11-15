@@ -1,7 +1,6 @@
 // lib/screens/admin_attendance_verification_page.dart
-// v1.3: 🔒 Fully audited overrides — Manual Clock Out and Modify Log now
-//       write atomic transactions to attendance_logs + attendance_overrides
-//       (who, what, when, why). Minimum reason length bumped to 10.
+// v2.6: 🛠️ Fixed missing GPS data by querying `activity_logs` as fallback.
+//       Now searches multiple collections to find the coordinates.
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -31,22 +30,34 @@ class AdminAttendanceVerificationPage extends StatefulWidget {
 
 class _AdminAttendanceVerificationPageState
     extends State<AdminAttendanceVerificationPage> {
-  // ══════════════════════════════════════════════════════════════
-  // STATE
-  // ══════════════════════════════════════════════════════════════
   Map<String, dynamic>? _employeeData;
-  Map<String, dynamic>? _locationData;
   String? _deviceInfoOverride;
   String _deviceStatus = 'none';
   String _registeredDeviceValue = '';
   String _actualDeviceValue = '';
   String? _clientInfoOverride;
+
+  // Map & GPS State
+  final MapController _mapController = MapController();
+  ll.LatLng? _clockInCoords;
+  ll.LatLng? _clockOutCoords;
+  DateTime? _clockInTime;
+  DateTime? _clockOutTime;
+
+  // Debug Console
+  List<String> _debugMessages = [];
+
   bool _loading = true;
   bool _processingAction = false;
+  bool _disposed = false;
+  bool get _safe => mounted && !_disposed;
+
+  void _safeSetState(VoidCallback fn) {
+    if (_safe) setState(fn);
+  }
 
   AdminColors get tc => AdminTheme.getColors(context);
 
-  // 🎭 Demo Mode Getter
   bool get _isDemo {
     try {
       return DemoModeService.instance.isEnabled;
@@ -55,7 +66,6 @@ class _AdminAttendanceVerificationPageState
     }
   }
 
-  // 🎭 Demo Block Helper
   void _demoBlock() {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -67,27 +77,9 @@ class _AdminAttendanceVerificationPageState
     );
   }
 
-  // 🔒 Admin identity for audit trail
-  String get _adminIdentifier {
-    try {
-      final u = FirebaseAuth.instance.currentUser;
-      if (u != null) {
-        return u.email ?? u.uid;
-      }
-    } catch (_) {}
-    return 'Admin';
-  }
-
-  String get _adminName {
-    try {
-      final u = FirebaseAuth.instance.currentUser;
-      return u?.displayName ?? u?.email?.split('@').first ?? 'HR Admin';
-    } catch (_) {
-      return 'HR Admin';
-    }
-  }
-
-  String get _adminRole => 'HR/Admin';
+  String get _actorEmail =>
+      FirebaseAuth.instance.currentUser?.email?.toLowerCase().trim() ?? 'unknown';
+  String get _actorUid => FirebaseAuth.instance.currentUser?.uid ?? 'unknown';
 
   @override
   void initState() {
@@ -95,41 +87,62 @@ class _AdminAttendanceVerificationPageState
     _fetchRelatedData();
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // EXTRACT LATLNG
-  // ══════════════════════════════════════════════════════════════
-  ll.LatLng? _extractLatLng(Map<String, dynamic> data) {
-    final geo = data['location'] ??
-        data['geopoint'] ??
-        data['geo'] ??
-        data['coordinates'];
-    if (geo is GeoPoint) {
-      return ll.LatLng(geo.latitude, geo.longitude);
-    }
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 
-    final lat = data['latitude'] ??
-        data['lat'] ??
-        data['gps_lat'] ??
-        data['gpsLatitude'] ??
-        data['gps_latitude'];
-    final lng = data['longitude'] ??
-        data['lng'] ??
-        data['lon'] ??
-        data['gps_lng'] ??
-        data['gpsLongitude'] ??
-        data['gps_longitude'];
+  // ══════════════════════════════════════════════════════════════
+  // RECURSIVE LATLNG EXTRACTOR
+  // ══════════════════════════════════════════════════════════════
+  ll.LatLng? _extractLatLng(dynamic data) {
+    if (data == null) return null;
 
-    if (lat is num && lng is num) {
-      if (lat.abs() <= 90 && lng.abs() <= 180) {
-        return ll.LatLng(lat.toDouble(), lng.toDouble());
+    if (data is GeoPoint) return ll.LatLng(data.latitude, data.longitude);
+
+    if (data is Map) {
+      final latKeys = ['latitude', 'lat', 'gps_lat', 'gpsLatitude', 'gps_latitude', 'clockInLatitude', 'clockOutLatitude', 'clock_in_lat', 'clock_out_lat', 'timeInLat', 'timeOutLat', 'latitudeIn', 'latitudeOut', 'checkInLat', 'checkOutLat', 'lastLat', 'currentLat'];
+      final lngKeys = ['longitude', 'lng', 'lon', 'gps_lng', 'gpsLongitude', 'gps_longitude', 'clockInLongitude', 'clockOutLongitude', 'clock_in_lng', 'clock_out_lng', 'timeInLng', 'timeOutLng', 'longitudeIn', 'longitudeOut', 'checkInLng', 'checkOutLng', 'lastLng', 'currentLng'];
+
+      for (final k in latKeys) {
+        if (data.containsKey(k)) {
+          for (final l in lngKeys) {
+            if (data.containsKey(l)) {
+              final lat = data[k];
+              final lng = data[l];
+              if (lat is num && lng is num) return ll.LatLng(lat.toDouble(), lng.toDouble());
+              if (lat is String && lng is String) {
+                final latD = double.tryParse(lat);
+                final lngD = double.tryParse(lng);
+                if (latD != null && lngD != null) return ll.LatLng(latD, lngD);
+              }
+            }
+          }
+        }
+      }
+
+      final nestedKeys = ['location', 'geopoint', 'geo', 'coordinates', 'clockInLocation', 'clockOutLocation', 'attendanceLocation', 'gps', 'position', 'coord', 'loc', 'checkInLocation', 'checkOutLocation', 'map_location', 'location_map', 'lastLocation', 'currentLocation'];
+      for (final key in nestedKeys) {
+        if (data.containsKey(key)) {
+          final res = _extractLatLng(data[key]);
+          if (res != null) return res;
+        }
       }
     }
 
-    if (lat is String && lng is String) {
-      final latD = double.tryParse(lat);
-      final lngD = double.tryParse(lng);
-      if (latD != null && lngD != null) {
-        return ll.LatLng(latD, lngD);
+    if (data is List && data.length >= 2) {
+      final lat = data[0];
+      final lng = data[1];
+      if (lat is num && lng is num) return ll.LatLng(lat.toDouble(), lng.toDouble());
+    }
+
+    if (data is String) {
+      final parts = data.split(',');
+      if (parts.length == 2) {
+        final latD = double.tryParse(parts[0].trim());
+        final lngD = double.tryParse(parts[1].trim());
+        if (latD != null && lngD != null) return ll.LatLng(latD, lngD);
       }
     }
 
@@ -137,7 +150,7 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ⭐ DEVICE MATCH HELPER
+  // DEVICE MATCH HELPERS
   // ══════════════════════════════════════════════════════════════
   bool _fuzzyDeviceMatch(String registered, String actual) {
     final regLower = registered.toLowerCase().trim();
@@ -147,10 +160,7 @@ class _AdminAttendanceVerificationPageState
     if (regLower == actLower) return true;
 
     String clean(String s) {
-      return s
-          .replaceAll(RegExp(r'\(web\)', caseSensitive: false), '')
-          .replaceAll(RegExp(r'\s+'), ' ')
-          .trim();
+      return s.replaceAll(RegExp(r'\(web\)', caseSensitive: false), '').replaceAll(RegExp(r'\s+'), ' ').trim();
     }
 
     final regClean = clean(regLower);
@@ -160,76 +170,45 @@ class _AdminAttendanceVerificationPageState
     if (regClean == actClean) return true;
 
     const genericTerms = {
-      'mobile app',
-      'web browser',
-      'android app',
-      'ios app',
-      'windows app',
-      'macos app',
-      'linux app',
-      'mobile',
-      'web',
-      'android',
-      'ios',
-      'unknown device',
-      'not recorded',
-      '—',
-      'null',
+      'mobile app', 'web browser', 'android app', 'ios app', 'windows app',
+      'macos app', 'linux app', 'mobile', 'web', 'android', 'ios',
+      'unknown device', 'not recorded', '—', 'null',
     };
 
     final regIsGeneric = genericTerms.contains(regClean);
     final actIsGeneric = genericTerms.contains(actClean);
 
     if (regIsGeneric != actIsGeneric) return false;
-    if (regIsGeneric && actIsGeneric) {
-      return regClean == actClean;
-    }
+    if (regIsGeneric && actIsGeneric) return regClean == actClean;
 
-    final regTokens = regClean
-        .split(RegExp(r'[\s\-_\,\.]+'))
-        .where((t) => t.length >= 2)
-        .toSet();
-    final actTokens = actClean
-        .split(RegExp(r'[\s\-_\,\.]+'))
-        .where((t) => t.length >= 2)
-        .toSet();
+    final regTokens = regClean.split(RegExp(r'[\s\-_\,\.]+')).where((t) => t.length >= 2).toSet();
+    final actTokens = actClean.split(RegExp(r'[\s\-_\,\.]+')).where((t) => t.length >= 2).toSet();
 
     if (regTokens.isEmpty || actTokens.isEmpty) return false;
 
-    final shorter =
-    regTokens.length <= actTokens.length ? regTokens : actTokens;
-    final longer =
-    regTokens.length <= actTokens.length ? actTokens : regTokens;
+    final shorter = regTokens.length <= actTokens.length ? regTokens : actTokens;
+    final longer = regTokens.length <= actTokens.length ? actTokens : regTokens;
 
     return shorter.every((t) => longer.contains(t));
   }
 
   bool _isLegacyDeviceValue(String value) {
     final v = value.toLowerCase().trim();
-    return v == 'mobile app' ||
-        v == 'android app' ||
-        v == 'ios app' ||
-        v == 'windows app' ||
-        v == 'macos app' ||
-        v == 'linux app';
+    return v == 'mobile app' || v == 'android app' || v == 'ios app' || v == 'windows app' || v == 'macos app' || v == 'linux app';
   }
 
-  Map<String, dynamic> _extractDeviceInfoWithSource(
-      Map<String, dynamic> log) {
+  bool _isSystemAction(String value) {
+    final v = value.toLowerCase().trim();
+    return v.contains('auto clock') || v == 'system' || v == 'server' || v == 'cron' || v.contains('dashboard');
+  }
+
+  Map<String, dynamic> _extractDeviceInfoWithSource(Map<String, dynamic> log) {
     String registeredDevice = '';
     if (_employeeData != null) {
-      final candidates = [
-        _employeeData!['registeredDevice'],
-        _employeeData!['deviceModel'],
-        _employeeData!['deviceName'],
-        _employeeData!['device'],
-      ];
+      final candidates = [_employeeData!['registeredDevice'], _employeeData!['deviceModel'], _employeeData!['deviceName'], _employeeData!['device']];
       for (final c in candidates) {
         final v = (c ?? '').toString().trim();
-        if (v.isNotEmpty &&
-            v != '—' &&
-            v.toLowerCase() != 'null' &&
-            v.toLowerCase() != 'not recorded') {
+        if (v.isNotEmpty && v != '—' && v.toLowerCase() != 'null' && v.toLowerCase() != 'not recorded') {
           registeredDevice = v;
           break;
         }
@@ -237,22 +216,10 @@ class _AdminAttendanceVerificationPageState
     }
 
     String actualDevice = '';
-
-    const specificKeys = [
-      'deviceModel',
-      'deviceInfo',
-      'clientDevice',
-      'phoneModel',
-      'deviceName',
-    ];
+    const specificKeys = ['deviceModel', 'deviceInfo', 'clientDevice', 'phoneModel', 'deviceName'];
     for (final key in specificKeys) {
       final v = (log[key] ?? '').toString().trim();
-      if (v.isNotEmpty &&
-          v != '—' &&
-          v.toLowerCase() != 'null' &&
-          v.toLowerCase() != 'mobile app' &&
-          v.toLowerCase() != 'web browser' &&
-          !_isLegacyDeviceValue(v)) {
+      if (v.isNotEmpty && v != '—' && v.toLowerCase() != 'null' && v.toLowerCase() != 'mobile app' && v.toLowerCase() != 'web browser' && !_isLegacyDeviceValue(v)) {
         actualDevice = v;
         break;
       }
@@ -260,9 +227,7 @@ class _AdminAttendanceVerificationPageState
 
     if (actualDevice.isEmpty) {
       final v = (log['device'] ?? '').toString().trim();
-      if (v.isNotEmpty && v != '—' && v.toLowerCase() != 'null') {
-        actualDevice = v;
-      }
+      if (v.isNotEmpty && v != '—' && v.toLowerCase() != 'null') actualDevice = v;
     }
 
     if (actualDevice.isEmpty) {
@@ -276,107 +241,53 @@ class _AdminAttendanceVerificationPageState
       }
     }
 
-    debugPrint('📱 [Device] registered="$registeredDevice" | '
-        'actual="$actualDevice"');
+    if (_isSystemAction(actualDevice) || _isLegacyDeviceValue(actualDevice)) {
+      actualDevice = '';
+    }
 
     if (registeredDevice.isNotEmpty) {
       if (_isLegacyDeviceValue(registeredDevice)) {
         if (actualDevice.isNotEmpty && !_isLegacyDeviceValue(actualDevice)) {
-          return {
-            'displayValue': actualDevice,
-            'status': 'legacy',
-            'registeredDevice': registeredDevice,
-            'actualDevice': actualDevice,
-          };
+          return {'displayValue': actualDevice, 'status': 'legacy', 'registeredDevice': registeredDevice, 'actualDevice': actualDevice};
         }
-        return {
-          'displayValue': registeredDevice,
-          'status': 'registered',
-          'registeredDevice': registeredDevice,
-          'actualDevice':
-          actualDevice.isNotEmpty ? actualDevice : registeredDevice,
-        };
+        return {'displayValue': registeredDevice, 'status': 'registered', 'registeredDevice': registeredDevice, 'actualDevice': actualDevice.isNotEmpty ? actualDevice : registeredDevice};
       }
 
-      if (actualDevice.isEmpty) {
-        return {
-          'displayValue': registeredDevice,
-          'status': 'registered',
-          'registeredDevice': registeredDevice,
-          'actualDevice': '',
-        };
-      }
+      if (actualDevice.isEmpty) return {'displayValue': registeredDevice, 'status': 'registered', 'registeredDevice': registeredDevice, 'actualDevice': ''};
 
       final matches = _fuzzyDeviceMatch(registeredDevice, actualDevice);
-
       if (matches) {
-        return {
-          'displayValue': registeredDevice,
-          'status': 'registered',
-          'registeredDevice': registeredDevice,
-          'actualDevice': actualDevice,
-        };
+        return {'displayValue': registeredDevice, 'status': 'registered', 'registeredDevice': registeredDevice, 'actualDevice': actualDevice};
       } else {
-        return {
-          'displayValue': actualDevice,
-          'status': 'unregistered',
-          'registeredDevice': registeredDevice,
-          'actualDevice': actualDevice,
-        };
+        return {'displayValue': actualDevice, 'status': 'unregistered', 'registeredDevice': registeredDevice, 'actualDevice': actualDevice};
       }
     }
 
-    if (actualDevice.isNotEmpty) {
-      return {
-        'displayValue': actualDevice,
-        'status': 'none',
-        'registeredDevice': '',
-        'actualDevice': actualDevice,
-      };
-    }
+    if (actualDevice.isNotEmpty) return {'displayValue': actualDevice, 'status': 'none', 'registeredDevice': '', 'actualDevice': actualDevice};
 
-    return {
-      'displayValue': 'Not recorded',
-      'status': 'none',
-      'registeredDevice': '',
-      'actualDevice': '',
-    };
+    return {'displayValue': 'Not recorded', 'status': 'none', 'registeredDevice': '', 'actualDevice': ''};
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // EXTRACT CLIENT INFO
-  // ══════════════════════════════════════════════════════════════
   String? _extractClientInfo(Map<String, dynamic> data) {
-    const keys = [
-      'client',
-      'clientName',
-      'clientInfo',
-      'purpose',
-      'reason',
-      'verificationMethod',
-      'verificationNote',
-      'note',
-    ];
+    const keys = ['client', 'clientName', 'clientInfo', 'purpose', 'reason', 'verificationMethod', 'verificationNote', 'note'];
     for (final key in keys) {
       final v = data[key];
-      if (v != null && v.toString().trim().isNotEmpty) {
-        return v.toString().trim();
-      }
+      if (v != null && v.toString().trim().isNotEmpty) return v.toString().trim();
     }
     return null;
   }
 
   // ══════════════════════════════════════════════════════════════
-  // FETCH EMPLOYEE + LOCATION + DEVICE
+  // FETCH DATA (MAY DEBUG LOGS)
   // ══════════════════════════════════════════════════════════════
   Future<void> _fetchRelatedData() async {
-    // 🎭 DEMO MODE — skip Firebase completely
+    _debugMessages.clear();
+
     if (_isDemo) {
       final log = widget.logData;
       _clientInfoOverride = _extractClientInfo(log);
-
       _employeeData = {
-        'name': log['employee_name'] ?? log['name'] ?? 'Demo Employee',
+        'name': log['employees_name'] ?? log['employee_name'] ?? 'Demo Employee',
         'employeeId': log['employee_id'] ?? log['employeeId'] ?? 'DEMO-001',
         'department': log['department'] ?? 'Operations',
         'role': log['position'] ?? 'Staff',
@@ -384,231 +295,163 @@ class _AdminAttendanceVerificationPageState
         'deviceName': log['registeredDevice'] ?? 'iPhone 14 Pro',
       };
 
-      _deviceInfoOverride =
-          log['registeredDevice']?.toString() ?? 'iPhone 14 Pro';
+      _deviceInfoOverride = log['registeredDevice']?.toString() ?? 'iPhone 14 Pro';
       _deviceStatus = 'registered';
       _registeredDeviceValue = _deviceInfoOverride!;
       _actualDeviceValue = _deviceInfoOverride!;
 
-      final logCoords = _extractLatLng(log);
-      if (logCoords != null) {
-        _locationData = {
-          'latitude': logCoords.latitude,
-          'longitude': logCoords.longitude,
-          'locationName': log['locationName'] ?? 'Makati Office',
-          'timestamp': log['timestamp'],
-        };
-      }
+      _clockInCoords = const ll.LatLng(14.5995, 120.9842);
+      _clockOutCoords = const ll.LatLng(14.5547, 121.0244);
+      _clockInTime = DateTime.now().subtract(const Duration(hours: 8));
+      _clockOutTime = DateTime.now();
 
-      if (mounted) setState(() => _loading = false);
+      if (_safe) _safeSetState(() => _loading = false);
       return;
     }
 
-    // ─── NORMAL MODE: Fetch from Firebase ───
     final log = widget.logData;
-    final empId = (log['employee_id'] ?? log['employeeId'] ?? '').toString();
+    final empId = (log['employee_id'] ?? log['employeeId'] ?? log['employees_id'] ?? log['employeeDocId'] ?? '').toString();
     final empAuthUid = (log['authUid'] ?? log['auth_uid'] ?? '').toString();
-    final empName = (log['employee_name'] ?? log['name'] ?? '').toString();
-    final empEmail = (log['email'] ?? '').toString();
-    final logTs = _toDateTime(log['timestamp']);
+    final empName = (log['employees_name'] ?? log['employee_name'] ?? log['name'] ?? '').toString();
 
-    debugPrint('═══════════════════════════════════════════════════');
-    debugPrint('🔍 [VERIFY] Fetch: name="$empName" id="$empId" email="$empEmail"');
+    final logTs = _toDateTime(log['timestamp'] ?? log['date'] ?? log['createdAt'] ?? log['clockInTime']);
+    final targetDate = logTs ?? DateTime.now();
+
+    _debugMessages.add('Target Date: ${DateFormat('yyyy-MM-dd').format(targetDate)}');
+    _debugMessages.add('Target EmpID: $empId');
 
     _clientInfoOverride = _extractClientInfo(log);
 
     final logCoords = _extractLatLng(log);
     if (logCoords != null) {
-      _locationData = {
-        'latitude': logCoords.latitude,
-        'longitude': logCoords.longitude,
-        'locationName': log['locationName'] ?? log['location_name'],
-        'timestamp': log['timestamp'],
-      };
+      _clockInCoords = logCoords;
+      _clockInTime = logTs;
+      _debugMessages.add('Found GPS in current log!');
     }
 
-    // Fetch employee
     try {
       Map<String, dynamic>? found;
-
-      if (empAuthUid.isNotEmpty) {
-        final s = await FirebaseFirestore.instance
-            .collection('employees')
-            .where('authUid', isEqualTo: empAuthUid)
-            .limit(1)
-            .get();
-        if (s.docs.isNotEmpty) {
-          found = {...s.docs.first.data(), 'id': s.docs.first.id};
-        }
+      if (empId.isNotEmpty) {
+        final doc = await FirebaseFirestore.instance.collection('employees').doc(empId).get();
+        if (doc.exists && doc.data() != null) found = {...doc.data()!, 'id': doc.id};
       }
-
-      if (found == null && empId.isNotEmpty) {
-        final doc = await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(empId)
-            .get();
-        if (doc.exists && doc.data() != null) {
-          found = {...doc.data()!, 'id': doc.id};
-        }
+      if (found == null && empAuthUid.isNotEmpty) {
+        final s = await FirebaseFirestore.instance.collection('employees').where('authUid', isEqualTo: empAuthUid).limit(1).get();
+        if (s.docs.isNotEmpty) found = {...s.docs.first.data()!, 'id': s.docs.first.id};
       }
-
       if (found == null && empName.isNotEmpty) {
-        final s = await FirebaseFirestore.instance
-            .collection('employees')
-            .where('name', isEqualTo: empName)
-            .limit(1)
-            .get();
-        if (s.docs.isNotEmpty) {
-          found = {...s.docs.first.data(), 'id': s.docs.first.id};
-        }
+        final s = await FirebaseFirestore.instance.collection('employees').where('name', isEqualTo: empName).limit(1).get();
+        if (s.docs.isNotEmpty) found = {...s.docs.first.data()!, 'id': s.docs.first.id};
       }
-
-      if (found == null && empId.isNotEmpty) {
-        final s = await FirebaseFirestore.instance
-            .collection('employees')
-            .where('nfcTagId', isEqualTo: empId)
-            .limit(1)
-            .get();
-        if (s.docs.isNotEmpty) {
-          found = {...s.docs.first.data(), 'id': s.docs.first.id};
-        }
-      }
-
-      if (found == null && empEmail.isNotEmpty) {
-        final s = await FirebaseFirestore.instance
-            .collection('employees')
-            .where('email', isEqualTo: empEmail)
-            .limit(1)
-            .get();
-        if (s.docs.isNotEmpty) {
-          found = {...s.docs.first.data(), 'id': s.docs.first.id};
-        }
-      }
-
       _employeeData = found;
+      if (found != null) _debugMessages.add('Employee profile found. ID: ${found['id']}');
     } catch (e) {
-      debugPrint('❌ [VERIFY] Emp error: $e');
+      _debugMessages.add('Emp error: $e');
     }
 
-    // Extract device info
+    if (_clockInCoords == null && _employeeData != null) {
+      final empCoords = _extractLatLng(_employeeData!);
+      if (empCoords != null) {
+        _clockInCoords = empCoords;
+        _clockInTime = targetDate;
+        _debugMessages.add('Found GPS in Employee Profile!');
+      }
+    }
+
+    final Set<String> searchIds = {empId};
+    if (_employeeData != null) {
+      searchIds.add((_employeeData!['id'] ?? '').toString());
+      searchIds.add((_employeeData!['employeeId'] ?? '').toString());
+    }
+    searchIds.removeWhere((e) => e.isEmpty);
+
+    if (searchIds.isNotEmpty) {
+      try {
+        final List<QueryDocumentSnapshot<Map<String, dynamic>>> allDocs = [];
+
+        // 1. Hanapin sa attendance_logs
+        try {
+          final snap1 = await FirebaseFirestore.instance.collection('attendance_logs')
+              .where('employee_id', whereIn: searchIds.toList()).get();
+          allDocs.addAll(snap1.docs);
+        } catch (_) {}
+
+        // 2. Hanapin sa activity_logs (Madalas nandito ang GPS galing phone)
+        try {
+          final snap2 = await FirebaseFirestore.instance.collection('activity_logs')
+              .where('employee_id', whereIn: searchIds.toList()).get();
+          allDocs.addAll(snap2.docs);
+        } catch (_) {}
+
+        // 3. Hanapin sa activity logs (legacy)
+        try {
+          final snap3 = await FirebaseFirestore.instance.collection('activity logs')
+              .where('employee_id', whereIn: searchIds.toList()).get();
+          allDocs.addAll(snap3.docs);
+        } catch (_) {}
+
+        _debugMessages.add('Fetched ${allDocs.length} logs total.');
+
+        // I-sort lahat mula pinakabago pababa
+        allDocs.sort((a, b) {
+          final ta = _toDateTime(a.data()['timestamp'] ?? a.data()['date'] ?? a.data()['createdAt']);
+          final tb = _toDateTime(b.data()['timestamp'] ?? b.data()['date'] ?? b.data()['createdAt']);
+          if (ta == null) return 1;
+          if (tb == null) return -1;
+          return tb.compareTo(ta);
+        });
+
+        for (var doc in allDocs) {
+          final data = doc.data();
+          final ts = _toDateTime(data['timestamp'] ?? data['date'] ?? data['createdAt']);
+
+          if (ts == null) continue;
+          if (ts.year != targetDate.year || ts.month != targetDate.month || ts.day != targetDate.day) continue;
+
+          final coords = _extractLatLng(data);
+          if (coords != null) {
+            final type = (data['type'] ?? data['status'] ?? data['action'] ?? '').toString().toUpperCase();
+
+            _debugMessages.add('Log [${DateFormat('hh:mm a').format(ts)}] Type: $type, HasGPS: Yes');
+
+            if (type.contains('IN') || type.contains('LOGIN') || type.contains('CLOCKED IN')) {
+              if (_clockInCoords == null) {
+                _clockInCoords = coords;
+                _clockInTime = ts;
+              }
+            } else if (type.contains('OUT') || type.contains('LOGOUT') || type.contains('CLOCKED OUT')) {
+              if (_clockOutCoords == null) {
+                _clockOutCoords = coords;
+                _clockOutTime = ts;
+              }
+            } else {
+              if (_clockInCoords == null) {
+                _clockInCoords = coords;
+                _clockInTime = ts;
+              } else if (_clockOutCoords == null && ts.isAfter(_clockInTime!)) {
+                _clockOutCoords = coords;
+                _clockOutTime = ts;
+              }
+            }
+          } else {
+            final type = (data['type'] ?? data['status'] ?? data['action'] ?? '').toString().toUpperCase();
+            _debugMessages.add('Log [${DateFormat('hh:mm a').format(ts)}] Type: $type, NO GPS.');
+          }
+        }
+      } catch (e) {
+        _debugMessages.add('Query Error: $e');
+      }
+    } else {
+      _debugMessages.add('No search IDs available.');
+    }
+
     final deviceResult = _extractDeviceInfoWithSource(log);
     _deviceInfoOverride = deviceResult['displayValue'] as String;
     _deviceStatus = deviceResult['status'] as String;
-    _registeredDeviceValue =
-        deviceResult['registeredDevice'] as String? ?? '';
+    _registeredDeviceValue = deviceResult['registeredDevice'] as String? ?? '';
     _actualDeviceValue = deviceResult['actualDevice'] as String? ?? '';
 
-    final Set<String> empIds = {};
-    empIds.add(empId);
-    if (_employeeData != null) {
-      empIds.add((_employeeData!['id'] ?? '').toString());
-      empIds.add((_employeeData!['employeeId'] ?? '').toString());
-      empIds.add((_employeeData!['nfcTagId'] ?? '').toString());
-      empIds.add((_employeeData!['authUid'] ?? '').toString());
-    }
-    empIds.removeWhere((e) => e.isEmpty);
-
-    final Set<String> empEmails = {};
-    empEmails.add(empEmail);
-    if (_employeeData != null) {
-      empEmails.add((_employeeData!['email'] ?? '').toString());
-    }
-    empEmails.removeWhere((e) => e.isEmpty);
-
-    // Fetch GPS from user locations
-    if (_locationData == null) {
-      const locationCollections = [
-        'user locations',
-        'user_locations',
-        'locations',
-        'attendance_locations',
-        'gps_logs',
-      ];
-      const employeeFieldNames = [
-        'employeeId',
-        'employee_id',
-        'empId',
-        'uid',
-        'authUid',
-      ];
-
-      for (final coll in locationCollections) {
-        if (_locationData != null) break;
-
-        for (final field in employeeFieldNames) {
-          if (_locationData != null) break;
-
-          for (final id in empIds) {
-            if (_locationData != null) break;
-            try {
-              final snap = await FirebaseFirestore.instance
-                  .collection(coll)
-                  .where(field, isEqualTo: id)
-                  .limit(50)
-                  .get();
-
-              if (snap.docs.isEmpty) continue;
-
-              final docs = snap.docs.toList();
-              docs.sort((a, b) {
-                final ta = _toDateTime(a.data()['timestamp']);
-                final tb = _toDateTime(b.data()['timestamp']);
-                if (ta == null && tb == null) return 0;
-                if (ta == null) return 1;
-                if (tb == null) return -1;
-                if (logTs == null) return tb.compareTo(ta);
-                final da = ta.difference(logTs).inSeconds.abs();
-                final db = tb.difference(logTs).inSeconds.abs();
-                return da.compareTo(db);
-              });
-
-              for (final d in docs) {
-                final data = d.data();
-                final coords = _extractLatLng(data);
-                if (coords == null) continue;
-
-                final ts = _toDateTime(data['timestamp']);
-                if (logTs != null && ts != null) {
-                  final diff = ts.difference(logTs).inSeconds.abs();
-                  if (diff > 4 * 60 * 60) continue;
-                }
-
-                _locationData = {...data, 'id': d.id};
-                break;
-              }
-            } catch (e) {
-              debugPrint('   ❌ $coll/$field: $e');
-            }
-          }
-        }
-
-        if (_locationData == null && empEmails.isNotEmpty) {
-          for (final email in empEmails) {
-            try {
-              final snap = await FirebaseFirestore.instance
-                  .collection(coll)
-                  .where('email', isEqualTo: email)
-                  .limit(50)
-                  .get();
-              for (final d in snap.docs) {
-                final coords = _extractLatLng(d.data());
-                if (coords != null) {
-                  _locationData = {...d.data(), 'id': d.id};
-                  break;
-                }
-              }
-            } catch (_) {}
-            if (_locationData != null) break;
-          }
-        }
-      }
-    }
-
-    if (_clientInfoOverride == null && _locationData != null) {
-      _clientInfoOverride = _extractClientInfo(_locationData!);
-    }
-
-    if (mounted) setState(() => _loading = false);
+    if (_safe) _safeSetState(() => _loading = false);
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -646,25 +489,15 @@ class _AdminAttendanceVerificationPageState
   }
 
   String _formatEmployeeId() {
-    final emp = _employeeData;
-    if (emp != null) {
-      final actualId = _s(emp['employeeId'], '');
-      if (actualId.isNotEmpty &&
-          actualId != 'Not recorded' &&
-          !actualId.contains(':')) {
-        return actualId.toUpperCase();
-      }
-      final docId = _s(emp['id'], '');
-      if (docId.isNotEmpty) {
-        final short = docId.length > 6 ? docId.substring(0, 6) : docId;
-        return 'EMP-${short.toUpperCase()}';
-      }
+    if (_employeeData != null) {
+      final actualId = _s(_employeeData!['employeeId'], '');
+      if (actualId.isNotEmpty && actualId != 'Not recorded' && !actualId.contains(':')) return actualId.toUpperCase();
+      final docId = _s(_employeeData!['id'], '');
+      if (docId.isNotEmpty) return 'EMP-${docId.substring(0, docId.length > 6 ? 6 : docId.length).toUpperCase()}';
     }
     final raw = widget.logId;
     if (raw.isEmpty) return 'EMP-0000';
-    final short =
-    raw.length > 6 ? raw.substring(0, 6).toUpperCase() : raw.toUpperCase();
-    return 'EMP-$short';
+    return 'EMP-${raw.substring(0, raw.length > 6 ? 6 : raw.length).toUpperCase()}';
   }
 
   String _getDepartment() {
@@ -673,17 +506,12 @@ class _AdminAttendanceVerificationPageState
       if (d.isNotEmpty && d != 'Not recorded') return d;
     }
     final fromLog = _s(widget.logData['department'], '');
-    if (fromLog.isNotEmpty && fromLog != 'Not recorded') return fromLog;
-    return 'Not recorded';
+    return (fromLog.isNotEmpty && fromLog != 'Not recorded') ? fromLog : 'Not recorded';
   }
 
   String _getManager() {
     if (_employeeData != null) {
-      final m = _s(
-          _employeeData!['manager'] ??
-              _employeeData!['managerName'] ??
-              _employeeData!['supervisor'],
-          '');
+      final m = _s(_employeeData!['manager'] ?? _employeeData!['managerName'] ?? _employeeData!['supervisor'], '');
       if (m.isNotEmpty && m != 'Not recorded') return m;
     }
     return 'Not assigned';
@@ -705,853 +533,92 @@ class _AdminAttendanceVerificationPageState
     return _s(widget.logData['photoUrl'], '');
   }
 
-  ll.LatLng? _getCoords() {
-    final fromLog = _extractLatLng(widget.logData);
-    if (fromLog != null) return fromLog;
-    if (_locationData != null) {
-      return _extractLatLng(_locationData!);
-    }
-    return null;
-  }
-
-  String _getCoordsStr() {
-    final coords = _getCoords();
-    if (coords == null) return 'Not recorded';
-    final latStr = coords.latitude.toStringAsFixed(4);
-    final lngStr = coords.longitude.toStringAsFixed(4);
-    final latDir = coords.latitude >= 0 ? 'N' : 'S';
-    final lngDir = coords.longitude >= 0 ? 'E' : 'W';
-    return '$latStr° $latDir, $lngStr° $lngDir';
-  }
-
-  String _getLocationName() {
-    if (_locationData != null) {
-      final n = _s(
-          _locationData!['locationName'] ??
-              _locationData!['location'] ??
-              _locationData!['name'],
-          '');
-      if (n.isNotEmpty && n != 'Not recorded') return n;
-    }
-    return _s(
-        widget.logData['locationName'] ?? widget.logData['location'], '');
-  }
-
   String _getDeviceInfo() {
-    if (_deviceInfoOverride != null &&
-        _deviceInfoOverride!.isNotEmpty &&
-        _deviceInfoOverride != '—') {
-      return _deviceInfoOverride!;
-    }
+    if (_deviceInfoOverride != null && _deviceInfoOverride!.isNotEmpty && _deviceInfoOverride != '—') return _deviceInfoOverride!;
     return 'Not recorded';
   }
 
   String _getClientInfo() {
-    if (_clientInfoOverride != null && _clientInfoOverride!.isNotEmpty) {
-      return _clientInfoOverride!;
-    }
+    if (_clientInfoOverride != null && _clientInfoOverride!.isNotEmpty) return _clientInfoOverride!;
     return 'Not specified';
   }
 
   // ══════════════════════════════════════════════════════════════
-  // 🆕 MANUAL CLOCK OUT — Admin creates OUT log for employee
+  // ACTIONS (Approve & Flag)
   // ══════════════════════════════════════════════════════════════
-  Future<void> _showManualClockOutDialog() async {
-    if (_isDemo) {
-      _demoBlock();
-      return;
-    }
-    if (_processingAction) return;
-
-    final log = widget.logData;
-    final empDocId =
-    (_employeeData?['id'] ?? log['employee_id'] ?? log['employeeId'] ?? '')
-        .toString();
-    final empName = (_employeeData?['name'] ??
-        log['employee_name'] ??
-        log['name'] ??
-        'Employee')
-        .toString();
-
-    if (empDocId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Cannot clock out: employee ID missing.'),
-          backgroundColor: tc.red,
-        ),
-      );
-      return;
-    }
-
-    // Default clock-out time = now
-    DateTime clockOutAt = DateTime.now();
-    final reasonCtrl = TextEditingController();
-    bool submitting = false;
-    String? errMsg;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: !_processingAction,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) {
-          return AlertDialog(
-            backgroundColor: tc.card,
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            title: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: tc.red.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(Icons.logout_rounded, color: tc.red, size: 20),
-                ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    'Manual Clock Out',
-                    style:
-                    TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: tc.orange.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(8),
-                      border:
-                      Border.all(color: tc.orange.withValues(alpha: 0.3)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Employee',
-                          style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: tc.muted,
-                              letterSpacing: 0.4),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(empName,
-                            style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: tc.text)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'This will create a new CLOCK OUT record for this '
-                        'employee. Use this when the employee forgot to '
-                        'clock out.',
-                    style: TextStyle(fontSize: 12, color: tc.muted, height: 1.4),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Clock-out time',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: tc.text),
-                  ),
-                  const SizedBox(height: 6),
-                  InkWell(
-                    onTap: submitting
-                        ? null
-                        : () async {
-                      final picked = await showTimePicker(
-                        context: ctx,
-                        initialTime: TimeOfDay.fromDateTime(clockOutAt),
-                      );
-                      if (picked != null) {
-                        setDlg(() {
-                          clockOutAt = DateTime(
-                            clockOutAt.year,
-                            clockOutAt.month,
-                            clockOutAt.day,
-                            picked.hour,
-                            picked.minute,
-                          );
-                        });
-                      }
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: tc.surface,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: tc.border),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.access_time_rounded,
-                              size: 18, color: tc.orange),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              DateFormat('MMM d, yyyy • hh:mm a')
-                                  .format(clockOutAt),
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: tc.text),
-                            ),
-                          ),
-                          Icon(Icons.edit_rounded,
-                              size: 14, color: tc.muted),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Reason (required)',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: tc.text),
-                  ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: reasonCtrl,
-                    maxLines: 3,
-                    maxLength: 200,
-                    enabled: !submitting,
-                    onChanged: (_) {
-                      if (errMsg != null) setDlg(() => errMsg = null);
-                    },
-                    style: TextStyle(color: tc.text, fontSize: 13),
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Employee confirmed forgot to clock out',
-                      hintStyle:
-                      TextStyle(color: tc.muted, fontSize: 12),
-                      isDense: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                  if (errMsg != null) ...[
-                    const SizedBox(height: 8),
-                    Text(errMsg!,
-                        style: TextStyle(
-                            color: tc.red,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600)),
-                  ],
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: submitting ? null : () => Navigator.pop(ctx, false),
-                child: Text('Cancel',
-                    style: TextStyle(color: tc.muted)),
-              ),
-              ElevatedButton.icon(
-                onPressed: submitting
-                    ? null
-                    : () async {
-                  final reason = reasonCtrl.text.trim();
-                  if (reason.length < 10) {
-                    setDlg(() => errMsg =
-                    'Please provide a clear reason (min 10 chars).');
-                    return;
-                  }
-                  setDlg(() {
-                    submitting = true;
-                    errMsg = null;
-                  });
-                  final ok = await _performManualClockOut(
-                    employeeDocId: empDocId,
-                    employeeName: empName,
-                    clockOutAt: clockOutAt,
-                    reason: reason,
-                  );
-                  if (!ctx.mounted) return;
-                  Navigator.pop(ctx, ok);
-                },
-                icon: submitting
-                    ? SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
-                )
-                    : const Icon(Icons.check_rounded, size: 16),
-                label: Text(submitting ? 'Saving…' : 'Clock Out'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: tc.red,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-
-    reasonCtrl.dispose();
-
-    if (confirmed == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('✅ Clock-out recorded successfully.'),
-          backgroundColor: tc.green,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
-
-  Future<bool> _performManualClockOut({
-    required String employeeDocId,
-    required String employeeName,
-    required DateTime clockOutAt,
-    required String reason,
-  }) async {
-    if (_isDemo) return false;
-    if (_processingAction) return false;
-    setState(() => _processingAction = true);
+  Future<void> _approveLog() async {
+    if (_isDemo) return _demoBlock();
+    _safeSetState(() => _processingAction = true);
     try {
-      final now = DateTime.now();
-      final adminId = _adminIdentifier;
-      final fs = FirebaseFirestore.instance;
+      await FirebaseFirestore.instance.collection('attendance_logs').doc(widget.logId).set({
+        'reviewStatus': 'approved',
+        'reviewedBy': _actorEmail,
+        'reviewedByUid': _actorUid,
+        'reviewedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-      final originalEmpId = (widget.logData['employee_id'] ??
-          widget.logData['employeeId'] ??
-          employeeDocId)
-          .toString();
-
-      final logRef = fs.collection('attendance_logs').doc();
-      final overrideRef = fs.collection('attendance_overrides').doc();
-
-      // 🔒 ATOMIC TRANSACTION: Save to logs AND overrides
-      await fs.runTransaction((txn) async {
-        // 1. Save the Audit Override Record
-        txn.set(overrideRef, {
-          'overrideId': overrideRef.id,
-          'attendanceLogId': logRef.id,
-          'employeeId': originalEmpId,
-          'employeeName': employeeName,
-          'employeeDocId': employeeDocId,
-          'date': DateFormat('yyyy-MM-dd').format(clockOutAt),
-          'action': 'CREATE',
-          'field': 'type',
-          'oldValue': null,
-          'newValue': 'OUT',
-          'reason': reason,
-          'performedBy': adminId,
-          'performedByName': _adminName,
-          'performedByEmail': adminId,
-          'performedByRole': _adminRole,
-          'performedAt': FieldValue.serverTimestamp(),
-          'device': 'Admin Web Portal',
-          'platform': 'web',
-          'acknowledgedByEmployee': false,
-        });
-
-        // 2. Save the Attendance Log
-        txn.set(logRef, {
-          'employee_id': originalEmpId,
-          'employeeId': originalEmpId,
-          'employeeDocId': employeeDocId,
-          'employee_name': employeeName,
-          'employeeName': employeeName,
-          'type': 'OUT',
-          'action': 'Manual Clock Out (Admin)',
-          'details': 'Admin manually clocked out employee',
-          'date': DateFormat('yyyy-MM-dd').format(clockOutAt),
-          'time': DateFormat('HH:mm:ss').format(clockOutAt),
-          'timestamp': Timestamp.fromDate(clockOutAt),
-          'status': 'approved',
-          'payrollStatus': 'Pending',
-          'source': 'admin_manual',
-          'original_log_id': widget.logId,
-          // 🆕 OVERRIDE METADATA
-          'isOverridden': true,
-          'overrideId': overrideRef.id,
-          'overriddenBy': adminId,
-          'overriddenByName': _adminName,
-          'overriddenByRole': _adminRole,
-          'overrideReason': reason,
-          'overrideAt': FieldValue.serverTimestamp(),
-        });
-      });
-
-      // Audit trail (Legacy)
-      try {
-        await fs.collection('admin_audit_logs').add({
-          'action': 'manual_clock_out',
-          'admin': adminId,
-          'adminName': _adminName,
-          'employeeId': employeeDocId,
-          'employeeName': employeeName,
-          'newLogId': logRef.id,
-          'overrideId': overrideRef.id,
-          'originalLogId': widget.logId,
-          'clockOutAt': Timestamp.fromDate(clockOutAt),
-          'reason': reason,
-          'timestamp': FieldValue.serverTimestamp(),
-          'platform': 'admin_panel',
-        });
-      } catch (e) {
-        debugPrint('⚠️ Audit log failed: $e');
-      }
-
-      return true;
+      if (!_safe) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance approved.'), backgroundColor: Colors.green));
+      widget.onBack?.call();
     } catch (e) {
-      debugPrint('❌ Manual clock out failed: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e'), backgroundColor: tc.red),
-        );
-      }
-      return false;
+      if (!_safe) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e'), backgroundColor: tc.red));
     } finally {
-      if (mounted) setState(() => _processingAction = false);
+      if (_safe) _safeSetState(() => _processingAction = false);
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // 🆕 MODIFY LOG — Admin edits existing log (add/fix clock-out)
-  // ══════════════════════════════════════════════════════════════
-  Future<void> _showModifyLogDialog() async {
-    if (_isDemo) {
-      _demoBlock();
-      return;
-    }
-    if (_processingAction) return;
+  Future<void> _flagLog() async {
+    if (_isDemo) return _demoBlock();
 
-    final logTs = _toDateTime(widget.logData['timestamp']) ?? DateTime.now();
     final reasonCtrl = TextEditingController();
-
-    DateTime modifiedTime = logTs;
-    String modifiedType =
-    (widget.logData['type'] ?? 'IN').toString().toUpperCase();
-    if (modifiedType != 'IN' && modifiedType != 'OUT') {
-      modifiedType = 'IN';
-    }
-
-    bool submitting = false;
-    String? errMsg;
-
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierDismissible: true,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) {
-          return AlertDialog(
-            backgroundColor: tc.card,
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            title: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: tc.orange.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(Icons.edit_note_rounded,
-                      color: tc.orange, size: 20),
-                ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    'Modify Attendance Log',
-                    style:
-                    TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: tc.surface,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: tc.border),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.receipt_long_rounded,
-                            size: 14, color: tc.muted),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            'Log ID: ${widget.logId}',
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontFamily: 'monospace',
-                                color: tc.muted),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Type',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: tc.text),
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildTypeChip(
-                          label: 'CLOCK IN',
-                          selected: modifiedType == 'IN',
-                          color: tc.green,
-                          onTap: submitting
-                              ? null
-                              : () => setDlg(() => modifiedType = 'IN'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildTypeChip(
-                          label: 'CLOCK OUT',
-                          selected: modifiedType == 'OUT',
-                          color: tc.red,
-                          onTap: submitting
-                              ? null
-                              : () => setDlg(() => modifiedType = 'OUT'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Timestamp',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: tc.text),
-                  ),
-                  const SizedBox(height: 6),
-                  InkWell(
-                    onTap: submitting
-                        ? null
-                        : () async {
-                      final date = await showDatePicker(
-                        context: ctx,
-                        initialDate: modifiedTime,
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime.now().add(const Duration(days: 1)),
-                      );
-                      if (date == null || !ctx.mounted) return;
-                      final time = await showTimePicker(
-                        context: ctx,
-                        initialTime:
-                        TimeOfDay.fromDateTime(modifiedTime),
-                      );
-                      if (time == null) return;
-                      setDlg(() {
-                        modifiedTime = DateTime(
-                          date.year,
-                          date.month,
-                          date.day,
-                          time.hour,
-                          time.minute,
-                        );
-                      });
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: tc.surface,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: tc.border),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.event_rounded,
-                              size: 18, color: tc.orange),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              DateFormat('MMM d, yyyy • hh:mm a')
-                                  .format(modifiedTime),
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: tc.text),
-                            ),
-                          ),
-                          Icon(Icons.edit_rounded,
-                              size: 14, color: tc.muted),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Reason for modification (required)',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: tc.text),
-                  ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: reasonCtrl,
-                    maxLines: 3,
-                    maxLength: 200,
-                    enabled: !submitting,
-                    onChanged: (_) {
-                      if (errMsg != null) setDlg(() => errMsg = null);
-                    },
-                    style: TextStyle(color: tc.text, fontSize: 13),
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Correct clock out time — system error',
-                      hintStyle:
-                      TextStyle(color: tc.muted, fontSize: 12),
-                      isDense: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                  if (errMsg != null) ...[
-                    const SizedBox(height: 8),
-                    Text(errMsg!,
-                        style: TextStyle(
-                            color: tc.red,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600)),
-                  ],
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: submitting ? null : () => Navigator.pop(ctx, false),
-                child: Text('Cancel',
-                    style: TextStyle(color: tc.muted)),
-              ),
-              ElevatedButton.icon(
-                onPressed: submitting
-                    ? null
-                    : () async {
-                  final reason = reasonCtrl.text.trim();
-                  if (reason.length < 10) {
-                    setDlg(() => errMsg =
-                    'Please provide a clear reason (min 10 chars).');
-                    return;
-                  }
-                  setDlg(() {
-                    submitting = true;
-                    errMsg = null;
-                  });
-                  final ok = await _performModifyLog(
-                    newTimestamp: modifiedTime,
-                    newType: modifiedType,
-                    reason: reason,
-                  );
-                  if (!ctx.mounted) return;
-                  Navigator.pop(ctx, ok);
-                },
-                icon: submitting
-                    ? SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
-                )
-                    : const Icon(Icons.save_rounded, size: 16),
-                label: Text(submitting ? 'Saving…' : 'Save Changes'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: tc.orange,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-
-    reasonCtrl.dispose();
-
-    if (confirmed == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('✅ Log modified successfully.'),
-          backgroundColor: tc.green,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      // Optionally reload data so UI reflects changes
-      // _fetchRelatedData();
-    }
-  }
-
-  Widget _buildTypeChip({
-    required String label,
-    required bool selected,
-    required Color color,
-    required VoidCallback? onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? color.withValues(alpha: 0.12) : tc.surface,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: selected ? color : tc.border,
-            width: selected ? 1.6 : 1,
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+      builder: (_) => AlertDialog(
+        backgroundColor: tc.card,
+        title: Text('Flag for Review', style: TextStyle(color: tc.text)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              selected
-                  ? Icons.check_circle_rounded
-                  : Icons.radio_button_unchecked_rounded,
-              size: 14,
-              color: selected ? color : tc.muted,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: selected ? color : tc.muted,
-                letterSpacing: 0.3,
-              ),
+            TextField(
+              controller: reasonCtrl,
+              maxLines: 3,
+              style: TextStyle(color: tc.text),
+              decoration: InputDecoration(labelText: 'Reason', labelStyle: TextStyle(color: tc.muted), border: const OutlineInputBorder()),
             ),
           ],
         ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel', style: TextStyle(color: tc.muted))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: tc.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Flag'),
+          ),
+        ],
       ),
     );
-  }
 
-  Future<bool> _performModifyLog({
-    required DateTime newTimestamp,
-    required String newType,
-    required String reason,
-  }) async {
-    if (_isDemo) return false;
-    if (_processingAction) return false;
-    setState(() => _processingAction = true);
+    if (confirmed != true) return;
+
+    _safeSetState(() => _processingAction = true);
     try {
-      final adminId = _adminIdentifier;
-      final fs = FirebaseFirestore.instance;
-      final beforeSnapshot = Map<String, dynamic>.from(widget.logData);
+      await FirebaseFirestore.instance.collection('attendance_logs').doc(widget.logId).set({
+        'reviewStatus': 'flagged',
+        'reviewReason': reasonCtrl.text.trim(),
+        'reviewedBy': _actorEmail,
+        'reviewedByUid': _actorUid,
+        'reviewedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-      final empId = (widget.logData['employee_id'] ?? widget.logData['employeeId'] ?? '').toString();
-      final empName = _s(widget.logData['employee_name'] ?? widget.logData['name'], 'Employee');
-      final empDocId = _s(_employeeData?['id'] ?? '', '');
-
-      final logRef = fs.collection('attendance_logs').doc(widget.logId);
-      final overrideRef = fs.collection('attendance_overrides').doc();
-
-      await fs.runTransaction((txn) async {
-        // 1. Save Override Audit
-        txn.set(overrideRef, {
-          'overrideId': overrideRef.id,
-          'attendanceLogId': widget.logId,
-          'employeeId': empId,
-          'employeeName': empName,
-          'employeeDocId': empDocId,
-          'date': DateFormat('yyyy-MM-dd').format(newTimestamp),
-          'action': 'UPDATE',
-          'field': 'timestamp/type',
-          'oldValue': '${beforeSnapshot['type']} @ ${beforeSnapshot['timestamp']}',
-          'newValue': '$newType @ $newTimestamp',
-          'reason': reason,
-          'performedBy': adminId,
-          'performedByName': _adminName,
-          'performedByEmail': adminId,
-          'performedByRole': _adminRole,
-          'performedAt': FieldValue.serverTimestamp(),
-          'device': 'Admin Web Portal',
-          'platform': 'web',
-          'acknowledgedByEmployee': false,
-        });
-
-        // 2. Update Attendance Log
-        txn.update(logRef, {
-          'timestamp': Timestamp.fromDate(newTimestamp),
-          'date': DateFormat('yyyy-MM-dd').format(newTimestamp),
-          'time': DateFormat('HH:mm:ss').format(newTimestamp),
-          'type': newType,
-          'modified_by_admin': adminId,
-          'modification_reason': reason,
-          'modified_at': FieldValue.serverTimestamp(),
-          // 🆕 OVERRIDE METADATA
-          'isOverridden': true,
-          'overrideId': overrideRef.id,
-          'overriddenBy': adminId,
-          'overriddenByName': _adminName,
-          'overriddenByRole': _adminRole,
-          'overrideReason': reason,
-          'overrideAt': FieldValue.serverTimestamp(),
-          'previous_value': {
-            'timestamp': beforeSnapshot['timestamp'],
-            'type': beforeSnapshot['type'],
-          },
-        });
-      });
-
-      // Legacy Audit
-      try {
-        await fs.collection('admin_audit_logs').add({
-          'action': 'modify_attendance_log',
-          'admin': adminId,
-          'adminName': _adminName,
-          'logId': widget.logId,
-          'overrideId': overrideRef.id,
-          'employeeId': empId,
-          'reason': reason,
-          'timestamp': FieldValue.serverTimestamp(),
-          'platform': 'admin_panel',
-        });
-      } catch (e) {
-        debugPrint('⚠️ Audit log failed: $e');
-      }
-
-      return true;
+      if (!_safe) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance flagged for review.'), backgroundColor: Colors.orange));
+      widget.onBack?.call();
     } catch (e) {
-      debugPrint('❌ Modify log failed: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e'), backgroundColor: tc.red),
-        );
-      }
-      return false;
+      if (!_safe) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e'), backgroundColor: tc.red));
     } finally {
-      if (mounted) setState(() => _processingAction = false);
+      if (_safe) _safeSetState(() => _processingAction = false);
     }
   }
 
@@ -1560,33 +627,20 @@ class _AdminAttendanceVerificationPageState
   // ══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    final name = _s(
-      _employeeData?['name'] ??
-          widget.logData['employee_name'] ??
-          widget.logData['name'],
-      'System User',
-    );
+    final name = _s(_employeeData?['name'] ?? widget.logData['employees_name'] ?? widget.logData['employee_name'] ?? widget.logData['name'], 'System User');
     final role = _getRole();
     final department = _getDepartment();
     final manager = _getManager();
     final photoUrl = _getPhotoUrl();
     final client = _getClientInfo();
     final deviceInfo = _getDeviceInfo();
-    final locationName = _getLocationName();
-    final coordsStr = _getCoordsStr();
-    final verificationNote = _s(
-      widget.logData['verificationNote'],
-      'Off-site Client Meeting Proof',
-    );
+    final verificationNote = _s(widget.logData['verificationNote'], 'Off-site Client Meeting Proof');
     final employeeId = _formatEmployeeId();
-
-    final ts = _toDateTime(widget.logData['timestamp']);
+    final ts = _toDateTime(widget.logData['timestamp'] ?? widget.logData['date'] ?? widget.logData['createdAt'] ?? widget.logData['clockInTime']);
     final dateStr = _fmtFullDate(ts);
 
     final rawHistory = widget.logData['history'];
-    final List<Map<String, dynamic>> historyList = rawHistory is List
-        ? rawHistory.whereType<Map<String, dynamic>>().toList()
-        : <Map<String, dynamic>>[];
+    final List<Map<String, dynamic>> historyList = rawHistory is List ? rawHistory.whereType<Map<String, dynamic>>().toList() : <Map<String, dynamic>>[];
     final timeline = [widget.logData, ...historyList];
 
     return Container(
@@ -1598,22 +652,15 @@ class _AdminAttendanceVerificationPageState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 🎭 DEMO BANNER
               if (_isDemo) ...[
                 _buildDemoBanner(),
                 const SizedBox(height: 16),
               ],
-
-              // 🆕 OVERRIDE BANNER
-              if (widget.logData['isOverridden'] == true) ...[
+              if (widget.logData['isOverridden'] == true || widget.logData['overriddenBy'] != null || widget.logData['manualEntry'] == true) ...[
                 Container(
                   padding: const EdgeInsets.all(12),
                   margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF7ED),
-                    border: Border.all(color: const Color(0xFFF59E0B)),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                  decoration: BoxDecoration(color: const Color(0xFFFFF7ED), border: Border.all(color: const Color(0xFFF59E0B)), borderRadius: BorderRadius.circular(8)),
                   child: Row(
                     children: [
                       const Icon(Icons.edit_note_rounded, color: Color(0xFFF59E0B)),
@@ -1622,8 +669,14 @@ class _AdminAttendanceVerificationPageState
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Edited by: ${widget.logData['overriddenByName'] ?? 'HR'}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF92400E))),
-                            Text('Reason: ${widget.logData['overrideReason'] ?? 'No reason provided'}', style: const TextStyle(color: Color(0xFFB45309))),
+                            Text(
+                                'Edited by: ${widget.logData['overriddenByEmail'] ?? widget.logData['overriddenByName'] ?? widget.logData['overriddenBy'] ?? 'Admin'}',
+                                style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF92400E))
+                            ),
+                            Text(
+                                'Reason: ${widget.logData['overrideReason'] ?? widget.logData['manualNote'] ?? 'No reason provided'}',
+                                style: const TextStyle(color: Color(0xFFB45309))
+                            ),
                           ],
                         ),
                       ),
@@ -1631,7 +684,6 @@ class _AdminAttendanceVerificationPageState
                   ),
                 ),
               ],
-
               _buildBreadcrumb(tc),
               const SizedBox(height: 8),
               _buildPageHeader(context, tc),
@@ -1641,15 +693,9 @@ class _AdminAttendanceVerificationPageState
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Row(
                     children: [
-                      SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: tc.orange),
-                      ),
+                      SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: tc.orange)),
                       const SizedBox(width: 10),
-                      Text('Fetching employee details...',
-                          style: TextStyle(fontSize: 12, color: tc.muted)),
+                      Text('Fetching employee details...', style: TextStyle(fontSize: 12, color: tc.muted)),
                     ],
                   ),
                 ),
@@ -1660,30 +706,9 @@ class _AdminAttendanceVerificationPageState
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _buildLeftColumn(
-                        tc,
-                        name: name,
-                        role: role,
-                        department: department,
-                        manager: manager,
-                        photoUrl: photoUrl,
-                        employeeId: employeeId,
-                        timeline: timeline,
-                      ),
+                      _buildLeftColumn(tc, name: name, role: role, department: department, manager: manager, photoUrl: photoUrl, employeeId: employeeId, timeline: timeline),
                       const SizedBox(height: 20),
-                      _buildVerificationCard(
-                        context,
-                        tc,
-                        client: client,
-                        deviceInfo: deviceInfo,
-                        deviceStatus: _deviceStatus,
-                        registeredDevice: _registeredDeviceValue,
-                        actualDevice: _actualDeviceValue,
-                        locationName: locationName,
-                        coordsStr: coordsStr,
-                        verificationNote: verificationNote,
-                        dateStr: dateStr,
-                      ),
+                      _buildVerificationCard(context, tc, client: client, deviceInfo: deviceInfo, deviceStatus: _deviceStatus, registeredDevice: _registeredDeviceValue, actualDevice: _actualDeviceValue, verificationNote: verificationNote, dateStr: dateStr),
                     ],
                   );
                 }
@@ -1691,35 +716,9 @@ class _AdminAttendanceVerificationPageState
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SizedBox(
-                      width: 420,
-                      child: _buildLeftColumn(
-                        tc,
-                        name: name,
-                        role: role,
-                        department: department,
-                        manager: manager,
-                        photoUrl: photoUrl,
-                        employeeId: employeeId,
-                        timeline: timeline,
-                      ),
-                    ),
+                    SizedBox(width: 420, child: _buildLeftColumn(tc, name: name, role: role, department: department, manager: manager, photoUrl: photoUrl, employeeId: employeeId, timeline: timeline)),
                     const SizedBox(width: 24),
-                    Expanded(
-                      child: _buildVerificationCard(
-                        context,
-                        tc,
-                        client: client,
-                        deviceInfo: deviceInfo,
-                        deviceStatus: _deviceStatus,
-                        registeredDevice: _registeredDeviceValue,
-                        actualDevice: _actualDeviceValue,
-                        locationName: locationName,
-                        coordsStr: coordsStr,
-                        verificationNote: verificationNote,
-                        dateStr: dateStr,
-                      ),
-                    ),
+                    Expanded(child: _buildVerificationCard(context, tc, client: client, deviceInfo: deviceInfo, deviceStatus: _deviceStatus, registeredDevice: _registeredDeviceValue, actualDevice: _actualDeviceValue, verificationNote: verificationNote, dateStr: dateStr)),
                   ],
                 );
               }),
@@ -1730,15 +729,10 @@ class _AdminAttendanceVerificationPageState
     );
   }
 
-  // 🎭 DEMO BANNER
   Widget _buildDemoBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: tc.orange.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: tc.orange.withValues(alpha: 0.45)),
-      ),
+      decoration: BoxDecoration(color: tc.orange.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(10), border: Border.all(color: tc.orange.withValues(alpha: 0.45))),
       child: Row(
         children: [
           Icon(Icons.science_rounded, color: tc.orange, size: 20),
@@ -1747,24 +741,8 @@ class _AdminAttendanceVerificationPageState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Demo Mode Active',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: tc.orange,
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Showing sample verification data. Approve, Clock Out, '
-                      'Modify, and Flag actions are disabled.',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: tc.textMuted,
-                    height: 1.35,
-                  ),
-                ),
+                Text('Demo Mode Active', style: TextStyle(fontWeight: FontWeight.w800, color: tc.orange, fontSize: 13)),
+                Text('Showing sample verification data. Actions are disabled.', style: TextStyle(fontSize: 11, color: tc.textMuted)),
               ],
             ),
           ),
@@ -1773,9 +751,6 @@ class _AdminAttendanceVerificationPageState
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // BREADCRUMB
-  // ══════════════════════════════════════════════════════════════
   Widget _buildBreadcrumb(AdminColors tc) {
     if (widget.onBack == null) return const SizedBox.shrink();
     return InkWell(
@@ -1788,23 +763,13 @@ class _AdminAttendanceVerificationPageState
           children: [
             Icon(Icons.arrow_back_rounded, color: tc.orange, size: 18),
             const SizedBox(width: 6),
-            Text(
-              'Back to Attendance Logs',
-              style: TextStyle(
-                color: tc.orange,
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
-              ),
-            ),
+            Text('Back to Attendance Logs', style: TextStyle(color: tc.orange, fontWeight: FontWeight.w600, fontSize: 13)),
           ],
         ),
       ),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // PAGE HEADER — v1.3 with Manual Clock Out + Modify Log
-  // ══════════════════════════════════════════════════════════════
   Widget _buildPageHeader(BuildContext context, AdminColors tc) {
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
@@ -1813,216 +778,72 @@ class _AdminAttendanceVerificationPageState
       final title = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Attendance Verification',
-            style: TextStyle(
-              fontSize: r.responsive<double>(xs: 22, sm: 24, md: 26, lg: 28),
-              fontWeight: FontWeight.w700,
-              color: tc.text,
-              letterSpacing: -0.5,
-            ),
-          ),
+          Text('Attendance Verification', style: TextStyle(fontSize: r.responsive<double>(xs: 22, sm: 24, md: 26, lg: 28), fontWeight: FontWeight.w700, color: tc.text, letterSpacing: -0.5)),
           const SizedBox(height: 4),
-          Text(
-            'Off-site Client Meeting Proof',
-            style: TextStyle(fontSize: 13, color: tc.muted),
-          ),
+          Text('Off-site Client Meeting Proof', style: TextStyle(fontSize: 13, color: tc.muted)),
         ],
       );
 
-      // ── ACTION BUTTONS ──
       final approveBtn = _headerButton(
         icon: _isDemo ? Icons.lock_outline_rounded : Icons.done_all_rounded,
         label: _isDemo ? 'Approve (Demo)' : 'Approve',
         color: _isDemo ? tc.border : tc.orange,
         fg: _isDemo ? tc.muted : Colors.white,
-        onTap: _isDemo
-            ? _demoBlock
-            : () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Marked as approved.'),
-              backgroundColor: tc.green,
-            ),
-          );
-        },
+        onTap: _isDemo ? _demoBlock : _approveLog,
       );
 
-      // 🆕 MANUAL CLOCK OUT
-      final clockOutBtn = _headerButton(
-        icon: _isDemo ? Icons.lock_outline_rounded : Icons.logout_rounded,
-        label: _isDemo ? 'Clock Out (Demo)' : 'Manual Clock Out',
-        color: _isDemo ? tc.border : tc.red,
-        fg: _isDemo ? tc.muted : Colors.white,
-        onTap: _isDemo ? _demoBlock : _showManualClockOutDialog,
-      );
-
-      // 🆕 MODIFY LOG
-      final modifyBtn = _headerButton(
-        icon: _isDemo ? Icons.lock_outline_rounded : Icons.edit_note_rounded,
-        label: _isDemo ? 'Modify (Demo)' : 'Modify Log',
-        color: _isDemo ? tc.border : tc.blue,
-        fg: _isDemo ? tc.muted : Colors.white,
-        onTap: _isDemo ? _demoBlock : _showModifyLogDialog,
-      );
-
-      // Flag button (existing behaviour)
       final flagBtn = _headerButton(
         icon: _isDemo ? Icons.lock_outline_rounded : Icons.flag_outlined,
         label: _isDemo ? 'Flag (Demo)' : 'Flag',
         color: _isDemo ? tc.border : tc.red.withValues(alpha: 0.85),
         fg: _isDemo ? tc.muted : Colors.white,
         outlined: true,
-        onTap: _isDemo
-            ? _demoBlock
-            : () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Flagged for review.'),
-              backgroundColor: tc.red,
-            ),
-          );
-        },
+        onTap: _isDemo ? _demoBlock : _flagLog,
       );
 
       final actions = Wrap(
         spacing: 8,
         runSpacing: 8,
         alignment: narrow ? WrapAlignment.start : WrapAlignment.end,
-        children: [
-          approveBtn,
-          clockOutBtn,
-          modifyBtn,
-          flagBtn,
-        ],
+        children: [approveBtn, flagBtn],
       );
 
-      if (narrow) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            title,
-            const SizedBox(height: 12),
-            actions,
-          ],
-        );
-      }
-
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(child: title),
-          const SizedBox(width: 12),
-          Flexible(child: actions),
-        ],
-      );
+      if (narrow) return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [title, const SizedBox(height: 12), actions]);
+      return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.end, children: [Expanded(child: title), const SizedBox(width: 12), Flexible(child: actions)]);
     });
   }
 
-  Widget _headerButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required Color fg,
-    required VoidCallback onTap,
-    bool outlined = false,
-  }) {
+  Widget _headerButton({required IconData icon, required String label, required Color color, required Color fg, required VoidCallback onTap, bool outlined = false}) {
     if (outlined) {
       return OutlinedButton.icon(
         onPressed: onTap,
         icon: Icon(icon, size: 16),
-        label: Text(
-          label,
-          style: const TextStyle(
-              fontWeight: FontWeight.w700, fontSize: 13),
-        ),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: color,
-          side: BorderSide(color: color, width: 1.4),
-          padding:
-          const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
+        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+        style: OutlinedButton.styleFrom(foregroundColor: color, side: BorderSide(color: color, width: 1.4), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
       );
     }
     return ElevatedButton.icon(
       onPressed: onTap,
       icon: Icon(icon, size: 16),
-      label: Text(
-        label,
-        style:
-        const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-      ),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color,
-        foregroundColor: fg,
-        padding:
-        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        shape:
-        RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        elevation: 0,
-      ),
+      label: Text(label, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+      style: ElevatedButton.styleFrom(backgroundColor: color, foregroundColor: fg, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), elevation: 0),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // LEFT COLUMN
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildLeftColumn(
-      AdminColors tc, {
-        required String name,
-        required String role,
-        required String department,
-        required String manager,
-        required String photoUrl,
-        required String employeeId,
-        required List<Map<String, dynamic>> timeline,
-      }) {
+  Widget _buildLeftColumn(AdminColors tc, {required String name, required String role, required String department, required String manager, required String photoUrl, required String employeeId, required List<Map<String, dynamic>> timeline}) {
     return Column(
       children: [
-        _buildEmployeeCard(
-          tc,
-          name: name,
-          role: role,
-          department: department,
-          manager: manager,
-          photoUrl: photoUrl,
-          employeeId: employeeId,
-        ),
+        _buildEmployeeCard(tc, name: name, role: role, department: department, manager: manager, photoUrl: photoUrl, employeeId: employeeId),
         const SizedBox(height: 20),
         _buildTimelineCard(tc, timeline),
       ],
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // EMPLOYEE CARD
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildEmployeeCard(
-      AdminColors tc, {
-        required String name,
-        required String role,
-        required String department,
-        required String manager,
-        required String photoUrl,
-        required String employeeId,
-      }) {
+  Widget _buildEmployeeCard(AdminColors tc, {required String name, required String role, required String department, required String manager, required String photoUrl, required String employeeId}) {
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: tc.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+      decoration: BoxDecoration(color: tc.card, borderRadius: BorderRadius.circular(16), border: Border.all(color: tc.border), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 12, offset: const Offset(0, 4))]),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2034,39 +855,15 @@ class _AdminAttendanceVerificationPageState
                   clipBehavior: Clip.none,
                   children: [
                     Container(
-                      width: 60,
-                      height: 60,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: tc.orange.withValues(alpha: 0.15),
-                        border: Border.all(color: tc.card, width: 2),
-                      ),
+                      width: 60, height: 60,
+                      decoration: BoxDecoration(shape: BoxShape.circle, color: tc.orange.withValues(alpha: 0.15), border: Border.all(color: tc.card, width: 2)),
                       child: ClipOval(
                         child: photoUrl.isNotEmpty
-                            ? Image.network(
-                          photoUrl,
-                          width: 60,
-                          height: 60,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
-                              _initialsAvatar(tc, name, size: 56),
-                        )
+                            ? Image.network(photoUrl, width: 60, height: 60, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _initialsAvatar(tc, name, size: 56))
                             : _initialsAvatar(tc, name, size: 56),
                       ),
                     ),
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: Container(
-                        width: 14,
-                        height: 14,
-                        decoration: BoxDecoration(
-                          color: tc.green,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: tc.card, width: 2),
-                        ),
-                      ),
-                    ),
+                    Positioned(bottom: 0, right: 0, child: Container(width: 14, height: 14, decoration: BoxDecoration(color: tc.green, shape: BoxShape.circle, border: Border.all(color: tc.card, width: 2)))),
                   ],
                 ),
                 const SizedBox(width: 14),
@@ -2074,22 +871,9 @@ class _AdminAttendanceVerificationPageState
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        name,
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700,
-                          color: tc.text,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                      ),
+                      Text(name, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: tc.text), overflow: TextOverflow.ellipsis, maxLines: 1),
                       const SizedBox(height: 2),
-                      Text(
-                        role,
-                        style: TextStyle(fontSize: 13, color: tc.muted),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      Text(role, style: TextStyle(fontSize: 13, color: tc.muted), overflow: TextOverflow.ellipsis),
                     ],
                   ),
                 ),
@@ -2097,68 +881,21 @@ class _AdminAttendanceVerificationPageState
             );
 
             final badge = Container(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: tc.orange.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                employeeId.toUpperCase(),
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: tc.orangeText,
-                  letterSpacing: 0.3,
-                ),
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: tc.orange.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(20)),
+              child: Text(employeeId.toUpperCase(), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: tc.orangeText, letterSpacing: 0.3)),
             );
 
-            if (narrow) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  avatarAndName,
-                  const SizedBox(height: 12),
-                  badge,
-                ],
-              );
-            }
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(child: avatarAndName),
-                const SizedBox(width: 8),
-                badge,
-              ],
-            );
+            if (narrow) return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [avatarAndName, const SizedBox(height: 12), badge]);
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: avatarAndName), const SizedBox(width: 8), badge]);
           }),
           const SizedBox(height: 20),
           Divider(color: tc.border, height: 1),
           const SizedBox(height: 16),
           LayoutBuilder(builder: (_, c) {
             final narrow = c.maxWidth < 280;
-            if (narrow) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _metaColumn(tc, label: 'DEPARTMENT', value: department),
-                  const SizedBox(height: 12),
-                  _metaColumn(tc, label: 'MANAGER', value: manager),
-                ],
-              );
-            }
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                    child:
-                    _metaColumn(tc, label: 'DEPARTMENT', value: department)),
-                const SizedBox(width: 16),
-                Expanded(
-                    child: _metaColumn(tc, label: 'MANAGER', value: manager)),
-              ],
-            );
+            if (narrow) return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_metaColumn(tc, label: 'DEPARTMENT', value: department), const SizedBox(height: 12), _metaColumn(tc, label: 'MANAGER', value: manager)]);
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: _metaColumn(tc, label: 'DEPARTMENT', value: department)), const SizedBox(width: 16), Expanded(child: _metaColumn(tc, label: 'MANAGER', value: manager))]);
           }),
         ],
       ),
@@ -2168,121 +905,60 @@ class _AdminAttendanceVerificationPageState
   Widget _initialsAvatar(AdminColors tc, String name, {double size = 56}) {
     final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
     return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      color: tc.orange.withValues(alpha: 0.2),
-      child: Text(
-        initial,
-        style: TextStyle(
-          color: tc.orangeText,
-          fontWeight: FontWeight.w700,
-          fontSize: size * 0.4,
-        ),
-      ),
+      width: size, height: size, alignment: Alignment.center, color: tc.orange.withValues(alpha: 0.2),
+      child: Text(initial, style: TextStyle(color: tc.orangeText, fontWeight: FontWeight.w700, fontSize: size * 0.4)),
     );
   }
 
-  Widget _metaColumn(AdminColors tc,
-      {required String label, required String value}) {
+  Widget _metaColumn(AdminColors tc, {required String label, required String value}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            color: tc.muted,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 10, color: tc.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
         const SizedBox(height: 2),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: tc.text,
-          ),
-          overflow: TextOverflow.ellipsis,
-        ),
+        Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: tc.text), overflow: TextOverflow.ellipsis),
       ],
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // TIMELINE CARD
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildTimelineCard(
-      AdminColors tc, List<Map<String, dynamic>> entries) {
+  Widget _buildTimelineCard(AdminColors tc, List<Map<String, dynamic>> entries) {
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: tc.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+      decoration: BoxDecoration(color: tc.card, borderRadius: BorderRadius.circular(16), border: Border.all(color: tc.border), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 12, offset: const Offset(0, 4))]),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Recent Time-In Events',
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: tc.text)),
-              Text('This Week',
-                  style: TextStyle(fontSize: 12, color: tc.muted)),
+              Text('Recent Time-In Events', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: tc.text)),
+              Text('This Week', style: TextStyle(fontSize: 12, color: tc.muted)),
             ],
           ),
           const SizedBox(height: 20),
-          ...List.generate(entries.length, (i) {
-            return _buildTimelineItem(tc, entries[i],
-                isFirst: i == 0, isLast: i == entries.length - 1);
-          }),
+          ...List.generate(entries.length, (i) => _buildTimelineItem(tc, entries[i], isFirst: i == 0, isLast: i == entries.length - 1)),
         ],
       ),
     );
   }
 
-  Widget _buildTimelineItem(AdminColors tc, Map<String, dynamic> entry,
-      {required bool isFirst, required bool isLast}) {
-    final ts = _toDateTime(entry['timestamp']);
+  Widget _buildTimelineItem(AdminColors tc, Map<String, dynamic> entry, {required bool isFirst, required bool isLast}) {
+    final ts = _toDateTime(entry['timestamp'] ?? entry['date'] ?? entry['createdAt'] ?? entry['clockInTime']);
     final dateLabel = _fmtTimelineDate(ts);
     final type = _s(entry['type'], 'LOGIN').toString().toUpperCase();
     final isLogin = type.contains('IN') || type.contains('LOGIN');
-    final verifiedVia =
-    _s(entry['verificationMethod'] ?? entry['client'], 'Verified');
+    final verifiedVia = _s(entry['verificationMethod'] ?? entry['client'], 'Verified');
 
-    final statusRaw =
-    _s(entry['status'] ?? entry['verificationStatus'], '').toLowerCase();
-    final isLate = statusRaw == 'late' ||
-        (ts != null && (ts.hour > 9 || (ts.hour == 9 && ts.minute > 15)));
+    final statusRaw = _s(entry['status'] ?? entry['verificationStatus'], '').toLowerCase();
+    final isLate = statusRaw == 'late' || (ts != null && (ts.hour > 9 || (ts.hour == 9 && ts.minute > 15)));
 
     final statusBg = isLate ? tc.pillWarnBg : tc.pillGreenBg;
     final statusTx = isLate ? tc.pillWarnTx : tc.pillGreenTx;
-    final statusLabel =
-    isLate ? 'Late' : (isLogin ? 'On Time' : 'Clocked Out');
+    final statusLabel = isLate ? 'Late' : (isLogin ? 'On Time' : 'Clocked Out');
 
-    final deviceFromEntry = _s(
-        entry['deviceModel'] ??
-            entry['deviceName'] ??
-            entry['device'] ??
-            '',
-        '');
-    final subInfo = deviceFromEntry.isNotEmpty
-        ? deviceFromEntry
-        : _s(entry['locationName'] ?? entry['keyfobSerial'] ?? '', '');
+    final rawDevice = _s(entry['deviceModel'] ?? entry['deviceName'] ?? entry['device'] ?? '', '');
+    final deviceFromEntry = _isSystemAction(rawDevice) ? '' : rawDevice;
+    final subInfo = deviceFromEntry.isNotEmpty ? deviceFromEntry : _s(entry['locationName'] ?? entry['keyfobSerial'] ?? '', '');
 
     return IntrinsicHeight(
       child: Row(
@@ -2292,29 +968,8 @@ class _AdminAttendanceVerificationPageState
             width: 24,
             child: Column(
               children: [
-                Container(
-                  width: isFirst ? 20 : 14,
-                  height: isFirst ? 20 : 14,
-                  margin: EdgeInsets.only(
-                    top: isFirst ? 4 : 7,
-                    left: isFirst ? 2 : 5,
-                    right: isFirst ? 2 : 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color:
-                    isFirst ? tc.orange : tc.blue.withValues(alpha: 0.4),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: tc.card, width: 2),
-                  ),
-                ),
-                if (!isLast)
-                  Expanded(
-                    child: Container(
-                      width: 2,
-                      margin: const EdgeInsets.symmetric(vertical: 4),
-                      color: tc.border,
-                    ),
-                  ),
+                Container(width: isFirst ? 20 : 14, height: isFirst ? 20 : 14, margin: EdgeInsets.only(top: isFirst ? 4 : 7, left: isFirst ? 2 : 5, right: isFirst ? 2 : 5), decoration: BoxDecoration(color: isFirst ? tc.orange : tc.blue.withValues(alpha: 0.4), shape: BoxShape.circle, border: Border.all(color: tc.card, width: 2))),
+                if (!isLast) Expanded(child: Container(width: 2, margin: const EdgeInsets.symmetric(vertical: 4), color: tc.border)),
               ],
             ),
           ),
@@ -2324,74 +979,27 @@ class _AdminAttendanceVerificationPageState
               padding: EdgeInsets.only(bottom: isLast ? 0 : 20),
               child: Container(
                 padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: isFirst
-                      ? tc.orange.withValues(alpha: 0.06)
-                      : tc.surface,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: isFirst
-                        ? tc.orange.withValues(alpha: 0.2)
-                        : tc.border,
-                  ),
-                ),
+                decoration: BoxDecoration(color: isFirst ? tc.orange.withValues(alpha: 0.06) : tc.surface, borderRadius: BorderRadius.circular(10), border: Border.all(color: isFirst ? tc.orange.withValues(alpha: 0.2) : tc.border)),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Text(dateLabel,
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: tc.text)),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: statusBg,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(statusLabel,
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: statusTx)),
-                        ),
+                        Expanded(child: Text(dateLabel, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: tc.text))),
+                        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: statusBg, borderRadius: BorderRadius.circular(4)), child: Text(statusLabel, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: statusTx))),
                       ],
                     ),
                     const SizedBox(height: 6),
                     RichText(
                       text: TextSpan(
                         style: TextStyle(fontSize: 12, color: tc.muted),
-                        children: [
-                          const TextSpan(text: 'Verification: '),
-                          TextSpan(
-                            text: verifiedVia,
-                            style: TextStyle(
-                                fontWeight: FontWeight.w700, color: tc.text),
-                          ),
-                        ],
+                        children: [const TextSpan(text: 'Verification: '), TextSpan(text: verifiedVia, style: TextStyle(fontWeight: FontWeight.w700, color: tc.text))],
                       ),
                     ),
                     if (subInfo.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(Icons.phone_iphone_rounded,
-                              size: 12, color: tc.muted),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(subInfo,
-                                style: TextStyle(
-                                    fontSize: 11, color: tc.muted),
-                                overflow: TextOverflow.ellipsis),
-                          ),
-                        ],
-                      ),
+                      Row(children: [Icon(Icons.phone_iphone_rounded, size: 12, color: tc.muted), const SizedBox(width: 4), Expanded(child: Text(subInfo, style: TextStyle(fontSize: 11, color: tc.muted), overflow: TextOverflow.ellipsis))]),
                     ],
                   ],
                 ),
@@ -2403,36 +1011,10 @@ class _AdminAttendanceVerificationPageState
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // VERIFICATION CARD
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildVerificationCard(
-      BuildContext context,
-      AdminColors tc, {
-        required String client,
-        required String deviceInfo,
-        required String deviceStatus,
-        required String registeredDevice,
-        required String actualDevice,
-        required String locationName,
-        required String coordsStr,
-        required String verificationNote,
-        required String dateStr,
-      }) {
+  Widget _buildVerificationCard(BuildContext context, AdminColors tc, {required String client, required String deviceInfo, required String deviceStatus, required String registeredDevice, required String actualDevice, required String verificationNote, required String dateStr}) {
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: tc.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
+      decoration: BoxDecoration(color: tc.card, borderRadius: BorderRadius.circular(16), border: Border.all(color: tc.border), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 24, offset: const Offset(0, 12))]),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2443,29 +1025,15 @@ class _AdminAttendanceVerificationPageState
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: tc.orange.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(Icons.fact_check_outlined,
-                          size: 20, color: tc.orange),
-                    ),
+                    Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: tc.orange.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)), child: Icon(Icons.fact_check_outlined, size: 20, color: tc.orange)),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Verification Detail',
-                              style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w700,
-                                  color: tc.text)),
+                          Text('Verification Detail', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: tc.text)),
                           const SizedBox(height: 2),
-                          Text(verificationNote,
-                              style:
-                              TextStyle(fontSize: 13, color: tc.muted)),
+                          Text(verificationNote, style: TextStyle(fontSize: 13, color: tc.muted)),
                         ],
                       ),
                     ),
@@ -2474,153 +1042,55 @@ class _AdminAttendanceVerificationPageState
               ),
               const SizedBox(width: 12),
               InkWell(
-                onTap: _isDemo
-                    ? _demoBlock
-                    : () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text('Flagged for review.'),
-                      backgroundColor: tc.red,
-                    ),
-                  );
-                },
+                onTap: _flagLog,
                 borderRadius: BorderRadius.circular(20),
                 child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                        color: (_isDemo ? tc.border : tc.red)
-                            .withValues(alpha: 0.3)),
-                  ),
-                  child: Icon(
-                    _isDemo ? Icons.lock_outline_rounded : Icons.flag_outlined,
-                    size: 18,
-                    color: _isDemo ? tc.muted : tc.red,
-                  ),
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: tc.red.withValues(alpha: 0.3))),
+                  child: Icon(Icons.flag_outlined, size: 18, color: tc.red),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 20),
-          _buildMapPreview(tc,
-              dateStr: dateStr,
-              coordsStr: coordsStr,
-              locationName: locationName),
+          _buildMapPreview(tc, dateStr: dateStr),
           const SizedBox(height: 20),
           LayoutBuilder(builder: (_, c) {
             final narrow = c.maxWidth < 400;
-            final clientBox = _subDetailBox(tc,
-                icon: Icons.work_outline_rounded,
-                label: 'CLIENT',
-                value: client);
+            final clientBox = _subDetailBox(tc, icon: Icons.work_outline_rounded, label: 'CLIENT', value: client);
+            final deviceBox = _buildDeviceInfoBox(tc, deviceStatus: deviceStatus, displayValue: deviceInfo, registeredDevice: registeredDevice, actualDevice: actualDevice);
 
-            final deviceBox = _buildDeviceInfoBox(
-              tc,
-              deviceStatus: deviceStatus,
-              displayValue: deviceInfo,
-              registeredDevice: registeredDevice,
-              actualDevice: actualDevice,
-            );
-
-            if (narrow) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  clientBox,
-                  const SizedBox(height: 12),
-                  deviceBox,
-                ],
-              );
-            }
-            return Row(
-              children: [
-                Expanded(child: clientBox),
-                const SizedBox(width: 12),
-                Expanded(child: deviceBox),
-              ],
-            );
+            if (narrow) return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [clientBox, const SizedBox(height: 12), deviceBox]);
+            return Row(children: [Expanded(child: clientBox), const SizedBox(width: 12), Expanded(child: deviceBox)]);
           }),
         ],
       ),
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // DEVICE INFO BOX
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildDeviceInfoBox(
-      AdminColors tc, {
-        required String deviceStatus,
-        required String displayValue,
-        required String registeredDevice,
-        required String actualDevice,
-      }) {
+  Widget _buildDeviceInfoBox(AdminColors tc, {required String deviceStatus, required String displayValue, required String registeredDevice, required String actualDevice}) {
     final bool isRegistered = deviceStatus == 'registered';
     final bool isUnregistered = deviceStatus == 'unregistered';
     final bool isLegacy = deviceStatus == 'legacy';
-    final bool isUnknown = deviceStatus == 'none';
 
-    Color boxBg;
-    Color boxBorder;
-    Color iconColor;
-    Color labelColor;
+    Color boxBg, boxBorder, iconColor, labelColor, valueColor;
     IconData icon;
-    Color valueColor;
-    Color? badgeBg;
-    Color? badgeTextColor;
+    Color? badgeBg, badgeTextColor;
     String? badgeText;
 
     if (isRegistered) {
-      boxBg = const Color(0xFFDCFCE7);
-      boxBorder = const Color(0xFF22C55E);
-      iconColor = const Color(0xFF166534);
-      labelColor = const Color(0xFF166534);
-      icon = Icons.verified_user_rounded;
-      valueColor = tc.text;
-      badgeBg = const Color(0xFF22C55E);
-      badgeTextColor = Colors.white;
-      badgeText = 'REGISTERED';
+      boxBg = const Color(0xFFDCFCE7); boxBorder = const Color(0xFF22C55E); iconColor = const Color(0xFF166534); labelColor = const Color(0xFF166534); icon = Icons.verified_user_rounded; valueColor = tc.text; badgeBg = const Color(0xFF22C55E); badgeTextColor = Colors.white; badgeText = 'REGISTERED';
     } else if (isUnregistered) {
-      boxBg = const Color(0xFFFEE2E2);
-      boxBorder = const Color(0xFFEF4444);
-      iconColor = const Color(0xFF991B1B);
-      labelColor = const Color(0xFF991B1B);
-      icon = Icons.gpp_maybe_rounded;
-      valueColor = const Color(0xFF991B1B);
-      badgeBg = const Color(0xFFEF4444);
-      badgeTextColor = Colors.white;
-      badgeText = 'UNREGISTERED';
+      boxBg = const Color(0xFFFEE2E2); boxBorder = const Color(0xFFEF4444); iconColor = const Color(0xFF991B1B); labelColor = const Color(0xFF991B1B); icon = Icons.gpp_maybe_rounded; valueColor = const Color(0xFF991B1B); badgeBg = const Color(0xFFEF4444); badgeTextColor = Colors.white; badgeText = 'UNREGISTERED';
     } else if (isLegacy) {
-      boxBg = const Color(0xFFFEF3C7);
-      boxBorder = const Color(0xFFF59E0B);
-      iconColor = const Color(0xFF92400E);
-      labelColor = const Color(0xFF92400E);
-      icon = Icons.system_update_alt_rounded;
-      valueColor = const Color(0xFF92400E);
-      badgeBg = const Color(0xFFF59E0B);
-      badgeTextColor = Colors.white;
-      badgeText = 'NEEDS UPDATE';
+      boxBg = const Color(0xFFFEF3C7); boxBorder = const Color(0xFFF59E0B); iconColor = const Color(0xFF92400E); labelColor = const Color(0xFF92400E); icon = Icons.system_update_alt_rounded; valueColor = const Color(0xFF92400E); badgeBg = const Color(0xFFF59E0B); badgeTextColor = Colors.white; badgeText = 'NEEDS UPDATE';
     } else {
-      boxBg = tc.surface;
-      boxBorder = tc.border;
-      iconColor = tc.muted;
-      labelColor = tc.muted;
-      icon = Icons.phone_iphone_rounded;
-      valueColor = tc.text;
+      boxBg = tc.surface; boxBorder = tc.border; iconColor = tc.muted; labelColor = tc.muted; icon = Icons.phone_iphone_rounded; valueColor = tc.text;
     }
 
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: boxBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: boxBorder,
-          width: isRegistered || isUnregistered || isLegacy ? 1.5 : 1,
-        ),
-      ),
+      decoration: BoxDecoration(color: boxBg, borderRadius: BorderRadius.circular(10), border: Border.all(color: boxBorder, width: isRegistered || isUnregistered || isLegacy ? 1.5 : 1)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2628,173 +1098,33 @@ class _AdminAttendanceVerificationPageState
             children: [
               Icon(icon, size: 12, color: iconColor),
               const SizedBox(width: 6),
-              Text(
-                'DEVICE INFO',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: labelColor,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.5,
-                ),
-              ),
+              Text('DEVICE INFO', style: TextStyle(fontSize: 10, color: labelColor, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
               if (badgeText != null) ...[
                 const SizedBox(width: 6),
-                Container(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: badgeBg,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    badgeText,
-                    style: TextStyle(
-                      fontSize: 7,
-                      color: badgeTextColor,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
+                Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1), decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(4)), child: Text(badgeText, style: TextStyle(fontSize: 7, color: badgeTextColor, fontWeight: FontWeight.w800, letterSpacing: 0.5))),
               ],
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            displayValue,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: valueColor,
-            ),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 2,
-          ),
+          Text(displayValue, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: valueColor), overflow: TextOverflow.ellipsis, maxLines: 2),
           if (isUnregistered && registeredDevice.isNotEmpty) ...[
             const SizedBox(height: 8),
             Container(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: const Color(0xFFEF4444).withValues(alpha: 0.4),
-                ),
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.6), borderRadius: BorderRadius.circular(6), border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.4))),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.warning_amber_rounded,
-                          size: 12, color: Color(0xFF991B1B)),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          'Registered: $registeredDevice',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF991B1B),
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
+                  Row(children: [const Icon(Icons.warning_amber_rounded, size: 12, color: Color(0xFF991B1B)), const SizedBox(width: 4), Expanded(child: Text('Registered: $registeredDevice', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF991B1B)), overflow: TextOverflow.ellipsis))]),
                   const SizedBox(height: 3),
-                  const Text(
-                    'A different device was used than the registered one',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF991B1B),
-                      fontStyle: FontStyle.italic,
-                      height: 1.3,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          if (isLegacy && registeredDevice.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Container(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: const Color(0xFFF59E0B).withValues(alpha: 0.4),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.info_outline_rounded,
-                          size: 12, color: Color(0xFF92400E)),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          'Old format: $registeredDevice',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF92400E),
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  const Text(
-                    'The registered device on the profile needs to be updated',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF92400E),
-                      fontStyle: FontStyle.italic,
-                      height: 1.3,
-                    ),
-                  ),
+                  const Text('A different device was used than the registered one', style: TextStyle(fontSize: 10, color: Color(0xFF991B1B), fontStyle: FontStyle.italic, height: 1.3)),
                 ],
               ),
             ),
           ],
           if (isRegistered && actualDevice.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Row(
-              children: [
-                const Icon(Icons.check_circle_rounded,
-                    size: 11, color: Color(0xFF166534)),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(
-                    'Verified — matches registered device',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF166534),
-                      fontStyle: FontStyle.italic,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ],
-          if (isUnknown && displayValue == 'Not recorded') ...[
-            const SizedBox(height: 4),
-            Text(
-              'No device info in the attendance log or profile',
-              style: TextStyle(
-                fontSize: 10,
-                color: tc.muted,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
+            Row(children: [const Icon(Icons.check_circle_rounded, size: 11, color: Color(0xFF166534)), const SizedBox(width: 4), Expanded(child: Text('Verified — matches registered device', style: const TextStyle(fontSize: 10, color: Color(0xFF166534), fontStyle: FontStyle.italic), overflow: TextOverflow.ellipsis))]),
           ],
         ],
       ),
@@ -2802,314 +1132,255 @@ class _AdminAttendanceVerificationPageState
   }
 
   // ══════════════════════════════════════════════════════════════
-  // MAP PREVIEW
+  // MAP PREVIEW (FIXED SHADER ISSUE)
   // ══════════════════════════════════════════════════════════════
-  Widget _buildMapPreview(
-      AdminColors tc, {
-        required String dateStr,
-        required String coordsStr,
-        required String locationName,
-      }) {
-    final coords = _getCoords();
+  Widget _buildMapPreview(AdminColors tc, {required String dateStr}) {
+    final points = <ll.LatLng>[];
+    if (_clockInCoords != null) points.add(_clockInCoords!);
+    if (_clockOutCoords != null) points.add(_clockOutCoords!);
+
+    final hasGps = points.isNotEmpty;
+
+    // DEFAULT OFFICE LOCATION KUNG WALANG GPS
+    final defaultCoords = const ll.LatLng(14.5995, 120.9842);
+    final displayCenter = hasGps ? points.first : defaultCoords;
+    final initialZoom = points.length > 1 ? 13.0 : 16.0;
 
     return LayoutBuilder(builder: (_, c) {
       final r = BsResponsive(c.maxWidth);
-      final mapHeight = r.responsive<double>(
-        xs: 260,
-        sm: 300,
-        md: 340,
-        lg: 340,
-      );
+      final mapHeight = r.responsive<double>(xs: 280, sm: 320, md: 360, lg: 360);
 
       return Container(
         height: mapHeight,
-        clipBehavior: Clip.hardEdge,
         decoration: BoxDecoration(
           color: tc.surface,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: tc.border),
         ),
-        child: Stack(
-          children: [
-            if (coords != null)
-              FlutterMap(
-                options: MapOptions(
-                  initialCenter: coords,
-                  initialZoom: 16,
-                  interactionOptions: const InteractionOptions(
-                    flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-                  ),
-                ),
-                children: [
-                  TileLayer(
-                    urlTemplate:
-                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.hris.biometrics',
-                  ),
-                  CircleLayer(
-                    circles: [
-                      CircleMarker(
-                        point: coords,
-                        radius: 100,
-                        useRadiusInMeter: true,
-                        color: tc.orange.withValues(alpha: 0.15),
-                        borderColor: tc.orange.withValues(alpha: 0.6),
-                        borderStrokeWidth: 2,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Stack(
+            children: [
+              if (hasGps)
+                RepaintBoundary(
+                  child: FlutterMap(
+                    mapController: _mapController,
+                    options: MapOptions(
+                      initialCenter: displayCenter,
+                      initialZoom: initialZoom,
+                      interactionOptions: const InteractionOptions(flags: InteractiveFlag.all & ~InteractiveFlag.rotate),
+                    ),
+                    children: [
+                      TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.hris.biometrics'),
+
+                      MarkerLayer(
+                        markers: [
+                          if (_clockInCoords != null)
+                            Marker(
+                              point: _clockInCoords!,
+                              width: 40, height: 40,
+                              child: Container(
+                                decoration: BoxDecoration(color: Colors.green, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
+                                child: const Icon(Icons.login_rounded, color: Colors.white, size: 20),
+                              ),
+                            ),
+                          if (_clockOutCoords != null)
+                            Marker(
+                              point: _clockOutCoords!,
+                              width: 40, height: 40,
+                              child: Container(
+                                decoration: BoxDecoration(color: Colors.red, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
+                                child: const Icon(Icons.logout_rounded, color: Colors.white, size: 20),
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),
-                  MarkerLayer(
-                    markers: [
-                      Marker(
-                        point: coords,
-                        width: 48,
-                        height: 48,
+                ),
+
+              if (hasGps)
+                Positioned(
+                  top: 16,
+                  left: 16,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          color: tc.card,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: tc.border),
+                          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2))],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            InkWell(
+                              onTap: () {
+                                if (!_safe) return;
+                                try {
+                                  _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 0.5);
+                                } catch (_) {}
+                              },
+                              child: SizedBox(
+                                width: 32, height: 32,
+                                child: Icon(Icons.add, size: 16, color: tc.text),
+                              ),
+                            ),
+                            Container(height: 1, width: 32, color: tc.border),
+                            InkWell(
+                              onTap: () {
+                                if (!_safe) return;
+                                try {
+                                  _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 0.5);
+                                } catch (_) {}
+                              },
+                              child: SizedBox(
+                                width: 32, height: 32,
+                                child: Icon(Icons.remove, size: 16, color: tc.text),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      InkWell(
+                        onTap: () {
+                          if (!_safe || !hasGps) return;
+                          try {
+                            _mapController.move(displayCenter, initialZoom);
+                          } catch (_) {}
+                        },
                         child: Container(
+                          width: 32, height: 32,
                           decoration: BoxDecoration(
-                            color: tc.orange,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 3),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 8,
-                                offset: const Offset(0, 3),
+                            color: tc.card,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: tc.border),
+                            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2))],
+                          ),
+                          child: Icon(Icons.my_location, size: 14, color: tc.text),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              if (!hasGps)
+                Positioned.fill(
+                  child: Container(
+                    color: const Color(0xFF1E1E1E),
+                    padding: const EdgeInsets.all(24),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.location_off_rounded, color: Colors.redAccent, size: 24),
+                              const SizedBox(width: 8),
+                              const Text('No GPS data recorded', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          const Text('Dahil ang logs na ito ay gawa sa "Manual Entry" o walang nakuhang GPS noong nag-clock in/out, hindi ito makapag-render ng mapa.', style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.4)),
+                          const SizedBox(height: 16),
+                          const Divider(color: Colors.white24),
+                          const SizedBox(height: 8),
+                          const Text('DEBUG LOGS:', style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                          const SizedBox(height: 8),
+                          ..._debugMessages.map((msg) => Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text('• $msg', style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace')),
+                          )),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+              if (hasGps)
+                Positioned(
+                  left: 16, right: 16, bottom: 16,
+                  child: LayoutBuilder(builder: (_, overlayC) {
+                    final info = Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [Icon(Icons.calendar_today_rounded, size: 12, color: tc.orange), const SizedBox(width: 6), Flexible(child: Text(dateStr, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: tc.text), overflow: TextOverflow.ellipsis))]),
+                        const SizedBox(height: 6),
+
+                        if (_clockInTime != null || _clockInCoords != null) ...[
+                          Row(
+                            children: [
+                              const Icon(Icons.login_rounded, size: 12, color: Colors.green),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'IN: ${_clockInTime != null ? DateFormat('hh:mm a').format(_clockInTime!) : 'Time N/A'}',
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: tc.text),
+                                ),
                               ),
                             ],
                           ),
-                          child: const Icon(
-                            Icons.person_pin_circle_rounded,
-                            color: Colors.white,
-                            size: 24,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              )
-            else
-              Positioned.fill(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: tc.isDark
-                          ? [
-                        const Color(0xFF1F2937),
-                        const Color(0xFF111827),
-                      ]
-                          : [
-                        const Color(0xFF3B4A5F),
-                        const Color(0xFF1F2937),
-                      ],
-                    ),
-                  ),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.location_off_rounded,
-                          size: 48,
-                          color: Colors.white.withValues(alpha: 0.4),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'No GPS data recorded',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            fontSize: 13,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Attendance log has no coordinates',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.5),
-                            fontSize: 11,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: LayoutBuilder(builder: (_, overlayC) {
-                final narrow = overlayC.maxWidth < 400;
-                final info = Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.calendar_today_rounded,
-                            size: 12, color: tc.orange),
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: Text(dateStr,
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: tc.text),
-                              overflow: TextOverflow.ellipsis),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Icon(Icons.location_on_rounded,
-                            size: 12, color: tc.muted),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: RichText(
-                            text: TextSpan(
-                              style: TextStyle(fontSize: 11, color: tc.muted),
-                              children: [
-                                TextSpan(
-                                  text: coordsStr,
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      color: tc.text),
+                          const SizedBox(height: 2),
+                        ],
+                        if (_clockOutTime != null || _clockOutCoords != null) ...[
+                          Row(
+                            children: [
+                              const Icon(Icons.logout_rounded, size: 12, color: Colors.red),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'OUT: ${_clockOutTime != null ? DateFormat('hh:mm a').format(_clockOutTime!) : 'Time N/A'}',
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: tc.text),
                                 ),
-                                if (locationName.isNotEmpty &&
-                                    locationName != 'Not recorded')
-                                  TextSpan(
-                                    text: ' ($locationName)',
-                                    style: TextStyle(color: tc.muted),
-                                  ),
-                              ],
-                            ),
-                            overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
                           ),
-                        ),
+                        ],
                       ],
-                    ),
-                  ],
-                );
+                    );
 
-                final badge = Container(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: coords != null ? tc.pillGreenBg : tc.pillWarnBg,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: (coords != null ? tc.pillGreenTx : tc.pillWarnTx)
-                          .withValues(alpha: 0.3),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        coords != null
-                            ? Icons.verified_rounded
-                            : Icons.warning_amber_rounded,
-                        size: 12,
-                        color:
-                        coords != null ? tc.pillGreenTx : tc.pillWarnTx,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        coords != null ? 'Location\nMatched' : 'No GPS\nData',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color:
-                          coords != null ? tc.pillGreenTx : tc.pillWarnTx,
-                          height: 1.1,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-
-                return Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: tc.card.withValues(alpha: 0.96),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: tc.border),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.08),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: narrow
-                      ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      info,
-                      const SizedBox(height: 10),
-                      badge,
-                    ],
-                  )
-                      : Row(
-                    children: [
-                      Expanded(child: info),
-                      const SizedBox(width: 12),
-                      badge,
-                    ],
-                  ),
-                );
-              }),
-            ),
-          ],
+                    return Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(color: tc.card.withValues(alpha: 0.96), borderRadius: BorderRadius.circular(10), border: Border.all(color: tc.border), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 4))]),
+                      child: Row(children: [Expanded(child: info), const SizedBox(width: 12), _buildGpsBadge(tc, true)]),
+                    );
+                  }),
+                ),
+            ],
+          ),
         ),
       );
     });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // SUB DETAIL BOX
-  // ══════════════════════════════════════════════════════════════
-  Widget _subDetailBox(
-      AdminColors tc, {
-        required IconData icon,
-        required String label,
-        required String value,
-      }) {
+  Widget _buildGpsBadge(AdminColors tc, bool hasGps) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(color: hasGps ? tc.pillGreenBg : tc.pillWarnBg, borderRadius: BorderRadius.circular(20), border: Border.all(color: (hasGps ? tc.pillGreenTx : tc.pillWarnTx).withValues(alpha: 0.3))),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(hasGps ? Icons.verified_rounded : Icons.warning_amber_rounded, size: 12, color: hasGps ? tc.pillGreenTx : tc.pillWarnTx),
+          const SizedBox(width: 4),
+          Text(hasGps ? 'Location\nMatched' : 'No GPS\nData', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: hasGps ? tc.pillGreenTx : tc.pillWarnTx, height: 1.1)),
+        ],
+      ),
+    );
+  }
+
+  Widget _subDetailBox(AdminColors tc, {required IconData icon, required String label, required String value}) {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: tc.surface,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: tc.border),
-      ),
+      decoration: BoxDecoration(color: tc.surface, borderRadius: BorderRadius.circular(10), border: Border.all(color: tc.border)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(icon, size: 12, color: tc.muted),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: TextStyle(
-                      fontSize: 10,
-                      color: tc.muted,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.5)),
-            ],
-          ),
+          Row(children: [Icon(icon, size: 12, color: tc.muted), const SizedBox(width: 6), Text(label, style: TextStyle(fontSize: 10, color: tc.muted, fontWeight: FontWeight.w700, letterSpacing: 0.5))]),
           const SizedBox(height: 8),
-          Text(
-            value,
-            style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: tc.text),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 2,
-          ),
+          Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: tc.text), overflow: TextOverflow.ellipsis, maxLines: 2),
         ],
       ),
     );

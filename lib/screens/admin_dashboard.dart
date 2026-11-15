@@ -1,9 +1,6 @@
 // lib/screens/admin_dashboard.dart
-// v2.1: 🆕 Payroll Rates (admin_payroll_settings_page.dart) opens inside the
-//       Payroll tab (tab 6) so the sidebar stays visible.
-// v2.0: 🆕 Support Reports nav item + live pending badge.
-//       Admin can now act on employee "Contact Admin" reports
-//       (unlock fingerprint / re-register / clear lockout / reply).
+// v2.5: 🚀 Fixed Web Engine crash (disposed EngineFlutterView).
+//       Used ValueNotifier for sidebar to prevent full-page rebuilds.
 import 'dart:async';
 import 'dart:math' show sin, cos, asin, sqrt, pi;
 import 'package:flutter/material.dart';
@@ -22,7 +19,7 @@ import 'admin_activity_page.dart';
 import 'admin_tracking_page.dart';
 import 'admin_payroll_page.dart';
 import 'admin_payroll_management_page.dart';
-import 'admin_payroll_settings_page.dart'; // 🆕 Payroll Rates
+import 'admin_payroll_settings_page.dart';
 import 'admin_create_leave_request_page.dart';
 import 'admin_assign_client_meeting_page.dart';
 import 'admin_add_client_location_page.dart';
@@ -30,7 +27,7 @@ import 'admin_login_screen.dart';
 import 'admin_presence_monitor_screen.dart';
 import 'admin_password_change_requests_page.dart';
 import 'admin_device_management_screen.dart';
-import 'admin_support_reports_page.dart'; // 🆕 Support Reports
+import 'admin_support_reports_page.dart';
 
 import '../widgets/admin_notification_bell.dart';
 import '../services/employee_notification_service.dart';
@@ -70,6 +67,9 @@ class AdminDashboardState extends State<AdminDashboard>
   late AnimationController _menuIconCtrl;
   late Animation<double> _menuIconRotation;
 
+  // ✅ NEW: ValueNotifier for smooth sidebar toggle without rebuilding the page
+  final ValueNotifier<bool> _isSidebarCollapsed = ValueNotifier(false);
+
   List<Map<String, dynamic>> _employees = [];
   List<Map<String, dynamic>> _locations = [];
   Map<String, List<Map<String, dynamic>>> _userLogs = {};
@@ -86,14 +86,14 @@ class AdminDashboardState extends State<AdminDashboard>
   StreamSubscription? _empSub;
   StreamSubscription? _attendanceSub;
   StreamSubscription? _locSub;
-  StreamSubscription? _reportsSub; // 🆕 pending support reports count
+  StreamSubscription? _reportsSub;
 
-  int _pendingReportCount = 0; // 🆕
+  int _pendingReportCount = 0;
 
   String? _verifyLogId;
   Map<String, dynamic>? _verifyLogData;
   Map<String, dynamic>? _selectedPayrollEmployee;
-  bool _showPayrollSettings = false; // 🆕 Payroll Rates sub-page
+  bool _showPayrollSettings = false;
 
   bool _showCreateLeave = false;
 
@@ -152,6 +152,7 @@ class AdminDashboardState extends State<AdminDashboard>
       'type': 'IN',
       'status': 'On Time',
       'timestamp': DateTime.now().subtract(const Duration(hours: 8)),
+      'latitude': 14.6114, 'longitude': 120.9936, 'locationName': 'Main Office',
     },
     {
       'id': 'demo-log-002',
@@ -159,8 +160,8 @@ class AdminDashboardState extends State<AdminDashboard>
       'name': 'Maria Santos',
       'type': 'IN',
       'status': 'On Time',
-      'timestamp': DateTime.now()
-          .subtract(const Duration(hours: 7, minutes: 30)),
+      'timestamp': DateTime.now().subtract(const Duration(hours: 7, minutes: 30)),
+      'latitude': 14.6120, 'longitude': 120.9941, 'locationName': 'Main Office',
     },
     {
       'id': 'demo-log-003',
@@ -169,6 +170,7 @@ class AdminDashboardState extends State<AdminDashboard>
       'type': 'OUT',
       'status': 'On Time',
       'timestamp': DateTime.now().subtract(const Duration(minutes: 45)),
+      'latitude': 14.6100, 'longitude': 120.9950, 'locationName': 'Nearby Cafe',
     },
     {
       'id': 'demo-log-004',
@@ -177,6 +179,7 @@ class AdminDashboardState extends State<AdminDashboard>
       'type': 'IN',
       'status': 'Late',
       'timestamp': DateTime.now().subtract(const Duration(hours: 2)),
+      'latitude': 14.6150, 'longitude': 120.9900, 'locationName': 'Warehouse A',
     },
   ];
 
@@ -214,9 +217,6 @@ class AdminDashboardState extends State<AdminDashboard>
     },
   ];
 
-  // ═══════════════════════════════════════════════════════════════
-  // NAV ITEMS — added Support Reports (index 18)
-  // ═══════════════════════════════════════════════════════════════
   static const List<_AdminNavItem> _navItems = [
     _AdminNavItem(0, 'Overview', Icons.grid_view_rounded),
     _AdminNavItem(1, 'Employees', Icons.people_alt_rounded),
@@ -230,35 +230,23 @@ class AdminDashboardState extends State<AdminDashboard>
     _AdminNavItem(9, 'Client Location', Icons.add_location_alt_rounded),
     _AdminNavItem(15, 'Password Requests', Icons.password_rounded),
     _AdminNavItem(17, 'Device Management', Icons.phonelink_setup_rounded),
-    _AdminNavItem(18, 'Support Reports', Icons.support_agent_rounded), // 🆕
+    _AdminNavItem(18, 'Support Reports', Icons.support_agent_rounded),
   ];
 
   String get _searchHint {
     switch (_tab) {
-      case 0:
-        return 'Search not available here';
-      case 1:
-        return 'Search employees...';
-      case 2:
-        return 'Search not available here';
-      case 3:
-        return 'Search attendance logs...';
-      case 4:
-        return 'Search activity logs...';
-      case 5:
-        return 'Search not available here';
-      case 6:
-        return 'Search not available here';
-      case 7:
-        return 'Search not available here';
-      case 15:
-        return 'Search password change requests...';
-      case 17:
-        return 'Search not available here';
-      case 18:
-        return 'Search not available here';
-      default:
-        return 'Search...';
+      case 0: return 'Search not available here';
+      case 1: return 'Search employees...';
+      case 2: return 'Search not available here';
+      case 3: return 'Search attendance logs...';
+      case 4: return 'Search activity logs...';
+      case 5: return 'Search not available here';
+      case 6: return 'Search not available here';
+      case 7: return 'Search not available here';
+      case 15: return 'Search password change requests...';
+      case 17: return 'Search not available here';
+      case 18: return 'Search not available here';
+      default: return 'Search...';
     }
   }
 
@@ -306,7 +294,7 @@ class AdminDashboardState extends State<AdminDashboard>
       NotificationBackupService.instance.init();
       _loadEmployees();
       _setupStreams();
-      _subscribePendingSupportReports(); // 🆕
+      _subscribePendingSupportReports();
     }
 
     _searchFocus.addListener(() {
@@ -314,9 +302,6 @@ class AdminDashboardState extends State<AdminDashboard>
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🆕 Pending Support Reports counter
-  // ═══════════════════════════════════════════════════════════════
   void _subscribePendingSupportReports() {
     if (_isDemo) return;
     _reportsSub?.cancel();
@@ -333,9 +318,6 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // DEMO DATA LOADER
-  // ═══════════════════════════════════════════════════════════════
   void _loadDemoData() {
     final inLogs = _demoAttendanceLogs
         .where((l) => l['type'] == 'IN' || l['type'] == 'LOGIN')
@@ -355,8 +337,7 @@ class AdminDashboardState extends State<AdminDashboard>
     setState(() {
       _employees = List<Map<String, dynamic>>.from(_demoEmployees);
       _locations = List<Map<String, dynamic>>.from(_demoLocations);
-      _attendanceLogs =
-      List<Map<String, dynamic>>.from(_demoAttendanceLogs);
+      _attendanceLogs = List<Map<String, dynamic>>.from(_demoAttendanceLogs);
       _loginLogs = inLogs;
       _logoutLogs = outLogs;
       _regLogs = List<Map<String, dynamic>>.from(_demoRegLogs)
@@ -366,7 +347,7 @@ class AdminDashboardState extends State<AdminDashboard>
       _loading = false;
       _error = null;
       _initialLoadDone = true;
-      _pendingReportCount = 0; // 🆕 demo shows no pending
+      _pendingReportCount = 0;
     });
   }
 
@@ -381,9 +362,10 @@ class AdminDashboardState extends State<AdminDashboard>
     _empSub?.cancel();
     _attendanceSub?.cancel();
     _locSub?.cancel();
-    _reportsSub?.cancel(); // 🆕
+    _reportsSub?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
+    _isSidebarCollapsed.dispose(); // ✅ Dispose ValueNotifier
     super.dispose();
   }
 
@@ -403,25 +385,18 @@ class AdminDashboardState extends State<AdminDashboard>
   }
 
   void openPayrollManagement(Map<String, dynamic> employeeData) {
-    debugPrint('🟢 openPayrollManagement: ${employeeData['name']}');
     setState(() => _selectedPayrollEmployee = employeeData);
   }
 
   void closePayrollManagement() {
-    debugPrint('🔵 closePayrollManagement: back to payroll list');
-    setState(() {
-      _selectedPayrollEmployee = null;
-    });
+    setState(() => _selectedPayrollEmployee = null);
   }
 
-  // 🆕 Payroll Rates (HR-editable settings)
   void openPayrollSettings() {
-    debugPrint('🟢 openPayrollSettings');
     setState(() => _showPayrollSettings = true);
   }
 
   void closePayrollSettings() {
-    debugPrint('🔵 closePayrollSettings: back to payroll list');
     setState(() => _showPayrollSettings = false);
   }
 
@@ -438,14 +413,14 @@ class AdminDashboardState extends State<AdminDashboard>
   }
 
   void _handleNavTap(int index) {
-    debugPrint('🧭 [Nav] switching to tab $index');
     _searchCtrl.clear();
     setState(() {
       _tab = index;
       _search = '';
       _selectedPayrollEmployee = null;
-      _showPayrollSettings = false; // 🆕
+      _showPayrollSettings = false;
       if (_showCreateLeave) _showCreateLeave = false;
+      if (_verifyLogData != null) _verifyLogData = null;
     });
   }
 
@@ -460,8 +435,7 @@ class AdminDashboardState extends State<AdminDashboard>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.card,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         title: Row(
           children: [
             Icon(Icons.logout_rounded, color: c.red, size: 22),
@@ -469,26 +443,19 @@ class AdminDashboardState extends State<AdminDashboard>
             Expanded(
               child: Text(
                 'Sign out?',
-                style: TextStyle(
-                  color: c.text,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
+                style: TextStyle(color: c.text, fontWeight: FontWeight.w700, fontSize: 16),
               ),
             ),
           ],
         ),
         content: Text(
-          _isDemo
-              ? 'You will exit demo mode.'
-              : 'You will be signed out.',
+          _isDemo ? 'You will exit demo mode.' : 'You will be signed out.',
           style: TextStyle(color: c.textMuted, fontSize: 13),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancel',
-                style: TextStyle(color: c.textMuted)),
+            child: Text('Cancel', style: TextStyle(color: c.textMuted)),
           ),
           ElevatedButton.icon(
             onPressed: () => Navigator.pop(ctx, true),
@@ -497,8 +464,7 @@ class AdminDashboardState extends State<AdminDashboard>
             style: ElevatedButton.styleFrom(
               backgroundColor: c.red,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
           ),
         ],
@@ -515,14 +481,13 @@ class AdminDashboardState extends State<AdminDashboard>
     if (!mounted) return;
 
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-          builder: (_) => const AdminLoginScreen(forceLogout: true)),
+      MaterialPageRoute(builder: (_) => const AdminLoginScreen(forceLogout: true)),
           (_) => false,
     );
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SEND UPDATE — with OneSignal Push Notification
+  // SEND UPDATE DIALOG
   // ═══════════════════════════════════════════════════════════════
   void _openSendUpdateDialog(BuildContext context, AdminColors c) {
     final titleCtrl = TextEditingController();
@@ -537,8 +502,7 @@ class AdminDashboardState extends State<AdminDashboard>
       fillColor: c.surface,
       hintText: hint,
       hintStyle: TextStyle(color: c.muted),
-      contentPadding:
-      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide(color: c.border),
@@ -555,26 +519,25 @@ class AdminDashboardState extends State<AdminDashboard>
 
     TextStyle itemStyle() => TextStyle(color: c.text, fontSize: 14);
 
-    InputDecoration fieldDeco(String hint, {int? maxLines}) =>
-        InputDecoration(
-          filled: true,
-          fillColor: c.surface,
-          hintText: hint,
-          hintStyle: TextStyle(color: c.muted),
-          contentPadding: const EdgeInsets.all(12),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: c.border),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: c.border),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: c.orange, width: 1.5),
-          ),
-        );
+    InputDecoration fieldDeco(String hint, {int? maxLines}) => InputDecoration(
+      filled: true,
+      fillColor: c.surface,
+      hintText: hint,
+      hintStyle: TextStyle(color: c.muted),
+      contentPadding: const EdgeInsets.all(12),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: c.orange, width: 1.5),
+      ),
+    );
 
     showDialog(
       context: context,
@@ -582,37 +545,26 @@ class AdminDashboardState extends State<AdminDashboard>
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlgState) => AlertDialog(
           backgroundColor: c.card,
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Row(
             children: [
               Icon(Icons.campaign_rounded, color: c.orange, size: 22),
               const SizedBox(width: 10),
               Text(
                 'Send Update',
-                style: TextStyle(
-                  color: c.text,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 18,
-                ),
+                style: TextStyle(color: c.text, fontWeight: FontWeight.w700, fontSize: 18),
               ),
               if (_isDemo) ...[
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: c.orange.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
                     'DEMO',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w800,
-                      color: c.orange,
-                      letterSpacing: 0.5,
-                    ),
+                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: c.orange, letterSpacing: 0.5),
                   ),
                 ),
               ],
@@ -633,33 +585,23 @@ class AdminDashboardState extends State<AdminDashboard>
                         decoration: BoxDecoration(
                           color: c.orange.withValues(alpha: 0.10),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                              color: c.orange.withValues(alpha: 0.4)),
+                          border: Border.all(color: c.orange.withValues(alpha: 0.4)),
                         ),
                         child: Row(
                           children: [
-                            Icon(Icons.visibility_off_rounded,
-                                size: 14, color: c.orange),
+                            Icon(Icons.visibility_off_rounded, size: 14, color: c.orange),
                             const SizedBox(width: 6),
                             Expanded(
                               child: Text(
                                 'Demo mode — no notification will be sent.',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: c.orange,
-                                ),
+                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c.orange),
                               ),
                             ),
                           ],
                         ),
                       ),
                     ),
-                  Text('Type',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: c.muted)),
+                  Text('Type', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c.muted)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
                     initialValue: selectedType,
@@ -668,30 +610,15 @@ class AdminDashboardState extends State<AdminDashboard>
                     style: itemStyle(),
                     decoration: dropDeco('Select type'),
                     items: [
-                      DropdownMenuItem(
-                          value: 'announcement',
-                          child: Text('📢 Announcement', style: itemStyle())),
-                      DropdownMenuItem(
-                          value: 'payroll',
-                          child: Text('💰 Payroll', style: itemStyle())),
-                      DropdownMenuItem(
-                          value: 'reminder',
-                          child: Text('⏰ Reminder', style: itemStyle())),
-                      DropdownMenuItem(
-                          value: 'general',
-                          child: Text('📋 General', style: itemStyle())),
+                      DropdownMenuItem(value: 'announcement', child: Text('📢 Announcement', style: itemStyle())),
+                      DropdownMenuItem(value: 'payroll', child: Text('💰 Payroll', style: itemStyle())),
+                      DropdownMenuItem(value: 'reminder', child: Text('⏰ Reminder', style: itemStyle())),
+                      DropdownMenuItem(value: 'general', child: Text('📋 General', style: itemStyle())),
                     ],
-                    onChanged: isSending
-                        ? null
-                        : (v) => setDlgState(
-                            () => selectedType = v ?? 'announcement'),
+                    onChanged: isSending ? null : (v) => setDlgState(() => selectedType = v ?? 'announcement'),
                   ),
                   const SizedBox(height: 12),
-                  Text('Recipient',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: c.muted)),
+                  Text('Recipient', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c.muted)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
                     initialValue: selectedRecipient,
@@ -701,19 +628,10 @@ class AdminDashboardState extends State<AdminDashboard>
                     style: itemStyle(),
                     decoration: dropDeco('Select recipient'),
                     items: [
-                      DropdownMenuItem(
-                          value: 'ALL',
-                          child: Text('🌐 All Employees',
-                              style: itemStyle())),
-                      ..._employees
-                          .where((e) => e['terminated'] != true)
-                          .map((e) {
-                        final id =
-                        (e['id'] ?? e['employeeId'] ?? '').toString();
-                        final name = (e['name'] ??
-                            '${e['firstName'] ?? ''} ${e['lastName'] ?? ''}')
-                            .toString()
-                            .trim();
+                      DropdownMenuItem(value: 'ALL', child: Text('🌐 All Employees', style: itemStyle())),
+                      ..._employees.where((e) => e['terminated'] != true).map((e) {
+                        final id = (e['id'] ?? e['employeeId'] ?? '').toString();
+                        final name = (e['name'] ?? '${e['firstName'] ?? ''} ${e['lastName'] ?? ''}').toString().trim();
                         return DropdownMenuItem(
                           value: id,
                           child: Text(
@@ -724,17 +642,10 @@ class AdminDashboardState extends State<AdminDashboard>
                         );
                       }),
                     ],
-                    onChanged: isSending
-                        ? null
-                        : (v) => setDlgState(
-                            () => selectedRecipient = v ?? 'ALL'),
+                    onChanged: isSending ? null : (v) => setDlgState(() => selectedRecipient = v ?? 'ALL'),
                   ),
                   const SizedBox(height: 12),
-                  Text('Priority',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: c.muted)),
+                  Text('Priority', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c.muted)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
                     initialValue: selectedPriority,
@@ -743,27 +654,14 @@ class AdminDashboardState extends State<AdminDashboard>
                     style: itemStyle(),
                     decoration: dropDeco('Select priority'),
                     items: [
-                      DropdownMenuItem(
-                          value: 'low',
-                          child: Text('Low', style: itemStyle())),
-                      DropdownMenuItem(
-                          value: 'normal',
-                          child: Text('Normal', style: itemStyle())),
-                      DropdownMenuItem(
-                          value: 'high',
-                          child: Text('High', style: itemStyle())),
+                      DropdownMenuItem(value: 'low', child: Text('Low', style: itemStyle())),
+                      DropdownMenuItem(value: 'normal', child: Text('Normal', style: itemStyle())),
+                      DropdownMenuItem(value: 'high', child: Text('High', style: itemStyle())),
                     ],
-                    onChanged: isSending
-                        ? null
-                        : (v) => setDlgState(
-                            () => selectedPriority = v ?? 'normal'),
+                    onChanged: isSending ? null : (v) => setDlgState(() => selectedPriority = v ?? 'normal'),
                   ),
                   const SizedBox(height: 12),
-                  Text('Title',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: c.muted)),
+                  Text('Title', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c.muted)),
                   const SizedBox(height: 6),
                   TextField(
                     controller: titleCtrl,
@@ -773,11 +671,7 @@ class AdminDashboardState extends State<AdminDashboard>
                     decoration: fieldDeco('e.g. Team Meeting Tomorrow'),
                   ),
                   const SizedBox(height: 12),
-                  Text('Message',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: c.muted)),
+                  Text('Message', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c.muted)),
                   const SizedBox(height: 6),
                   TextField(
                     controller: messageCtrl,
@@ -785,8 +679,7 @@ class AdminDashboardState extends State<AdminDashboard>
                     enabled: !isSending,
                     style: TextStyle(color: c.text),
                     cursorColor: c.orange,
-                    decoration: fieldDeco(
-                        'Write your message for the employee(s)...'),
+                    decoration: fieldDeco('Write your message for the employee(s)...'),
                   ),
                 ],
               ),
@@ -805,11 +698,7 @@ class AdminDashboardState extends State<AdminDashboard>
                 final message = messageCtrl.text.trim();
                 if (title.isEmpty || message.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                          'Please fill in both title and message.'),
-                      backgroundColor: Color(0xFFEF4444),
-                    ),
+                    const SnackBar(content: Text('Please fill in both title and message.'), backgroundColor: Color(0xFFEF4444)),
                   );
                   return;
                 }
@@ -817,11 +706,7 @@ class AdminDashboardState extends State<AdminDashboard>
                 if (_isDemo) {
                   Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text(
-                          '🧪 Demo mode — update NOT sent (sample only).'),
-                      backgroundColor: c.orange,
-                    ),
+                    SnackBar(content: const Text('🧪 Demo mode — update NOT sent (sample only).'), backgroundColor: c.orange),
                   );
                   return;
                 }
@@ -839,20 +724,9 @@ class AdminDashboardState extends State<AdminDashboard>
 
                   bool pushSent = false;
                   if (selectedRecipient == 'ALL') {
-                    pushSent =
-                    await OneSignalSender.instance.sendToAll(
-                      title: title,
-                      message: message,
-                      type: selectedType,
-                    );
+                    pushSent = await OneSignalSender.instance.sendToAll(title: title, message: message, type: selectedType);
                   } else {
-                    pushSent = await OneSignalSender.instance
-                        .sendToEmployee(
-                      employeeId: selectedRecipient,
-                      title: title,
-                      message: message,
-                      type: selectedType,
-                    );
+                    pushSent = await OneSignalSender.instance.sendToEmployee(employeeId: selectedRecipient, title: title, message: message, type: selectedType);
                   }
 
                   if (!ctx.mounted) return;
@@ -862,46 +736,30 @@ class AdminDashboardState extends State<AdminDashboard>
                     SnackBar(
                       content: Text(
                         pushSent
-                            ? (selectedRecipient == 'ALL'
-                            ? '✅ Sent to ALL employees + Push Notification'
-                            : '✅ Sent to employee + Push Notification')
+                            ? (selectedRecipient == 'ALL' ? '✅ Sent to ALL employees + Push Notification' : '✅ Sent to employee + Push Notification')
                             : '⚠️ Saved to DB, but Push Notification failed. Check API Key.',
                       ),
-                      backgroundColor: pushSent
-                          ? const Color(0xFF16A34A)
-                          : Colors.orange,
+                      backgroundColor: pushSent ? const Color(0xFF16A34A) : Colors.orange,
                     ),
                   );
                 } catch (e) {
                   if (!ctx.mounted) return;
                   setDlgState(() => isSending = false);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Failed: $e'),
-                      backgroundColor: const Color(0xFFEF4444),
-                    ),
+                    SnackBar(content: Text('Failed: $e'), backgroundColor: const Color(0xFFEF4444)),
                   );
                 }
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: c.orange,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               ),
               icon: isSending
-                  ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2))
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                   : const Icon(Icons.send_rounded, size: 16),
-              label: Text(
-                isSending ? 'Sending...' : 'Send',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
+              label: Text(isSending ? 'Sending...' : 'Send', style: const TextStyle(fontWeight: FontWeight.w700)),
             ),
           ],
         ),
@@ -909,13 +767,14 @@ class AdminDashboardState extends State<AdminDashboard>
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // PRESENCE DIALOG
+  // ═══════════════════════════════════════════════════════════════
   void _showPresenceDialog(BuildContext context, AdminColors c) {
     showModalBottomSheet(
       context: context,
       backgroundColor: c.card,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => SafeArea(
         child: SingleChildScrollView(
           child: Padding(
@@ -928,53 +787,27 @@ class AdminDashboardState extends State<AdminDashboard>
                   child: Container(
                     width: 40,
                     height: 4,
-                    decoration: BoxDecoration(
-                      color: c.border,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
+                    decoration: BoxDecoration(color: c.border, borderRadius: BorderRadius.circular(999)),
                   ),
                 ),
                 const SizedBox(height: 16),
                 Row(
                   children: [
-                    Icon(Icons.location_searching_rounded,
-                        color: c.orange, size: 22),
+                    Icon(Icons.location_searching_rounded, color: c.orange, size: 22),
                     const SizedBox(width: 10),
-                    Text(
-                      'Presence & Backup',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: c.text,
-                      ),
-                    ),
+                    Text('Presence & Backup', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: c.text)),
                     if (_isDemo) ...[
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: c.orange.withValues(alpha: 0.18),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          'DEMO',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                            color: c.orange,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(color: c.orange.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(4)),
+                        child: Text('DEMO', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: c.orange, letterSpacing: 0.5)),
                       ),
                     ],
                   ],
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  'Test the presence monitor and backup system',
-                  style: TextStyle(fontSize: 12, color: c.textMuted),
-                ),
+                Text('Test the presence monitor and backup system', style: TextStyle(fontSize: 12, color: c.textMuted)),
                 const SizedBox(height: 20),
 
                 _debugTile(
@@ -985,23 +818,14 @@ class AdminDashboardState extends State<AdminDashboard>
                   color: const Color(0xFF16A34A),
                   onTap: () async {
                     Navigator.pop(ctx);
-
                     if (_isDemo) {
-                      _showSnack(
-                          '🧪 Demo mode — backup NOT created (sample only).');
+                      _showSnack('🧪 Demo mode — backup NOT created (sample only).');
                       return;
                     }
-
                     _showSnack('💾 Creating backup...');
                     try {
-                      final count = await NotificationBackupService
-                          .instance
-                          .forceBackupNow(limit: 20);
-                      _showSnack(
-                        count > 0
-                            ? '✅ $count entries added to log!'
-                            : '⚠️ No new notifications to back up',
-                      );
+                      final count = await NotificationBackupService.instance.forceBackupNow(limit: 20);
+                      _showSnack(count > 0 ? '✅ $count entries added to log!' : '⚠️ No new notifications to back up');
                     } catch (e) {
                       _showSnack('❌ Backup failed: $e');
                     }
@@ -1011,11 +835,7 @@ class AdminDashboardState extends State<AdminDashboard>
                 const SizedBox(height: 12),
                 Text(
                   '💡 Tip: Tap the 📁 folder icon in the AppBar to view the notification log.',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: c.textMuted,
-                    fontStyle: FontStyle.italic,
-                  ),
+                  style: TextStyle(fontSize: 11, color: c.textMuted, fontStyle: FontStyle.italic),
                 ),
               ],
             ),
@@ -1048,10 +868,7 @@ class AdminDashboardState extends State<AdminDashboard>
                 Container(
                   width: 40,
                   height: 40,
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+                  decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
                   child: Icon(icon, color: color, size: 20),
                 ),
                 const SizedBox(width: 12),
@@ -1059,31 +876,13 @@ class AdminDashboardState extends State<AdminDashboard>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: c.text,
-                        ),
-                      ),
+                      Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.text)),
                       const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: c.textMuted,
-                          height: 1.3,
-                        ),
-                      ),
+                      Text(subtitle, style: TextStyle(fontSize: 11, color: c.textMuted, height: 1.3)),
                     ],
                   ),
                 ),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: c.muted,
-                  size: 20,
-                ),
+                Icon(Icons.chevron_right_rounded, color: c.muted, size: 20),
               ],
             ),
           ),
@@ -1095,11 +894,7 @@ class AdminDashboardState extends State<AdminDashboard>
   void _showSnack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
-      ),
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 2), behavior: SnackBarBehavior.floating),
     );
   }
 
@@ -1110,7 +905,6 @@ class AdminDashboardState extends State<AdminDashboard>
     }
     try {
       final emps = await AdminDatabase.getEmployees();
-      debugPrint('✅ _loadEmployees: ${emps.length} employees loaded');
       if (mounted) {
         setState(() {
           _employees = emps;
@@ -1121,7 +915,6 @@ class AdminDashboardState extends State<AdminDashboard>
         });
       }
     } catch (e) {
-      debugPrint('❌ _loadEmployees error: $e');
       if (mounted) {
         setState(() {
           _loading = false;
@@ -1164,14 +957,8 @@ class AdminDashboardState extends State<AdminDashboard>
         if (mounted && !_isDemo) {
           setState(() {
             _attendanceLogs = logs;
-            _loginLogs = logs
-                .where((l) =>
-            l['type'] == 'IN' || l['type'] == 'LOGIN')
-                .toList();
-            _logoutLogs = logs
-                .where((l) =>
-            l['type'] == 'OUT' || l['type'] == 'LOGOUT')
-                .toList();
+            _loginLogs = logs.where((l) => l['type'] == 'IN' || l['type'] == 'LOGIN').toList();
+            _logoutLogs = logs.where((l) => l['type'] == 'OUT' || l['type'] == 'LOGOUT').toList();
           });
         }
       },
@@ -1214,9 +1001,7 @@ class AdminDashboardState extends State<AdminDashboard>
     for (final e in _employees) {
       final id = (e['id'] ?? '').toString();
       if (id.isNotEmpty) {
-        final userAttendance = _attendanceLogs
-            .where((log) => (log['employee_id'] ?? '').toString() == id)
-            .toList();
+        final userAttendance = _attendanceLogs.where((log) => (log['employee_id'] ?? '').toString() == id).toList();
         ul[id] = userAttendance;
       }
     }
@@ -1241,10 +1026,7 @@ class AdminDashboardState extends State<AdminDashboard>
       return AnimatedBuilder(
         animation: ThemeProvider.instance,
         builder: (context, _) {
-          return Theme(
-            data: ThemeProvider.instance.theme,
-            child: _buildShell(context),
-          );
+          return Theme(data: ThemeProvider.instance.theme, child: _buildShell(context));
         },
       );
     }
@@ -1253,12 +1035,7 @@ class AdminDashboardState extends State<AdminDashboard>
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return Scaffold(
-            backgroundColor: _c.background,
-            body: Center(
-              child: CircularProgressIndicator(color: _c.orange),
-            ),
-          );
+          return Scaffold(backgroundColor: _c.background, body: Center(child: CircularProgressIndicator(color: _c.orange)));
         }
 
         if (!snapshot.hasData) {
@@ -1268,10 +1045,7 @@ class AdminDashboardState extends State<AdminDashboard>
         return AnimatedBuilder(
           animation: ThemeProvider.instance,
           builder: (context, _) {
-            return Theme(
-              data: ThemeProvider.instance.theme,
-              child: _buildShell(context),
-            );
+            return Theme(data: ThemeProvider.instance.theme, child: _buildShell(context));
           },
         );
       },
@@ -1280,18 +1054,10 @@ class AdminDashboardState extends State<AdminDashboard>
 
   Widget _buildShell(BuildContext context) {
     if (_loading) {
-      return Scaffold(
-        backgroundColor: _c.background,
-        body: Center(child: CircularProgressIndicator(color: _c.orange)),
-      );
+      return Scaffold(backgroundColor: _c.background, body: Center(child: CircularProgressIndicator(color: _c.orange)));
     }
     if (_error != null) {
-      return Scaffold(
-        backgroundColor: _c.background,
-        body: Center(
-          child: Text('Error: $_error', style: TextStyle(color: _c.red)),
-        ),
-      );
+      return Scaffold(backgroundColor: _c.background, body: Center(child: Text('Error: $_error', style: TextStyle(color: _c.red))));
     }
 
     return LayoutBuilder(
@@ -1315,8 +1081,32 @@ class AdminDashboardState extends State<AdminDashboard>
                 ? Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                buildSidebar(),
-                Expanded(child: buildPage()),
+                // ✅ SMOOTH ANIMATED SIDEBAR (using ValueListenableBuilder to prevent full rebuild)
+                ValueListenableBuilder<bool>(
+                  valueListenable: _isSidebarCollapsed,
+                  builder: (context, isCollapsed, child) {
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOutCubic,
+                      width: isCollapsed ? 0 : 240,
+                      child: ClipRect(
+                        child: OverflowBox(
+                          alignment: Alignment.centerLeft,
+                          minWidth: 240,
+                          maxWidth: 240,
+                          child: child,
+                        ),
+                      ),
+                    );
+                  },
+                  child: buildSidebar(), // Built only once
+                ),
+                // ✅ PREVENT RE-LAYOUT LAG ON MAIN PAGE
+                Expanded(
+                  child: RepaintBoundary(
+                    child: buildPage(),
+                  ),
+                ),
               ],
             )
                 : buildPage(),
@@ -1358,19 +1148,11 @@ class AdminDashboardState extends State<AdminDashboard>
               ? c.navBorder.withValues(alpha: 0.4)
               : (isFocused
               ? c.accent
-              : (c.isDark
-              ? c.navBorder
-              : c.navBorder.withValues(alpha: 0.6))),
+              : (c.isDark ? c.navBorder : c.navBorder.withValues(alpha: 0.6))),
           width: isFocused && available ? 1.5 : 1,
         ),
         boxShadow: (isFocused && available)
-            ? [
-          BoxShadow(
-            color: c.accent.withValues(alpha: 0.15),
-            blurRadius: 8,
-            spreadRadius: 0,
-          ),
-        ]
+            ? [BoxShadow(color: c.accent.withValues(alpha: 0.15), blurRadius: 8, spreadRadius: 0)]
             : null,
       ),
       child: Row(
@@ -1378,8 +1160,7 @@ class AdminDashboardState extends State<AdminDashboard>
           const SizedBox(width: 14),
           Icon(
             available ? Icons.search_rounded : Icons.search_off_rounded,
-            color:
-            !available ? c.muted : (isFocused ? c.accent : c.navText),
+            color: !available ? c.muted : (isFocused ? c.accent : c.navText),
             size: 18,
           ),
           const SizedBox(width: 8),
@@ -1389,27 +1170,16 @@ class AdminDashboardState extends State<AdminDashboard>
               focusNode: _searchFocus,
               enabled: available,
               onChanged: (v) => setState(() => _search = v),
-              onSubmitted: (v) {
-                debugPrint('🔍 Search submitted on tab $_tab: "$v"');
-                _searchFocus.unfocus();
-              },
+              onSubmitted: (v) => _searchFocus.unfocus(),
               cursorColor: c.accent,
-              style: TextStyle(
-                color: available ? c.text : c.muted,
-                fontSize: 14,
-              ),
+              style: TextStyle(color: available ? c.text : c.muted, fontSize: 14),
               textInputAction: TextInputAction.search,
               decoration: InputDecoration(
-                hintText: available
-                    ? _searchHint
-                    : 'Search not available on this page',
+                hintText: available ? _searchHint : 'Search not available on this page',
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: EdgeInsets.zero,
-                hintStyle: TextStyle(
-                  color: c.isDark ? c.muted : c.navText,
-                  fontSize: 14,
-                ),
+                hintStyle: TextStyle(color: c.isDark ? c.muted : c.navText, fontSize: 14),
               ),
             ),
           ),
@@ -1418,20 +1188,12 @@ class AdminDashboardState extends State<AdminDashboard>
               onTap: _clearSearch,
               behavior: HitTestBehavior.opaque,
               child: Padding(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 child: Container(
                   width: 18,
                   height: 18,
-                  decoration: BoxDecoration(
-                    color: c.muted.withValues(alpha: 0.25),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    Icons.close_rounded,
-                    size: 12,
-                    color: c.text,
-                  ),
+                  decoration: BoxDecoration(color: c.muted.withValues(alpha: 0.25), shape: BoxShape.circle),
+                  child: Icon(Icons.close_rounded, size: 12, color: c.text),
                 ),
               ),
             )
@@ -1455,17 +1217,37 @@ class AdminDashboardState extends State<AdminDashboard>
       scrolledUnderElevation: 0,
       surfaceTintColor: Colors.transparent,
       toolbarHeight: 56,
+
+      // ✅ SMOOTH SIDEBAR TOGGLE (using ValueListenableBuilder)
       leading: wide
-          ? null
+          ? ValueListenableBuilder<bool>(
+        valueListenable: _isSidebarCollapsed,
+        builder: (context, isCollapsed, _) {
+          return IconButton(
+            icon: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: Icon(
+                isCollapsed ? Icons.menu_rounded : Icons.menu_open_rounded,
+                key: ValueKey(isCollapsed),
+                color: c.accent,
+              ),
+            ),
+            onPressed: () {
+              _isSidebarCollapsed.value = !_isSidebarCollapsed.value;
+            },
+            tooltip: isCollapsed ? 'Show Sidebar' : 'Hide Sidebar',
+          );
+        },
+      )
           : IconButton(
         icon: _buildAnimatedMenuIcon(c.accent),
         onPressed: _openDrawer,
         tooltip: 'Open menu',
         padding: EdgeInsets.zero,
-        constraints:
-        const BoxConstraints(minWidth: 44, minHeight: 44),
+        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
       ),
-      leadingWidth: wide ? null : (isTiny ? 40 : 48),
+      leadingWidth: wide ? 56 : (isTiny ? 40 : 48),
+
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(1),
         child: Container(height: 1, color: c.navBorder),
@@ -1487,24 +1269,11 @@ class AdminDashboardState extends State<AdminDashboard>
           if (_isDemo) ...[
             const SizedBox(width: 8),
             Tooltip(
-              message:
-              'Demo mode is ON — sample data only. Sign out to disable.',
+              message: 'Demo mode is ON — sample data only. Sign out to disable.',
               child: Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: c.orange.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'DEMO',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w800,
-                    color: c.orange,
-                    letterSpacing: 0.5,
-                  ),
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(color: c.orange.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(4)),
+                child: Text('DEMO', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: c.orange, letterSpacing: 0.5)),
               ),
             ),
           ],
@@ -1521,23 +1290,15 @@ class AdminDashboardState extends State<AdminDashboard>
         ],
 
         IconButton(
-          tooltip: ThemeProvider.instance.isDark
-              ? 'Switch to Light Mode'
-              : 'Switch to Dark Mode',
+          tooltip: ThemeProvider.instance.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
           onPressed: () => ThemeProvider.instance.toggleDarkMode(),
           padding: EdgeInsets.zero,
-          constraints:
-          const BoxConstraints(minWidth: 40, minHeight: 40),
+          constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
           icon: AnimatedSwitcher(
             duration: const Duration(milliseconds: 250),
-            transitionBuilder: (child, anim) => RotationTransition(
-              turns: anim,
-              child: FadeTransition(opacity: anim, child: child),
-            ),
+            transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: child),
             child: Icon(
-              ThemeProvider.instance.isDark
-                  ? Icons.light_mode_rounded
-                  : Icons.dark_mode_rounded,
+              ThemeProvider.instance.isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
               key: ValueKey(ThemeProvider.instance.isDark),
               size: 20,
               color: c.accent,
@@ -1556,48 +1317,21 @@ class AdminDashboardState extends State<AdminDashboard>
           IconButton(
             tooltip: 'Presence & Backup',
             onPressed: () => _showPresenceDialog(context, c),
-            icon: Icon(
-              Icons.location_searching_rounded,
-              size: 21,
-              color: c.accent,
-            ),
+            icon: Icon(Icons.location_searching_rounded, size: 21, color: c.accent),
           ),
           IconButton(
             tooltip: 'Notification Backups',
-            onPressed: () {
-              Navigator.push(
-                context,
-                adminRoute(const NotificationBackupListPage()),
-              );
-            },
-            icon: Icon(
-              Icons.folder_special_rounded,
-              size: 21,
-              color: c.accent,
-            ),
+            onPressed: () => Navigator.push(context, adminRoute(const NotificationBackupListPage())),
+            icon: Icon(Icons.folder_special_rounded, size: 21, color: c.accent),
           ),
-          // 🆕 Quick access Support Reports with badge
           IconButton(
-            tooltip: _pendingReportCount > 0
-                ? 'Support Reports ($_pendingReportCount pending)'
-                : 'Support Reports',
+            tooltip: _pendingReportCount > 0 ? 'Support Reports ($_pendingReportCount pending)' : 'Support Reports',
             onPressed: () => _handleNavTap(18),
             icon: Badge(
               isLabelVisible: _pendingReportCount > 0,
-              label: Text(
-                '$_pendingReportCount',
-                style: const TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
-              ),
+              label: Text('$_pendingReportCount', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.white)),
               backgroundColor: c.red,
-              child: Icon(
-                Icons.support_agent_rounded,
-                size: 21,
-                color: c.accent,
-              ),
+              child: Icon(Icons.support_agent_rounded, size: 21, color: c.accent),
             ),
           ),
         ],
@@ -1606,21 +1340,16 @@ class AdminDashboardState extends State<AdminDashboard>
           PopupMenuButton<String>(
             tooltip: 'More',
             color: c.card,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             padding: EdgeInsets.zero,
-            icon: Icon(Icons.more_vert_rounded,
-                color: c.accent, size: 22),
+            icon: Icon(Icons.more_vert_rounded, color: c.accent, size: 22),
             onSelected: (v) {
               if (v == 'send_update') {
                 _openSendUpdateDialog(context, c);
               } else if (v == 'presence') {
                 _showPresenceDialog(context, c);
               } else if (v == 'backups') {
-                Navigator.push(
-                  context,
-                  adminRoute(const NotificationBackupListPage()),
-                );
+                Navigator.push(context, adminRoute(const NotificationBackupListPage()));
               } else if (v == 'support_reports') {
                 _handleNavTap(18);
               }
@@ -1629,31 +1358,25 @@ class AdminDashboardState extends State<AdminDashboard>
               PopupMenuItem(
                 value: 'send_update',
                 child: Row(children: [
-                  Icon(Icons.campaign_rounded,
-                      size: 18, color: c.orange),
+                  Icon(Icons.campaign_rounded, size: 18, color: c.orange),
                   const SizedBox(width: 10),
-                  Text('Send Update',
-                      style: TextStyle(color: c.text, fontSize: 13)),
+                  Text('Send Update', style: TextStyle(color: c.text, fontSize: 13)),
                 ]),
               ),
               PopupMenuItem(
                 value: 'presence',
                 child: Row(children: [
-                  Icon(Icons.location_searching_rounded,
-                      size: 18, color: c.orange),
+                  Icon(Icons.location_searching_rounded, size: 18, color: c.orange),
                   const SizedBox(width: 10),
-                  Text('Presence & Backup',
-                      style: TextStyle(color: c.text, fontSize: 13)),
+                  Text('Presence & Backup', style: TextStyle(color: c.text, fontSize: 13)),
                 ]),
               ),
               PopupMenuItem(
                 value: 'backups',
                 child: Row(children: [
-                  Icon(Icons.folder_special_rounded,
-                      size: 18, color: c.orange),
+                  Icon(Icons.folder_special_rounded, size: 18, color: c.orange),
                   const SizedBox(width: 10),
-                  Text('Notification Backups',
-                      style: TextStyle(color: c.text, fontSize: 13)),
+                  Text('Notification Backups', style: TextStyle(color: c.text, fontSize: 13)),
                 ]),
               ),
               PopupMenuItem(
@@ -1663,12 +1386,10 @@ class AdminDashboardState extends State<AdminDashboard>
                     isLabelVisible: _pendingReportCount > 0,
                     label: Text('$_pendingReportCount'),
                     backgroundColor: c.red,
-                    child: Icon(Icons.support_agent_rounded,
-                        size: 18, color: c.orange),
+                    child: Icon(Icons.support_agent_rounded, size: 18, color: c.orange),
                   ),
                   const SizedBox(width: 10),
-                  Text('Support Reports',
-                      style: TextStyle(color: c.text, fontSize: 13)),
+                  Text('Support Reports', style: TextStyle(color: c.text, fontSize: 13)),
                 ]),
               ),
             ],
@@ -1698,42 +1419,17 @@ class AdminDashboardState extends State<AdminDashboard>
                   Container(
                     width: 40,
                     height: 40,
-                    decoration: BoxDecoration(
-                      color: c.sidebarLogoBox,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      Icons.front_hand_rounded,
-                      color: c.isDark
-                          ? Colors.white
-                          : const Color(0xFF53433C),
-                      size: 20,
-                    ),
+                    decoration: BoxDecoration(color: c.sidebarLogoBox, borderRadius: BorderRadius.circular(8)),
+                    child: Icon(Icons.front_hand_rounded, color: c.isDark ? Colors.white : const Color(0xFF53433C), size: 20),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'R.A.C.O.M.A.',
-                          style: TextStyle(
-                            color: c.sidebarBrandText,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15,
-                            letterSpacing: -0.2,
-                          ),
-                        ),
+                        Text('R.A.C.O.M.A.', style: TextStyle(color: c.sidebarBrandText, fontWeight: FontWeight.w700, fontSize: 15, letterSpacing: -0.2)),
                         const SizedBox(height: 1),
-                        Text(
-                          'HRIS',
-                          style: TextStyle(
-                            color: c.navText,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 11,
-                            letterSpacing: 0.3,
-                          ),
-                        ),
+                        Text('HRIS', style: TextStyle(color: c.navText, fontWeight: FontWeight.w600, fontSize: 11, letterSpacing: 0.3)),
                       ],
                     ),
                   ),
@@ -1744,8 +1440,7 @@ class AdminDashboardState extends State<AdminDashboard>
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
-                children:
-                _navItems.map((item) => _navTile(item)).toList(),
+                children: _navItems.map((item) => _navTile(item)).toList(),
               ),
             ),
             Padding(
@@ -1757,32 +1452,17 @@ class AdminDashboardState extends State<AdminDashboard>
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                     decoration: BoxDecoration(
                       color: c.red.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: c.red.withValues(alpha: 0.3),
-                        width: 1,
-                      ),
+                      border: Border.all(color: c.red.withValues(alpha: 0.3), width: 1),
                     ),
                     child: Row(
                       children: [
-                        Icon(
-                          Icons.logout_rounded,
-                          color: c.red,
-                          size: 18,
-                        ),
+                        Icon(Icons.logout_rounded, color: c.red, size: 18),
                         const SizedBox(width: 14),
-                        Text(
-                          'Sign Out',
-                          style: TextStyle(
-                            color: c.red,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
+                        Text('Sign Out', style: TextStyle(color: c.red, fontSize: 14, fontWeight: FontWeight.w700)),
                       ],
                     ),
                   ),
@@ -1793,31 +1473,17 @@ class AdminDashboardState extends State<AdminDashboard>
               padding: const EdgeInsets.all(12),
               child: Container(
                 width: double.infinity,
-                padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                 decoration: BoxDecoration(
                   color: c.clockCardBg,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: c.isDark
-                        ? c.navBorder.withValues(alpha: 0.5)
-                        : Colors.transparent,
-                    width: 1,
-                  ),
+                  border: Border.all(color: c.isDark ? c.navBorder.withValues(alpha: 0.5) : Colors.transparent, width: 1),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Flexible(
-                      child: Text(
-                        'Clock System Status',
-                        style: TextStyle(
-                          color: c.clockCardText,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      child: Text('Clock System Status', style: TextStyle(color: c.clockCardText, fontSize: 13, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
                     ),
                     const SizedBox(width: 8),
                     Container(
@@ -1826,13 +1492,7 @@ class AdminDashboardState extends State<AdminDashboard>
                       decoration: BoxDecoration(
                         color: c.clockDotColor,
                         shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: c.clockDotColor.withValues(alpha: 0.5),
-                            blurRadius: 6,
-                            spreadRadius: 1,
-                          ),
-                        ],
+                        boxShadow: [BoxShadow(color: c.clockDotColor.withValues(alpha: 0.5), blurRadius: 6, spreadRadius: 1)],
                       ),
                     ),
                   ],
@@ -1848,9 +1508,7 @@ class AdminDashboardState extends State<AdminDashboard>
   Widget _navTile(_AdminNavItem item) {
     final c = _c;
     final sel = _tab == item.index;
-    // 🆕 badge count (only for Support Reports)
-    final int badge =
-    item.index == 18 && _pendingReportCount > 0 ? _pendingReportCount : 0;
+    final int badge = item.index == 18 && _pendingReportCount > 0 ? _pendingReportCount : 0;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
@@ -1869,11 +1527,7 @@ class AdminDashboardState extends State<AdminDashboard>
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             child: Row(
               children: [
-                Icon(
-                  item.icon,
-                  color: sel ? c.sidebarActiveText : c.navText,
-                  size: 18,
-                ),
+                Icon(item.icon, color: sel ? c.sidebarActiveText : c.navText, size: 18),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
@@ -1881,28 +1535,20 @@ class AdminDashboardState extends State<AdminDashboard>
                     style: TextStyle(
                       color: sel ? c.sidebarActiveText : c.navText,
                       fontSize: 14,
-                      fontWeight:
-                      sel ? FontWeight.w700 : FontWeight.w500,
+                      fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
                     ),
                   ),
                 ),
                 if (badge > 0)
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: sel
-                          ? Colors.white.withValues(alpha: 0.9)
-                          : c.red,
+                      color: sel ? Colors.white.withValues(alpha: 0.9) : c.red,
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
                       '$badge',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: sel ? c.orange : Colors.white,
-                      ),
+                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: sel ? c.orange : Colors.white),
                     ),
                   ),
               ],
@@ -1925,10 +1571,7 @@ class AdminDashboardState extends State<AdminDashboard>
           builder: (context, value, child) {
             return Opacity(
               opacity: value.clamp(0.0, 1.0),
-              child: Transform.translate(
-                offset: Offset(-30 * (1 - value), 0),
-                child: child,
-              ),
+              child: Transform.translate(offset: Offset(-30 * (1 - value), 0), child: child),
             );
           },
           child: Column(
@@ -1940,38 +1583,15 @@ class AdminDashboardState extends State<AdminDashboard>
                     Container(
                       width: 40,
                       height: 40,
-                      decoration: BoxDecoration(
-                        color: c.sidebarLogoBox,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.front_hand_rounded,
-                        color: c.isDark
-                            ? Colors.white
-                            : const Color(0xFF53433C),
-                        size: 20,
-                      ),
+                      decoration: BoxDecoration(color: c.sidebarLogoBox, borderRadius: BorderRadius.circular(8)),
+                      child: Icon(Icons.front_hand_rounded, color: c.isDark ? Colors.white : const Color(0xFF53433C), size: 20),
                     ),
                     const SizedBox(width: 12),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'R.A.C.O.M.A.',
-                          style: TextStyle(
-                            color: c.sidebarBrandText,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15,
-                          ),
-                        ),
-                        Text(
-                          'HRIS',
-                          style: TextStyle(
-                            color: c.navText,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                        Text('R.A.C.O.M.A.', style: TextStyle(color: c.sidebarBrandText, fontWeight: FontWeight.w700, fontSize: 15)),
+                        Text('HRIS', style: TextStyle(color: c.navText, fontSize: 11, fontWeight: FontWeight.w600)),
                       ],
                     ),
                   ],
@@ -1983,51 +1603,31 @@ class AdminDashboardState extends State<AdminDashboard>
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   children: _navItems.map((item) {
                     final sel = _tab == item.index;
-                    final int badge = item.index == 18 && _pendingReportCount > 0
-                        ? _pendingReportCount
-                        : 0;
+                    final int badge = item.index == 18 && _pendingReportCount > 0 ? _pendingReportCount : 0;
                     return ListTile(
-                      leading: Icon(
-                        item.icon,
-                        color: sel ? c.sidebarActiveText : c.navText,
-                        size: 20,
-                      ),
+                      leading: Icon(item.icon, color: sel ? c.sidebarActiveText : c.navText, size: 20),
                       title: Text(
                         item.label,
                         style: TextStyle(
                           color: sel ? c.sidebarActiveText : c.navText,
-                          fontWeight:
-                          sel ? FontWeight.w700 : FontWeight.w500,
+                          fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
                           fontSize: 14,
                         ),
                       ),
                       trailing: badge > 0
                           ? Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: sel
-                              ? Colors.white.withValues(alpha: 0.9)
-                              : c.red,
+                          color: sel ? Colors.white.withValues(alpha: 0.9) : c.red,
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Text(
-                          '$badge',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            color: sel ? c.orange : Colors.white,
-                          ),
-                        ),
+                        child: Text('$badge', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: sel ? c.orange : Colors.white)),
                       )
                           : null,
                       selected: sel,
                       selectedTileColor: c.orange,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 2),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
                       onTap: () {
                         Navigator.pop(context);
                         _handleNavTap(item.index);
@@ -2038,18 +1638,9 @@ class AdminDashboardState extends State<AdminDashboard>
               ),
               Divider(color: c.navBorder, height: 1),
               ListTile(
-                leading:
-                Icon(Icons.logout_rounded, color: c.red, size: 20),
-                title: Text(
-                  _isDemo ? 'Exit Demo Mode' : 'Sign Out',
-                  style: TextStyle(
-                    color: c.red,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
-                ),
-                contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                leading: Icon(Icons.logout_rounded, color: c.red, size: 20),
+                title: Text(_isDemo ? 'Exit Demo Mode' : 'Sign Out', style: TextStyle(color: c.red, fontWeight: FontWeight.w600, fontSize: 14)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 onTap: () {
                   Navigator.pop(context);
                   _handleSignOut(c);
@@ -2081,32 +1672,17 @@ class AdminDashboardState extends State<AdminDashboard>
       type: BottomNavigationBarType.fixed,
       elevation: 0,
       items: const [
-        BottomNavigationBarItem(
-          icon: Icon(Icons.grid_view_rounded),
-          label: 'Overview',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.people_alt_rounded),
-          label: 'Staff',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.person_add_alt_1_rounded),
-          label: 'Add',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.calendar_month_rounded),
-          label: 'Logs',
-        ),
+        BottomNavigationBarItem(icon: Icon(Icons.grid_view_rounded), label: 'Overview'),
+        BottomNavigationBarItem(icon: Icon(Icons.people_alt_rounded), label: 'Staff'),
+        BottomNavigationBarItem(icon: Icon(Icons.person_add_alt_1_rounded), label: 'Add'),
+        BottomNavigationBarItem(icon: Icon(Icons.calendar_month_rounded), label: 'Logs'),
       ],
     );
   }
 
   Widget buildPage() {
     if (_showCreateLeave) {
-      return AdminCreateLeaveRequestPage(
-        employees: _employees,
-        onBack: _closeCreateLeaveRequest,
-      );
+      return AdminCreateLeaveRequestPage(employees: _employees, onBack: _closeCreateLeaveRequest);
     }
 
     switch (_tab) {
@@ -2169,7 +1745,6 @@ class AdminDashboardState extends State<AdminDashboard>
           distanceCalculator: _getDistance,
         );
       case 6:
-      // 🆕 Payroll Rates sub-page (sidebar stays visible)
         if (_showPayrollSettings && !_isDemo) {
           return PayrollSettingsPage(
             key: const ValueKey('payroll_settings'),
@@ -2177,8 +1752,7 @@ class AdminDashboardState extends State<AdminDashboard>
           );
         }
         if (_selectedPayrollEmployee != null) {
-          final empId =
-              _selectedPayrollEmployee!['id']?.toString() ?? 'unknown';
+          final empId = _selectedPayrollEmployee!['id']?.toString() ?? 'unknown';
           return AdminPayrollManagementPage(
             key: ValueKey('payroll_$empId'),
             employeeData: _selectedPayrollEmployee!,
@@ -2189,7 +1763,7 @@ class AdminDashboardState extends State<AdminDashboard>
           employees: _employees,
           userLogs: _userLogs,
           onSelectEmployee: (emp) => openPayrollManagement(emp),
-          onOpenSettings: _isDemo ? null : openPayrollSettings, // 🆕
+          onOpenSettings: _isDemo ? null : openPayrollSettings,
         );
       case 7:
         return const AdminPresenceMonitorScreen();
@@ -2213,7 +1787,7 @@ class AdminDashboardState extends State<AdminDashboard>
         return const PasswordChangeRequestsPage();
       case 17:
         return const AdminDeviceManagementScreen();
-      case 18: // 🆕 Support Reports
+      case 18:
         return const AdminSupportReportsPage();
       default:
         return const Center(child: Text('View not found'));
