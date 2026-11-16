@@ -188,7 +188,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
     }
     return _isLoginMode
         ? 'Both methods use military-grade encryption. Your biometric data never leaves your device.'
-        : 'Your location will be verified automatically before clock-in.';
+        : '';
   }
 
   @override
@@ -1135,7 +1135,12 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
         child: Column(children: [
           _buildOrangeHeader(),
           if (!_isOnline) _buildOfflineBanner(),
-          Expanded(child: _buildSelectMethodStep(tc)),
+          Expanded(
+            child: Transform.translate(
+              offset: const Offset(0, -10),
+              child: _buildSelectMethodStep(tc),
+            ),
+          ),
         ]),
       ),
     );
@@ -1355,7 +1360,7 @@ class _BiometricMethodScreenState extends State<BiometricMethodScreen>
             _buildOverlapCard(
               tc: tc,
               stepLabel: _stepLabel,
-              overlap: 64 * scale,
+              overlap: 60 * scale,
               child: _isLoading
                   ? _buildLoading()
                   : _errorMessage != null

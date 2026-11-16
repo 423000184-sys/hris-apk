@@ -5,6 +5,11 @@
 // Ang file na ito ay KINI-COMPILE LANG sa Android, iOS, Windows,
 // macOS, at Linux. HINDI ito dapat i-import nang direkta — gamitin
 // ang `face_matcher.dart` (facade) sa halip.
+//
+// v2.0: 🔧 Switched from flutter_litert → tflite_flutter (pubspec match)
+//   • Float32List.reshape() para efficient + same as face_embedder.dart
+//   • Removed duplicate dart:io / path_provider / shared_preferences imports
+//   • InterpreterOptions(threads: 2) for faster inference
 
 import 'dart:async';
 import 'dart:convert';
@@ -16,14 +21,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb, kDebugMode;
-import 'package:flutter_litert/flutter_litert.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
-import 'dart:io';
-import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
+
 void _secureLog(String message) {
   if (kDebugMode) debugPrint(message);
 }
@@ -96,8 +98,11 @@ class FaceMatcher {
       return;
     }
 
-    _interpreter ??=
-    await Interpreter.fromAsset('assets/models/mobilefacenet.tflite');
+    final opts = InterpreterOptions()..threads = 2;
+    _interpreter ??= await Interpreter.fromAsset(
+      'assets/models/mobilefacenet.tflite',
+      options: opts,
+    );
 
     _faceDetector ??= FaceDetector(
       options: FaceDetectorOptions(
@@ -110,7 +115,7 @@ class FaceMatcher {
     );
 
     _isInitialized = true;
-    _secureLog('✅ TFLite + ML Kit Models loaded');
+    _secureLog('✅ TFLite (tflite_flutter) + ML Kit Models loaded');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -167,9 +172,9 @@ class FaceMatcher {
   // EMBEDDING GENERATION
   // ═══════════════════════════════════════════════════════════════
   static Future<List<double>> generateEmbedding(
-      Uint8List imageBytes, {
-        bool enableAlignment = true,
-      }) async {
+    Uint8List imageBytes, {
+    bool enableAlignment = true,
+  }) async {
     if (kIsWeb) {
       _secureLog('⛔ generateEmbedding SKIPPED on web');
       return <double>[];
@@ -225,10 +230,8 @@ class FaceMatcher {
       final marginX = rect.width * 0.15;
       final marginY = rect.height * 0.15;
 
-      final cropX =
-      (rect.left - marginX).toInt().clamp(0, workingImage.width);
-      final cropY =
-      (rect.top - marginY).toInt().clamp(0, workingImage.height);
+      final cropX = (rect.left - marginX).toInt().clamp(0, workingImage.width);
+      final cropY = (rect.top - marginY).toInt().clamp(0, workingImage.height);
       final cropW = (rect.width + marginX * 2)
           .toInt()
           .clamp(0, workingImage.width - cropX);
@@ -256,29 +259,25 @@ class FaceMatcher {
         interpolation: img.Interpolation.cubic,
       );
 
-      final input = List.generate(
-        1,
-            (_) => List.generate(
-          112,
-              (y) => List.generate(112, (x) {
-            final p = resized.getPixel(x, y);
-            return <double>[
-              (p.r - 127.5) / 128.0,
-              (p.g - 127.5) / 128.0,
-              (p.b - 127.5) / 128.0,
-            ];
-          }),
-        ),
-      );
+      // ✅ tflite_flutter: Float32List.reshape() — efficient at compatible
+      final input = Float32List(1 * 112 * 112 * 3);
+      int idx = 0;
+      for (int y = 0; y < 112; y++) {
+        for (int x = 0; x < 112; x++) {
+          final p = resized.getPixel(x, y);
+          input[idx++] = (p.r - 127.5) / 128.0;
+          input[idx++] = (p.g - 127.5) / 128.0;
+          input[idx++] = (p.b - 127.5) / 128.0;
+        }
+      }
+      final inputTensor = input.reshape([1, 112, 112, 3]);
 
-      // ✅ FIXED: Use nested List (walang .reshape, compatible sa flutter_litert)
-      final output = <List<double>>[
-        List<double>.filled(_embeddingSize, 0.0),
-      ];
+      final output =
+          List.filled(1 * _embeddingSize, 0.0).reshape([1, _embeddingSize]);
 
-      _interpreter!.run(input, output);
+      _interpreter!.run(inputTensor, output);
 
-      final rawDoubles = output[0];
+      final rawDoubles = (output[0] as List).cast<double>();
 
       double norm = 0.0;
       for (final v in rawDoubles) {
@@ -431,10 +430,10 @@ class FaceMatcher {
   // SAVE EMBEDDING
   // ═══════════════════════════════════════════════════════════════
   static Future<void> saveEmbedding(
-      String employeeId,
-      List<double> embedding, {
-        String? source,
-      }) async {
+    String employeeId,
+    List<double> embedding, {
+    String? source,
+  }) async {
     if (!_isValidEmbedding(embedding)) {
       _secureLog('❌ Invalid embedding — refusing to save');
       throw ArgumentError('Invalid embedding');
@@ -442,7 +441,7 @@ class FaceMatcher {
 
     try {
       final docRef =
-      FirebaseFirestore.instance.collection('employees').doc(employeeId);
+          FirebaseFirestore.instance.collection('employees').doc(employeeId);
       final doc = await docRef.get();
 
       List<List<double>> existing = [];
@@ -458,9 +457,8 @@ class FaceMatcher {
               final decoded = jsonDecode(rawJson);
               if (decoded is List) {
                 existing = decoded
-                    .map((e) => (e as List)
-                    .map((v) => (v as num).toDouble())
-                    .toList())
+                    .map((e) =>
+                        (e as List).map((v) => (v as num).toDouble()).toList())
                     .where((e) => _isValidEmbedding(e))
                     .toList();
               }
@@ -505,10 +503,10 @@ class FaceMatcher {
   // 🆕 ENROLL FACE — para sa UNANG BESES na registration
   // ═══════════════════════════════════════════════════════════════
   static Future<EnrollResult> enrollFace(
-      String employeeId,
-      Uint8List imageBytes, {
-        String source = 'mobile_enrollment',
-      }) async {
+    String employeeId,
+    Uint8List imageBytes, {
+    String source = 'mobile_enrollment',
+  }) async {
     if (kIsWeb) {
       return const EnrollResult(
         success: false,
@@ -585,11 +583,11 @@ class FaceMatcher {
   // AUTO-UPGRADE FROM IMAGE
   // ═══════════════════════════════════════════════════════════════
   static Future<bool> autoUpgradeFromImage(
-      String employeeId,
-      Uint8List imageBytes, {
-        String source = 'upload',
-        bool onlyIfNotV4 = false,
-      }) async {
+    String employeeId,
+    Uint8List imageBytes, {
+    String source = 'upload',
+    bool onlyIfNotV4 = false,
+  }) async {
     if (kIsWeb) {
       _secureLog('⛔ autoUpgrade SKIPPED on web');
       return false;
@@ -599,7 +597,7 @@ class FaceMatcher {
       if (imageBytes.isEmpty) return false;
 
       final docRef =
-      FirebaseFirestore.instance.collection('employees').doc(employeeId);
+          FirebaseFirestore.instance.collection('employees').doc(employeeId);
 
       if (onlyIfNotV4) {
         final doc = await docRef.get();
@@ -687,12 +685,12 @@ class FaceMatcher {
   // 🔥 MAIN VERIFY — strict, no auto-pass, with self-heal
   // ═══════════════════════════════════════════════════════════════
   static Future<FaceVerifyResult> verify(
-      String employeeId,
-      Uint8List liveImageBytes, {
-        double threshold = defaultThreshold,
-        bool allowLegacy = false,
-        bool enableSelfHeal = true,
-      }) async {
+    String employeeId,
+    Uint8List liveImageBytes, {
+    double threshold = defaultThreshold,
+    bool allowLegacy = false,
+    bool enableSelfHeal = true,
+  }) async {
     if (kIsWeb) {
       return const FaceVerifyResult(
         score: 0,
@@ -745,7 +743,7 @@ class FaceMatcher {
       }
 
       final live =
-      await generateEmbedding(liveImageBytes, enableAlignment: true);
+          await generateEmbedding(liveImageBytes, enableAlignment: true);
       if (live.isEmpty) {
         return const FaceVerifyResult(
           score: 0,
@@ -806,10 +804,10 @@ class FaceMatcher {
   // UPLOAD EMPLOYEE PHOTO (used by admin)
   // ═══════════════════════════════════════════════════════════════
   static Future<String?> uploadEmployeePhoto(
-      String employeeId,
-      Uint8List imageBytes, {
-        bool autoUpgradeFace = true,
-      }) async {
+    String employeeId,
+    Uint8List imageBytes, {
+    bool autoUpgradeFace = true,
+  }) async {
     if (imageBytes.isEmpty) return null;
 
     Uint8List processedBytes = imageBytes;
@@ -856,7 +854,7 @@ class FaceMatcher {
             .child('$employeeId.jpg');
         await ref
             .putData(processedBytes,
-            SettableMetadata(contentType: 'image/jpeg'))
+                SettableMetadata(contentType: 'image/jpeg'))
             .timeout(const Duration(seconds: 20));
         final url = await ref.getDownloadURL();
         return url;
@@ -954,9 +952,9 @@ class FaceMatcher {
         'count': data['faceEmbeddingsCount'],
         'size': data['faceEmbeddingSize'],
         'hasJson':
-        (data['faceEmbeddingsJson'] as String?)?.isNotEmpty ?? false,
+            (data['faceEmbeddingsJson'] as String?)?.isNotEmpty ?? false,
         'hasPhotoUrl':
-        (data['photoUrl'] as String?)?.isNotEmpty ?? false,
+            (data['photoUrl'] as String?)?.isNotEmpty ?? false,
         'updatedAt': data['faceEmbeddingUpdatedAt'],
         'source': data['faceEmbeddingSource'],
       };
@@ -987,6 +985,6 @@ class FaceVerifyResult {
   @override
   String toString() =>
       'FaceVerifyResult(score: ${score.toStringAsFixed(4)}, '
-          'matched: $matched, hasEmbedding: $hasEmbedding, '
-          'error: $error)';
+      'matched: $matched, hasEmbedding: $hasEmbedding, '
+      'error: $error)';
 }

@@ -1,12 +1,13 @@
 // lib/services/payroll_calculator.dart
-// v2.2: - Rates are HR-editable (settings/payroll); defaults = SSS 5% of MSC,
-//         Pag-IBIG cap 200, OT 125%, rest day 130%, rest-day OT 169%, ND 10%,
-//         BIR monthly withholding brackets.
-//       - Centavo rounding on every amount so payslip rows add up.
-//       - netPay clamped to 0 but the gap is exposed as deductionShortfall.
-//       - 13th month is now earnedBasic / 12.
-//       - otherIncomeAllowance is now the EARNED allowance (matches gross).
-//       - Fixed: logs from today were dropped (fetch end was midnight).
+// v2.5: 🛡️ INDEX-FREE PER-EMPLOYEE FETCH
+//   • When idField/id is provided, _logsInRange now queries ONLY by the ID
+//     field and filters dates locally in Dart. This completely removes the
+//     dependency on composite indexes (employeeId + arrivalTime, etc.),
+//     which frequently fail on Web builds.
+//   • Bulk fetch (without idField) still uses single-field time range queries
+//     (auto-indexed by Firestore).
+//   • Type-aware _parseTimestamp (OUT prefers departureTime).
+//   • Prorated statutory contributions.
 import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
@@ -94,8 +95,8 @@ class PayrollSettings {
     final rawB = m['taxBrackets'];
     if (rawB is List && rawB.isNotEmpty) {
       final parsed =
-      rawB.map(TaxBracket.tryParse).whereType<TaxBracket>().toList()
-        ..sort((a, b) => a.over.compareTo(b.over));
+          rawB.map(TaxBracket.tryParse).whereType<TaxBracket>().toList()
+            ..sort((a, b) => a.over.compareTo(b.over));
       if (parsed.length == rawB.length) brackets = parsed;
     }
 
@@ -110,35 +111,38 @@ class PayrollSettings {
       pagibigEmployeeRate: gd('pagibigEmployeeRate', d.pagibigEmployeeRate),
       pagibigMax: gd('pagibigMax', d.pagibigMax),
       pagibigLowSalaryThreshold:
-      gd('pagibigLowSalaryThreshold', d.pagibigLowSalaryThreshold),
+          gd('pagibigLowSalaryThreshold', d.pagibigLowSalaryThreshold),
       pagibigLowRate: gd('pagibigLowRate', d.pagibigLowRate),
-      ordinaryOtMultiplier: gd('ordinaryOtMultiplier', d.ordinaryOtMultiplier),
+      ordinaryOtMultiplier:
+          gd('ordinaryOtMultiplier', d.ordinaryOtMultiplier),
       restDayRegularMultiplier:
-      gd('restDayRegularMultiplier', d.restDayRegularMultiplier),
-      restDayOtMultiplier: gd('restDayOtMultiplier', d.restDayOtMultiplier),
-      nightDiffMultiplier: gd('nightDiffMultiplier', d.nightDiffMultiplier),
+          gd('restDayRegularMultiplier', d.restDayRegularMultiplier),
+      restDayOtMultiplier:
+          gd('restDayOtMultiplier', d.restDayOtMultiplier),
+      nightDiffMultiplier:
+          gd('nightDiffMultiplier', d.nightDiffMultiplier),
       taxBrackets: brackets,
     );
   }
 
   Map<String, dynamic> toMap() => {
-    'sssEmployeeRate': sssEmployeeRate,
-    'sssMinMsc': sssMinMsc,
-    'sssMaxMsc': sssMaxMsc,
-    'sssMscStep': sssMscStep,
-    'philhealthTotalRate': philhealthTotalRate,
-    'philhealthFloor': philhealthFloor,
-    'philhealthCeiling': philhealthCeiling,
-    'pagibigEmployeeRate': pagibigEmployeeRate,
-    'pagibigMax': pagibigMax,
-    'pagibigLowSalaryThreshold': pagibigLowSalaryThreshold,
-    'pagibigLowRate': pagibigLowRate,
-    'ordinaryOtMultiplier': ordinaryOtMultiplier,
-    'restDayRegularMultiplier': restDayRegularMultiplier,
-    'restDayOtMultiplier': restDayOtMultiplier,
-    'nightDiffMultiplier': nightDiffMultiplier,
-    'taxBrackets': taxBrackets.map((b) => b.toMap()).toList(),
-  };
+        'sssEmployeeRate': sssEmployeeRate,
+        'sssMinMsc': sssMinMsc,
+        'sssMaxMsc': sssMaxMsc,
+        'sssMscStep': sssMscStep,
+        'philhealthTotalRate': philhealthTotalRate,
+        'philhealthFloor': philhealthFloor,
+        'philhealthCeiling': philhealthCeiling,
+        'pagibigEmployeeRate': pagibigEmployeeRate,
+        'pagibigMax': pagibigMax,
+        'pagibigLowSalaryThreshold': pagibigLowSalaryThreshold,
+        'pagibigLowRate': pagibigLowRate,
+        'ordinaryOtMultiplier': ordinaryOtMultiplier,
+        'restDayRegularMultiplier': restDayRegularMultiplier,
+        'restDayOtMultiplier': restDayOtMultiplier,
+        'nightDiffMultiplier': nightDiffMultiplier,
+        'taxBrackets': taxBrackets.map((b) => b.toMap()).toList(),
+      };
 
   List<String> validate() {
     final e = <String>[];
@@ -215,10 +219,10 @@ class WorkHoursConfig {
 
     return WorkHoursConfig(
       standardMinutesPerDay:
-      gv(m['standardMinutesPerDay'], 480).clamp(60, 1440),
+          gv(m['standardMinutesPerDay'], 480).clamp(60, 1440),
       lunchBreakMinutes: gv(m['lunchBreakMinutes'], 60).clamp(0, 240),
       lunchThresholdMinutes:
-      gv(m['lunchThresholdMinutes'], 300).clamp(60, 1440),
+          gv(m['lunchThresholdMinutes'], 300).clamp(60, 1440),
       graceMinutes: gv(m['graceMinutes'], 15).clamp(0, 60),
     );
   }
@@ -270,7 +274,6 @@ class PayrollBreakdown {
   final double totalDeductions;
   final double netPay;
 
-  /// How much the deductions exceed gross (netPay is clamped to 0).
   final double deductionShortfall;
   final double sickLeaveBalance;
   final double vacationLeaveBalance;
@@ -410,6 +413,17 @@ class PayrollCalculator {
   static const int _maxLogsPerEmployee = 5000;
   static const int _maxPeriodDays = 62;
 
+  static const List<String> _timeFields = <String>[
+    'timestamp',
+    'arrivalTime',
+    'departureTime',
+  ];
+
+  static const List<String> _idFields = <String>[
+    'employee_id',
+    'employeeId',
+  ];
+
   static double toDbl(dynamic v) {
     if (v is num) {
       final d = v.toDouble();
@@ -431,7 +445,6 @@ class PayrollCalculator {
     return fallback;
   }
 
-  /// Round to centavos (half away from zero) so payslip rows add up exactly.
   static double _r2(double v) => (v * 100).roundToDouble() / 100;
 
   static int countWeekdays(DateTime start, DateTime end) {
@@ -457,11 +470,19 @@ class PayrollCalculator {
   static String _dateKey(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+  // ─────────── v2.4 — TYPE-AWARE TIMESTAMP ───────────
   static DateTime? _parseTimestamp(Map<String, dynamic> data) {
-    final raw = data['timestamp'] ?? data['createdAt'];
+    final isOut = _isOut(_logType(data));
+    final raw = data['timestamp'] ??
+        (isOut
+            ? (data['departureTime'] ?? data['arrivalTime'])
+            : (data['arrivalTime'] ?? data['departureTime'])) ??
+        data['createdAt'];
+
     if (raw is Timestamp) return raw.toDate();
     if (raw is DateTime) return raw;
     if (raw is int) return DateTime.fromMillisecondsSinceEpoch(raw);
+
     final dateStr = data['date'] as String?;
     if (dateStr != null) {
       return DateTime.tryParse('$dateStr ${data['time'] ?? '00:00'}');
@@ -472,12 +493,14 @@ class PayrollCalculator {
 
   static String _logType(Map<String, dynamic> log) =>
       (log['type'] ?? log['status'] ?? '').toString().toUpperCase();
+
   static bool _isIn(String type) =>
       type.contains('IN') || type.contains('LOGIN') || type.contains('CLOCK_IN');
+
   static bool _isOut(String type) =>
       type.contains('OUT') ||
-          type.contains('LOGOUT') ||
-          type.contains('CLOCK_OUT');
+      type.contains('LOGOUT') ||
+      type.contains('CLOCK_OUT');
 
   static Set<String> _safeEmployeeIds(Map<String, dynamic> employee) {
     final ids = <String>{};
@@ -488,9 +511,79 @@ class PayrollCalculator {
     return ids;
   }
 
-  // ───────────────────────── Statutory contributions ─────────────────────────
+  // ─────────── v2.5 — INDEX-FREE PER-EMPLOYEE FETCH ───────────
+  static Future<List<Map<String, dynamic>>> _logsInRange({
+    String? idField,
+    String? id,
+    required DateTime start,
+    required DateTime end,
+    int limit = 5000,
+  }) async {
+    final merged = <String, Map<String, dynamic>>{};
 
-  /// SSS employee share = rate x MSC bracket.
+    if (idField != null && id != null) {
+      // 🎯 PER-EMPLOYEE FETCH: Query ONLY by idField to avoid composite index requirements.
+      // Fetch all logs for this employee (up to limit), then filter by date locally.
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('attendance_logs')
+            .where(idField, isEqualTo: id)
+            .limit(limit)
+            .get();
+            
+        for (final doc in snap.docs) {
+          final data = doc.data();
+          final typeStr = (data['type'] ?? data['status'] ?? '').toString().toUpperCase();
+          final isOut = typeStr.contains('OUT');
+          final raw = data['timestamp'] ??
+              (isOut
+                  ? (data['departureTime'] ?? data['arrivalTime'])
+                  : (data['arrivalTime'] ?? data['departureTime'])) ??
+              data['createdAt'];
+              
+          DateTime? ts;
+          if (raw is Timestamp) ts = raw.toDate();
+          else if (raw is String) ts = DateTime.tryParse(raw);
+          
+          if (ts == null) {
+             final dStr = data['date']?.toString();
+             final tStr = data['time']?.toString();
+             if (dStr != null && tStr != null) {
+               ts = DateTime.tryParse('${dStr}T$tStr');
+             }
+          }
+
+          if (ts != null && !ts.isBefore(start) && !ts.isAfter(end)) {
+            merged[doc.id] = data;
+          }
+        }
+        return merged.values.toList();
+      } catch (e) {
+        debugPrint('⚠️ _logsInRange(byId $idField=$id): $e');
+        return [];
+      }
+    } else {
+      // 🌍 BULK FETCH: Query by time fields (requires only single-field indexes).
+      for (final tf in _timeFields) {
+        try {
+          final snap = await FirebaseFirestore.instance
+              .collection('attendance_logs')
+              .where(tf, isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+              .where(tf, isLessThanOrEqualTo: Timestamp.fromDate(end))
+              .limit(limit)
+              .get();
+          for (final doc in snap.docs) {
+            merged[doc.id] = doc.data();
+          }
+        } catch (e) {
+          debugPrint('⚠️ _logsInRange(bulk $tf): $e');
+        }
+      }
+    }
+    
+    return merged.values.toList();
+  }
+
   static double calcSss(double monthlySalary, PayrollSettings s) {
     if (monthlySalary <= 0) return 0.0;
     final raw =
@@ -502,18 +595,16 @@ class PayrollCalculator {
     return msc * s.sssEmployeeRate;
   }
 
-  /// PhilHealth employee share = half of the total premium.
   static double calcPhilhealth(double monthlySalary, PayrollSettings s) {
     if (monthlySalary <= 0) return 0.0;
     final base = monthlySalary < s.philhealthFloor
         ? s.philhealthFloor
         : (monthlySalary > s.philhealthCeiling
-        ? s.philhealthCeiling
-        : monthlySalary);
+            ? s.philhealthCeiling
+            : monthlySalary);
     return base * s.philhealthTotalRate / 2;
   }
 
-  /// Pag-IBIG employee share, capped at pagibigMax.
   static double calcPagibig(double monthlySalary, PayrollSettings s) {
     if (monthlySalary <= 0) return 0.0;
     if (monthlySalary <= s.pagibigLowSalaryThreshold) {
@@ -523,7 +614,6 @@ class PayrollCalculator {
     return c > s.pagibigMax ? s.pagibigMax : c;
   }
 
-  /// BIR monthly withholding tax: base + (taxable - over) x rate.
   static double calcWithholdingTax(double taxable, PayrollSettings s) {
     if (taxable <= 0) return 0.0;
     TaxBracket? hit;
@@ -538,7 +628,6 @@ class PayrollCalculator {
     return hit.base + (taxable - hit.over) * hit.rate;
   }
 
-  /// Minutes between 10PM and 6AM inside [inTime, outTime].
   static int _calculateNdMinutes(DateTime inTime, DateTime outTime) {
     int ndMins = 0;
     DateTime current = DateTime(inTime.year, inTime.month, inTime.day, 22, 0);
@@ -560,41 +649,28 @@ class PayrollCalculator {
     return ndMins;
   }
 
-  // ───────────────────────────── Attendance fetching ─────────────────────────
-
   static Future<Map<String, int>> fetchPresentDaysMap({
     required DateTime periodStart,
     required DateTime periodEnd,
   }) async {
     final result = <String, Set<String>>{};
-    try {
-      final snap = await FirebaseFirestore.instance
-          .collection('attendance_logs')
-          .where('timestamp',
-          isGreaterThanOrEqualTo: Timestamp.fromDate(periodStart))
-          .where('timestamp',
-          isLessThanOrEqualTo: Timestamp.fromDate(periodEnd))
-          .limit(5000)
-          .get();
-      for (final d in snap.docs) {
-        final data = d.data();
-        final empId =
-        (data['employee_id'] ?? data['employeeId'] ?? data['empId'] ?? '')
-            .toString()
-            .trim();
-        if (empId.isEmpty) continue;
-        final ts = _parseTimestamp(data);
-        if (ts == null || ts.isBefore(periodStart) || ts.isAfter(periodEnd)) {
-          continue;
-        }
-        if (ts.weekday == DateTime.saturday || ts.weekday == DateTime.sunday) {
-          continue;
-        }
-        if (!_isIn(_logType(data))) continue;
-        result.putIfAbsent(empId, () => {}).add(_dateKey(ts));
+    final docs = await _logsInRange(start: periodStart, end: periodEnd);
+
+    for (final data in docs) {
+      final empId =
+          (data['employee_id'] ?? data['employeeId'] ?? data['empId'] ?? '')
+              .toString()
+              .trim();
+      if (empId.isEmpty) continue;
+      final ts = _parseTimestamp(data);
+      if (ts == null || ts.isBefore(periodStart) || ts.isAfter(periodEnd)) {
+        continue;
       }
-    } catch (e) {
-      debugPrint('⚠️ fetchPresentDaysMap: $e');
+      if (ts.weekday == DateTime.saturday || ts.weekday == DateTime.sunday) {
+        continue;
+      }
+      if (!_isIn(_logType(data))) continue;
+      result.putIfAbsent(empId, () => {}).add(_dateKey(ts));
     }
     return result.map((k, v) => MapEntry(k, v.length));
   }
@@ -607,34 +683,21 @@ class PayrollCalculator {
     final ids = _safeEmployeeIds(employee);
     if (ids.isEmpty) return 0;
     final dates = <String>{};
+
     for (final id in ids) {
-      try {
-        var snap = await FirebaseFirestore.instance
-            .collection('attendance_logs')
-            .where('employee_id', isEqualTo: id)
-            .where('timestamp',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(periodStart))
-            .where('timestamp',
-            isLessThanOrEqualTo: Timestamp.fromDate(periodEnd))
-            .limit(_maxLogsPerEmployee)
-            .get();
-
-        if (snap.docs.isEmpty) {
-          snap = await FirebaseFirestore.instance
-              .collection('attendance_logs')
-              .where('employeeId', isEqualTo: id)
-              .where('timestamp',
-              isGreaterThanOrEqualTo: Timestamp.fromDate(periodStart))
-              .where('timestamp',
-              isLessThanOrEqualTo: Timestamp.fromDate(periodEnd))
-              .limit(_maxLogsPerEmployee)
-              .get();
-        }
-
-        for (final d in snap.docs) {
-          final data = d.data();
+      for (final idField in _idFields) {
+        final docs = await _logsInRange(
+          idField: idField,
+          id: id,
+          start: periodStart,
+          end: periodEnd,
+          limit: _maxLogsPerEmployee,
+        );
+        for (final data in docs) {
           final ts = _parseTimestamp(data);
-          if (ts == null || ts.isBefore(periodStart) || ts.isAfter(periodEnd)) {
+          if (ts == null ||
+              ts.isBefore(periodStart) ||
+              ts.isAfter(periodEnd)) {
             continue;
           }
           if (ts.weekday == DateTime.saturday ||
@@ -643,8 +706,6 @@ class PayrollCalculator {
           }
           if (_isIn(_logType(data))) dates.add(_dateKey(ts));
         }
-      } catch (e) {
-        debugPrint('⚠️ present days ($id): $e');
       }
     }
     return dates.length;
@@ -660,40 +721,25 @@ class PayrollCalculator {
     if (ids.isEmpty) return const WorkHoursTotals();
 
     final Map<String, List<Map<String, dynamic>>> byDay = {};
+
     for (final id in ids) {
-      try {
-        var snap = await FirebaseFirestore.instance
-            .collection('attendance_logs')
-            .where('employee_id', isEqualTo: id)
-            .where('timestamp',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(periodStart))
-            .where('timestamp',
-            isLessThanOrEqualTo: Timestamp.fromDate(periodEnd))
-            .limit(_maxLogsPerEmployee)
-            .get();
-
-        if (snap.docs.isEmpty) {
-          snap = await FirebaseFirestore.instance
-              .collection('attendance_logs')
-              .where('employeeId', isEqualTo: id)
-              .where('timestamp',
-              isGreaterThanOrEqualTo: Timestamp.fromDate(periodStart))
-              .where('timestamp',
-              isLessThanOrEqualTo: Timestamp.fromDate(periodEnd))
-              .limit(_maxLogsPerEmployee)
-              .get();
-        }
-
-        for (final d in snap.docs) {
-          final data = d.data();
+      for (final idField in _idFields) {
+        final docs = await _logsInRange(
+          idField: idField,
+          id: id,
+          start: periodStart,
+          end: periodEnd,
+          limit: _maxLogsPerEmployee,
+        );
+        for (final data in docs) {
           final ts = _parseTimestamp(data);
-          if (ts == null || ts.isBefore(periodStart) || ts.isAfter(periodEnd)) {
+          if (ts == null ||
+              ts.isBefore(periodStart) ||
+              ts.isAfter(periodEnd)) {
             continue;
           }
           byDay.putIfAbsent(_dateKey(ts), () => []).add({...data, '_ts': ts});
         }
-      } catch (e) {
-        debugPrint('⚠️ work hours ($id): $e');
       }
     }
 
@@ -705,7 +751,7 @@ class PayrollCalculator {
     byDay.forEach((key, logs) {
       if (logs.isEmpty) return;
       logs.sort(
-              (a, b) => (a['_ts'] as DateTime).compareTo(b['_ts'] as DateTime));
+          (a, b) => (a['_ts'] as DateTime).compareTo(b['_ts'] as DateTime));
 
       final firstTs = logs.first['_ts'] as DateTime;
       final isWeekend = firstTs.weekday == DateTime.saturday ||
@@ -763,8 +809,6 @@ class PayrollCalculator {
     );
   }
 
-  // ─────────────────────────────── HR settings ───────────────────────────────
-
   static Future<PayrollSettings> fetchSettings() async {
     try {
       final doc = await FirebaseFirestore.instance
@@ -784,9 +828,9 @@ class PayrollCalculator {
   }
 
   static Future<void> saveSettings(
-      PayrollSettings s, {
-        required String actorUid,
-      }) async {
+    PayrollSettings s, {
+    required String actorUid,
+  }) async {
     final errors = s.validate();
     if (errors.isNotEmpty) throw ArgumentError(errors.join('; '));
     await FirebaseFirestore.instance.collection('settings').doc('payroll').set({
@@ -795,8 +839,6 @@ class PayrollCalculator {
       'updatedBy': actorUid,
     }, SetOptions(merge: true));
   }
-
-  // ────────────────────────────────── Compute ────────────────────────────────
 
   static Future<PayrollBreakdown> compute({
     required Map<String, dynamic> employee,
@@ -818,11 +860,10 @@ class PayrollCalculator {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final yesterday = today.subtract(const Duration(days: 1));
-    // End of today, so today's logs are included (was midnight before).
     final endOfToday = DateTime(now.year, now.month, now.day, 23, 59, 59);
     final fetchEnd = periodEnd.isAfter(endOfToday) ? endOfToday : periodEnd;
     final pStart =
-    DateTime(periodStart.year, periodStart.month, periodStart.day);
+        DateTime(periodStart.year, periodStart.month, periodStart.day);
     final pEnd = DateTime(periodEnd.year, periodEnd.month, periodEnd.day);
 
     final dateHiredRaw = employee['dateHired'] ??
@@ -889,9 +930,8 @@ class PayrollCalculator {
             toDbl(employee['specialAllowance']);
 
     final workingDays =
-    toInt(employee['workingDaysPerMonth'], defaultWorkingDays).clamp(1, 31);
+        toInt(employee['workingDaysPerMonth'], defaultWorkingDays).clamp(1, 31);
     final savedDaily = toDbl(employee['dailyRate']);
-    // Daily rate stays unrounded so 22 days x rate == basic exactly.
     final dailyRate = savedDaily > 0 ? savedDaily : basic / workingDays;
     final hourlyRate = dailyRate / 8.0;
 
@@ -903,13 +943,13 @@ class PayrollCalculator {
     final rdOtHours = workHours.restDayOtMinutes / 60.0;
     final ndHours = workHours.nightDiffMinutes / 60.0;
 
-    // Multipliers come from HR-editable settings (settings/payroll).
     final otAmount =
-    _r2(otHours * hourlyRate * settings.ordinaryOtMultiplier);
+        _r2(otHours * hourlyRate * settings.ordinaryOtMultiplier);
     final rdAmount = _r2(
         rdRegHours * hourlyRate * settings.restDayRegularMultiplier +
             rdOtHours * hourlyRate * settings.restDayOtMultiplier);
-    final ndAmount = _r2(ndHours * hourlyRate * settings.nightDiffMultiplier);
+    final ndAmount =
+        _r2(ndHours * hourlyRate * settings.nightDiffMultiplier);
 
     final gross = _r2(earnedBasic +
         earnedAllowance +
@@ -919,21 +959,26 @@ class PayrollCalculator {
         holidayAmount +
         otherIncomeAllowance);
 
-    // Contributions are based on the contract monthly salary (not on
-    // attendance), so absences never reduce SSS / PhilHealth / Pag-IBIG.
-    final sss = earnedBasic > 0 ? _r2(calcSss(basic, settings)) : 0.0;
-    final philhealth =
-    earnedBasic > 0 ? _r2(calcPhilhealth(basic, settings)) : 0.0;
-    final pagibig = earnedBasic > 0 ? _r2(calcPagibig(basic, settings)) : 0.0;
+    final attendanceRatio = workingDays > 0
+        ? (present / workingDays).clamp(0.0, 1.0).toDouble()
+        : 0.0;
+    final sss = earnedBasic > 0
+        ? _r2(calcSss(basic, settings) * attendanceRatio)
+        : 0.0;
+    final philhealth = earnedBasic > 0
+        ? _r2(calcPhilhealth(basic, settings) * attendanceRatio)
+        : 0.0;
+    final pagibig = earnedBasic > 0
+        ? _r2(calcPagibig(basic, settings) * attendanceRatio)
+        : 0.0;
 
     final taxable = _r2(math.min(
         math.max(0.0, gross - sss - philhealth - pagibig), _maxSalary));
     final tax =
-    _r2(taxWithheldOverride ?? calcWithholdingTax(taxable, settings));
+        _r2(taxWithheldOverride ?? calcWithholdingTax(taxable, settings));
     final totalDeductions = _r2(sss + philhealth + pagibig + tax);
     final absent = (expectedDays - present).clamp(0, expectedDays);
 
-    // Net is never shown negative, but the gap is no longer hidden.
     final rawNet = _r2(gross - totalDeductions);
     final netPay = math.max(0.0, rawNet);
     final shortfall = math.max(0.0, -rawNet);
@@ -959,7 +1004,6 @@ class PayrollCalculator {
       nightDiffAmount: ndAmount,
       nightDiffHours: ndHours,
       holidayAmount: holidayAmount,
-      // Earned (not full-month) so payslip rows add up to gross.
       otherIncomeAllowance: _r2(earnedAllowance + otherIncomeAllowance),
       earnedAllowance: earnedAllowance,
       totalAdjustmentsMade: 0.0,
@@ -976,7 +1020,7 @@ class PayrollCalculator {
       workLunchMinutes: workHours.lunchMinutes,
       workNetMinutes: workHours.netMinutes,
       workOvertimeMinutes:
-      workHours.regularOtMinutes + workHours.restDayOtMinutes,
+          workHours.regularOtMinutes + workHours.restDayOtMinutes,
       daysWithLogs: workHours.daysWithLogs,
       daysWithLunchApplied: workHours.daysWithLunchApplied,
       salarySource: (employee['salarySource'] as String?)?.trim() ?? 'manual',

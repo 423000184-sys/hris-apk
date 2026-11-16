@@ -1,9 +1,11 @@
 // lib/screens/reports_screen.dart
+// v2.8: 🔐 PDF password is now the employee's own PIN (verified via a PIN dialog).
+//       Removed the generated/derived password: Save Password dialog,
+//       View My PDF Password dialog and button.
 // v2.7: 🔧 Fixed PayrollBreakdown initialization missing earnedBasic & earnedAllowance.
 // v2.6: 🔓 Admin can manually unlock payslips (bypasses end-of-month rule).
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
 import 'dart:math' as math;
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -11,7 +13,6 @@ import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../services/database_service.dart';
@@ -85,8 +86,10 @@ Future<T> _executeWithLoadBalancer<T>(Future<T> Function() operation) async {
       retries++;
 
       // Exponential Backoff: 1s, 2s, 4s + random jitter
-      final backoff = (math.pow(2, retries) * 1000).toInt() + math.Random().nextInt(500);
-      debugPrint('⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
+      final backoff =
+          (math.pow(2, retries) * 1000).toInt() + math.Random().nextInt(500);
+      debugPrint(
+          '⚖️ [LoadBalancer] Write throttled. Retrying in ${backoff}ms... (Attempt $retries/$maxRetries)');
       await Future.delayed(Duration(milliseconds: backoff));
     }
   }
@@ -129,17 +132,15 @@ Future<void> _logSecurityEventGlobal({
   }
 }
 
-String _maskString(String input, {int showStart = 2, int showEnd = 2}) {
-  if (input.isEmpty) return '';
-  if (input.length <= showStart + showEnd) return '*' * input.length;
-  final start = input.substring(0, showStart);
-  final end = input.substring(input.length - showEnd);
-  return '$start${'*' * (input.length - showStart - showEnd)}$end';
-}
-
 const int kWorkingDaysPerMonth = 22;
 const int _kDownloadWindowDays = 1;
 const Duration _kDemoSkeletonDuration = Duration(milliseconds: 900);
+
+/// PIN used as the PDF password in Demo Mode only (fake payslip).
+const String _kDemoPin = '1234';
+
+/// Wrong PIN attempts allowed per export before the dialog closes.
+const int _kMaxPinAttempts = 3;
 
 enum _NetworkState { online, offline, checking }
 
@@ -185,7 +186,6 @@ class _ReportsScreenState extends State<ReportsScreen>
   bool _exporting = false;
   bool _downloading = false;
   bool _sendingSupport = false;
-  bool _loadingPassword = false;
   DateTime? _lastSupportRequestAt;
 
   bool _isPayslipUnlocked = false;
@@ -320,12 +320,11 @@ class _ReportsScreenState extends State<ReportsScreen>
                 _showOfflineOverlay = false;
               });
 
-              _overlayDelayTimer =
-                  Timer(const Duration(milliseconds: 1200), () {
-                    if (mounted && _networkState == _NetworkState.offline) {
-                      setState(() => _showOfflineOverlay = true);
-                    }
-                  });
+              _overlayDelayTimer = Timer(const Duration(milliseconds: 1200), () {
+                if (mounted && _networkState == _NetworkState.offline) {
+                  setState(() => _showOfflineOverlay = true);
+                }
+              });
             } else if (_networkState == _NetworkState.offline) {
               _overlayDelayTimer?.cancel();
               _showOfflineOverlay = false;
@@ -749,7 +748,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     return PayrollBreakdown(
       regularPay: demo['regularPay'] ?? 22000.0,
       basicSalary: demo['basicSalary'] ?? 22000.0,
-      earnedBasic: demo['basicSalary'] ?? 22000.0, // 🆕 Added
+      earnedBasic: demo['basicSalary'] ?? 22000.0,
       basicHours: demo['basicHours'] ?? 176.0,
       absentAmount: demo['absentAmount'] ?? 0.0,
       absentHours: demo['absentHours'] ?? 0.0,
@@ -765,7 +764,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       nightDiffHours: demo['nightDiffHours'] ?? 12.0,
       holidayAmount: demo['holidayAmount'] ?? 600.0,
       otherIncomeAllowance: demo['otherIncomeAllowance'] ?? 0.0,
-      earnedAllowance: demo['otherIncomeAllowance'] ?? 0.0, // 🆕 Added
+      earnedAllowance: demo['otherIncomeAllowance'] ?? 0.0,
       totalAdjustmentsMade: demo['totalAdjustmentsMade'] ?? 0.0,
       grossPay: demo['grossPay'] ?? 25750.0,
       thirteenthMonth: 0,
@@ -887,8 +886,7 @@ class _ReportsScreenState extends State<ReportsScreen>
       }
 
       final basicFromData = _num(data?['basicSalary']);
-      final basicAllow =
-      _num(data?['basicAllowance'] ?? data?['allowances']);
+      final basicAllow = _num(data?['basicAllowance'] ?? data?['allowances']);
       final housingAllow = _num(data?['housingAllowance']);
       final transportAllow = _num(data?['transportAllowance']);
       final specialAllow = _num(data?['specialAllowance']);
@@ -998,7 +996,8 @@ class _ReportsScreenState extends State<ReportsScreen>
       }
 
       if (!_isDemo && _networkState != _NetworkState.online) {
-        _showSnack('⚠️ No internet. Please check your connection.', error: true);
+        _showSnack('⚠️ No internet. Please check your connection.',
+            error: true);
         return;
       }
 
@@ -1032,20 +1031,62 @@ class _ReportsScreenState extends State<ReportsScreen>
         return;
       }
 
-      final password =
-      PayrollPdfService.deriveUserPassword(effectiveEmp.employeeId.trim());
-
+      // 🔐 The employee proves they know their PIN; that PIN locks the PDF.
       if (!mounted) return;
-      await _showPreDownloadPasswordDialog(password);
-      if (!mounted) return;
+      final pin = await _promptForPin();
+      if (pin == null || !mounted) return;
 
-      await _doGeneratePdf(effectiveEmp);
+      await _doGeneratePdf(effectiveEmp, pin);
     } finally {
       _downloading = false;
     }
   }
 
-  Future<void> _doGeneratePdf(Employee effectiveEmp) async {
+  /// Asks the employee for their PIN and verifies it before export.
+  /// Returns the verified PIN, or null if cancelled or locked out.
+  Future<String?> _promptForPin() async {
+    if (_isDemo) return _kDemoPin;
+
+    final emp = _employee ?? widget.initialEmployee;
+    final empId = (emp?.employeeId.isNotEmpty ?? false)
+        ? emp!.employeeId
+        : _displayEmpId;
+
+    if (empId.isEmpty || empId == '—') {
+      _showSnack('Employee ID not available.', error: true);
+      return null;
+    }
+
+    final pin = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _PinDialog(
+        verify: (value) async {
+          try {
+            // Assumed signature: verifyPin(employeeId, pin) -> Future<bool>
+            return await SecurityService.instance
+                .verifyPin(empId, value)
+                .timeout(const Duration(seconds: 5));
+          } catch (e) {
+            debugPrint('⚠️ PIN verify error: $e');
+            return false;
+          }
+        },
+        onLockout: () => _logSecurityEvent(
+          type: 'reports_pin_lockout',
+          severity: 'high',
+          details: 'Too many wrong PIN attempts on payslip export',
+        ),
+      ),
+    );
+
+    if (pin == null && mounted) {
+      _showSnack('Export cancelled.', error: true);
+    }
+    return pin;
+  }
+
+  Future<void> _doGeneratePdf(Employee effectiveEmp, String pin) async {
     if (!mounted) return;
     setState(() => _exporting = true);
     _lastPdfGeneratedAt = DateTime.now();
@@ -1084,6 +1125,7 @@ class _ReportsScreenState extends State<ReportsScreen>
         vacationLeaveBalance: _breakdown.vacationLeaveBalance,
         riceAllowance: _breakdown.riceAllowance,
         receivedThru: 'ATM',
+        userPassword: pin,
         sessionNonce: _sessionNonce,
       );
 
@@ -1111,8 +1153,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                 'exported_at': FieldValue.serverTimestamp(),
                 'platform': kIsWeb ? 'Web' : 'Mobile',
                 'session_nonce': _sessionNonce,
-              })
-          );
+              }));
         } catch (e) {
           debugPrint('⚠️ pdf_exports log warning: $e');
         }
@@ -1121,8 +1162,8 @@ class _ReportsScreenState extends State<ReportsScreen>
       if (mounted) {
         _showSnack(
           _isDemo
-              ? '🎭 DEMO PDF payslip generated ✓'
-              : 'PDF payslip generated ✓',
+              ? '🎭 DEMO PDF payslip generated ✓ (PIN: $_kDemoPin)'
+              : 'PDF payslip generated ✓ Open it with your PIN.',
         );
       }
     } catch (e) {
@@ -1132,290 +1173,6 @@ class _ReportsScreenState extends State<ReportsScreen>
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
-  }
-
-  Future<void> _showPreDownloadPasswordDialog(String password) async {
-    if (!mounted) return;
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final tc = _ThemeColors(isDark);
-    final accent = _Mock.orange;
-
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: tc.cardBg,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(color: tc.cardBorder),
-          ),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  _isDemo ? Icons.science_rounded : Icons.lock_outline_rounded,
-                  color: accent,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  _isDemo ? 'Demo — Save Password' : 'Save Password',
-                  style: TextStyle(
-                    color: tc.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Before downloading, copy or save this password first. You will need it to open the PDF.',
-                  style: TextStyle(
-                      color: tc.textGrayDark, fontSize: 13, height: 1.4),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  decoration: BoxDecoration(
-                    color: accent.withValues(alpha: 0.10),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: accent.withValues(alpha: 0.35), width: 1.5),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: SelectionArea(
-                          child: Text(
-                            password,
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 4,
-                              color: accent,
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.copy_rounded, color: tc.textGrayDark, size: 20),
-                        onPressed: () async {
-                          await Clipboard.setData(ClipboardData(text: password));
-                          if (ctx.mounted) {
-                            ScaffoldMessenger.of(ctx).showSnackBar(
-                              const SnackBar(
-                                content: Text('Password copied ✓'),
-                                duration: Duration(seconds: 2),
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.info_outline_rounded, color: Color(0xFFFF4D6D), size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _isDemo
-                            ? '🎭 DEMO MODE — this is a FAKE PDF. No data will be saved to the database.'
-                            : 'This password is the SAME for all your payslips — it never changes. Save it somewhere safe.',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFFFF4D6D),
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              style: TextButton.styleFrom(
-                foregroundColor: accent,
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              ),
-              child: const Text(
-                'OK — Download Now',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _showCurrentPdfPassword() async {
-    _recordActivity();
-    if (_loadingPassword) return;
-
-    String empId;
-    if (_isDemo) {
-      empId = DemoModeService.demoEmployee.employeeId;
-    } else {
-      final emp = _employee ?? widget.initialEmployee;
-      if (emp == null && _rawData == null) {
-        _showSnack('Employee data not loaded.', error: true);
-        return;
-      }
-      empId = emp?.employeeId ?? (_rawData?['employeeId'] ?? _displayEmpId).toString();
-    }
-
-    if (empId.isEmpty || empId == '—') {
-      _showSnack('Employee ID not available.', error: true);
-      return;
-    }
-
-    setState(() => _loadingPassword = true);
-    final pwd = PayrollPdfService.deriveUserPassword(empId);
-    if (!mounted) return;
-    setState(() => _loadingPassword = false);
-
-    if (pwd.isEmpty) {
-      _showSnack('Could not compute password.', error: true);
-      return;
-    }
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final tc = _ThemeColors(isDark);
-    final accent = _Mock.orange;
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: tc.cardBg,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: tc.cardBorder),
-        ),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: accent.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                _isDemo ? Icons.science_rounded : Icons.vpn_key_rounded,
-                color: accent,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                _isDemo ? 'Demo PDF Password' : 'Your PDF Password',
-                style: TextStyle(
-                  color: tc.textPrimary,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _isDemo
-                    ? 'This is a FAKE password for demo mode. The PDF will still open with it.'
-                    : 'Use this password to open ANY payslip PDF you download. '
-                    'This is the SAME password forever — save it somewhere safe.',
-                style: TextStyle(color: tc.textGrayDark, fontSize: 13, height: 1.4),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: accent.withValues(alpha: 0.35), width: 1.5),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: SelectionArea(
-                        child: Text(
-                          pwd,
-                          style: TextStyle(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 4,
-                            color: accent,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.copy_rounded, color: tc.textGrayDark, size: 20),
-                      onPressed: () async {
-                        await Clipboard.setData(ClipboardData(text: pwd));
-                        if (ctx.mounted) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(
-                              content: Text('Password copied ✓'),
-                              duration: Duration(seconds: 2),
-                              behavior: SnackBarBehavior.floating,
-                            ),
-                          );
-                        }
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            style: TextButton.styleFrom(
-              foregroundColor: accent,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            ),
-            child: const Text(
-              'Close',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _showContactHrSheet({String? prefillCategory}) async {
@@ -1429,9 +1186,12 @@ class _ReportsScreenState extends State<ReportsScreen>
     }
 
     final now = DateTime.now();
-    if (_lastSupportRequestAt != null && now.difference(_lastSupportRequestAt!).inMinutes < 2) {
+    if (_lastSupportRequestAt != null &&
+        now.difference(_lastSupportRequestAt!).inMinutes < 2) {
       final remainSec = 120 - now.difference(_lastSupportRequestAt!).inSeconds;
-      _showSnack('⚠️ Nag-send ka na recently. Mag-antay ng ${remainSec}s bago mag-send muli.', error: true);
+      _showSnack(
+          '⚠️ Nag-send ka na recently. Mag-antay ng ${remainSec}s bago mag-send muli.',
+          error: true);
       return;
     }
 
@@ -1440,7 +1200,8 @@ class _ReportsScreenState extends State<ReportsScreen>
 
     final emp = _employee ?? widget.initialEmployee;
     if (emp == null && _rawData == null) {
-      _showSnack('Employee data not loaded. Please reload the screen.', error: true);
+      _showSnack('Employee data not loaded. Please reload the screen.',
+          error: true);
       return;
     }
 
@@ -1448,7 +1209,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (emp != null) {
       effectiveEmp = emp;
     } else {
-      final now = DateTime.now();
+      final nowTs = DateTime.now();
       effectiveEmp = Employee(
         id: (_rawData!['id'] ?? _displayEmpId).toString(),
         employeeId: (_rawData!['employeeId'] ?? _displayEmpId).toString(),
@@ -1457,12 +1218,13 @@ class _ReportsScreenState extends State<ReportsScreen>
         email: (_rawData!['email'] ?? '').toString(),
         department: _department,
         position: _designation,
-        createdAt: now,
-        updatedAt: now,
+        createdAt: nowTs,
+        updatedAt: nowTs,
       );
     }
 
-    String selectedCategory = prefillCategory ?? SupportRequestService.categories.first.value;
+    String selectedCategory =
+        prefillCategory ?? SupportRequestService.categories.first.value;
     final TextEditingController descCtrl = TextEditingController();
 
     final submitted = await showModalBottomSheet<bool>(
@@ -1506,7 +1268,8 @@ class _ReportsScreenState extends State<ReportsScreen>
                             color: _Mock.orange.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          child: const Icon(Icons.support_agent_rounded, color: _Mock.orange, size: 20),
+                          child: const Icon(Icons.support_agent_rounded,
+                              color: _Mock.orange, size: 20),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -1524,7 +1287,8 @@ class _ReportsScreenState extends State<ReportsScreen>
                               const SizedBox(height: 2),
                               Text(
                                 'We will forward your concern to the admin/HR.',
-                                style: TextStyle(color: tc.textGrayDark, fontSize: 12),
+                                style: TextStyle(
+                                    color: tc.textGrayDark, fontSize: 12),
                               ),
                             ],
                           ),
@@ -1537,15 +1301,21 @@ class _ReportsScreenState extends State<ReportsScreen>
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 6),
                         child: InkWell(
-                          onTap: () => setSheet(() => selectedCategory = c.value),
+                          onTap: () =>
+                              setSheet(() => selectedCategory = c.value),
                           borderRadius: BorderRadius.circular(12),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
                             decoration: BoxDecoration(
-                              color: selected ? _Mock.orange.withValues(alpha: 0.10) : Colors.transparent,
+                              color: selected
+                                  ? _Mock.orange.withValues(alpha: 0.10)
+                                  : Colors.transparent,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: selected ? _Mock.orange.withValues(alpha: 0.5) : tc.cardBorder,
+                                color: selected
+                                    ? _Mock.orange.withValues(alpha: 0.5)
+                                    : tc.cardBorder,
                                 width: selected ? 1.5 : 1,
                               ),
                             ),
@@ -1557,7 +1327,9 @@ class _ReportsScreenState extends State<ReportsScreen>
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
                                     border: Border.all(
-                                      color: selected ? _Mock.orange : tc.textGrayDark,
+                                      color: selected
+                                          ? _Mock.orange
+                                          : tc.textGrayDark,
                                       width: 2,
                                     ),
                                   ),
@@ -1577,17 +1349,23 @@ class _ReportsScreenState extends State<ReportsScreen>
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                    CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         c.label,
                                         style: TextStyle(
                                           fontSize: 13,
-                                          fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                                          fontWeight: selected
+                                              ? FontWeight.w700
+                                              : FontWeight.w600,
                                           color: tc.textPrimary,
                                         ),
                                       ),
-                                      Text(c.hint, style: TextStyle(fontSize: 11, color: tc.textGrayDark)),
+                                      Text(c.hint,
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color: tc.textGrayDark)),
                                     ],
                                   ),
                                 ),
@@ -1606,16 +1384,20 @@ class _ReportsScreenState extends State<ReportsScreen>
                       cursorColor: _Mock.orange,
                       decoration: InputDecoration(
                         hintText: 'Describe what happened...',
-                        hintStyle: TextStyle(color: tc.textGrayDark, fontSize: 12),
+                        hintStyle:
+                        TextStyle(color: tc.textGrayDark, fontSize: 12),
                         filled: true,
-                        fillColor: isDark ? Colors.white.withValues(alpha: 0.04) : const Color(0xFFF4F4F5),
+                        fillColor: isDark
+                            ? Colors.white.withValues(alpha: 0.04)
+                            : const Color(0xFFF4F4F5),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                           borderSide: BorderSide(color: tc.cardBorder),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: _Mock.orange, width: 1.5),
+                          borderSide: const BorderSide(
+                              color: _Mock.orange, width: 1.5),
                         ),
                       ),
                     ),
@@ -1625,19 +1407,25 @@ class _ReportsScreenState extends State<ReportsScreen>
                         Expanded(
                           child: OutlinedButton(
                             onPressed: () => Navigator.pop(ctx, false),
-                            child: Text('Cancel', style: TextStyle(color: tc.textGrayDark)),
+                            child: Text('Cancel',
+                                style: TextStyle(color: tc.textGrayDark)),
                           ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           flex: 2,
                           child: ElevatedButton.icon(
-                            onPressed: _sendingSupport ? null : () => Navigator.pop(ctx, true),
-                            icon: const Icon(Icons.send_rounded, color: Colors.white, size: 16),
-                            label: const Text('Send to HR', style: TextStyle(color: Colors.white)),
+                            onPressed: _sendingSupport
+                                ? null
+                                : () => Navigator.pop(ctx, true),
+                            icon: const Icon(Icons.send_rounded,
+                                color: Colors.white, size: 16),
+                            label: const Text('Send to HR',
+                                style: TextStyle(color: Colors.white)),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: _Mock.orange,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              padding:
+                              const EdgeInsets.symmetric(vertical: 14),
                             ),
                           ),
                         ),
@@ -1683,7 +1471,8 @@ class _ReportsScreenState extends State<ReportsScreen>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
-      backgroundColor: error ? const Color(0xFFFF4D6D) : const Color(0xFF00E5A0),
+      backgroundColor:
+      error ? const Color(0xFFFF4D6D) : const Color(0xFF00E5A0),
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       margin: const EdgeInsets.all(16),
@@ -1749,19 +1538,14 @@ class _ReportsScreenState extends State<ReportsScreen>
                             _buildDemoBadge(),
                             const SizedBox(height: 14),
                           ],
-
                           _buildPayslipCard(tc, thisMonth),
-
                           if (!_isDownloadWindowOpen && !_isDemo) ...[
                             const SizedBox(height: 14),
                             _buildDownloadLockedBanner(tc),
                           ],
-
                           const SizedBox(height: 20),
                           _buildDownloadButton(),
                           const SizedBox(height: 12),
-                          _buildViewPasswordButton(tc),
-                          const SizedBox(height: 10),
                           _buildContactHrButton(tc),
                         ],
                       ),
@@ -1780,17 +1564,21 @@ class _ReportsScreenState extends State<ReportsScreen>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [_Mock.orange, Color(0xFFF54900)]),
+        gradient:
+        const LinearGradient(colors: [_Mock.orange, Color(0xFFF54900)]),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
-        children: const [
+      child: const Row(
+        children: [
           Icon(Icons.science_rounded, color: Colors.white, size: 16),
           SizedBox(width: 8),
           Expanded(
             child: Text(
               'DEMO MODE — Fake payslip, no data is saved',
-              style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800),
             ),
           ),
         ],
@@ -1804,7 +1592,8 @@ class _ReportsScreenState extends State<ReportsScreen>
       decoration: BoxDecoration(
         color: _Mock.orange.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _Mock.orange.withValues(alpha: 0.35), width: 1.2),
+        border: Border.all(
+            color: _Mock.orange.withValues(alpha: 0.35), width: 1.2),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1815,7 +1604,8 @@ class _ReportsScreenState extends State<ReportsScreen>
               color: _Mock.orange.withValues(alpha: 0.18),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(Icons.lock_clock_rounded, color: _Mock.orange, size: 18),
+            child: const Icon(Icons.lock_clock_rounded,
+                color: _Mock.orange, size: 18),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1824,12 +1614,19 @@ class _ReportsScreenState extends State<ReportsScreen>
               children: [
                 const Text(
                   'Download Available at End of Month',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: _Mock.orange),
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: _Mock.orange),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   'Payslip for $_periodRangeLabel will be downloadable on $_downloadWindowLabel.',
-                  style: TextStyle(fontSize: 12, height: 1.4, color: tc.textGrayDark, fontWeight: FontWeight.w500),
+                  style: TextStyle(
+                      fontSize: 12,
+                      height: 1.4,
+                      color: tc.textGrayDark,
+                      fontWeight: FontWeight.w500),
                 ),
               ],
             ),
@@ -1852,24 +1649,38 @@ class _ReportsScreenState extends State<ReportsScreen>
               gradient: const LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [Color(0xFFFF8A00), Color(0xFFFA6A00), Color(0xFFF54900)],
+                colors: [
+                  Color(0xFFFF8A00),
+                  Color(0xFFFA6A00),
+                  Color(0xFFF54900)
+                ],
               ),
               borderRadius: BorderRadius.circular(16),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 40),
+                const Icon(Icons.wifi_off_rounded,
+                    color: Colors.white, size: 40),
                 const SizedBox(height: 20),
-                const Text('No Connection', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
+                const Text('No Connection',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700)),
                 const SizedBox(height: 10),
-                Text(_networkErrorMessage, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                Text(_networkErrorMessage,
+                    textAlign: TextAlign.center,
+                    style:
+                    const TextStyle(color: Colors.white, fontSize: 13)),
                 const SizedBox(height: 24),
                 ElevatedButton.icon(
                   onPressed: _retryNetworkCheck,
                   icon: const Icon(Icons.refresh_rounded, size: 18),
                   label: const Text('Try Again'),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: _Mock.orange),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: _Mock.orange),
                 ),
               ],
             ),
@@ -1896,7 +1707,9 @@ class _ReportsScreenState extends State<ReportsScreen>
       width: double.infinity,
       decoration: const BoxDecoration(
         gradient: gradient,
-        borderRadius: BorderRadius.only(bottomLeft: Radius.circular(16), bottomRight: Radius.circular(16)),
+        borderRadius: BorderRadius.only(
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(16)),
       ),
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
       child: Column(
@@ -1905,25 +1718,41 @@ class _ReportsScreenState extends State<ReportsScreen>
           Row(
             children: [
               GestureDetector(
-                onTap: () { _recordActivity(); Navigator.maybePop(context); },
+                onTap: () {
+                  _recordActivity();
+                  Navigator.maybePop(context);
+                },
                 child: const Row(
                   children: [
-                    Icon(Icons.chevron_left_rounded, color: Colors.white, size: 20),
+                    Icon(Icons.chevron_left_rounded,
+                        color: Colors.white, size: 20),
                     SizedBox(width: 2),
-                    Text('Back', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
+                    Text('Back',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500)),
                   ],
                 ),
               ),
               const Spacer(),
               if (_isDemo) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.22), borderRadius: BorderRadius.circular(12)),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(12)),
                   child: const Row(
                     children: [
-                      Icon(Icons.science_rounded, color: Colors.white, size: 11),
+                      Icon(Icons.science_rounded,
+                          color: Colors.white, size: 11),
                       SizedBox(width: 5),
-                      Text('DEMO', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800)),
+                      Text('DEMO',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800)),
                     ],
                   ),
                 ),
@@ -1934,26 +1763,42 @@ class _ReportsScreenState extends State<ReportsScreen>
                 child: Opacity(
                   opacity: printDisabled && !busy ? 0.55 : 1.0,
                   child: Container(
-                    width: 38, height: 38,
+                    width: 38,
+                    height: 38,
                     decoration: BoxDecoration(
                       color: tc.printButtonBg,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: tc.printButtonBorder),
                     ),
                     child: busy
-                        ? const Padding(padding: EdgeInsets.all(9), child: CircularProgressIndicator(color: accent, strokeWidth: 2))
-                        : Icon(canDownload ? Icons.print_rounded : Icons.lock_outline_rounded, color: accent, size: 20),
+                        ? const Padding(
+                        padding: EdgeInsets.all(9),
+                        child: CircularProgressIndicator(
+                            color: accent, strokeWidth: 2))
+                        : Icon(
+                        canDownload
+                            ? Icons.print_rounded
+                            : Icons.lock_outline_rounded,
+                        color: accent,
+                        size: 20),
                   ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 40),
-          Text(_isDemo ? 'Demo Payslip' : 'Payslip Details', style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w500)),
+          Text(_isDemo ? 'Demo Payslip' : 'Payslip Details',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w500)),
           const SizedBox(height: 6),
-          Text('Salary slip for $thisMonth', style: const TextStyle(color: Colors.white, fontSize: 14)),
+          Text('Salary slip for $thisMonth',
+              style: const TextStyle(color: Colors.white, fontSize: 14)),
           const SizedBox(height: 4),
-          Text('Period: $_periodRangeLabel', style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
+          Text('Period: $_periodRangeLabel',
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
         ],
       ),
     );
@@ -1977,11 +1822,23 @@ class _ReportsScreenState extends State<ReportsScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('R.A.C.O.M.A', style: TextStyle(color: accent, fontSize: 20, fontWeight: FontWeight.w500)),
+                const Text('R.A.C.O.M.A',
+                    style: TextStyle(
+                        color: accent,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w500)),
                 const SizedBox(height: 8),
-                Text(_isDemo ? 'DEMO Payslip — no data saved' : 'Smart HR Information System', style: TextStyle(color: tc.textPrimary, fontSize: 12)),
+                Text(
+                    _isDemo
+                        ? 'DEMO Payslip — no data saved'
+                        : 'Smart HR Information System',
+                    style: TextStyle(color: tc.textPrimary, fontSize: 12)),
                 const SizedBox(height: 12),
-                Text(_isDemo ? 'Demo Company HQ, Philippines' : 'Jumbo HQ, Manila, Philippines', style: TextStyle(color: tc.textGrayDark, fontSize: 10)),
+                Text(
+                    _isDemo
+                        ? 'Demo Company HQ, Philippines'
+                        : 'Jumbo HQ, Manila, Philippines',
+                    style: TextStyle(color: tc.textGrayDark, fontSize: 10)),
               ],
             ),
           ),
@@ -1990,23 +1847,43 @@ class _ReportsScreenState extends State<ReportsScreen>
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: _isDemo ? _Mock.orange.withValues(alpha: 0.12) : _Mock.paidBg,
+                  color: _isDemo
+                      ? _Mock.orange.withValues(alpha: 0.12)
+                      : _Mock.paidBg,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _isDemo ? _Mock.orange.withValues(alpha: 0.45) : _Mock.paidBorder),
+                  border: Border.all(
+                      color: _isDemo
+                          ? _Mock.orange.withValues(alpha: 0.45)
+                          : _Mock.paidBorder),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(_isDemo ? Icons.science_rounded : Icons.check_circle_rounded, color: accent, size: 14),
+                    Icon(
+                        _isDemo
+                            ? Icons.science_rounded
+                            : Icons.check_circle_rounded,
+                        color: accent,
+                        size: 14),
                     const SizedBox(width: 6),
-                    Text(_isDemo ? 'DEMO' : 'Paid', style: TextStyle(color: accent, fontSize: 12, fontWeight: FontWeight.w500)),
+                    Text(_isDemo ? 'DEMO' : 'Paid',
+                        style: const TextStyle(
+                            color: accent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500)),
                   ],
                 ),
               ),
               const SizedBox(height: 12),
-              Text('Payslip for\n$thisMonth', textAlign: TextAlign.right, style: TextStyle(color: tc.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+              Text('Payslip for\n$thisMonth',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                      color: tc.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500)),
             ],
           ),
         ],
@@ -2037,50 +1914,31 @@ class _ReportsScreenState extends State<ReportsScreen>
         ),
         child: Center(
           child: busy
-              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
+              ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                  color: Colors.white, strokeWidth: 2.5))
               : Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(canDownload ? Icons.download_rounded : Icons.lock_clock_rounded, color: Colors.white, size: 20),
+              Icon(
+                  canDownload
+                      ? Icons.download_rounded
+                      : Icons.lock_clock_rounded,
+                  color: Colors.white,
+                  size: 20),
               const SizedBox(width: 10),
               Text(
                 canDownload
-                    ? (_isDemo ? 'Download DEMO PDF' : 'Download as PDF / Print')
+                    ? (_isDemo
+                    ? 'Download DEMO PDF'
+                    : 'Download as PDF / Print')
                     : 'Available on $_downloadWindowLabel',
-                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildViewPasswordButton(_ThemeColors tc) {
-    final disabled = _loadingPassword;
-    final accent = _isDemo ? _Mock.orange : tc.textGrayDark;
-
-    return GestureDetector(
-      onTap: disabled ? null : _showCurrentPdfPassword,
-      child: Container(
-        width: double.infinity,
-        height: 42,
-        decoration: BoxDecoration(
-          color: tc.cardBg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: tc.cardBorder, width: 1),
-        ),
-        child: Center(
-          child: disabled
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: _Mock.orange, strokeWidth: 2))
-              : Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.vpn_key_rounded, color: accent, size: 16),
-              const SizedBox(width: 8),
-              Text(
-                _isDemo ? 'View Demo PDF Password' : 'View My PDF Password',
-                style: TextStyle(color: accent, fontSize: 13, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500),
               ),
             ],
           ),
@@ -2102,25 +1960,184 @@ class _ReportsScreenState extends State<ReportsScreen>
           decoration: BoxDecoration(
             color: tc.cardBg,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _Mock.orange.withValues(alpha: 0.45), width: 1.5),
+            border: Border.all(
+                color: _Mock.orange.withValues(alpha: 0.45), width: 1.5),
           ),
           child: Center(
             child: disabled && !_isDemo
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: _Mock.orange, strokeWidth: 2))
+                ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                    color: _Mock.orange, strokeWidth: 2))
                 : Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.support_agent_rounded, color: _Mock.orange, size: 18),
+                const Icon(Icons.support_agent_rounded,
+                    color: _Mock.orange, size: 18),
                 const SizedBox(width: 8),
                 Text(
-                  _isDemo ? 'Contact HR (disabled in demo)' : 'Contact HR / Report Issue',
-                  style: TextStyle(color: tc.textPrimary, fontSize: 13.5, fontWeight: FontWeight.w700),
+                  _isDemo
+                      ? 'Contact HR (disabled in demo)'
+                      : 'Contact HR / Report Issue',
+                  style: TextStyle(
+                      color: tc.textPrimary,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700),
                 ),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// PIN DIALOG
+// ══════════════════════════════════════════════════════════════
+
+/// Asks for the employee's PIN, verifies it through [verify], and pops the
+/// verified PIN. Pops null on cancel or after [_kMaxPinAttempts] wrong tries.
+class _PinDialog extends StatefulWidget {
+  final Future<bool> Function(String pin) verify;
+  final VoidCallback onLockout;
+
+  const _PinDialog({required this.verify, required this.onLockout});
+
+  @override
+  State<_PinDialog> createState() => _PinDialogState();
+}
+
+class _PinDialogState extends State<_PinDialog> {
+  final TextEditingController _controller = TextEditingController();
+  String? _error;
+  int _attempts = 0;
+  bool _checking = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final entered = _controller.text.trim();
+    if (entered.isEmpty || _checking) return;
+
+    setState(() => _checking = true);
+    final ok = await widget.verify(entered);
+    if (!mounted) return;
+
+    if (ok) {
+      Navigator.of(context).pop(entered);
+      return;
+    }
+
+    _attempts++;
+    if (_attempts >= _kMaxPinAttempts) {
+      widget.onLockout();
+      Navigator.of(context).pop();
+      return;
+    }
+
+    setState(() {
+      _checking = false;
+      _error = 'Wrong PIN. ${_kMaxPinAttempts - _attempts} attempt(s) left.';
+      _controller.clear();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tc = _ThemeColors(isDark);
+
+    return AlertDialog(
+      backgroundColor: tc.cardBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: tc.cardBorder),
+      ),
+      title: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: _Mock.orange.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.lock_outline_rounded,
+                color: _Mock.orange, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Enter your PIN',
+              style: TextStyle(
+                color: tc.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Your PIN is the password for the PDF. Never share it.',
+            style:
+            TextStyle(color: tc.textGrayDark, fontSize: 13, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            maxLength: 12,
+            enabled: !_checking,
+            onSubmitted: (_) => _submit(),
+            style: TextStyle(color: tc.textPrimary),
+            cursorColor: _Mock.orange,
+            decoration: InputDecoration(
+              errorText: _error,
+              counterText: '',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: tc.cardBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: _Mock.orange, width: 1.5),
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _checking ? null : () => Navigator.of(context).pop(),
+          child: Text('Cancel', style: TextStyle(color: tc.textGrayDark)),
+        ),
+        TextButton(
+          onPressed: _checking ? null : _submit,
+          style: TextButton.styleFrom(foregroundColor: _Mock.orange),
+          child: _checking
+              ? const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+                color: _Mock.orange, strokeWidth: 2),
+          )
+              : const Text('Download',
+              style: TextStyle(fontWeight: FontWeight.w700)),
+        ),
+      ],
     );
   }
 }

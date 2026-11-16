@@ -1,4 +1,8 @@
 // lib/screens/clock_screen.dart
+// v2.1: 🔧 Fixed overflow + themed clock toggle (same as dashboard)
+//   • Hero card: height 220, fontSize 30/13, Flexible + ellipsis (overflow-safe)
+//   • Clock In/Out: themed bg (dark sa dark mode, white sa light mode)
+//   • Active tab: orange gradient + white text
 // v2.0: 📍 GPS SAVING FIX
 //   • Now extracts and saves latitude/longitude from geofence result.
 //   • Passes coordinates to OfflineAttendanceService and activity_logs.
@@ -50,6 +54,10 @@ class _ThemeColors {
       isDark ? const Color(0xFF27272A) : const Color(0xFFE5E7EB);
   Color get avatarBorder =>
       isDark ? const Color(0xFF3F3F46) : const Color(0xFF27272A);
+
+  // ✅ NEW: Themed bg for clock toggle (same as dashboard)
+  Color get toggleActiveBg =>
+      isDark ? const Color(0xFF27272A) : Colors.white;
 
   double get watermarkOpacity => isDark ? 0.15 : 0.80;
 }
@@ -275,12 +283,12 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       try {
         _connectivitySub =
             ConnectivityService.instance.onStatusChange.listen((online) {
-              if (!mounted) return;
-              setState(() {
-                _networkState =
+          if (!mounted) return;
+          setState(() {
+            _networkState =
                 online ? _NetworkState.online : _NetworkState.offline;
-              });
-            });
+          });
+        });
       } catch (e) {
         debugPrint('⚠️ connectivity listen failed: $e');
       }
@@ -329,29 +337,29 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     try {
       _connectivitySub =
           ConnectivityService.instance.onStatusChange.listen((online) {
-            if (!mounted) return;
-            debugPrint('🌐 [ClockScreen] connectivity → online=$online');
+        if (!mounted) return;
+        debugPrint('🌐 [ClockScreen] connectivity → online=$online');
 
-            if (!online) {
-              if (_networkState == _NetworkState.offline) return;
-              _overlayDelayTimer?.cancel();
-              setState(() {
-                _networkState = _NetworkState.offline;
-                _networkErrorMessage =
+        if (!online) {
+          if (_networkState == _NetworkState.offline) return;
+          _overlayDelayTimer?.cancel();
+          setState(() {
+            _networkState = _NetworkState.offline;
+            _networkErrorMessage =
                 'No internet connection.\nPlease check your network.';
-                _showOfflineOverlay = false;
-              });
-              _overlayDelayTimer = Timer(const Duration(milliseconds: 1200), () {
-                if (mounted && _networkState == _NetworkState.offline) {
-                  setState(() => _showOfflineOverlay = true);
-                }
-              });
-            } else if (_networkState == _NetworkState.offline) {
-              _overlayDelayTimer?.cancel();
-              _showOfflineOverlay = false;
-              _retryNetworkCheck();
+            _showOfflineOverlay = false;
+          });
+          _overlayDelayTimer = Timer(const Duration(milliseconds: 1200), () {
+            if (mounted && _networkState == _NetworkState.offline) {
+              setState(() => _showOfflineOverlay = true);
             }
           });
+        } else if (_networkState == _NetworkState.offline) {
+          _overlayDelayTimer?.cancel();
+          _showOfflineOverlay = false;
+          _retryNetworkCheck();
+        }
+      });
     } catch (e) {
       debugPrint('⚠️ [ClockScreen] connectivity listen failed: $e');
     }
@@ -538,7 +546,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     try {
       final ref =
-      FirebaseFirestore.instance.collection('_time_sync').doc('ping');
+          FirebaseFirestore.instance.collection('_time_sync').doc('ping');
       final before = DateTime.now();
       await ref
           .set({'ping': FieldValue.serverTimestamp()}, SetOptions(merge: true))
@@ -619,7 +627,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         builder: (_) => const LoginScreen(),
         settings: const RouteSettings(name: '/login'),
       ),
-          (route) => false,
+      (route) => false,
     );
   }
 
@@ -660,7 +668,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         builder: (_) => const LoginScreen(),
         settings: const RouteSettings(name: '/login'),
       ),
-          (route) => false,
+      (route) => false,
     );
   }
 
@@ -691,7 +699,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       }
 
       final sessionEmpId =
-      await SecurityService.instance.getCurrentEmployeeId();
+          await SecurityService.instance.getCurrentEmployeeId();
       final currentDocId = _employee?.id;
       final currentEmpId = _employee?.employeeId;
 
@@ -707,7 +715,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
           type: 'clock_session_mismatch',
           severity: 'critical',
           details:
-          'Session ($sessionEmpId) != clock ($currentDocId/$currentEmpId)',
+              'Session ($sessionEmpId) != clock ($currentDocId/$currentEmpId)',
         );
         _cachedSessionValid = false;
         _sessionCacheTime = DateTime.now();
@@ -739,7 +747,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         .doc(empId)
         .snapshots()
         .listen(
-          (snap) async {
+      (snap) async {
         if (!mounted || _loggedOut) return;
         if (snap.metadata.hasPendingWrites) return;
         final data = snap.data();
@@ -857,7 +865,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       setState(() {
         _networkState = _NetworkState.offline;
         _networkErrorMessage =
-        'No internet connection.\nPlease check your network and try again.';
+            'No internet connection.\nPlease check your network and try again.';
       });
       _overlayDelayTimer = Timer(const Duration(milliseconds: 1200), () {
         if (mounted && _networkState == _NetworkState.offline) {
@@ -1249,7 +1257,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
           inside
               ? '✅ You are now inside the authorized zone.'
               : '📍 You are outside the authorized zone. '
-              'If you are remote, ask the admin to enable WFH.',
+                  'If you are remote, ask the admin to enable WFH.',
         );
       }
     } catch (e) {
@@ -1439,7 +1447,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         .doc(empDocId)
         .snapshots()
         .listen(
-          (snap) {
+      (snap) {
         if (!mounted || _loggedOut) return;
         final data = snap.data();
         if (data == null) return;
@@ -1572,14 +1580,14 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     Map<String, dynamic>? outOverride;
 
     final sorted = [...docs]..sort((a, b) {
-      final aData = a.data() as Map<String, dynamic>;
-      final bData = b.data() as Map<String, dynamic>;
-      final aTime = _extractDateTime(aData) ??
-          (a.metadata.hasPendingWrites ? DateTime.now() : DateTime(2000));
-      final bTime = _extractDateTime(bData) ??
-          (b.metadata.hasPendingWrites ? DateTime.now() : DateTime(2000));
-      return aTime.compareTo(bTime);
-    });
+        final aData = a.data() as Map<String, dynamic>;
+        final bData = b.data() as Map<String, dynamic>;
+        final aTime = _extractDateTime(aData) ??
+            (a.metadata.hasPendingWrites ? DateTime.now() : DateTime(2000));
+        final bTime = _extractDateTime(bData) ??
+            (b.metadata.hasPendingWrites ? DateTime.now() : DateTime(2000));
+        return aTime.compareTo(bTime);
+      });
 
     for (final doc in sorted) {
       final data = doc.data() as Map<String, dynamic>;
@@ -1595,10 +1603,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       // ✅ honest extraction: no "Admin/HR" / "No reason provided"
       final overrideInfo = data['isOverridden'] == true
           ? <String, dynamic>{
-        'by': (data['overriddenByName'] ?? '').toString().trim(),
-        'role': (data['overriddenByRole'] ?? '').toString().trim(),
-        'reason': (data['overrideReason'] ?? '').toString().trim(),
-      }
+              'by': (data['overriddenByName'] ?? '').toString().trim(),
+              'role': (data['overriddenByRole'] ?? '').toString().trim(),
+              'reason': (data['overrideReason'] ?? '').toString().trim(),
+            }
           : null;
 
       if (isIn) {
@@ -1735,7 +1743,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     double? distanceMeters;
     String? locationName;
 
-    // ✅ NEW: GPS VARIABLES
+    // ✅ GPS VARIABLES
     double? lat;
     double? lng;
 
@@ -1746,7 +1754,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
           distanceMeters = geo.distanceMeters;
           locationName = geo.matchedLocationName;
 
-          // ✅ NEW: Extract GPS Coordinates
+          // ✅ Extract GPS Coordinates
           if (geo.position != null) {
             lat = geo.position!.latitude;
             lng = geo.position!.longitude;
@@ -1757,7 +1765,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       }
     }
 
-    final proofTag = _fieldProofId != null ? '|field_selfie_pending|proof:$_fieldProofId' : '';
+    final proofTag =
+        _fieldProofId != null ? '|field_selfie_pending|proof:$_fieldProofId' : '';
     final baseRemarks = zoneType;
     final remarks = '$baseRemarks$proofTag';
 
@@ -1770,7 +1779,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       device: deviceName,
       remarks: remarks,
       zoneType: zoneType,
-      // ✅ NEW: Pass GPS to DB
+      // ✅ Pass GPS to DB
       latitude: lat,
       longitude: lng,
     );
@@ -1830,7 +1839,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       distanceMeters: distanceMeters,
       locationName: locationName,
       txnId: txnId,
-      // ✅ NEW: Pass to activity logs
+      // ✅ Pass to activity logs
       latitude: lat,
       longitude: lng,
     );
@@ -1850,7 +1859,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     double? distanceMeters,
     String? locationName,
     required String txnId,
-    // ✅ NEW: Accept coordinates
+    // ✅ Accept coordinates
     double? latitude,
     double? longitude,
   }) {
@@ -1860,9 +1869,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     }
 
     final effectiveLocation =
-    (locationName != null && locationName.isNotEmpty)
-        ? locationName
-        : _fallbackLocationLabel(zoneType);
+        (locationName != null && locationName.isNotEmpty)
+            ? locationName
+            : _fallbackLocationLabel(zoneType);
 
     final activityLogPayload = <String, dynamic>{
       'type': isClockIn ? 'clock_in' : 'clock_out',
@@ -1887,7 +1896,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       'mock_location': _mockLocationDetected,
       if (_fieldProofId != null) 'fieldProofId': _fieldProofId,
 
-      // ✅ NEW: Save coordinates
+      // ✅ Save coordinates
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
       if (latitude != null && longitude != null)
@@ -1915,7 +1924,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       'session_nonce': _sessionNonce,
       if (_fieldProofId != null) 'fieldProofId': _fieldProofId,
 
-      // ✅ NEW: Save coordinates
+      // ✅ Save coordinates
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
       if (latitude != null && longitude != null)
@@ -2422,7 +2431,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                           if (_mockLocationDetected && !_isDemo) ...[
                             Padding(
                               padding:
-                              const EdgeInsets.fromLTRB(24, 0, 24, 0),
+                                  const EdgeInsets.fromLTRB(24, 0, 24, 0),
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
@@ -2440,7 +2449,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                           _buildHeroCard(),
                           if (_todayIsOverridden) _buildOverrideBanner(tc),
                           const SizedBox(height: 21),
-                          _buildClockInOutSection(),
+                          // ✅ Pass tc for themed toggle
+                          _buildClockInOutSection(tc),
                           const SizedBox(height: 23),
                           _buildClockOutSection(tc),
                           const SizedBox(height: 21),
@@ -2546,7 +2556,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                   Text(
                     _todayOverrideUnattributed
                         ? 'Reason: ${_todayOverrideReason ?? "Not recorded"}\n'
-                        'Please ask HR to confirm this change.'
+                            'Please ask HR to confirm this change.'
                         : 'Reason: ${_todayOverrideReason ?? "Not recorded"}',
                     style: TextStyle(
                       fontSize: 12,
@@ -2708,12 +2718,12 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     final initials = name.trim().isEmpty
         ? '?'
         : name
-        .trim()
-        .split(' ')
-        .map((w) => w[0])
-        .take(2)
-        .join()
-        .toUpperCase();
+            .trim()
+            .split(' ')
+            .map((w) => w[0])
+            .take(2)
+            .join()
+            .toUpperCase();
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
@@ -2835,13 +2845,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       child: hasPhoto && !_isDemo
           ? _buildPhotoContent(tc, photoUrl, initials)
           : Text(
-        initials,
-        style: const TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          color: Colors.white,
-        ),
-      ),
+              initials,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+            ),
     );
   }
 
@@ -2893,6 +2903,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ FIX #1 — HERO CARD (overflow-safe, same pattern as dashboard)
+  // ═══════════════════════════════════════════════════════════════
   Widget _buildHeroCard() {
     final Color accent;
     final String statusText;
@@ -2914,7 +2927,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       accent = const Color(0xFF4ADE80);
       statusText = 'WFH Mode.';
       subtitle =
-      'Work-from-home access is active. You can clock in/out anywhere.';
+          'Work-from-home access is active. You can clock in/out anywhere.';
     } else if (_isInRange) {
       accent = _orange;
       statusText = 'In Range.';
@@ -2923,7 +2936,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       accent = _orange;
       statusText = 'Out of Range.';
       subtitle =
-      'You are outside the authorized zone. Clock in/out is disabled.';
+          'You are outside the authorized zone. Clock in/out is disabled.';
     }
 
     return Padding(
@@ -2932,7 +2945,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         onTap: _handleContinue,
         child: RepaintBoundary(
           child: Container(
-            height: 200,
+            height: 220, // ✅ from 200 — extra room
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(24),
               border: Border.all(
@@ -2981,40 +2994,50 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(25, 32, 25, 20),
+                  padding: const EdgeInsets.fromLTRB(25, 28, 25, 20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      RichText(
-                        softWrap: true,
-                        text: TextSpan(
-                          style: const TextStyle(
-                            fontSize: 34,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.white,
-                            height: 1.15,
-                          ),
-                          children: [
-                            const TextSpan(text: 'You are currently\n'),
-                            TextSpan(
-                              text: statusText,
-                              style: TextStyle(
-                                color: accent,
-                                fontWeight: FontWeight.w700,
-                              ),
+                      // ✅ Flexible + maxLines + ellipsis — hindi na mag-overflow
+                      Flexible(
+                        flex: 4,
+                        child: RichText(
+                          softWrap: true,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          text: TextSpan(
+                            style: const TextStyle(
+                              fontSize: 30, // ✅ from 34
+                              fontWeight: FontWeight.w500,
+                              color: Colors.white,
+                              height: 1.15,
                             ),
-                          ],
+                            children: [
+                              const TextSpan(text: 'You are currently\n'),
+                              TextSpan(
+                                text: statusText,
+                                style: TextStyle(
+                                  color: accent,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      const Spacer(),
-                      Text(
-                        subtitle,
-                        softWrap: true,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w400,
-                          color: Color(0xFFA1A1AA),
-                          height: 1.4,
+                      Flexible(
+                        flex: 2,
+                        child: Text(
+                          subtitle,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13, // ✅ from 14
+                            fontWeight: FontWeight.w400,
+                            color: Color(0xFFA1A1AA),
+                            height: 1.4,
+                          ),
                         ),
                       ),
                     ],
@@ -3028,24 +3051,20 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildClockInOutSection() {
-    final clockedIn = _clockInTime != null;
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ FIX #2 — CLOCK IN/OUT TOGGLE (themed like dashboard)
+  // ═══════════════════════════════════════════════════════════════
+  Widget _buildClockInOutSection(_ThemeColors tc) {
+    final clocked = _clockInTime != null;
     final canClock = _canClock;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Container(
-        height: 72,
-        padding: const EdgeInsets.all(7),
+        padding: const EdgeInsets.all(6),
         decoration: BoxDecoration(
-          gradient: _isDemo
-              ? const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [_demoAccent, _demoAccentDark],
-          )
-              : _orangeGradient,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(18),
+          color: tc.toggleActiveBg, // ✅ dark sa dark mode, white sa light mode
           border: Border.all(
             color: _isDemo ? _demoAccent : _orangeBorder,
             width: 1.15,
@@ -3059,91 +3078,89 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                     ? null
                     : _handleClockIn,
                 behavior: HitTestBehavior.opaque,
-                child: AnimatedOpacity(
-                  duration: const Duration(milliseconds: 150),
-                  opacity: canClock ? 1.0 : 0.5,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: _isDemo ? _demoAccent : _orangeBorder,
-                        width: 1,
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text(
-                          'Clock In',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _saving && !clockedIn
-                              ? 'Saving...'
-                              : (canClock ? _clockInDisplay : 'Locked'),
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: !canClock
-                                ? _red
-                                : (clockedIn
-                                ? (_isDemo ? _demoAccent : _orange)
-                                : const Color(0xFFA1A1AA)),
-                            letterSpacing: 0.3,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                child: _toggleTab(
+                  tc: tc,
+                  label: 'Clock In',
+                  time: _saving && !clocked
+                      ? 'Saving...'
+                      : (canClock ? _clockInDisplay : 'Locked'),
+                  active: true,
+                  locked: !canClock,
                 ),
               ),
             ),
-            const SizedBox(width: 2),
             Expanded(
               child: GestureDetector(
                 onTap: (_saving || !canClock || _clockActionInProgress)
                     ? null
                     : _handleClockOut,
                 behavior: HitTestBehavior.opaque,
-                child: AnimatedOpacity(
-                  duration: const Duration(milliseconds: 150),
-                  opacity: canClock ? 1.0 : 0.5,
-                  child: Container(
-                    alignment: Alignment.center,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text(
-                          'Clock Out',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          canClock ? _clockOutDisplay : 'Locked',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                            letterSpacing: 0.3,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                child: _toggleTab(
+                  tc: tc,
+                  label: 'Clock Out',
+                  time: canClock ? _clockOutDisplay : 'Locked',
+                  active: false,
+                  locked: !canClock,
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ✅ Same pattern as dashboard's _toggleTab
+  Widget _toggleTab({
+    required _ThemeColors tc,
+    required String label,
+    required String time,
+    required bool active,
+    bool locked = false,
+  }) {
+    return Opacity(
+      opacity: locked ? 0.55 : 1.0,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          gradient: active
+              ? (_isDemo
+                  ? const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [_demoAccent, _demoAccentDark],
+                    )
+                  : _orangeGradient)
+              : null,
+          borderRadius: BorderRadius.circular(12),
+          border: active
+              ? Border.all(
+                  color: _isDemo ? _demoAccent : _orangeBorder,
+                  width: 1,
+                )
+              : null,
+        ),
+        child: Column(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: active ? Colors.white : tc.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              time,
+              style: TextStyle(
+                fontSize: 11,
+                color: locked
+                    ? _red
+                    : (active
+                        ? Colors.white.withValues(alpha: 0.9)
+                        : tc.textMuted),
+                fontWeight: locked ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
           ],
@@ -3158,21 +3175,21 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     final cardBg = _isDemo
         ? _demoAccent.withValues(alpha: tc.isDark ? 0.2 : 0.15)
         : (_isInRange
-        ? (tc.isDark
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.white.withValues(alpha: 0.2))
-        : (_isWfhMode
-        ? const Color(0xFF22C55E)
-        .withValues(alpha: tc.isDark ? 0.2 : 0.15)
-        : (tc.isDark
-        ? const Color(0xFF1F1F23)
-        : const Color(0xFF838383).withValues(alpha: 0.28))));
+            ? (tc.isDark
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.white.withValues(alpha: 0.2))
+            : (_isWfhMode
+                ? const Color(0xFF22C55E)
+                    .withValues(alpha: tc.isDark ? 0.2 : 0.15)
+                : (tc.isDark
+                    ? const Color(0xFF1F1F23)
+                    : const Color(0xFF838383).withValues(alpha: 0.28))));
 
     final cardBorder = _isDemo
         ? _demoAccent
         : (_isInRange
-        ? _orangeBorder
-        : (_isWfhMode ? const Color(0xFF22C55E) : _red));
+            ? _orangeBorder
+            : (_isWfhMode ? const Color(0xFF22C55E) : _red));
 
     final labelColor = isInRangeOrWfh ? tc.textPrimary : tc.textOnDark;
     final hasClockedOut = _clockOutTime != null;
@@ -3227,7 +3244,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                 child: Container(
                   width: 105,
                   padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                   decoration: BoxDecoration(
                     color: cardBg,
                     borderRadius: BorderRadius.circular(20),
@@ -3244,8 +3261,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                           shape: BoxShape.circle,
                           gradient: _isDemo
                               ? const LinearGradient(
-                            colors: [_demoAccent, _demoAccentDark],
-                          )
+                                  colors: [_demoAccent, _demoAccentDark],
+                                )
                               : _orangeGradient,
                           border: Border.all(
                             color: _isDemo ? _demoAccent : _orangeBorder,
@@ -3257,8 +3274,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                           !canClock
                               ? Icons.lock_outline_rounded
                               : (hasClockedOut
-                              ? Icons.check_rounded
-                              : Icons.access_time_rounded),
+                                  ? Icons.check_rounded
+                                  : Icons.access_time_rounded),
                           color: Colors.white,
                           size: 20,
                         ),
@@ -3284,7 +3301,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
             const SizedBox(height: 12),
             Container(
               padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: tc.isDark
                     ? const Color(0xFF14371F)
@@ -3307,7 +3324,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                         fontSize: 11.5,
                         fontWeight: FontWeight.w600,
                         color:
-                        tc.isDark ? const Color(0xFF86EFAC) : _greenDeep,
+                            tc.isDark ? const Color(0xFF86EFAC) : _greenDeep,
                         height: 1.35,
                       ),
                     ),
@@ -3421,7 +3438,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight:
-                      active ? FontWeight.w700 : FontWeight.w500,
+                          active ? FontWeight.w700 : FontWeight.w500,
                       color: color,
                     ),
                   ),

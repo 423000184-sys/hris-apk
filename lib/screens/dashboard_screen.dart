@@ -1,4 +1,8 @@
 // lib/screens/dashboard_screen.dart
+// ✅ v4.1: Fixed status banner overflow + themed clock in/out widget
+//   • Status banner: height 220, flexible text, ellipsis-safe
+//   • Toggle container: dark sa dark mode, white sa light mode
+//   • Active tab: orange gradient with white text (high contrast)
 // ✅ v4.0: Clock-state fixes so LandingScreen no longer redirects after clock-out
 //   • Writes last_clock_in_at_* / last_clock_out_at_* under BOTH doc id and employeeId
 //   • Merges the 3 attendance streams + poll into one list (no more overwriting)
@@ -245,7 +249,7 @@ class DashboardScreenState extends State<DashboardScreen>
   static const int _maxAttendanceRetries = 3;
 
   static const AssetImage _logoProvider =
-  AssetImage('assets/images/logo.png');
+      AssetImage('assets/images/logo.png');
 
   // ✅ Exact-match log types (same sets as LandingScreen)
   static const Set<String> _inTypes = {
@@ -303,7 +307,7 @@ class DashboardScreenState extends State<DashboardScreen>
   bool get _isOnline => _networkState == _NetworkState.online;
 
   final DateTime _payslipMonth =
-  DateTime(DateTime.now().year, DateTime.now().month);
+      DateTime(DateTime.now().year, DateTime.now().month);
   double? _payslipAmount;
   bool _payslipLoading = true;
   bool _payslipError = false;
@@ -378,29 +382,29 @@ class DashboardScreenState extends State<DashboardScreen>
       try {
         _connectivitySub =
             ConnectivityService.instance.onStatusChange.listen((online) {
-              if (!mounted) return;
-              if (!online) {
-                _overlayDelayTimer?.cancel();
-                setState(() {
-                  _networkState = _NetworkState.offline;
-                  _networkErrorMessage =
+          if (!mounted) return;
+          if (!online) {
+            _overlayDelayTimer?.cancel();
+            setState(() {
+              _networkState = _NetworkState.offline;
+              _networkErrorMessage =
                   'No internet connection.\nPlease check your network.';
-                  _isLoadingAttendance = _isDemo ? false : true;
-                  _checkingLocation = _isDemo ? false : true;
-                  _showOfflineOverlay = false;
-                });
-                _overlayDelayTimer =
-                    Timer(const Duration(milliseconds: 1200), () {
-                      if (mounted && _networkState == _NetworkState.offline) {
-                        setState(() => _showOfflineOverlay = true);
-                      }
-                    });
-              } else if (_networkState == _NetworkState.offline) {
-                _overlayDelayTimer?.cancel();
-                _showOfflineOverlay = false;
-                _retryNetworkCheck();
+              _isLoadingAttendance = _isDemo ? false : true;
+              _checkingLocation = _isDemo ? false : true;
+              _showOfflineOverlay = false;
+            });
+            _overlayDelayTimer =
+                Timer(const Duration(milliseconds: 1200), () {
+              if (mounted && _networkState == _NetworkState.offline) {
+                setState(() => _showOfflineOverlay = true);
               }
             });
+          } else if (_networkState == _NetworkState.offline) {
+            _overlayDelayTimer?.cancel();
+            _showOfflineOverlay = false;
+            _retryNetworkCheck();
+          }
+        });
       } catch (e) {}
 
       if (_isDemo) {
@@ -448,13 +452,13 @@ class DashboardScreenState extends State<DashboardScreen>
     } catch (_) {}
     try {
       final ok =
-      await SecurityHardeningService.instance.checkDeviceIntegrity();
+          await SecurityHardeningService.instance.checkDeviceIntegrity();
       _deviceCompromised = !ok;
       _integrityChecked = true;
     } catch (_) {}
     try {
       _deviceBinding =
-      await SecurityHardeningService.instance.getDeviceBindingToken();
+          await SecurityHardeningService.instance.getDeviceBindingToken();
     } catch (_) {}
 
     final valid = await _validateSession(forceRefresh: true);
@@ -503,7 +507,7 @@ class DashboardScreenState extends State<DashboardScreen>
     try {
       final prefs = await SharedPreferences.getInstance();
       final storedHash =
-      prefs.getString('${_kEmployeeHashKey}_${_employee!.id}');
+          prefs.getString('${_kEmployeeHashKey}_${_employee!.id}');
       if (storedHash == null) return false;
       final currentHash = _hashEmployeeData(_employee!);
       if (storedHash != currentHash) return true;
@@ -711,7 +715,7 @@ class DashboardScreenState extends State<DashboardScreen>
         builder: (_) => const LoginScreen(),
         settings: const RouteSettings(name: '/login'),
       ),
-          (route) => false,
+      (route) => false,
     );
   }
 
@@ -762,7 +766,7 @@ class DashboardScreenState extends State<DashboardScreen>
       setState(() {
         _networkState = _NetworkState.offline;
         _networkErrorMessage =
-        'No internet connection.\nPlease check your network and try again.';
+            'No internet connection.\nPlease check your network and try again.';
       });
       return;
     }
@@ -886,7 +890,7 @@ class DashboardScreenState extends State<DashboardScreen>
         .doc(docId)
         .snapshots()
         .listen(
-          (snap) {
+      (snap) {
         if (!mounted) return;
         final data = snap.data();
         if (data == null) return;
@@ -897,7 +901,7 @@ class DashboardScreenState extends State<DashboardScreen>
             : (rawWfh?.toString().toLowerCase() == 'true');
 
         final newRole =
-        (data['role'] ?? data['position'] ?? _role).toString();
+            (data['role'] ?? data['position'] ?? _role).toString();
         final newDept = (data['department'] ?? _department).toString();
         final newIsDriver = _isDriverRole(newRole, newDept);
 
@@ -1015,11 +1019,11 @@ class DashboardScreenState extends State<DashboardScreen>
   // ATTENDANCE STREAMS — merged (hindi na nag-o-overwrite ang isa't isa)
   // ═══════════════════════════════════════════════════════════════
   void _onAttendanceSnapshot(
-      String source,
-      QuerySnapshot snapshot,
-      String empId,
-      String? docId,
-      ) {
+    String source,
+    QuerySnapshot snapshot,
+    String empId,
+    String? docId,
+  ) {
     if (!mounted) return;
     _attendanceBySource[source] = snapshot.docs;
     _mergeAndProcess(empId, docId);
@@ -1053,14 +1057,14 @@ class DashboardScreenState extends State<DashboardScreen>
         .where('employee_id', isEqualTo: empId)
         .snapshots()
         .listen((s) => _onAttendanceSnapshot('snake', s, empId, docId),
-        onError: (_) {});
+            onError: (_) {});
 
     _attendanceSubCamel?.cancel();
     _attendanceSubCamel = col
         .where('employeeId', isEqualTo: empId)
         .snapshots()
         .listen((s) => _onAttendanceSnapshot('camel', s, empId, docId),
-        onError: (_) {});
+            onError: (_) {});
 
     if (docId != null && docId != empId) {
       _attendanceSubDocId?.cancel();
@@ -1068,7 +1072,7 @@ class DashboardScreenState extends State<DashboardScreen>
           .where('employeeId', isEqualTo: docId)
           .snapshots()
           .listen((s) => _onAttendanceSnapshot('docId', s, empId, docId),
-          onError: (_) {});
+              onError: (_) {});
     }
   }
 
@@ -1167,8 +1171,8 @@ class DashboardScreenState extends State<DashboardScreen>
 
   String _dtToHms(DateTime d) =>
       '${d.hour.toString().padLeft(2, '0')}:'
-          '${d.minute.toString().padLeft(2, '0')}:'
-          '${d.second.toString().padLeft(2, '0')}';
+      '${d.minute.toString().padLeft(2, '0')}:'
+      '${d.second.toString().padLeft(2, '0')}';
 
   /// Sinusulat ang local marker (para sa LandingScreen). May dedupe para
   /// hindi paulit-ulit ang SharedPreferences write.
@@ -1361,9 +1365,9 @@ class DashboardScreenState extends State<DashboardScreen>
           d.year == now.year && d.month == now.month && d.day == now.day;
 
       final DateTime? inToday =
-      (inDt != null && isToday(inDt)) ? inDt : null;
+          (inDt != null && isToday(inDt)) ? inDt : null;
       final DateTime? outToday =
-      (outDt != null && isToday(outDt)) ? outDt : null;
+          (outDt != null && isToday(outDt)) ? outDt : null;
 
       if (!mounted) return;
       if (inToday == null && outToday == null) return;
@@ -1909,7 +1913,7 @@ class DashboardScreenState extends State<DashboardScreen>
         type: 'payslip_downloaded',
         severity: 'info',
         details:
-        'Payslip $_payslipMonthLabel downloaded (${pdfBytes.length} bytes)',
+            'Payslip $_payslipMonthLabel downloaded (${pdfBytes.length} bytes)',
       ));
 
       if (showUI) {
@@ -2049,7 +2053,7 @@ class DashboardScreenState extends State<DashboardScreen>
           pw.SizedBox(height: 20),
           pw.Text('Earnings Summary',
               style:
-              pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                  pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 8),
           _pdfInfoTable([
             ['Gross Pay', 'PHP ${_formatPesoNum(grossPay)}'],
@@ -2086,11 +2090,11 @@ class DashboardScreenState extends State<DashboardScreen>
                   ? 'DEMO MODE — this payslip is NOT saved to the database.'
                   : 'This is a system-generated payslip. No signature required.',
               style:
-              const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
+                  const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
           pw.SizedBox(height: 4),
           pw.Text('Generated on ${_formatTimestamp(DateTime.now())}',
               style:
-              const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
+                  const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
         ],
       ),
     );
@@ -2112,20 +2116,20 @@ class DashboardScreenState extends State<DashboardScreen>
       },
       children: rows
           .map((r) => pw.TableRow(
-        children: [
-          pw.Padding(
-              padding: const pw.EdgeInsets.all(6),
-              child: pw.Text(r[0],
-                  style: pw.TextStyle(
-                      fontSize: 10,
-                      fontWeight: pw.FontWeight.bold,
-                      color: PdfColors.grey800))),
-          pw.Padding(
-              padding: const pw.EdgeInsets.all(6),
-              child: pw.Text(r[1],
-                  style: const pw.TextStyle(fontSize: 10))),
-        ],
-      ))
+                children: [
+                  pw.Padding(
+                      padding: const pw.EdgeInsets.all(6),
+                      child: pw.Text(r[0],
+                          style: pw.TextStyle(
+                              fontSize: 10,
+                              fontWeight: pw.FontWeight.bold,
+                              color: PdfColors.grey800))),
+                  pw.Padding(
+                      padding: const pw.EdgeInsets.all(6),
+                      child: pw.Text(r[1],
+                          style: const pw.TextStyle(fontSize: 10))),
+                ],
+              ))
           .toList(),
     );
   }
@@ -2299,7 +2303,7 @@ class DashboardScreenState extends State<DashboardScreen>
                 const SizedBox(height: 16),
                 const Text('Dashboard Error',
                     style:
-                    TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 Text(_initError!,
                     textAlign: TextAlign.center,
@@ -2806,6 +2810,9 @@ class DashboardScreenState extends State<DashboardScreen>
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ FIX #1 — STATUS BANNER (overflow-safe)
+  // ═══════════════════════════════════════════════════════════════
   Widget _buildStatusBanner() {
     final String statusText;
     final String subtitle;
@@ -2846,13 +2853,13 @@ class DashboardScreenState extends State<DashboardScreen>
     } else {
       statusText = 'out of range.';
       subtitle =
-      'Clock in from the authorized zone or ask admin for WFH access.';
+          'Clock in from the authorized zone or ask admin for WFH access.';
       accentColor = _T.red;
     }
 
     return Container(
       width: double.infinity,
-      height: 200,
+      height: 220, // ✅ from 200 — extra room
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: const Color(0xFFFFA500), width: 1.15),
@@ -2893,35 +2900,52 @@ class DashboardScreenState extends State<DashboardScreen>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(25, 32, 25, 20),
+            padding: const EdgeInsets.fromLTRB(25, 28, 25, 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                RichText(
-                  softWrap: true,
-                  text: TextSpan(
-                    style: const TextStyle(
-                        fontSize: 34,
+                // ✅ Flexible + maxLines + ellipsis para hindi mag-overflow
+                Flexible(
+                  flex: 4,
+                  child: RichText(
+                    softWrap: true,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    text: TextSpan(
+                      style: const TextStyle(
+                        fontSize: 30, // ✅ from 34
                         fontWeight: FontWeight.w500,
                         color: Colors.white,
-                        height: 1.15),
-                    children: [
-                      const TextSpan(text: 'You are currently\n'),
-                      TextSpan(
+                        height: 1.15,
+                      ),
+                      children: [
+                        const TextSpan(text: 'You are currently\n'),
+                        TextSpan(
                           text: statusText,
                           style: TextStyle(
-                              color: accentColor,
-                              fontWeight: FontWeight.w700)),
-                    ],
+                            color: accentColor,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const Spacer(),
-                Text(subtitle,
+                Flexible(
+                  flex: 2,
+                  child: Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w400,
-                        color: Color(0xFFA1A1AA),
-                        height: 1.4)),
+                      fontSize: 13, // ✅ from 14
+                      fontWeight: FontWeight.w400,
+                      color: Color(0xFFA1A1AA),
+                      height: 1.4,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -2930,6 +2954,9 @@ class DashboardScreenState extends State<DashboardScreen>
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ FIX #2 — TOGGLE (themed container: dark sa dark, white sa light)
+  // ═══════════════════════════════════════════════════════════════
   Widget _buildToggle(_ThemeColors tc) {
     final clocked = _isClockedIn;
     final canAction = _canClock && _isOnline && !_deviceCompromised;
@@ -2938,7 +2965,7 @@ class DashboardScreenState extends State<DashboardScreen>
       padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(_T.r18),
-        gradient: _T.brandGradient,
+        color: tc.toggleActiveBg,
         border: Border.all(color: _T.orange, width: 1.15),
       ),
       child: Row(
@@ -2952,8 +2979,6 @@ class DashboardScreenState extends State<DashboardScreen>
                 label: 'Clock In',
                 time: _clockInTime,
                 active: true,
-                inactiveTimeColor: Colors.white,
-                inactiveLabelColor: Colors.white,
                 locked: !canAction,
               ),
             ),
@@ -2967,8 +2992,6 @@ class DashboardScreenState extends State<DashboardScreen>
                 label: 'Clock Out',
                 time: _clockOutTime,
                 active: false,
-                inactiveTimeColor: Colors.white,
-                inactiveLabelColor: Colors.white,
                 locked: !canAction,
               ),
             ),
@@ -2978,13 +3001,14 @@ class DashboardScreenState extends State<DashboardScreen>
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ FIX #3 — TAB (orange gradient for active, themed for inactive)
+  // ═══════════════════════════════════════════════════════════════
   Widget _toggleTab({
     required _ThemeColors tc,
     required String label,
     required String time,
     required bool active,
-    required Color inactiveLabelColor,
-    required Color inactiveTimeColor,
     bool locked = false,
   }) {
     return Opacity(
@@ -2992,18 +3016,21 @@ class DashboardScreenState extends State<DashboardScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: active ? tc.toggleActiveBg : Colors.transparent,
+          gradient: active ? _T.brandGradient : null,
           borderRadius: BorderRadius.circular(12),
           border:
-          active ? Border.all(color: _T.orangeBorder, width: 1) : null,
+              active ? Border.all(color: _T.orangeBorder, width: 1) : null,
         ),
         child: Column(
           children: [
-            Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: active ? tc.textBlack : inactiveLabelColor)),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: active ? Colors.white : tc.textGray,
+              ),
+            ),
             const SizedBox(height: 2),
             Text(
               locked ? 'Locked' : time,
@@ -3011,7 +3038,9 @@ class DashboardScreenState extends State<DashboardScreen>
                 fontSize: 11,
                 color: locked
                     ? _T.red
-                    : (active ? tc.textMuted : inactiveTimeColor),
+                    : (active
+                        ? Colors.white.withValues(alpha: 0.9)
+                        : tc.textMuted),
                 fontWeight: locked ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
@@ -3075,21 +3104,21 @@ class DashboardScreenState extends State<DashboardScreen>
     final label = _networkState == _NetworkState.offline
         ? 'Offline'
         : (_checkingLocation
-        ? 'Verifying'
-        : (_isWfhMode
-        ? 'Remote GPS'
-        : (_isDriverMode ? 'Field GPS' : 'Live GPS')));
+            ? 'Verifying'
+            : (_isWfhMode
+                ? 'Remote GPS'
+                : (_isDriverMode ? 'Field GPS' : 'Live GPS')));
     final icon = _networkState == _NetworkState.offline
         ? Icons.cloud_off_rounded
         : (_checkingLocation
-        ? Icons.gps_fixed_rounded
-        : (_isWfhMode
-        ? Icons.home_work_rounded
-        : (_isDriverMode
-        ? Icons.local_shipping_rounded
-        : Icons.near_me_rounded)));
+            ? Icons.gps_fixed_rounded
+            : (_isWfhMode
+                ? Icons.home_work_rounded
+                : (_isDriverMode
+                    ? Icons.local_shipping_rounded
+                    : Icons.near_me_rounded)));
     final color =
-    _networkState == _NetworkState.offline ? _T.red : tc.textBlack;
+        _networkState == _NetworkState.offline ? _T.red : tc.textBlack;
 
     return Row(
       children: [
@@ -3210,13 +3239,13 @@ class DashboardScreenState extends State<DashboardScreen>
                   shape: BoxShape.circle,
                 ),
                 child: _checkingLocation &&
-                    _networkState != _NetworkState.offline &&
-                    !_isDemo
+                        _networkState != _NetworkState.offline &&
+                        !_isDemo
                     ? const Padding(
-                  padding: EdgeInsets.all(14),
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2),
-                )
+                        padding: EdgeInsets.all(14),
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2),
+                      )
                     : Icon(leadingIcon, color: Colors.white, size: 22),
               ),
               if ((!_checkingLocation ||
@@ -3292,7 +3321,7 @@ class DashboardScreenState extends State<DashboardScreen>
               behavior: HitTestBehavior.opaque,
               child: Container(
                 padding:
-                const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
+                    const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
                 decoration: BoxDecoration(
                   color: tc.cardFill,
                   borderRadius: BorderRadius.circular(_T.r20),
@@ -3425,64 +3454,64 @@ class DashboardScreenState extends State<DashboardScreen>
                         child: CircularProgressIndicator(
                             strokeWidth: 2.5, color: _T.orange)))
               else if (isDownloaded)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      GestureDetector(
-                        onTap: () {
-                          _recordUserActivity();
-                          _shareLocalPayslip();
-                        },
-                        behavior: HitTestBehavior.opaque,
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                              color: _T.orange.withValues(alpha: 0.1),
-                              shape: BoxShape.circle),
-                          child: const Icon(Icons.share_rounded,
-                              color: _T.orange, size: 18),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      GestureDetector(
-                        onTap: () {
-                          _recordUserActivity();
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  ReportsScreen(initialEmployee: _employee),
-                            ),
-                          );
-                        },
-                        behavior: HitTestBehavior.opaque,
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: const BoxDecoration(
-                              color: _T.orange, shape: BoxShape.circle),
-                          child: const Icon(Icons.picture_as_pdf_rounded,
-                              color: Colors.white, size: 18),
-                        ),
-                      ),
-                    ],
-                  )
-                else if (_payslipError)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                     GestureDetector(
                       onTap: () {
                         _recordUserActivity();
-                        _loadPayslipAmount();
+                        _shareLocalPayslip();
                       },
                       behavior: HitTestBehavior.opaque,
-                      child: const Icon(Icons.refresh_rounded,
-                          color: _T.orange, size: 20),
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                            color: _T.orange.withValues(alpha: 0.1),
+                            shape: BoxShape.circle),
+                        child: const Icon(Icons.share_rounded,
+                            color: _T.orange, size: 18),
+                      ),
                     ),
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: () {
+                        _recordUserActivity();
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                ReportsScreen(initialEmployee: _employee),
+                          ),
+                        );
+                      },
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: const BoxDecoration(
+                            color: _T.orange, shape: BoxShape.circle),
+                        child: const Icon(Icons.picture_as_pdf_rounded,
+                            color: Colors.white, size: 18),
+                      ),
+                    ),
+                  ],
+                )
+              else if (_payslipError)
+                GestureDetector(
+                  onTap: () {
+                    _recordUserActivity();
+                    _loadPayslipAmount();
+                  },
+                  behavior: HitTestBehavior.opaque,
+                  child: const Icon(Icons.refresh_rounded,
+                      color: _T.orange, size: 20),
+                ),
             ],
           ),
           if (isLocked) ...[
             const SizedBox(height: 12),
             Container(
               padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                   color: _T.red.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(8)),
@@ -3494,7 +3523,7 @@ class DashboardScreenState extends State<DashboardScreen>
                     child: Text(
                       'Payslip is locked. Wait for end of month or Admin approval.',
                       style:
-                      TextStyle(fontSize: 11, color: _T.red, height: 1.3),
+                          TextStyle(fontSize: 11, color: _T.red, height: 1.3),
                     ),
                   ),
                 ],
@@ -3504,7 +3533,7 @@ class DashboardScreenState extends State<DashboardScreen>
             const SizedBox(height: 12),
             Container(
               padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                   color: tc.textMuted.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(8)),

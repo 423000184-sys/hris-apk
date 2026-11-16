@@ -35,7 +35,8 @@ import 'apply_leave_screen.dart';
 import 'itinerary_screen.dart';
 import 'profile_screen.dart';
 import 'landing_screen.dart';
-import 'facial_recognition_screen.dart';
+import 'facial_recognition_stub.dart'
+if (dart.library.ffi) 'facial_recognition_screen.dart';
 
 void _secureLog(String message) {
   if (kDebugMode) debugPrint('[MainScreen] $message');

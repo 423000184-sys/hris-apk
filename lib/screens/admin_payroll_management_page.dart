@@ -1,4 +1,7 @@
 // lib/screens/admin_payroll_management_page.dart
+// v3.4: 🔧 fetchAttendance: present == null — lets the per-employee fetch
+//       run when the bulk present-days lookup missed this employee (e.g.
+//       attendance docs use arrivalTime/departureTime instead of timestamp).
 // v3.3: 🔧 Added fallback to fetch full employee data. Removed hardcoded values.
 import 'dart:async';
 import 'dart:convert';
@@ -211,9 +214,9 @@ class _AdminPayrollManagementPageState
       return _sanitize(raw, maxLen: 80);
     }
     final first =
-    _sanitize(_currentEmployeeData['firstName'] ?? '', maxLen: 40);
+        _sanitize(_currentEmployeeData['firstName'] ?? '', maxLen: 40);
     final last =
-    _sanitize(_currentEmployeeData['lastName'] ?? '', maxLen: 40);
+        _sanitize(_currentEmployeeData['lastName'] ?? '', maxLen: 40);
     final full = '$first $last'.trim();
     return full.isEmpty ? 'Unknown Employee' : full;
   }
@@ -267,8 +270,19 @@ class _AdminPayrollManagementPageState
     final s = _periodStart;
     final e = _periodEnd;
     const m = [
-      '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      '',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
     ];
     return '${m[s.month]} ${s.day} - ${m[e.month]} ${e.day}, ${e.year}';
   }
@@ -281,7 +295,7 @@ class _AdminPayrollManagementPageState
   void initState() {
     super.initState();
     _currentEmployeeData =
-    Map<String, dynamic>.from(widget.employeeData);
+        Map<String, dynamic>.from(widget.employeeData);
     _verifyAndLoad();
   }
 
@@ -291,7 +305,6 @@ class _AdminPayrollManagementPageState
         _isAdminVerified = true;
         _loading = true;
       });
-      // Generate dynamic Demo Data
       final demoEmp = DemoModeService.demoEmployee;
       final data = {
         'id': demoEmp.id,
@@ -301,7 +314,9 @@ class _AdminPayrollManagementPageState
         'basicSalary': 45000.0,
         'basicAllowance': 5000.0,
         'workingDaysPerMonth': 22,
-        'dateHired': DateTime.now().subtract(const Duration(days: 60)).toIso8601String(),
+        'dateHired': DateTime.now()
+            .subtract(const Duration(days: 60))
+            .toIso8601String(),
       };
       _currentEmployeeData = data;
 
@@ -353,7 +368,10 @@ class _AdminPayrollManagementPageState
       final docId = _docId;
       if (docId.isNotEmpty) {
         try {
-          final doc = await FirebaseFirestore.instance.collection('employees').doc(docId).get();
+          final doc = await FirebaseFirestore.instance
+              .collection('employees')
+              .doc(docId)
+              .get();
           if (doc.exists && doc.data() != null) {
             _currentEmployeeData = {
               ...doc.data()!,
@@ -372,22 +390,33 @@ class _AdminPayrollManagementPageState
       );
 
       int? present;
-      for (final k in ['id', 'employeeId', 'employee_id', 'nfcTagId', 'authUid']) {
+      for (final k in [
+        'id',
+        'employeeId',
+        'employee_id',
+        'nfcTagId',
+        'authUid'
+      ]) {
         final key = _currentEmployeeData[k]?.toString().trim();
-        if (key != null && key.isNotEmpty && presentDaysMap.containsKey(key)) {
+        if (key != null &&
+            key.isNotEmpty &&
+            presentDaysMap.containsKey(key)) {
           present = presentDaysMap[key];
           break;
         }
       }
 
-      // 2. Compute using the unified calculator
+      // 2. Compute using the unified calculator.
+      //    🔧 v3.4: when bulk lookup missed (e.g. doc has arrivalTime
+      //    instead of timestamp), let the per-employee fetch run so the
+      //    present-days count is still correct.
       final results = await Future.wait([
         PayrollCalculator.compute(
           employee: _currentEmployeeData,
           periodStart: _periodStart,
           periodEnd: _periodEnd,
           presentDaysOverride: present,
-          fetchAttendance: false, // Skip single fetch para sure na tugma
+          fetchAttendance: present == null,
         ),
         _loadHoursSummary(),
       ]);
@@ -473,8 +502,8 @@ class _AdminPayrollManagementPageState
     }
 
     final current = {
-      'basicSalary': PayrollCalculator.toDbl(
-          _currentEmployeeData['basicSalary']),
+      'basicSalary':
+          PayrollCalculator.toDbl(_currentEmployeeData['basicSalary']),
       'basicAllowance': PayrollCalculator.toDbl(
           _currentEmployeeData['basicAllowance'] ??
               _currentEmployeeData['allowances']),
@@ -486,8 +515,8 @@ class _AdminPayrollManagementPageState
           _currentEmployeeData['specialAllowance']),
       'workingDaysPerMonth': PayrollCalculator.toInt(
           _currentEmployeeData['workingDaysPerMonth'], 22),
-      'dailyRate': PayrollCalculator.toDbl(
-          _currentEmployeeData['dailyRate']),
+      'dailyRate':
+          PayrollCalculator.toDbl(_currentEmployeeData['dailyRate']),
     };
 
     final result = await showDialog<Map<String, dynamic>>(
@@ -539,9 +568,9 @@ class _AdminPayrollManagementPageState
   }
 
   Future<void> _savePayrollOverride(
-      Map<String, dynamic> newValues, {
-        required bool isSetup,
-      }) async {
+    Map<String, dynamic> newValues, {
+    required bool isSetup,
+  }) async {
     final docId = _docId;
     if (docId.isEmpty) {
       throw Exception('Invalid employee ID');
@@ -568,7 +597,7 @@ class _AdminPayrollManagementPageState
 
     final before = {
       'basicSalary':
-      PayrollCalculator.toDbl(_currentEmployeeData['basicSalary']),
+          PayrollCalculator.toDbl(_currentEmployeeData['basicSalary']),
       'basicAllowance': PayrollCalculator.toDbl(
           _currentEmployeeData['basicAllowance'] ??
               _currentEmployeeData['allowances']),
@@ -581,7 +610,7 @@ class _AdminPayrollManagementPageState
       'workingDaysPerMonth': PayrollCalculator.toInt(
           _currentEmployeeData['workingDaysPerMonth'], 22),
       'dailyRate':
-      PayrollCalculator.toDbl(_currentEmployeeData['dailyRate']),
+          PayrollCalculator.toDbl(_currentEmployeeData['dailyRate']),
     };
 
     await FirebaseFirestore.instance
@@ -614,7 +643,7 @@ class _AdminPayrollManagementPageState
         employeeId: docId,
         title: '💰 Payroll Updated',
         message:
-        'Your payroll details for $_periodLabel have been adjusted by HR. Please review your payslip.',
+            'Your payroll details for $_periodLabel have been adjusted by HR. Please review your payslip.',
         type: 'payroll',
       );
     } catch (e) {
@@ -692,7 +721,7 @@ class _AdminPayrollManagementPageState
           employeeId: docId,
           title: '🔓 Payslip Unlocked',
           message:
-          'Your payslip for $_periodLabel is now available for download.',
+              'Your payslip for $_periodLabel is now available for download.',
           type: 'payroll',
         );
       } catch (e) {
@@ -753,7 +782,7 @@ class _AdminPayrollManagementPageState
           employeeId: docId,
           title: '🔒 Payslip Locked',
           message:
-          'Your payslip for $_periodLabel has been locked by Admin.',
+              'Your payslip for $_periodLabel has been locked by Admin.',
           type: 'payroll',
         );
       } catch (e) {
@@ -961,7 +990,8 @@ class _AdminPayrollManagementPageState
                                         fontSize: 10))),
                             pw.Text(
                                 _b.sickLeaveBalance.toStringAsFixed(2),
-                                style: const pw.TextStyle(fontSize: 10)),
+                                style:
+                                    const pw.TextStyle(fontSize: 10)),
                           ],
                         ),
                         pw.SizedBox(height: 4),
@@ -974,7 +1004,8 @@ class _AdminPayrollManagementPageState
                             pw.Text(
                                 _b.vacationLeaveBalance
                                     .toStringAsFixed(2),
-                                style: const pw.TextStyle(fontSize: 10)),
+                                style:
+                                    const pw.TextStyle(fontSize: 10)),
                           ],
                         ),
                       ],
@@ -1031,7 +1062,7 @@ class _AdminPayrollManagementPageState
                       margin: const pw.EdgeInsets.only(left: 10),
                       decoration: const pw.BoxDecoration(
                         border:
-                        pw.Border(bottom: pw.BorderSide(width: 1)),
+                            pw.Border(bottom: pw.BorderSide(width: 1)),
                       ),
                     ),
                   ),
@@ -1052,8 +1083,8 @@ class _AdminPayrollManagementPageState
       child: pw.Row(
         children: [
           pw.Expanded(
-            child:
-            pw.Text(label, style: const pw.TextStyle(fontSize: 10)),
+            child: pw.Text(label,
+                style: const pw.TextStyle(fontSize: 10)),
           ),
           pw.SizedBox(
             width: 70,
@@ -1078,8 +1109,8 @@ class _AdminPayrollManagementPageState
       child: pw.Row(
         children: [
           pw.Expanded(
-            child:
-            pw.Text(label, style: const pw.TextStyle(fontSize: 10)),
+            child: pw.Text(label,
+                style: const pw.TextStyle(fontSize: 10)),
           ),
           pw.SizedBox(
             width: 70,
@@ -1299,31 +1330,32 @@ class _AdminPayrollManagementPageState
       child: Scaffold(
         backgroundColor: tc.background,
         body: _loading
-            ? Center(child: CircularProgressIndicator(color: tc.orange))
+            ? Center(
+                child: CircularProgressIndicator(color: tc.orange))
             : SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: BsContainer(
-            maxWidth: 1300,
-            padding: EdgeInsets.zero,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (_isDemo) ...[
-                  _buildDemoBanner(),
-                  const SizedBox(height: 16),
-                ],
-                _buildBackButton(),
-                const SizedBox(height: 12),
-                _buildProfileCard(),
-                const SizedBox(height: 24),
-                _buildMetricsRow(),
-                const SizedBox(height: 24),
-                _buildBreakdownGrid(),
-                const SizedBox(height: 40),
-              ],
-            ),
-          ),
-        ),
+                padding: const EdgeInsets.all(24.0),
+                child: BsContainer(
+                  maxWidth: 1300,
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_isDemo) ...[
+                        _buildDemoBanner(),
+                        const SizedBox(height: 16),
+                      ],
+                      _buildBackButton(),
+                      const SizedBox(height: 12),
+                      _buildProfileCard(),
+                      const SizedBox(height: 24),
+                      _buildMetricsRow(),
+                      const SizedBox(height: 24),
+                      _buildBreakdownGrid(),
+                      const SizedBox(height: 40),
+                    ],
+                  ),
+                ),
+              ),
       ),
     );
   }
@@ -1419,19 +1451,20 @@ class _AdminPayrollManagementPageState
               border: Border.all(color: tc.border),
               image: _photoUrl != null
                   ? DecorationImage(
-                  image: NetworkImage(_photoUrl!), fit: BoxFit.cover)
+                      image: NetworkImage(_photoUrl!),
+                      fit: BoxFit.cover)
                   : null,
             ),
             child: _photoUrl == null
                 ? Center(
-              child: Text(
-                _getInitials(_name),
-                style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: tc.orangeText),
-              ),
-            )
+                    child: Text(
+                      _getInitials(_name),
+                      style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: tc.orangeText),
+                    ),
+                  )
                 : null,
           );
 
@@ -1501,14 +1534,14 @@ class _AdminPayrollManagementPageState
                     : _openEditPayrollDialog,
                 icon: _editing
                     ? SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: tc.orange),
-                )
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: tc.orange),
+                      )
                     : Icon(Icons.edit_note_rounded,
-                    size: 16,
-                    color: _isDemo ? tc.muted : tc.orange),
+                        size: 16,
+                        color: _isDemo ? tc.muted : tc.orange),
                 label: Text(_editing ? 'Editing...' : 'Edit Payroll',
                     style: TextStyle(
                         color: _isDemo ? tc.muted : tc.orange,
@@ -1526,41 +1559,41 @@ class _AdminPayrollManagementPageState
                 onPressed: (_unlockingPayslip || _isDemo)
                     ? null
                     : (_isPayslipUnlocked
-                    ? _handleLockPayslip
-                    : _handleUnlockPayslip),
+                        ? _handleLockPayslip
+                        : _handleUnlockPayslip),
                 icon: _unlockingPayslip
                     ? SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: _isPayslipUnlocked
-                          ? tc.red
-                          : tc.blue),
-                )
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: _isPayslipUnlocked
+                                ? tc.red
+                                : tc.blue),
+                      )
                     : Icon(
-                  _isPayslipUnlocked
-                      ? Icons.lock_rounded
-                      : Icons.lock_open_rounded,
-                  size: 16,
-                  color: _isDemo
-                      ? tc.muted
-                      : (_isPayslipUnlocked
-                      ? tc.red
-                      : tc.blue),
-                ),
+                        _isPayslipUnlocked
+                            ? Icons.lock_rounded
+                            : Icons.lock_open_rounded,
+                        size: 16,
+                        color: _isDemo
+                            ? tc.muted
+                            : (_isPayslipUnlocked
+                                ? tc.red
+                                : tc.blue),
+                      ),
                 label: Text(
                     _unlockingPayslip
                         ? 'Processing...'
                         : (_isPayslipUnlocked
-                        ? 'Lock Payslip'
-                        : 'Unlock Payslip'),
+                            ? 'Lock Payslip'
+                            : 'Unlock Payslip'),
                     style: TextStyle(
                         color: _isDemo
                             ? tc.muted
                             : (_isPayslipUnlocked
-                            ? tc.red
-                            : tc.blue),
+                                ? tc.red
+                                : tc.blue),
                         fontWeight: FontWeight.w600)),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(
@@ -1577,14 +1610,14 @@ class _AdminPayrollManagementPageState
                 onPressed: (_printing || _isDemo) ? null : _handlePrint,
                 icon: _printing
                     ? SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: tc.text),
-                )
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: tc.text),
+                      )
                     : Icon(Icons.print_rounded,
-                    size: 16,
-                    color: _isDemo ? tc.muted : tc.text),
+                        size: 16,
+                        color: _isDemo ? tc.muted : tc.text),
                 label: Text(_printing ? 'Printing...' : 'Print',
                     style: TextStyle(
                         color: _isDemo ? tc.muted : tc.text,
@@ -1599,26 +1632,28 @@ class _AdminPayrollManagementPageState
               ),
               ElevatedButton.icon(
                 onPressed:
-                (_downloading || _isDemo) ? null : _handleDownload,
+                    (_downloading || _isDemo) ? null : _handleDownload,
                 icon: _downloading
                     ? const SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
-                )
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
                     : Icon(Icons.download_rounded,
-                    size: 16,
-                    color: _isDemo ? tc.muted : Colors.white),
+                        size: 16,
+                        color: _isDemo ? tc.muted : Colors.white),
                 label: Text(
-                    _downloading ? 'Downloading...' : 'Download Payslip',
+                    _downloading
+                        ? 'Downloading...'
+                        : 'Download Payslip',
                     style: TextStyle(
                         color: _isDemo ? tc.muted : Colors.white,
                         fontWeight: FontWeight.w600)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _isDemo ? tc.border : tc.orange,
                   disabledBackgroundColor:
-                  tc.orange.withValues(alpha: 0.5),
+                      tc.orange.withValues(alpha: 0.5),
                   elevation: 0,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
@@ -1658,11 +1693,16 @@ class _AdminPayrollManagementPageState
         final cards = <Widget>[
           _buildMetricCard('NET PAY', PayrollCalculator.peso(_autoNetPay),
               'Total take-home for this period', false),
-          _buildMetricCard('GROSS PAY', PayrollCalculator.peso(_autoGrossPay),
-              'Basic + Allowances + OT (auto)', false),
-          _buildMetricCard('TOTAL DEDUCTIONS',
+          _buildMetricCard(
+              'GROSS PAY',
+              PayrollCalculator.peso(_autoGrossPay),
+              'Basic + Allowances + OT (auto)',
+              false),
+          _buildMetricCard(
+              'TOTAL DEDUCTIONS',
               PayrollCalculator.peso(_b.totalDeductions),
-              'Absences + Govt Deductions', true),
+              'Absences + Govt Deductions',
+              true),
         ];
 
         if (wide) {
@@ -1785,10 +1825,16 @@ class _AdminPayrollManagementPageState
       badgeColor: tc.orange.withValues(alpha: 0.15),
       badgeTextColor: tc.orangeText,
       children: [
-        _item('Basic Pay (Earned)', '${_b.presentDays} day(s) × daily rate',
-            PayrollCalculator.peso(_b.earnedBasic), false),
-        _item('Allowances (Earned)', '${_b.presentDays} day(s) × allowance rate',
-            PayrollCalculator.peso(_b.earnedAllowance), false),
+        _item(
+            'Basic Pay (Earned)',
+            '${_b.presentDays} day(s) × daily rate',
+            PayrollCalculator.peso(_b.earnedBasic),
+            false),
+        _item(
+            'Allowances (Earned)',
+            '${_b.presentDays} day(s) × allowance rate',
+            PayrollCalculator.peso(_b.earnedAllowance),
+            false),
         _item(
           'Overtime Pay',
           hasOT
@@ -1800,8 +1846,11 @@ class _AdminPayrollManagementPageState
           false,
         ),
         if (_b.nightDiffAmount > 0)
-          _item('Night Differential', 'Additional pay for night hours',
-              PayrollCalculator.peso(_b.nightDiffAmount), false),
+          _item(
+              'Night Differential',
+              'Additional pay for night hours',
+              PayrollCalculator.peso(_b.nightDiffAmount),
+              false),
         Divider(color: tc.border, height: 20),
         _item('Total Gross', 'Sum of earnings',
             PayrollCalculator.peso(_autoGrossPay), false,
@@ -1849,14 +1898,14 @@ class _AdminPayrollManagementPageState
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: tc.pillGreenBg,
-            border:
-            Border(left: BorderSide(color: tc.pillGreenTx, width: 4)),
+            border: Border(
+                left: BorderSide(color: tc.pillGreenTx, width: 4)),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
             'Benefits are not deducted from net pay. These are additional savings received at the 13th month payout or year-end.',
             style:
-            TextStyle(fontSize: 11, color: tc.pillGreenTx, height: 1.4),
+                TextStyle(fontSize: 11, color: tc.pillGreenTx, height: 1.4),
           ),
         ),
       ],
@@ -1928,7 +1977,9 @@ class _AdminPayrollManagementPageState
         Divider(color: tc.border, height: 20),
         _item('Daily Rate', 'Basic ÷ working days',
             PayrollCalculator.peso(_b.dailyRate), false),
-        _item('Absence Deduction', '${_b.absentDays} day/s × daily rate',
+        _item(
+            'Absence Deduction',
+            '${_b.absentDays} day/s × daily rate',
             '-${PayrollCalculator.peso(_b.absentAmount)}',
             _b.absentDays > 0,
             bold: true),
@@ -1936,8 +1987,7 @@ class _AdminPayrollManagementPageState
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color:
-            _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
+            color: _b.absentDays > 0 ? tc.pillErrBg : tc.pillGreenBg,
             border: Border(
                 left: BorderSide(
                     color: _b.absentDays > 0
@@ -1952,9 +2002,8 @@ class _AdminPayrollManagementPageState
                 : 'No absences this period. Full salary will be received.',
             style: TextStyle(
                 fontSize: 11,
-                color: _b.absentDays > 0
-                    ? tc.pillErrTx
-                    : tc.pillGreenTx,
+                color:
+                    _b.absentDays > 0 ? tc.pillErrTx : tc.pillGreenTx,
                 height: 1.4),
           ),
         ),
@@ -1976,16 +2025,18 @@ class _AdminPayrollManagementPageState
             '-${PayrollCalculator.peso(_b.philhealth)}', true),
         _item('Pag-IBIG Contribution', 'Standard Employee Share',
             '-${PayrollCalculator.peso(_b.pagibig)}', true),
-        _item('Withholding Tax',
+        _item(
+            'Withholding Tax',
             'Calculated based on net taxable income',
-            '-${PayrollCalculator.peso(_b.taxWithheld)}', true),
+            '-${PayrollCalculator.peso(_b.taxWithheld)}',
+            true),
         const SizedBox(height: 16),
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: tc.pillWarnBg,
-            border:
-            Border(left: BorderSide(color: tc.pillWarnTx, width: 4)),
+            border: Border(
+                left: BorderSide(color: tc.pillWarnTx, width: 4)),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
@@ -2063,7 +2114,7 @@ class _AdminPayrollManagementPageState
                     style: TextStyle(
                         fontSize: 13,
                         fontWeight:
-                        bold ? FontWeight.w700 : FontWeight.w600,
+                            bold ? FontWeight.w700 : FontWeight.w600,
                         color: tc.text),
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
@@ -2126,8 +2177,8 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
   void initState() {
     super.initState();
     final v = widget.currentValues;
-    _basicSalaryCtrl = TextEditingController(
-        text: _fmtNum(v['basicSalary']));
+    _basicSalaryCtrl =
+        TextEditingController(text: _fmtNum(v['basicSalary']));
     _basicAllowanceCtrl =
         TextEditingController(text: _fmtNum(v['basicAllowance']));
     _housingAllowanceCtrl =
@@ -2187,9 +2238,9 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
 
   double get _totalAllowances =>
       _parse(_basicAllowanceCtrl) +
-          _parse(_housingAllowanceCtrl) +
-          _parse(_transportAllowanceCtrl) +
-          _parse(_specialAllowanceCtrl);
+      _parse(_housingAllowanceCtrl) +
+      _parse(_transportAllowanceCtrl) +
+      _parse(_specialAllowanceCtrl);
 
   bool _validateAll() {
     if (!_formKey.currentState!.validate()) return false;
@@ -2219,7 +2270,7 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
     return Dialog(
       backgroundColor: tc.card,
       shape:
-      RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
         child: SingleChildScrollView(
@@ -2281,8 +2332,8 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
                         controller: _basicAllowanceCtrl,
                         hint: 'Basic',
                         keyboardType:
-                        const TextInputType.numberWithOptions(
-                            decimal: true),
+                            const TextInputType.numberWithOptions(
+                                decimal: true),
                         validator: _numValidator,
                       ),
                     ),
@@ -2292,8 +2343,8 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
                         controller: _housingAllowanceCtrl,
                         hint: 'Housing',
                         keyboardType:
-                        const TextInputType.numberWithOptions(
-                            decimal: true),
+                            const TextInputType.numberWithOptions(
+                                decimal: true),
                         validator: _numValidator,
                       ),
                     ),
@@ -2307,8 +2358,8 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
                         controller: _transportAllowanceCtrl,
                         hint: 'Transport',
                         keyboardType:
-                        const TextInputType.numberWithOptions(
-                            decimal: true),
+                            const TextInputType.numberWithOptions(
+                                decimal: true),
                         validator: _numValidator,
                       ),
                     ),
@@ -2318,8 +2369,8 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
                         controller: _specialAllowanceCtrl,
                         hint: 'Special',
                         keyboardType:
-                        const TextInputType.numberWithOptions(
-                            decimal: true),
+                            const TextInputType.numberWithOptions(
+                                decimal: true),
                         validator: _numValidator,
                       ),
                     ),
@@ -2386,10 +2437,10 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      _previewRow(
-                          'Monthly Basic', _peso(_parse(_basicSalaryCtrl)), tc),
-                      _previewRow(
-                          'Total Allowances', _peso(_totalAllowances), tc),
+                      _previewRow('Monthly Basic',
+                          _peso(_parse(_basicSalaryCtrl)), tc),
+                      _previewRow('Total Allowances',
+                          _peso(_totalAllowances), tc),
                       _previewRow('Daily Rate', _peso(dailyRate), tc,
                           bold: true),
                       const Divider(height: 16),
@@ -2461,14 +2512,14 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
   }
 
   Widget _sectionLabel(String text, AdminColors tc) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: Text(text,
-        style: TextStyle(
-            color: tc.muted,
-            fontSize: 10.5,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.5)),
-  );
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(text,
+            style: TextStyle(
+                color: tc.muted,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5)),
+      );
 
   Widget _previewRow(String label, String value, AdminColors tc,
       {bool bold = false, bool highlight = false}) {
@@ -2482,14 +2533,13 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
                     fontSize: 11.5,
                     color: tc.muted,
                     fontWeight:
-                    bold ? FontWeight.w700 : FontWeight.w500)),
+                        bold ? FontWeight.w700 : FontWeight.w500)),
           ),
           Text(value,
               style: TextStyle(
                   fontSize: 12,
                   color: highlight ? tc.orange : tc.text,
-                  fontWeight:
-                  bold ? FontWeight.w800 : FontWeight.w600)),
+                  fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
         ],
       ),
     );
@@ -2514,7 +2564,7 @@ class _PayrollEditDialogState extends State<_PayrollEditDialog> {
         filled: true,
         fillColor: tc.surface,
         contentPadding:
-        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: BorderSide(color: tc.border),
@@ -2630,7 +2680,7 @@ class _OverridePasswordDialogState extends State<_OverridePasswordDialog> {
     return AlertDialog(
       backgroundColor: tc.card,
       shape:
-      RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
       contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
       actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
@@ -2682,9 +2732,9 @@ class _OverridePasswordDialogState extends State<_OverridePasswordDialog> {
                     ? 'New HR Assistant password'
                     : 'Enter HR Assistant password',
                 hintStyle:
-                TextStyle(color: tc.muted, fontSize: 13),
+                    TextStyle(color: tc.muted, fontSize: 13),
                 prefixIcon:
-                Icon(Icons.key_rounded, color: tc.muted, size: 18),
+                    Icon(Icons.key_rounded, color: tc.muted, size: 18),
                 suffixIcon: IconButton(
                   icon: Icon(
                       _obscure
@@ -2710,7 +2760,7 @@ class _OverridePasswordDialogState extends State<_OverridePasswordDialog> {
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
                   borderSide:
-                  BorderSide(color: tc.orange, width: 1.5),
+                      BorderSide(color: tc.orange, width: 1.5),
                 ),
               ),
             ),
@@ -2726,7 +2776,7 @@ class _OverridePasswordDialogState extends State<_OverridePasswordDialog> {
                 decoration: InputDecoration(
                   hintText: 'Confirm password',
                   hintStyle:
-                  TextStyle(color: tc.muted, fontSize: 13),
+                      TextStyle(color: tc.muted, fontSize: 13),
                   prefixIcon: Icon(Icons.check_circle_outline_rounded,
                       color: tc.muted, size: 18),
                   filled: true,
@@ -2744,7 +2794,7 @@ class _OverridePasswordDialogState extends State<_OverridePasswordDialog> {
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
                     borderSide:
-                    BorderSide(color: tc.orange, width: 1.5),
+                        BorderSide(color: tc.orange, width: 1.5),
                   ),
                 ),
               ),
@@ -2787,10 +2837,10 @@ class _OverridePasswordDialogState extends State<_OverridePasswordDialog> {
           onPressed: _verifying ? null : _submit,
           icon: _verifying
               ? const SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                  strokeWidth: 2, color: Colors.white))
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white))
               : const Icon(Icons.check_circle_rounded, size: 16),
           label: Text(
               _verifying
@@ -2803,7 +2853,7 @@ class _OverridePasswordDialogState extends State<_OverridePasswordDialog> {
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8)),
             padding:
-            const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
           ),
         ),
       ],

@@ -1,8 +1,10 @@
 // lib/screens/fingerprint_screen.dart
+// v5.6: 🧹 STALE CACHE FIX — _hasClockedInToday now prioritizes Firestore.
+//   • When online, queries Firestore as the source of truth.
+//   • If the doc is missing in Firestore (e.g. admin deleted it), clears
+//     the SharedPreferences cache so the user can clock in again.
+// v5.5: 🚨 ROOT NAVIGATOR FIX — Login screen no longer trapped below MainScreen
 // v5.4: 📍 GPS SAVING & FIELD PROOF INTEGRATION COMPLETE
-//   • Extracts and saves latitude/longitude from geofence to DB.
-//   • Handles off-site selfie proof (FieldProofService) seamlessly.
-//   • Honest attribution: "Device Unlock", not identity verification.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -13,6 +15,7 @@ import 'package:flutter/services.dart'
     show PlatformException, MissingPluginException;
 import 'package:local_auth/local_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/employee.dart';
 import '../widgets/bootstrap_grid.dart';
@@ -21,7 +24,7 @@ import '../data/local/dao/connectivity_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/clock_status_service.dart';
 import '../services/geofence_service.dart';
-import '../services/field_proof_service.dart'; // ✅ IMPORTED
+import '../services/field_proof_service.dart';
 import '../services/admin_notification_service.dart';
 import '../services/network_guard.dart';
 import '../services/offline_attendance_service.dart';
@@ -195,6 +198,18 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   static const _headerStart = Color(0xFFFF5500);
   static const _headerEnd = Color(0xFFFF6B00);
+  static const double _kHeaderDesignFrameWidth = 386.13;
+  static const double _kHeaderH = 287.13;
+  static const double _kHeaderBorderBottom = 1.15;
+  static const double _kHeaderRadius = 16.0;
+  static const double _kBackLeft = 24.0;
+  static const double _kBackTop = 48.0;
+  static const double _kTitleLeft = 24.0;
+  static const double _kTitleTop = 95.99;
+  static const double _kTitleFontSize = 30.0;
+  static const double _kSubtitleLeft = 24.0;
+  static const double _kSubtitleTop = 136.99;
+  static const double _kSubtitleFontSize = 14.0;
   static const _modalGradTop = Color(0xFFFF8A00);
   static const _modalGradMid = Color(0xFFFA6A00);
   static const _modalGradEnd = Color(0xFFF54900);
@@ -2038,7 +2053,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         _lastUsedTolerance = geoResult.usedTolerance;
         _geofenceVerifiedOffline = false;
 
-        // ✅ EXTRACT GPS COORDINATES
         try {
           final pos = geoResult.position;
           if (pos != null) {
@@ -2057,13 +2071,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final isAllowed = geoResult?.isAllowed ?? false;
       final isExempted = geoResult?.isExempted ?? false;
 
-      // ✅ FIELD PROOF CHECK
       if (geoResult != null && geoResult.needsProof) {
         final id = await _requestFieldSelfie(geoResult);
         if (id != null) {
           _fieldProofId = id;
           if (mounted) setState(() => _isCheckingGeofence = false);
-          return true; // Allowed, but flagged pending HR review below
+          return true;
         }
         if (mounted) {
           setState(() {
@@ -2096,7 +2109,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           severity: 'high',
           details: 'Geofence returned null — blocking clock-in',
         );
-        // ✅ IMPROVED: clearer message for deleted/missing work zones
         if (mounted) {
           setState(() {
             _fpState = _FpState.error;
@@ -2137,7 +2149,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
   }
 
-  // ✅ NEW: Helper to request selfie for field workers
   Future<String?> _requestFieldSelfie(GeofenceResult geo) async {
     if (!mounted) return null;
     final go = await showDialog<bool>(
@@ -2182,6 +2193,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     return widget.employee.id;
   }
 
+  // 🚨 FIX: Firestore na ang magiging boss kapag online.
   Future<bool> _hasClockedInToday(String employeeId) async {
     try {
       final now = DateTime.now();
@@ -2189,9 +2201,12 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final prefs = await SharedPreferences.getInstance();
       final lastClockIn = prefs.getString('last_clock_in_date_$employeeId');
 
-      if (lastClockIn == todayStr) return true;
-      if (!NetworkGuard.instance.isOnline) return false;
+      // 📴 Kapag OFFLINE, local cache lang ang paniniwalaan.
+      if (!NetworkGuard.instance.isOnline) {
+        return lastClockIn == todayStr;
+      }
 
+      // 🌐 Kapag ONLINE, ang Firestore Database ang boss.
       final q = await FirebaseFirestore.instance
           .collection('attendance_logs')
           .where('employee_id', isEqualTo: employeeId)
@@ -2202,13 +2217,25 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           .timeout(const Duration(seconds: 5));
 
       if (q.docs.isNotEmpty) {
-        await prefs.setString('last_clock_in_date_$employeeId', todayStr);
+        // May record sa DB. I-save sa cache.
+        if (lastClockIn != todayStr) {
+          await prefs.setString('last_clock_in_date_$employeeId', todayStr);
+        }
         return true;
+      } else {
+        // 🗑️ Binura mo sa DB. I-clear ang local cache para makapasok ka.
+        if (lastClockIn == todayStr) {
+          await prefs.remove('last_clock_in_date_$employeeId');
+        }
+        return false;
       }
-      return false;
     } catch (e) {
       _secureLog('⚠️ _hasClockedInToday error: $e');
-      return false;
+      // Fallback sa cache kung nag-timeout ang internet.
+      final prefs = await SharedPreferences.getInstance();
+      final lastClockIn = prefs.getString('last_clock_in_date_$employeeId');
+      final todayStr = DateTime.now().toIso8601String().substring(0, 10);
+      return lastClockIn == todayStr;
     }
   }
 
@@ -2316,7 +2343,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final employeeEmail = widget.employee.email;
       final zoneType = _computeZoneType();
 
-      // ✅ v5.3 — honest remarks; flag device bypass if it happened.
       String baseRemarks = _geofenceVerifiedOffline
           ? 'device_unlock|no_identity_check|pending_geofence_verification'
           : 'device_unlock|no_identity_check';
@@ -2324,7 +2350,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         baseRemarks += '|device_unlock_bypassed';
       }
 
-      // ✅ NEW: Tag the log so HR can find the proof
       final proofTag =
       _fieldProofId != null ? '|field_selfie_pending|proof:$_fieldProofId' : '';
       baseRemarks += proofTag;
@@ -2347,8 +2372,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           employeeEmail: employeeEmail,
           type: attendanceType,
           timestamp: effectiveTime,
-          latitude: _lastLatitude,      // ✅ SAVES GPS
-          longitude: _lastLongitude,    // ✅ SAVES GPS
+          latitude: _lastLatitude,
+          longitude: _lastLongitude,
           distance: _lastDistanceMeters,
           insideZone: !_geofenceVerifiedOffline,
           device: _deviceModel,
@@ -2369,7 +2394,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       final online = _networkState == _NetworkState.online;
 
-      // ✅ SAVES GPS SA ACTIVITY LOGS
       final locationPayload = <String, dynamic>{
         if (_lastLatitude != null) 'latitude': _lastLatitude,
         if (_lastLongitude != null) 'longitude': _lastLongitude,
@@ -2414,7 +2438,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         'platform': kIsWeb ? 'web' : 'mobile',
         'session_nonce': _sessionNonce,
         'timestamp': FieldValue.serverTimestamp(),
-        ...locationPayload, // ✅ INAYOS NA ITO
+        ...locationPayload,
       };
 
       if (!online) {
@@ -2518,10 +2542,23 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
   void _goToClockInSuccess() {
     if (!mounted) return;
-    final navigator = Navigator.of(context);
     final effective = _effectiveAttendanceTime;
 
-    navigator.push(
+    final rootNav = Navigator.of(context, rootNavigator: true);
+
+    if (!_isDemo) {
+      try {
+        final user = FirebaseAuth.instance.currentUser;
+        _secureLog(
+          '🔍 [FP] Pre-nav — authUser=${user?.uid ?? "NULL"} '
+              'empId=${widget.employee.id}',
+        );
+      } catch (e) {
+        _secureLog('⚠️ [FP] Auth diagnostic error: $e');
+      }
+    }
+
+    rootNav.push(
       PageRouteBuilder(
         opaque: false,
         barrierColor: const Color(0xFF09090B).withValues(alpha: 0.44),
@@ -2533,12 +2570,27 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           verificationMethod: 'device_unlock',
           locationName: _isDemo ? 'Demo Location' : _lastLocationName,
           onContinue: () {
-            navigator.pushAndRemoveUntil(
-              MaterialPageRoute(
-                builder: (_) => MainScreen(employee: widget.employee),
-              ),
-                  (route) => false,
-            );
+            try {
+              _secureLog(
+                  '🔀 [FP] onContinue → pushAndRemoveUntil(MainScreen)');
+              rootNav.pushAndRemoveUntil(
+                MaterialPageRoute(
+                  builder: (_) => MainScreen(employee: widget.employee),
+                ),
+                    (route) => false,
+              );
+              _secureLog('✅ [FP] MainScreen push triggered');
+            } catch (e, st) {
+              _secureLog('❌ [FP] Navigation failed: $e\n$st');
+              try {
+                rootNav.pushAndRemoveUntil(
+                  MaterialPageRoute(
+                    builder: (_) => MainScreen(employee: widget.employee),
+                  ),
+                      (route) => false,
+                );
+              } catch (_) {}
+            }
           },
         ),
       ),
@@ -2558,7 +2610,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
 
     try {
-      await Navigator.of(context).push(
+      await Navigator.of(context, rootNavigator: true).push(
         MaterialPageRoute(
           builder: (_) => FacialRecognitionScreen(
             employee: widget.employee,
@@ -2636,46 +2688,63 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     final fadeAnim = _fadeAnim ?? const AlwaysStoppedAnimation(1.0);
 
     return Scaffold(
-      body: FadeTransition(
-        opacity: fadeAnim,
+      backgroundColor: isDark ? const Color(0xFF0A0A0A) : const Color(0xFF121212),
+      body: SafeArea(
+        top: false,
+        bottom: false,
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final content = _buildContent(tc);
-
-            if (constraints.maxWidth < 768) {
-              return Stack(
-                children: [
-                  content,
-                  if (_pendingCount > 0 && !_isDemo) _buildPendingBadge(),
-                  if (_obscureContent) _buildPrivacyShield(),
-                ],
-              );
-            }
-
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                Positioned.fill(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [tc.bgTop, tc.bgMid, tc.bgBottom],
-                        stops: const [0.0, 0.6, 1.0],
-                      ),
+            final screenWidth = constraints.maxWidth;
+            final contentWidth = screenWidth < 420 ? screenWidth : 375.0;
+            return Center(
+              child: SizedBox(
+                width: contentWidth,
+                height: constraints.maxHeight,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(screenWidth <= 420 ? 0 : 40),
+                  child: FadeTransition(
+                    opacity: fadeAnim,
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [tc.bgTop, tc.bgMid, tc.bgBottom],
+                                stops: const [0.0, 0.6, 1.0],
+                              ),
+                            ),
+                          ),
+                        ),
+                        _buildWatermark(tc),
+                        // ✅ IDINAGDAG: Naka-ScrollView na para hindi mag-overflow
+                        SingleChildScrollView(
+                          physics: const BouncingScrollPhysics(),
+                          child: Column(
+                            children: [
+                              _buildHeader(),
+                              // ✅ IDINAGDAG: Inangat natin ang card papasok sa orange header
+                              Transform.translate(
+                                offset: const Offset(0, -85),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  child: _buildOuterCard(tc),
+                                ),
+                              ),
+                              const SizedBox(height: 60),
+                            ],
+                          ),
+                        ),
+                        if (_pendingCount > 0 && !_isDemo)
+                          _buildPendingBadge(),
+                        if (_obscureContent) _buildPrivacyShield(),
+                      ],
                     ),
                   ),
                 ),
-                Positioned.fill(
-                  child: IgnorePointer(child: Container(color: _scrim)),
-                ),
-                Positioned.fill(
-                  child: BsContainer(maxWidth: 480, child: content),
-                ),
-                if (_pendingCount > 0 && !_isDemo) _buildPendingBadge(),
-                if (_obscureContent) _buildPrivacyShield(),
-              ],
+              ),
             );
           },
         ),
@@ -2768,265 +2837,275 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     );
   }
 
-  Widget _buildContent(_ThemeColors tc) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Opacity(opacity: 0.55, child: _buildDimmedBackground(tc)),
-        IgnorePointer(child: Container(color: _scrim)),
-        SafeArea(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: _buildModalCard(),
+  Widget _buildWatermark(_ThemeColors tc) {
+    return Positioned(
+      bottom: -130,
+      left: -150,
+      child: IgnorePointer(
+        child: Transform.rotate(
+          angle: _degToRad(425),
+          child: Opacity(
+            opacity: tc.watermarkOpacity,
+            child: ColorFiltered(
+              colorFilter: const ColorFilter.mode(
+                Color.fromRGBO(255, 138, 0, 0.10),
+                BlendMode.srcIn,
+              ),
+              child: Image.asset(
+                _logoAsset,
+                width: 500,
+                height: 500,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
             ),
           ),
         ),
-      ],
+      ),
     );
   }
 
-  Widget _buildDimmedBackground(_ThemeColors tc) {
-    return Stack(
-      clipBehavior: Clip.hardEdge,
-      children: [
-        Positioned.fill(
-          child: Container(
+  Widget _buildHeader() {
+    return SafeArea(
+      bottom: false,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          double scale = constraints.maxWidth.isFinite
+              ? constraints.maxWidth / _kHeaderDesignFrameWidth
+              : 1.0;
+          if (scale <= 0) scale = 1.0;
+          if (scale > 1.0) scale = 1.0;
+
+          final outerRadius = _kHeaderRadius * scale;
+          final borderW = _kHeaderBorderBottom * scale;
+          final innerRadius = (outerRadius - borderW).clamp(0.0, outerRadius);
+
+          return Container(
+            width: double.infinity,
+            height: _kHeaderH * scale,
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [tc.bgTop, tc.bgMid, tc.bgBottom],
-                stops: const [0.0, 0.6, 1.0],
+              color: const Color(0xFF382A20),
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(outerRadius),
+                bottomRight: Radius.circular(outerRadius),
               ),
             ),
-          ),
-        ),
-        Positioned(
-          bottom: -130,
-          left: -150,
-          child: IgnorePointer(
-            child: Transform.rotate(
-              angle: _degToRad(425),
-              child: Opacity(
-                opacity: tc.watermarkOpacity,
-                child: ColorFiltered(
-                  colorFilter: const ColorFilter.mode(
-                    Color.fromRGBO(255, 138, 0, 0.10),
-                    BlendMode.srcIn,
-                  ),
-                  child: Image.asset(
-                    _logoAsset,
-                    width: 500,
-                    height: 500,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  ),
+            padding: EdgeInsets.only(bottom: borderW),
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: _isDemo
+                      ? [_demoAccent, _demoAccentDark]
+                      : [_headerStart, _headerEnd],
+                ),
+                borderRadius: BorderRadius.only(
+                  bottomLeft: Radius.circular(innerRadius),
+                  bottomRight: Radius.circular(innerRadius),
                 ),
               ),
-            ),
-          ),
-        ),
-        Positioned.fill(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: _isDemo
-                        ? [_demoAccent, _demoAccentDark]
-                        : [_headerStart, _headerEnd],
-                  ),
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(28),
-                    bottomRight: Radius.circular(28),
-                  ),
-                ),
-                child: SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 60),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        GestureDetector(
-                          onTap: _goBack,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              Icon(Icons.chevron_left_rounded,
-                                  color: _white, size: 22),
-                              SizedBox(width: 4),
-                              Text('Back',
-                                  style: TextStyle(
-                                      color: _white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600)),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
-                            _isDemo
-                                ? 'Demo Verify'
-                                : (widget.standaloneMode
-                                ? 'Device Verification'
-                                : 'Device Auth & Clock In'),
-                            style: const TextStyle(
+              child: Stack(
+                children: [
+                  Positioned(
+                    left: _kBackLeft * scale,
+                    top: _kBackTop * scale,
+                    child: GestureDetector(
+                      onTap: _goBack,
+                      behavior: HitTestBehavior.opaque,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Icon(Icons.chevron_left_rounded,
+                              color: _white, size: 22 * scale),
+                          SizedBox(width: 4 * scale),
+                          Text(
+                            'Back',
+                            style: TextStyle(
                                 color: _white,
-                                fontSize: 28,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.5)),
-                        const SizedBox(height: 6),
-                        Text(
-                            _isDemo
-                                ? 'Real biometric prompt — always pass'
-                                : (widget.standaloneMode
-                                ? 'Verify using your device lock'
-                                : 'Select your initial verification method'),
-                            style:
-                            const TextStyle(color: _white, fontSize: 14)),
-                        if (_isDemo) ...[
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.25),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: const Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.science_rounded,
-                                        color: Colors.white, size: 12),
-                                    SizedBox(width: 6),
-                                    Text(
-                                      'DEMO MODE',
-                                      style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w800,
-                                          letterSpacing: 0.5),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (_networkState == _NetworkState.offline) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: _error.withValues(alpha: 0.85),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.cloud_off_rounded,
-                                          color: Colors.white, size: 12),
-                                      SizedBox(width: 6),
-                                      Text(
-                                        'OFFLINE',
-                                        style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w800,
-                                            letterSpacing: 0.5),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ],
+                                fontSize: 16 * scale,
+                                fontWeight: FontWeight.w600,
+                                height: 1.0),
                           ),
-                        ] else if (_networkState ==
-                            _NetworkState.offline) ...[
-                          const SizedBox(height: 8),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: _kTitleLeft * scale,
+                    top: _kTitleTop * scale,
+                    child: Text(
+                      _isDemo
+                          ? 'Demo Verify'
+                          : (widget.standaloneMode
+                          ? 'Fingerprint'
+                          : 'Device Auth & Clock In'),
+                      style: TextStyle(
+                          color: _white,
+                          fontSize: _kTitleFontSize * scale,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                          height: 1.0),
+                    ),
+                  ),
+                  Positioned(
+                    left: _kSubtitleLeft * scale,
+                    top: _kSubtitleTop * scale,
+                    child: Text(
+                      _isDemo
+                          ? 'Real biometric prompt — always pass'
+                          : (widget.standaloneMode
+                          ? 'Verify using your device lock'
+                          : 'Select your initial verification method'),
+                      style: TextStyle(
+                          color: _white,
+                          fontSize: _kSubtitleFontSize * scale,
+                          fontWeight: FontWeight.w400,
+                          height: 1.0),
+                    ),
+                  ),
+                  if (_isDemo)
+                    Positioned(
+                      right: 16 * scale,
+                      top: _kBackTop * scale,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                           Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
+                                horizontal: 10, vertical: 5),
                             decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
+                              color: Colors.white.withValues(alpha: 0.22),
                               borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                  width: 1),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(Icons.cloud_off_rounded,
-                                    color: Colors.white, size: 12),
-                                const SizedBox(width: 6),
-                                Text(
-                                  _pendingCount > 0
-                                      ? 'Offline — $_pendingCount pending'
-                                      : 'Offline mode',
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600),
-                                ),
+                                Icon(Icons.science_rounded,
+                                    color: Colors.white, size: 12 * scale),
+                                SizedBox(width: 4 * scale),
+                                Text('DEMO',
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10 * scale,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 1.0)),
                               ],
                             ),
                           ),
+                          if (_networkState == _NetworkState.offline) ...[
+                            SizedBox(width: 6 * scale),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: _error.withValues(alpha: 0.85),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.cloud_off_rounded,
+                                      color: Colors.white, size: 11 * scale),
+                                  SizedBox(width: 4 * scale),
+                                  Text('OFFLINE',
+                                      style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 9.5 * scale,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: 0.5)),
+                                ],
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
+                    )
+                  else if (_networkState == _NetworkState.offline)
+                    Positioned(
+                      right: 16 * scale,
+                      top: _kBackTop * scale,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.cloud_off_rounded,
+                                color: Colors.white, size: 12 * scale),
+                            SizedBox(width: 5 * scale),
+                            Text(
+                              _pendingCount > 0
+                                  ? 'Offline · $_pendingCount pending'
+                                  : 'Offline mode',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10.5 * scale,
+                                  fontWeight: FontWeight.w700),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                ),
+                ],
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Transform.translate(
-                  offset: const Offset(0, -40),
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: tc.cardBg,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Column(children: [
-                      Text(
-                          _isDemo
-                              ? 'Demo Mode'
-                              : (_fingerprintLocked
-                              ? 'Access Blocked by Admin'
-                              : (widget.standaloneMode
-                              ? 'Device Authentication'
-                              : 'Step 1: Initial Login')),
-                          style: TextStyle(
-                              color: _isDemo
-                                  ? _demoAccent
-                                  : (_fingerprintLocked
-                                  ? _error
-                                  : tc.textDark),
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 20),
-                      Row(children: [
-                        Expanded(
-                            child: _dimmedOptionPlaceholder(
-                                tc, Icons.contactless_rounded, 'Key Fob')),
-                        const SizedBox(width: 12),
-                        Expanded(
-                            child: _dimmedOptionPlaceholder(
-                                tc, Icons.key_rounded, 'Use PIN')),
-                      ]),
-                    ]),
-                  ),
-                ),
-              ),
-            ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildOuterCard(_ThemeColors tc) {
+    return Container(
+      decoration: BoxDecoration(
+        color: tc.cardBg,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          )
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(10, 18, 10, 18),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            _isDemo
+                ? 'Demo Mode'
+                : (_fingerprintLocked
+                ? 'Access Blocked by Admin'
+                : (widget.standaloneMode
+                ? 'Step 3: Fingerprint'
+                : 'Step 1: Initial Login')),
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _isDemo
+                  ? _demoAccent
+                  : (_fingerprintLocked ? _error : tc.textDark),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
+            ),
           ),
-        ),
-      ],
+          const SizedBox(height: 14),
+          _buildModalCard(),
+        ],
+      ),
     );
   }
 
@@ -3084,7 +3163,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       width: double.infinity,
-      constraints: const BoxConstraints(maxWidth: 338),
+      constraints: const BoxConstraints(),
       padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
       decoration: BoxDecoration(
         gradient: LinearGradient(

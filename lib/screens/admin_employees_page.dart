@@ -1,10 +1,4 @@
 // lib/screens/admin_employees_page.dart
-// v3.1: 🏷️ "Liveness Check" only (Blink + Smile).
-//       No face templates, no embeddings, no identity verification.
-//       Legacy biometric fields (faceEmbedding*) are STILL PURGED on reset,
-//       but they no longer count as a valid liveness state. Only the new
-//       schema (livenessVerified / livenessVerifiedAt) is trusted.
-//       Demo Mode removed — always operates on real Firestore data.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File;
@@ -34,7 +28,7 @@ const int kAdminSickLeaveTotal = 18;
 const int kWorkingDaysPerMonth = 22;
 
 // ═════════════════════════════════════════════════════════════════════
-// LIVENESS — NOT biometric identity verification
+// LIVENESS — boolean check + on-device encrypted template only
 // ═════════════════════════════════════════════════════════════════════
 const String kLivenessVerifiedField = 'livenessVerified';
 const String kLivenessVerifiedAtField = 'livenessVerifiedAt';
@@ -115,6 +109,10 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   final _editDailyRateCtrl = TextEditingController();
   final _editBankNameCtrl = TextEditingController();
   final _editAccountNumberCtrl = TextEditingController();
+
+  // ✅ IDINAGDAG: Controllers para sa Leave Balances
+  final _editAnnualLeaveCtrl = TextEditingController();
+  final _editSickLeaveCtrl = TextEditingController();
 
   DateTime? _editBirthday;
   String? _editDepartmentDropdown;
@@ -262,6 +260,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       _editDailyRateCtrl,
       _editBankNameCtrl,
       _editAccountNumberCtrl,
+      _editAnnualLeaveCtrl, // ✅ Idinagdag
+      _editSickLeaveCtrl,   // ✅ Idinagdag
       _addFirstCtrl,
       _addLastCtrl,
       _addEmailCtrl,
@@ -1540,6 +1540,49 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
+  Widget _emptyState() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 64, horizontal: 24),
+      decoration: BoxDecoration(
+        color: tc.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tc.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.search_off_rounded, size: 56, color: tc.muted),
+          const SizedBox(height: 12),
+          Text(
+            'No employees found',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: tc.text,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Try adjusting your filters or search query.',
+            style: TextStyle(fontSize: 13, color: tc.muted),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toggleSelection(String docId) {
+    if (docId.isEmpty) return;
+    setState(() {
+      if (_selectedEmpIds.contains(docId)) {
+        _selectedEmpIds.remove(docId);
+      } else {
+        _selectedEmpIds.add(docId);
+      }
+    });
+  }
+
   // ═════════════════════════════════════════════════════════════════
   // Add page
   // ═════════════════════════════════════════════════════════════════
@@ -1850,6 +1893,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             ]),
           ),
           const SizedBox(height: 12),
+          // FIX #1: green notice now accurately describes on-device template.
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -1864,8 +1908,9 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
               const Expanded(
                 child: Text(
                   'Blink + Smile liveness check is performed in the mobile app. '
-                      'No face templates, no biometric data, and no identity '
-                      'verification are performed or stored.',
+                      'A face template is stored encrypted on the employee\'s '
+                      'device only. No face template or biometric data is '
+                      'transmitted to or stored on our servers.',
                   style: TextStyle(
                       fontSize: 12,
                       color: Color(0xFF166534),
@@ -2482,7 +2527,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _editDeptCtrl.text = _s(emp['department'], '');
     _editKeyfobCtrl.text = _s(emp['nfcTagId'], _s(emp['nfcId'], ''));
 
-    // 🚨 SECURITY FIX: Do not read plaintext PIN from Firestore.
+    // SECURITY: Do not read plaintext PIN from Firestore.
     _editPinCtrl.text = '';
     _editPinJustGenerated = false;
     _editPinVisible = false;
@@ -2491,6 +2536,10 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     _editDeviceNameCtrl.text = _s(emp['deviceName'], '');
     _editEmployeeIdCtrl.text = empId;
     _editOriginalEmployeeId = empId;
+
+    // ✅ IDINAGDAG: I-load ang Leave Balances
+    _editAnnualLeaveCtrl.text = _annualLeaveTotalOf(emp).toString();
+    _editSickLeaveCtrl.text = _sickLeaveTotalOf(emp).toString();
 
     final g = _s(emp['gender'], 'male').toLowerCase();
     _editGender =
@@ -2571,6 +2620,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                     _editPersonalCard(),
                     const SizedBox(height: 16),
                     _editSalaryCard(),
+                    const SizedBox(height: 16),
+                    _editLeaveCard(), // ✅ IDINAGDAG: Leave Balances Card
                     const SizedBox(height: 16),
                     _editSecurityCard(),
                     const SizedBox(height: 16),
@@ -2990,6 +3041,81 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       maxLen: 30),
                 ),
               ]),
+            ]);
+          }),
+        ],
+      ),
+    );
+  }
+
+  // ✅ IDINAGDAG: Leave Card
+  Widget _editLeaveCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: tc.card,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFDDC1AE)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.event_available_rounded,
+                color: Color(0xFFFF8C00), size: 22),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Leave Balances',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: tc.text,
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF8C00).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                    color: const Color(0xFFFF8C00).withValues(alpha: 0.4)),
+              ),
+              child: const Text(
+                'EDITABLE',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFFFF8C00),
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Text(
+            'Set the total allowed leaves for this employee per year. Used remaining leaves are calculated automatically.',
+            style: TextStyle(fontSize: 12, color: tc.muted, height: 1.4),
+          ),
+          const SizedBox(height: 16),
+          LayoutBuilder(builder: (context, c) {
+            final narrow = c.maxWidth < 560;
+            final f1 = _editField('ANNUAL LEAVE TOTAL (Days)', _editAnnualLeaveCtrl,
+                maxLen: 3);
+            final f2 = _editField('SICK LEAVE TOTAL (Days)', _editSickLeaveCtrl,
+                maxLen: 3);
+            if (narrow) {
+              return Column(children: [
+                f1,
+                const SizedBox(height: 14),
+                f2,
+              ]);
+            }
+            return Row(children: [
+              Expanded(child: f1),
+              const SizedBox(width: 16),
+              Expanded(child: f2),
             ]);
           }),
         ],
@@ -3651,6 +3777,12 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       return;
     }
 
+    // ✅ IDINAGDAG: Kunin ang bagong leave totals
+    final annualLeaveTotal =
+        int.tryParse(_editAnnualLeaveCtrl.text) ?? kAdminAnnualLeaveTotal;
+    final sickLeaveTotal =
+        int.tryParse(_editSickLeaveCtrl.text) ?? kAdminSickLeaveTotal;
+
     setState(() => _editSaving = true);
 
     try {
@@ -3694,6 +3826,10 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             _editAccountNumberCtrl.text,
             maxLen: 30),
         'salaryConfigured': true,
+
+        // ✅ IDINAGDAG: Isama ang leave totals sa update
+        'annualLeaveTotal': annualLeaveTotal,
+        'sickLeaveTotal': sickLeaveTotal,
       };
 
       final err = await _svc.updateEmployee(docId: docId, patch: patch);
@@ -3935,8 +4071,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       PendingEditRestore.newPin = newPin;
 
       await docRef.update({
-        // 🚨 REMOVED: Do not save plaintext PIN to Firestore
-        // 'pin': newPin,
+        // SECURITY: Do not save plaintext PIN to Firestore
         'pinHash': hash,
         'pinSalt': salt,
         'pinUpdatedAt': FieldValue.serverTimestamp(),
@@ -3944,7 +4079,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         'requiresPinChange': true,
       });
 
-      debugPrint('PIN regenerated for $docId - new PIN: $newPin');
+      debugPrint('PIN regenerated for $docId');
 
       if (!mounted) return;
 
@@ -3957,8 +4092,6 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         if (_selectedProfileEmp != null) {
           _selectedProfileEmp = {
             ..._selectedProfileEmp!,
-            // 🚨 REMOVED: Do not hold plaintext PIN in local state
-            // 'pin': newPin,
             'pinUpdatedAt': DateTime.now(),
             'requiresPinChange': true,
           };
@@ -4003,6 +4136,173 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     final bytes = utf8.encode('$salt:$pin');
     final digest = sha256.convert(bytes);
     return digest.toString();
+  }
+
+  // ═════════════════════════════════════════════════════════════════
+  // Confirmations
+  // ═════════════════════════════════════════════════════════════════
+  // FIX #2: writes faceAdminResetAt so the device can wipe its template.
+  Future<void> _confirmResetLiveness(Map<String, dynamic> emp) async {
+    final docId = _s(emp['id'], '');
+    final name = _nameOf(emp);
+    if (docId.isEmpty) {
+      _snack('Missing employee doc ID.', error: true);
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: tc.card,
+        title: Text('Reset liveness?', style: TextStyle(color: tc.text)),
+        content: Text(
+          'The employee will need to re-enroll (blink + smile) on their device. '
+              'Their encrypted face template will be deleted from the device on the next sync.',
+          style: TextStyle(color: tc.text, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: Text('Cancel', style: TextStyle(color: tc.muted)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: tc.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    if (!mounted) return;
+
+    try {
+      await AdminDatabase.fs.collection('employees').doc(docId).update({
+        // Clear boolean liveness state
+        kLivenessVerifiedField: false,
+        kLivenessVerifiedAtField: FieldValue.delete(),
+        'livenessSource': FieldValue.delete(),
+        'livenessCheckCount': 0,
+
+        // REQUIRED: lets the mobile client detect the admin reset, wipe its
+        // locally-encrypted template, and re-enable enrollment.
+        'faceAdminResetAt': FieldValue.serverTimestamp(),
+        'faceAdminResetBy': _actorEmail,
+      });
+
+      _snack(
+          'Liveness reset for $name. Device will wipe its template on next sync.');
+      widget.onRefreshNeeded();
+    } catch (e) {
+      _snack('Failed to reset liveness: $e', error: true);
+    }
+  }
+
+  Future<void> _confirmTerminate(String docId, String name) async {
+    if (docId.isEmpty) {
+      _snack('Missing employee doc ID.', error: true);
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: tc.card,
+        title: Text('Terminate employee?', style: TextStyle(color: tc.text)),
+        content: Text(
+          'This will mark $name as terminated. They will no longer be able to log in.',
+          style: TextStyle(color: tc.text, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: Text('Cancel', style: TextStyle(color: tc.muted)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: tc.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Terminate'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    if (!mounted) return;
+
+    try {
+      await AdminDatabase.fs.collection('employees').doc(docId).update({
+        'terminated': true,
+        'terminatedAt': FieldValue.serverTimestamp(),
+        'terminatedBy': _actorEmail,
+        'isOnline': false,
+        'isLoggedIn': false,
+      });
+      _snack('$name terminated.');
+      widget.onRefreshNeeded();
+    } catch (e) {
+      _snack('Failed to terminate: $e', error: true);
+    }
+  }
+
+  Future<void> _confirmWipeAllLogs() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: tc.card,
+        title: Text('Clear all logs?', style: TextStyle(color: tc.text)),
+        content: Text(
+          'This permanently removes attendance and liveness logs. '
+              'This cannot be undone.',
+          style: TextStyle(color: tc.text, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: Text('Cancel', style: TextStyle(color: tc.muted)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: tc.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    if (!mounted) return;
+
+    try {
+      var count = 0;
+      for (final col in [
+        'attendance_logs',
+        'liveness_logs',
+        'activity_logs',
+      ]) {
+        try {
+          final snap =
+          await AdminDatabase.fs.collection(col).limit(500).get();
+          for (final doc in snap.docs) {
+            await doc.reference.delete();
+            count++;
+          }
+        } catch (_) {
+          // Collection may not exist — ignore.
+        }
+      }
+      _snack('Cleared $count log entries.');
+      widget.onRefreshNeeded();
+    } catch (e) {
+      _snack('Failed to clear logs: $e', error: true);
+    }
   }
 
   // ═════════════════════════════════════════════════════════════════
@@ -4444,1579 +4744,155 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     );
   }
 
-  Widget _livenessStatusCard(Map<String, dynamic> emp) {
-    final verified = _isLivenessVerified(emp);
-    final verifiedAt = _livenessVerifiedAt(emp);
-    final count = _livenessCheckCountOf(emp);
-    final source = _livenessSourceOf(emp);
-
-    final bg = verified ? const Color(0xFFDCFCE7) : const Color(0xFFFFF7ED);
-    final border =
-    verified ? const Color(0xFF16A34A) : const Color(0xFFF97316);
-    final iconColor =
-    verified ? const Color(0xFF166534) : const Color(0xFF9A3412);
-    final labelColor =
-    verified ? const Color(0xFF166534) : const Color(0xFF9A3412);
-
+  Widget _credBox(String label, String value, bool ok, String subtitle) {
+    final fg = ok ? const Color(0xFF166534) : tc.muted;
+    final bg = ok ? const Color(0xFFDCFCE7) : tc.surface;
+    final border = ok ? const Color(0xFF16A34A) : tc.border;
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: border, width: 1.2),
+        border: Border.all(color: border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: verified
-                    ? const Color(0xFF16A34A).withValues(alpha: 0.15)
-                    : const Color(0xFFF97316).withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                verified
-                    ? Icons.verified_user_rounded
-                    : Icons.person_off_rounded,
-                size: 20,
-                color: iconColor,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'LIVENESS CHECK',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      color: labelColor,
-                      letterSpacing: 0.6,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    verified ? 'Passed' : 'Not Passed',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: labelColor,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Container(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: verified
-                    ? const Color(0xFF22C55E)
-                    : const Color(0xFF9CA3AF),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(
-                  verified ? Icons.check_rounded : Icons.priority_high_rounded,
-                  size: 12,
-                  color: Colors.white,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  verified ? 'PASSED' : 'PENDING',
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                    letterSpacing: 0.4,
-                  ),
-                ),
-              ]),
-            ),
-          ]),
-          const SizedBox(height: 12),
-          if (verified) ...[
-            _fpDetailRow(
-              Icons.calendar_today_rounded,
-              'Last passed',
-              verifiedAt != null
-                  ? '${_fmtDate(verifiedAt)} • ${_fmtTime(verifiedAt)}'
-                  : 'Date not available',
-            ),
-            const SizedBox(height: 8),
-            _fpDetailRow(
-              Icons.straighten_rounded,
-              'Status',
-              '$count check${count == 1 ? "" : "s"} on record',
-            ),
-            if (source != '—') ...[
-              const SizedBox(height: 8),
-              _fpDetailRow(Icons.source_rounded, 'Source', source),
-            ],
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton.icon(
-                onPressed: () => _confirmResetLiveness(emp),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFFEF4444),
-                  side: const BorderSide(color: Color(0xFFEF4444)),
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6)),
-                ),
-                icon: const Icon(Icons.restart_alt_rounded, size: 14),
-                label: const Text(
-                  'Reset Liveness',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-                ),
-              ),
-            ),
-          ] else ...[
-            _fpDetailRow(
-              Icons.info_outline_rounded,
-              'Status',
-              'Employee must pass the blink + smile liveness check '
-                  'in the mobile app before clocking in.',
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _fpDetailRow(IconData icon, String label, String value) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 13, color: const Color(0xFF6B7280)),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 110,
-          child: Text(
+          Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w700,
-              color: Color(0xFF6B7280),
-              letterSpacing: 0.2,
+              color: fg,
+              letterSpacing: 0.5,
             ),
           ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF1F2937),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _credBox(
-      String label, String value, bool verified, String verifiedText,
-      {bool mono = false}) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEFF4FF),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: tc.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: tc.muted,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ),
-            Icon(Icons.info_outline, size: 14, color: tc.muted),
-          ]),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
           Text(
             value,
             style: TextStyle(
-              fontSize: mono ? 18 : 22,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               color: tc.text,
-              letterSpacing: mono ? 0.5 : 1.5,
             ),
+            overflow: TextOverflow.ellipsis,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 2),
+          Text(subtitle, style: TextStyle(fontSize: 11, color: fg)),
+        ],
+      ),
+    );
+  }
+
+  Widget _livenessStatusCard(Map<String, dynamic> emp) {
+    final verified = _isLivenessVerified(emp);
+    final at = _livenessVerifiedAt(emp);
+    final src = _livenessSourceOf(emp);
+    final count = _livenessCheckCountOf(emp);
+    final fg = verified ? const Color(0xFF166534) : const Color(0xFF6B7280);
+    final bg = verified ? const Color(0xFFDCFCE7) : const Color(0xFFF3F4F6);
+    final border =
+    verified ? const Color(0xFF16A34A) : const Color(0xFF9CA3AF);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Row(children: [
             Icon(
-              verified ? Icons.verified_rounded : Icons.error_outline,
-              size: 14,
-              color: verified ? tc.orange : tc.red,
+              verified
+                  ? Icons.verified_user_rounded
+                  : Icons.person_off_rounded,
+              size: 16,
+              color: fg,
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 8),
             Text(
-              verifiedText,
+              'LIVENESS CHECK',
               style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: verified ? tc.orangeText : tc.red,
-              ),
-            ),
-          ]),
-        ],
-      ),
-    );
-  }
-
-  Widget _statusItem(IconData icon, String label, bool enabled,
-      String enabledText, String disabledText) {
-    return Column(children: [
-      Icon(icon,
-          size: 26, color: enabled ? const Color(0xFF904D00) : tc.muted),
-      const SizedBox(height: 6),
-      Text(
-        label,
-        style: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
-          color: enabled ? tc.text : tc.muted,
-        ),
-      ),
-      const SizedBox(height: 2),
-      Text(
-        enabled ? enabledText : disabledText,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          color: enabled ? tc.orangeText : tc.muted,
-        ),
-      ),
-    ]);
-  }
-
-  // ═════════════════════════════════════════════════════════════════
-  // Reset liveness
-  // ═════════════════════════════════════════════════════════════════
-  Future<void> _confirmResetLiveness(Map<String, dynamic> emp) async {
-    final docId = _s(emp['id'], '');
-    if (docId.isEmpty) return;
-
-    final count = _livenessCheckCountOf(emp);
-    final countLabel = count > 0
-        ? '$count check${count == 1 ? "" : "s"} on record'
-        : 'no checks yet';
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: tc.card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Row(children: [
-          const Icon(Icons.face_retouching_off_rounded,
-              color: Color(0xFFF59E0B)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text('Reset Liveness?',
-                style: TextStyle(color: tc.text, fontSize: 18)),
-          ),
-        ]),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'The liveness status for ${_nameOf(emp)} will be reset '
-                  '($countLabel).',
-              style: TextStyle(color: tc.text, fontSize: 13, height: 1.4),
-            ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF9C3),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFACC15)),
-              ),
-              child: const Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.info_outline_rounded,
-                      size: 16, color: Color(0xFF854D0E)),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'On their next clock-in, the employee will automatically '
-                          'undergo the blink + smile liveness check again.',
-                      style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF854D0E),
-                          height: 1.35),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx, false),
-            child: Text('Cancel', style: TextStyle(color: tc.muted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFF59E0B),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.pop(dialogCtx, true),
-            child: const Text('Reset Liveness'),
-          ),
-        ],
-      ),
-    );
-
-    if (ok != true || !mounted) return;
-
-    try {
-      await AdminDatabase.fs.collection('employees').doc(docId).set({
-        // NEW schema
-        kLivenessVerifiedField: FieldValue.delete(),
-        kLivenessVerifiedAtField: FieldValue.delete(),
-        'livenessCheckCount': FieldValue.delete(),
-        'livenessSource': FieldValue.delete(),
-        'livenessResetAt': FieldValue.serverTimestamp(),
-        'livenessResetBy': _actorEmail,
-        // LEGACY cleanup — purge old biometric fields from Firestore.
-        // These no longer count as proof of liveness, but we still
-        // remove them to avoid stale data lingering.
-        'faceEmbedding': FieldValue.delete(),
-        'faceEmbeddings': FieldValue.delete(),
-        'faceEmbeddingsJson': FieldValue.delete(),
-        'faceEmbeddingsCount': FieldValue.delete(),
-        'faceEmbeddingSize': FieldValue.delete(),
-        'faceEmbeddingVersion': FieldValue.delete(),
-        'faceEmbeddingUpdatedAt': FieldValue.delete(),
-        'faceEmbeddingSource': FieldValue.delete(),
-        'faceEmbeddingHash': FieldValue.delete(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      try {
-        await AdminDatabase.fs.collection('activity_logs').add({
-          'type': 'liveness_reset',
-          'action': 'Liveness Status Reset by Admin',
-          'employeeId': docId,
-          'employee_id': _s(emp['employeeId'], docId),
-          'employee_name': _nameOf(emp),
-          'previousChecks': count,
-          'resetBy': _actorEmail,
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-      } catch (_) {}
-
-      if (!mounted) return;
-      _snack('Liveness status reset. Employee must re-verify on next login.');
-      widget.onRefreshNeeded();
-
-      setState(() {
-        emp.remove(kLivenessVerifiedField);
-        emp.remove(kLivenessVerifiedAtField);
-        emp.remove('livenessCheckCount');
-        emp.remove('livenessSource');
-        emp.remove('faceEmbeddingVersion');
-        emp.remove('faceEmbeddingsCount');
-        emp.remove('faceEmbeddingsJson');
-        emp.remove('faceEmbeddingSource');
-        emp.remove('faceEmbeddingUpdatedAt');
-        if (_selectedProfileEmp != null &&
-            _s(_selectedProfileEmp!['id'], '') == docId) {
-          _selectedProfileEmp!.remove(kLivenessVerifiedField);
-          _selectedProfileEmp!.remove(kLivenessVerifiedAtField);
-          _selectedProfileEmp!.remove('livenessCheckCount');
-          _selectedProfileEmp!.remove('livenessSource');
-          _selectedProfileEmp!.remove('faceEmbeddingVersion');
-          _selectedProfileEmp!.remove('faceEmbeddingsCount');
-          _selectedProfileEmp!.remove('faceEmbeddingsJson');
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      _snack('Failed to reset liveness: $e', error: true);
-    }
-  }
-
-  // ═════════════════════════════════════════════════════════════════
-  // Streams (attendance / leave / activity)
-  // ═════════════════════════════════════════════════════════════════
-  Stream<List<Map<String, dynamic>>> _attendanceStream(String empId) {
-    return AdminDatabase.fs
-        .collection('attendance_logs')
-        .where('employee_id', isEqualTo: empId)
-        .limit(200)
-        .snapshots()
-        .map((s) {
-      final list = s.docs.map((d) {
-        final m = d.data();
-        return <String, dynamic>{...m, 'id': d.id};
-      }).toList();
-
-      list.sort((a, b) {
-        final da = _toDateTime(a['timestamp']);
-        final db = _toDateTime(b['timestamp']);
-        if (da != null && db != null) return db.compareTo(da);
-        if (da != null) return -1;
-        if (db != null) return 1;
-        return 0;
-      });
-      return list;
-    }).handleError((e) {
-      debugPrint('attendanceStream($empId): $e');
-      return <Map<String, dynamic>>[];
-    });
-  }
-
-  Stream<List<Map<String, dynamic>>> _leaveStream(String empId) {
-    return AdminDatabase.fs
-        .collection('leave_applications')
-        .where('employeeId', isEqualTo: empId)
-        .snapshots()
-        .map((s) {
-      final list = s.docs.map((d) {
-        final m = d.data();
-        return <String, dynamic>{...m, 'id': d.id};
-      }).toList();
-
-      list.sort((a, b) {
-        final da = _toDateTime(a['createdAt'] ?? a['timestamp']);
-        final db = _toDateTime(b['createdAt'] ?? b['timestamp']);
-        if (da != null && db != null) return db.compareTo(da);
-        return 0;
-      });
-      return list;
-    }).handleError((e) {
-      debugPrint('leaveStream($empId): $e');
-      return <Map<String, dynamic>>[];
-    });
-  }
-
-  Stream<List<Map<String, dynamic>>> _activityStream(String empId) {
-    return AdminDatabase.fs
-        .collection('activity_logs')
-        .where('employeeId', isEqualTo: empId)
-        .limit(50)
-        .snapshots()
-        .map((s) {
-      final list = s.docs
-          .map((d) => <String, dynamic>{...d.data(), 'id': d.id})
-          .toList();
-      list.sort((a, b) {
-        final da = _toDateTime(a['timestamp']);
-        final db = _toDateTime(b['timestamp']);
-        if (da != null && db != null) return db.compareTo(da);
-        return 0;
-      });
-      return list;
-    }).handleError((e) {
-      debugPrint('activityStream($empId): $e');
-      return <Map<String, dynamic>>[];
-    });
-  }
-
-  // ═════════════════════════════════════════════════════════════════
-  // Attendance + leave section
-  // ═════════════════════════════════════════════════════════════════
-  Widget _attendanceAndLeaveSection(String empId, Map<String, dynamic> emp) {
-    return LayoutBuilder(builder: (context, c) {
-      final stack = !BsResponsive(c.maxWidth).up(BsSize.lg);
-      final left = _recentAttendanceCard(empId);
-      final right = _leaveBalanceCard(empId, emp);
-      if (stack) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [left, const SizedBox(height: 20), right],
-        );
-      }
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(flex: 7, child: left),
-          const SizedBox(width: 20),
-          Expanded(flex: 4, child: right),
-        ],
-      );
-    });
-  }
-
-  Widget _recentAttendanceCard(String empId) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: tc.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Expanded(
-              child: Text(
-                'Recent Attendance',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w600,
-                  color: tc.text,
-                ),
-              ),
-            ),
-            Text(
-              'Live data',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: tc.muted,
-              ),
-            ),
-          ]),
-          const SizedBox(height: 16),
-          StreamBuilder<List<Map<String, dynamic>>>(
-            stream: _attendanceStream(empId),
-            builder: (context, snap) {
-              final logs = snap.data ?? const [];
-              final rows = _buildAttendanceRows(logs);
-              final totalMin = _sumMinutes(rows);
-              final monthMin = _sumMinutes(rows,
-                  month: DateTime.now().month, year: DateTime.now().year);
-
-              return Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      tc.orange.withValues(alpha: 0.12),
-                      tc.orange.withValues(alpha: 0.04),
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: tc.orange.withValues(alpha: 0.25)),
-                ),
-                child: Row(children: [
-                  Expanded(
-                    child: _hourStat(Icons.access_time_rounded, 'Total Hours',
-                        _fmtMinutes(totalMin)),
-                  ),
-                  Container(width: 1, height: 40, color: tc.border),
-                  Expanded(
-                    child: _hourStat(Icons.calendar_month_rounded,
-                        'This Month', _fmtMinutes(monthMin)),
-                  ),
-                  Container(width: 1, height: 40, color: tc.border),
-                  Expanded(
-                    child: _hourStat(Icons.check_circle_rounded,
-                        'Days Worked', '${rows.length}'),
-                  ),
-                ]),
-              );
-            },
-          ),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.only(bottom: 12),
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: tc.border)),
-            ),
-            child: Row(children: [
-              _attHdr('DATE', 4),
-              _attHdr('TIME IN', 3),
-              _attHdr('TIME OUT', 3),
-              _attHdr('TOTAL HRS', 3),
-              _attHdr('STATUS', 3),
-            ]),
-          ),
-          StreamBuilder<List<Map<String, dynamic>>>(
-            stream: _attendanceStream(empId),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Center(
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                );
-              }
-              if (snap.hasError) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 24),
-                  child: Center(
-                    child: Column(children: [
-                      Icon(Icons.error_outline, size: 32, color: tc.red),
-                      const SizedBox(height: 8),
-                      Text('Unable to load attendance.',
-                          style: TextStyle(color: tc.muted, fontSize: 13)),
-                    ]),
-                  ),
-                );
-              }
-              final logs = snap.data ?? const [];
-              if (logs.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 24),
-                  child: Center(
-                    child: Column(children: [
-                      Icon(Icons.event_busy_outlined,
-                          size: 32, color: tc.muted),
-                      const SizedBox(height: 8),
-                      Text('No attendance records yet.',
-                          style: TextStyle(color: tc.muted, fontSize: 13)),
-                    ]),
-                  ),
-                );
-              }
-              final rows = _buildAttendanceRows(logs).take(5).toList();
-              if (rows.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 24),
-                  child: Center(
-                    child: Text('No valid attendance data.',
-                        style: TextStyle(color: tc.muted, fontSize: 13)),
-                  ),
-                );
-              }
-              return Column(children: [
-                for (var i = 0; i < rows.length; i++) ...[
-                  _attRow(rows[i]),
-                  if (i < rows.length - 1)
-                    Divider(
-                        height: 1,
-                        color: tc.border.withValues(alpha: 0.3)),
-                ],
-              ]);
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  List<Map<String, dynamic>> _buildAttendanceRows(
-      List<Map<String, dynamic>> logs) {
-    final byDay = <String, List<Map<String, dynamic>>>{};
-    for (final log in logs) {
-      final dt = _toDateTime(log['timestamp'] ?? log['createdAt']);
-      if (dt == null) continue;
-      final key =
-          '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
-      byDay.putIfAbsent(key, () => []).add(log);
-    }
-
-    final rows = <Map<String, dynamic>>[];
-    byDay.forEach((key, dayLogs) {
-      dayLogs.sort((a, b) {
-        final ta = _toDateTime(a['timestamp']);
-        final tb = _toDateTime(b['timestamp']);
-        if (ta == null || tb == null) return 0;
-        return ta.compareTo(tb);
-      });
-
-      Map<String, dynamic>? inLog;
-      Map<String, dynamic>? outLog;
-      DateTime? inTs;
-      DateTime? outTs;
-
-      for (final l in dayLogs) {
-        final t = _s(l['type'], '').toUpperCase();
-        final ts = _toDateTime(l['timestamp']);
-        if ((t == 'IN' || t == 'LOGIN' || t == 'CLOCK IN') && inLog == null) {
-          inLog = l;
-          inTs = ts;
-        } else if ((t == 'OUT' || t == 'LOGOUT' || t == 'CLOCK OUT') &&
-            outLog == null) {
-          outLog = l;
-          outTs = ts;
-        }
-      }
-
-      if (inTs == null && dayLogs.isNotEmpty) {
-        inLog = dayLogs.first;
-        inTs = _toDateTime(inLog['timestamp']);
-      }
-      if (outTs == null && dayLogs.length > 1) {
-        outLog = dayLogs.last;
-        outTs = _toDateTime(outLog['timestamp']);
-      }
-
-      String total = '—';
-      if (inTs != null &&
-          outTs != null &&
-          (outTs.isAfter(inTs) || outTs.isAtSameMomentAs(inTs))) {
-        final d = outTs.difference(inTs);
-        total = '${d.inHours}h ${d.inMinutes.remainder(60)}m';
-      }
-
-      String status;
-      bool isLate = false;
-      if (inTs != null && outTs != null) {
-        if (inTs.hour > 9 || (inTs.hour == 9 && inTs.minute > 15)) {
-          isLate = true;
-          status = 'Late';
-        } else {
-          status = 'On Time';
-        }
-      } else if (inTs != null) {
-        status = 'Working';
-      } else {
-        status = 'Present';
-      }
-
-      rows.add({
-        'date': inTs ?? outTs ?? DateTime.now(),
-        'in': inTs,
-        'out': outTs,
-        'total': total,
-        'status': status,
-        'isLate': isLate,
-      });
-    });
-
-    rows.sort(
-            (a, b) => (b['date'] as DateTime).compareTo(a['date'] as DateTime));
-    return rows;
-  }
-
-  int _sumMinutes(List<Map<String, dynamic>> rows, {int? month, int? year}) {
-    int total = 0;
-    for (final r in rows) {
-      final a = r['in'] as DateTime?;
-      final b = r['out'] as DateTime?;
-      if (a == null || b == null || b.isBefore(a)) continue;
-      if (month != null && a.month != month) continue;
-      if (year != null && a.year != year) continue;
-      total += b.difference(a).inMinutes;
-    }
-    return total;
-  }
-
-  String _fmtMinutes(int m) {
-    if (m <= 0) return '0h 0m';
-    return '${m ~/ 60}h ${m % 60}m';
-  }
-
-  Widget _hourStat(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(children: [
-            Icon(icon, size: 14, color: tc.orange),
-            const SizedBox(width: 6),
-            Flexible(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: tc.muted,
-                ),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: fg,
+                letterSpacing: 0.5,
               ),
             ),
           ]),
           const SizedBox(height: 6),
           Text(
-            value,
+            verified ? 'Passed' : 'Not Passed',
             style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: tc.text,
-              letterSpacing: -0.3,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: fg,
             ),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 1,
+          ),
+          if (verified && at != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Verified ${_fmtDate(at)} ${_fmtTime(at)}',
+              style: TextStyle(fontSize: 11, color: fg),
+            ),
+          ],
+          const SizedBox(height: 4),
+          Text(
+            'Source: $src  •  Checks: $count',
+            style: TextStyle(fontSize: 11, color: fg),
           ),
         ],
       ),
     );
   }
 
-  Widget _attHdr(String label, int flex) => Expanded(
-    flex: flex,
-    child: Text(
-      label,
-      style: TextStyle(
-        fontSize: 13,
-        fontWeight: FontWeight.w700,
-        color: tc.muted,
-        letterSpacing: 0.5,
-      ),
-    ),
-  );
-
-  Widget _attRow(Map<String, dynamic> row) {
-    final date = row['date'] as DateTime?;
-    final inTs = row['in'] as DateTime?;
-    final outTs = row['out'] as DateTime?;
-    final total = row['total'] as String;
-    final status = row['status'] as String;
-    final isLate = row['isLate'] as bool;
-    final isWorking = status == 'Working';
-
-    final bg = isWorking
-        ? const Color(0xFFDBEAFE)
-        : (isLate ? const Color(0xFFFEF9C3) : const Color(0xFFDCFCE7));
-    final fg = isWorking
-        ? const Color(0xFF1E40AF)
-        : (isLate ? const Color(0xFF854D0E) : const Color(0xFF166534));
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      child: Row(children: [
+  Widget _statusItem(
+      IconData icon, String label, bool ok, String okText, String failText) {
+    final fg = ok ? const Color(0xFF166534) : tc.muted;
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: ok ? const Color(0xFF16A34A) : tc.muted),
+        const SizedBox(width: 6),
         Expanded(
-          flex: 4,
-          child: Text(_fmtDate(date),
-              style: TextStyle(fontSize: 14, color: tc.text)),
-        ),
-        Expanded(
-          flex: 3,
-          child: Text(
-            _fmtTime(inTs),
-            style: TextStyle(
-              fontSize: 14,
-              color: inTs != null ? tc.text : tc.muted,
-            ),
-          ),
-        ),
-        Expanded(
-          flex: 3,
-          child: Text(
-            _fmtTime(outTs),
-            style: TextStyle(
-              fontSize: 14,
-              color: outTs != null ? tc.text : tc.muted,
-            ),
-          ),
-        ),
-        Expanded(
-          flex: 3,
-          child: Text(
-            total,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: tc.text,
-            ),
-          ),
-        ),
-        Expanded(
-          flex: 3,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-              decoration: BoxDecoration(
-                color: bg,
-                borderRadius: BorderRadius.circular(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: tc.muted,
+                  letterSpacing: 0.4,
+                ),
               ),
-              child: Text(
-                status,
+              const SizedBox(height: 2),
+              Text(
+                ok ? okText : failText,
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                   color: fg,
                 ),
               ),
-            ),
+            ],
           ),
         ),
-      ]),
+      ],
     );
   }
 
-  Widget _leaveBalanceCard(String empId, Map<String, dynamic> emp) {
+  Widget _attendanceAndLeaveSection(String docId, Map<String, dynamic> emp) {
     final annualTotal = _annualLeaveTotalOf(emp);
     final sickTotal = _sickLeaveTotalOf(emp);
+    final annualUsed = _safeInt(emp['annualLeaveUsed'], 0);
+    final sickUsed = _safeInt(emp['sickLeaveUsed'], 0);
+    final annualLeft = (annualTotal - annualUsed).clamp(0, annualTotal);
+    final sickLeft = (sickTotal - sickUsed).clamp(0, sickTotal);
 
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: tc.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: _leaveStream(empId),
-        builder: (context, snap) {
-          final leaves = snap.data ?? const [];
-          final stats = _computeLeaveStats(leaves,
-              annualTotal: annualTotal, sickTotal: sickTotal);
-
-          final pending = leaves
-              .where((l) =>
-          _s(l['status'], 'pending').toLowerCase() == 'pending')
-              .toList();
-
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                Expanded(
-                  child: Text(
-                    'Leave Balance',
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w600,
-                      color: tc.text,
-                    ),
-                  ),
-                ),
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () => _openLeaveCreditsDialog(emp),
-                    borderRadius: BorderRadius.circular(6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: tc.orange.withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                            color: tc.orange.withValues(alpha: 0.4)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.edit_outlined,
-                              size: 12, color: tc.orange),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Edit',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: tc.orange,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 20),
-              _leaveItem(
-                'ANNUAL LEAVE',
-                stats['usedAnnual']!,
-                annualTotal,
-                const Color(0xFF904D00),
-                const Color(0xFFFFDCC3),
-                const Color(0xFF6E3900),
-              ),
-              if ((stats['pendingAnnual'] ?? 0) > 0) ...[
-                const SizedBox(height: 6),
-                Text(
-                  '+ ${stats['pendingAnnual']} day(s) pending approval',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: tc.muted,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 20),
-              _leaveItem(
-                'SICK LEAVE',
-                stats['usedSick']!,
-                sickTotal,
-                const Color(0xFF5C5F61),
-                const Color(0xFFE0E3E6),
-                const Color(0xFF44474A),
-              ),
-              if ((stats['pendingSick'] ?? 0) > 0) ...[
-                const SizedBox(height: 6),
-                Text(
-                  '+ ${stats['pendingSick']} day(s) pending approval',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: tc.muted,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFF4FF),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: tc.border),
-                ),
-                child: Row(children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Remaining Total',
-                            style: TextStyle(fontSize: 11, color: tc.muted)),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${stats['remainingAnnual']! + stats['remainingSick']!} days',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: tc.text,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Text(
-                    '${stats['remainingAnnual']}A • ${stats['remainingSick']}S',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: tc.orangeText,
-                    ),
-                  ),
-                ]),
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'PENDING REQUESTS',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: tc.muted,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(height: 12),
-              if (pending.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEFF4FF),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: tc.border),
-                  ),
-                  child: Text(
-                    'No pending leave requests.',
-                    style: TextStyle(fontSize: 13, color: tc.muted),
-                  ),
-                )
-              else
-                for (final p in pending.take(3))
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFEFF4FF),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: tc.border),
-                      ),
-                      child: Row(children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _leaveLabel(_s(p['leaveType'],
-                                    _s(p['type'], 'Leave'))),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: tc.text,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                '${_fmtDate(p['startDate'])} - ${_fmtDate(p['endDate'])} • ${_safeInt(p['days'], 1)}d',
-                                style: TextStyle(
-                                    fontSize: 12, color: tc.muted),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Icon(Icons.chevron_right_rounded,
-                            size: 18, color: tc.muted),
-                      ]),
-                    ),
-                  ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Map<String, int> _computeLeaveStats(
-      List<Map<String, dynamic>> leaves, {
-        required int annualTotal,
-        required int sickTotal,
-      }) {
-    int usedA = 0, usedS = 0, pendA = 0, pendS = 0;
-    for (final l in leaves) {
-      final code = _s(l['leaveType'], _s(l['type'], '')).toUpperCase();
-      final days = _safeInt(l['days'], 1);
-      final status = _s(l['status'], 'pending').toLowerCase();
-      if (status == 'approved') {
-        if (code == 'VL') {
-          usedA += days;
-        } else if (code == 'SL') {
-          usedS += days;
-        }
-      } else if (status == 'pending') {
-        if (code == 'VL') pendA += days;
-        if (code == 'SL') pendS += days;
-      }
-    }
-    return {
-      'usedAnnual': usedA,
-      'usedSick': usedS,
-      'pendingAnnual': pendA,
-      'pendingSick': pendS,
-      'remainingAnnual': (annualTotal - usedA).clamp(0, annualTotal),
-      'remainingSick': (sickTotal - usedS).clamp(0, sickTotal),
-    };
-  }
-
-  String _leaveLabel(String c) {
-    const m = {
-      'SL': 'Sick Leave',
-      'VL': 'Vacation Leave',
-      'EL': 'Emergency Leave',
-      'BL': 'Bereavement Leave',
-      'ML': 'Maternity Leave',
-      'PL': 'Paternity Leave',
-    };
-    return m[c.toUpperCase()] ?? c;
-  }
-
-  Widget _leaveItem(String label, int used, int total, Color bar, Color pillBg,
-      Color pillText) {
-    final progress = total == 0 ? 0.0 : (used / total).clamp(0.0, 1.0);
-    final remaining = (total - used).clamp(0, total);
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: pillBg,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: pillText,
-              letterSpacing: 0.3,
-            ),
-          ),
-        ),
-        const Spacer(),
-        Text(
-          '${used.toString().padLeft(2, '0')}/$total',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: tc.text,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text('Days', style: TextStyle(fontSize: 13, color: tc.muted)),
-      ]),
-      const SizedBox(height: 8),
-      ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Stack(children: [
-          Container(height: 8, color: const Color(0xFFDCE9FF)),
-          FractionallySizedBox(
-            widthFactor: progress,
-            child: Container(height: 8, color: bar),
-          ),
-        ]),
-      ),
-      const SizedBox(height: 4),
-      Row(children: [
-        Text('Used: $used', style: TextStyle(fontSize: 11, color: tc.muted)),
-        const Spacer(),
-        Text(
-          'Remaining: $remaining',
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: tc.orangeText,
-          ),
-        ),
-      ]),
-    ]);
-  }
-
-  Future<void> _openLeaveCreditsDialog(Map<String, dynamic> emp) async {
-    final docId = _s(emp['id'], '');
-    if (docId.isEmpty) return;
-
-    final annualCtrl =
-    TextEditingController(text: '${_annualLeaveTotalOf(emp)}');
-    final sickCtrl = TextEditingController(text: '${_sickLeaveTotalOf(emp)}');
-
-    final result = await showDialog<Map<String, int>>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: tc.card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Row(children: [
-          Icon(Icons.tune_rounded, color: tc.orange, size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Edit Leave Credits',
-              style: TextStyle(
-                color: tc.text,
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-              ),
-            ),
-          ),
-        ]),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Set the total leave credits for ${_nameOf(emp)}. Approved leaves are auto-deducted.',
-                style: TextStyle(fontSize: 12, color: tc.muted, height: 1.4),
-              ),
-              const SizedBox(height: 16),
-              _leaveCreditInput(
-                  'ANNUAL LEAVE (days)', annualCtrl, Icons.beach_access_rounded),
-              const SizedBox(height: 12),
-              _leaveCreditInput(
-                  'SICK LEAVE (days)', sickCtrl, Icons.sick_rounded),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel', style: TextStyle(color: tc.muted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: tc.orange,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-            onPressed: () {
-              final a = int.tryParse(annualCtrl.text.trim());
-              final s = int.tryParse(sickCtrl.text.trim());
-              if (a == null || s == null || a < 0 || a > 60 || s < 0 || s > 60) {
-                _snack('Enter numbers 0-60.', error: true);
-                return;
-              }
-              Navigator.pop(context, {'annual': a, 'sick': s});
-            },
-            child: const Text('Save',
-                style: TextStyle(fontWeight: FontWeight.w700)),
-          ),
-        ],
-      ),
-    );
-
-    if (result == null) return;
-
-    final err = await _svc.setLeaveCredits(
-      docId: docId,
-      annualTotal: result['annual']!,
-      sickTotal: result['sick']!,
-    );
-
-    if (!mounted) return;
-    if (err != null) {
-      _snack('Error: $err', error: true);
-      return;
-    }
-
-    setState(() {
-      emp['annualLeaveTotal'] = result['annual'];
-      emp['sickLeaveTotal'] = result['sick'];
-      if (_selectedProfileEmp != null &&
-          _s(_selectedProfileEmp!['id'], '') == docId) {
-        _selectedProfileEmp!['annualLeaveTotal'] = result['annual'];
-        _selectedProfileEmp!['sickLeaveTotal'] = result['sick'];
-      }
-    });
-    _snack('Leave credits updated.');
-    widget.onRefreshNeeded();
-  }
-
-  Widget _leaveCreditInput(
-      String label, TextEditingController ctrl, IconData icon) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(
-        label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          color: tc.text,
-          letterSpacing: 0.4,
-        ),
-      ),
-      const SizedBox(height: 6),
-      Container(
-        decoration: BoxDecoration(
-          color: tc.surface,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: tc.border),
-        ),
-        child: Row(children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 12),
-            child: Icon(icon, size: 16, color: tc.orange),
-          ),
-          Expanded(
-            child: TextField(
-              controller: ctrl,
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(2),
-              ],
-              style: TextStyle(
-                fontSize: 15,
-                color: tc.text,
-                fontWeight: FontWeight.w700,
-              ),
-              cursorColor: tc.orange,
-              decoration: const InputDecoration(
-                isDense: true,
-                contentPadding:
-                EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                border: InputBorder.none,
-              ),
-            ),
-          ),
-        ]),
-      ),
-    ]);
-  }
-
-  // ═════════════════════════════════════════════════════════════════
-  // Devices + activity
-  // ═════════════════════════════════════════════════════════════════
-  Widget _devicesSection(String empId, Map<String, dynamic> emp) {
-    return LayoutBuilder(builder: (context, c) {
-      final stack = !BsResponsive(c.maxWidth).up(BsSize.lg);
-      final left = _devicesCard(empId, emp);
-      final right = _activityCard(empId);
-      if (stack) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [left, const SizedBox(height: 20), right],
-        );
-      }
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(flex: 4, child: left),
-          const SizedBox(width: 20),
-          Expanded(flex: 7, child: right),
-        ],
-      );
-    });
-  }
-
-  Widget _devicesCard(String empId, Map<String, dynamic> emp) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: tc.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: _activityStream(empId),
-        builder: (context, snap) {
-          final logs = snap.data ?? const [];
-          final devices = _extractDevices(logs);
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                Icon(Icons.devices_rounded, size: 22, color: tc.orange),
-                const SizedBox(width: 8),
-                Text(
-                  'Authorized Devices',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w600,
-                    color: tc.text,
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 20),
-              if (devices.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: tc.surface,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: tc.border),
-                  ),
-                  child: Text(
-                    'No devices registered for this employee.',
-                    style: TextStyle(fontSize: 13, color: tc.muted),
-                  ),
-                )
-              else
-                for (var i = 0; i < devices.length; i++) ...[
-                  _deviceItem(devices[i]),
-                  if (i < devices.length - 1) const SizedBox(height: 12),
-                ],
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  List<Map<String, dynamic>> _extractDevices(
-      List<Map<String, dynamic>> logs) {
-    final uniq = <String, Map<String, dynamic>>{};
-    for (final log in logs) {
-      final name = _s(log['device'], '');
-      if (name.isEmpty ||
-          name.toLowerCase() == 'unknown device' ||
-          name == '—') {
-        continue;
-      }
-      if (!uniq.containsKey(name)) {
-        final lower = name.toLowerCase();
-        IconData icon = Icons.devices_rounded;
-        if (lower.contains('web') || lower.contains('chrome')) {
-          icon = Icons.web_rounded;
-        } else if (lower.contains('ios') || lower.contains('iphone')) {
-          icon = Icons.phone_iphone_rounded;
-        } else if (lower.contains('android')) {
-          icon = Icons.phone_android_rounded;
-        } else if (lower.contains('mobile')) {
-          icon = Icons.smartphone_rounded;
-        }
-
-        uniq[name] = {
-          'name': name,
-          'sub': _s(log['platform'], _s(log['os'], 'Mobile App')),
-          'lastActive': log['timestamp'],
-          'icon': icon,
-        };
-      }
-    }
-    return uniq.values.toList();
-  }
-
-  Widget _deviceItem(Map<String, dynamic> d) {
-    final last = d['lastActive'];
-    final lastStr = last != null
-        ? 'Last active: ${_fmtDate(last)} ${_fmtTime(last)}'
-        : 'Active now';
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: tc.card,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: tc.border),
-      ),
-      child: Row(children: [
-        Container(
-          width: 48,
-          height: 48,
-          decoration: const BoxDecoration(
-            color: Color(0xFFFFDCC3),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(d['icon'] as IconData,
-              size: 22, color: const Color(0xFF904D00)),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                d['name'] as String,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: tc.text,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(d['sub'] as String,
-                  style: TextStyle(fontSize: 13, color: tc.muted)),
-              const SizedBox(height: 4),
-              Text(lastStr, style: TextStyle(fontSize: 11, color: tc.muted)),
-            ],
-          ),
-        ),
-        Container(
-          width: 8,
-          height: 8,
-          decoration: const BoxDecoration(
-            color: Color(0xFF22C55E),
-            shape: BoxShape.circle,
-          ),
-        ),
-      ]),
-    );
-  }
-
-  Widget _activityCard(String empId) {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -6034,534 +4910,291 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(children: [
+            Icon(Icons.event_note_rounded, size: 22, color: tc.orange),
+            const SizedBox(width: 8),
+            Text(
+              'Attendance & Leave',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w600,
+                color: tc.text,
+              ),
+            ),
+          ]),
+          const SizedBox(height: 20),
+          LayoutBuilder(builder: (_, c) {
+            final narrow = c.maxWidth < 560;
+            final annual = _leaveTile('ANNUAL LEAVE', annualLeft, annualTotal,
+                const Color(0xFF904D00));
+            final sick = _leaveTile('SICK LEAVE', sickLeft, sickTotal,
+                const Color(0xFF1D4ED8));
+            final days = _leaveTile('WORKING DAYS / MONTH',
+                kWorkingDaysPerMonth, kWorkingDaysPerMonth,
+                const Color(0xFF166534));
+            if (narrow) {
+              return Column(children: [
+                annual,
+                const SizedBox(height: 12),
+                sick,
+                const SizedBox(height: 12),
+                days,
+              ]);
+            }
+            return Row(children: [
+              Expanded(child: annual),
+              const SizedBox(width: 12),
+              Expanded(child: sick),
+              const SizedBox(width: 12),
+              Expanded(child: days),
+            ]);
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _leaveTile(String label, int remaining, int total, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: tc.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: tc.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Text(
-            'Activity History',
+            label,
             style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w600,
-              color: tc.text,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: tc.muted,
+              letterSpacing: 0.5,
             ),
           ),
-          const SizedBox(height: 24),
-          StreamBuilder<List<Map<String, dynamic>>>(
-            stream: _activityStream(empId),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Center(
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                );
-              }
-              final logs = snap.data ?? const [];
-              if (logs.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    'No activity records yet.',
-                    style: TextStyle(fontSize: 13, color: tc.muted),
-                  ),
-                );
-              }
-              final rows = logs.take(6).toList();
-              return Column(children: [
-                for (var i = 0; i < rows.length; i++) ...[
-                  _activityItem(rows[i], i < rows.length - 1),
-                  if (i < rows.length - 1) const SizedBox(height: 4),
-                ],
-              ]);
-            },
+          const SizedBox(height: 4),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                '$remaining',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
+              Text(
+                ' / $total',
+                style: TextStyle(fontSize: 13, color: tc.muted),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: total == 0 ? 0 : remaining / total,
+              minHeight: 4,
+              backgroundColor: tc.border,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _activityItem(Map<String, dynamic> log, bool showLine) {
-    final title = _s(log['action'], _s(log['type'], 'Activity Event'));
-    final sub =
-        '${_fmtDate(log['timestamp'])} • ${_fmtTime(log['timestamp'])} • ${_s(log['device'], 'Unknown device')}';
+  Widget _devicesSection(String docId, Map<String, dynamic> emp) {
+    final deviceName = _s(emp['deviceName'], '');
+    final nfc = _s(emp['nfcTagId'], '');
+    final lastLogin = _toDateTime(emp['lastLogin'] ?? emp['lastActive']);
+    final hasDevice = deviceName.isNotEmpty && deviceName != '—';
+    final hasNfc = nfc.isNotEmpty && nfc != '—';
+    final hasLast = lastLogin != null;
 
-    return IntrinsicHeight(
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(
-          width: 40,
-          child: Column(children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: const BoxDecoration(
-                color: Color(0xFFE0E3E6),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(_iconForActivity(log['type']),
-                  size: 18, color: const Color(0xFF44474A)),
-            ),
-            if (showLine)
-              Expanded(
-                child: Container(
-                  width: 2,
-                  margin: const EdgeInsets.symmetric(vertical: 4),
-                  color: tc.border,
-                ),
-              ),
-          ]),
+    Widget row(IconData icon, String label, String value, bool ok) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: tc.surface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: tc.border),
         ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(bottom: showLine ? 20 : 0),
+        child: Row(children: [
+          Icon(icon,
+              size: 18, color: ok ? const Color(0xFF166534) : tc.muted),
+          const SizedBox(width: 10),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  title,
+                  label,
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: tc.muted,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 13,
                     fontWeight: FontWeight.w600,
                     color: tc.text,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 4),
-                Text(sub, style: TextStyle(fontSize: 13, color: tc.muted)),
               ],
             ),
           ),
-        ),
-      ]),
-    );
-  }
+        ]),
+      );
+    }
 
-  IconData _iconForActivity(dynamic type) {
-    final t = _s(type, '').toLowerCase();
-    if (t.contains('login') || t.contains('auth')) {
-      return Icons.vpn_key_outlined;
-    }
-    if (t.contains('wfh')) return Icons.home_work_rounded;
-    if (t.contains('pin')) return Icons.password_rounded;
-    if (t.contains('liveness_reset') || t.contains('face_reset')) {
-      return Icons.face_retouching_off_rounded;
-    }
-    if (t.contains('face') || t.contains('liveness')) {
-      return Icons.verified_user_rounded;
-    }
-    if (t.contains('error') || t.contains('fail')) {
-      return Icons.error_outline;
-    }
-    if (t.contains('registration')) {
-      return Icons.person_add_alt_1_rounded;
-    }
-    if (t.contains('leave')) return Icons.beach_access_rounded;
-    if (t.contains('terminat')) return Icons.person_remove_rounded;
-    return Icons.settings_outlined;
-  }
-
-  // ═════════════════════════════════════════════════════════════════
-  // Terminate / bulk select / PDF / wipe
-  // ═════════════════════════════════════════════════════════════════
-  void _confirmTerminate(String docId, String name) {
-    final reasonCtrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: tc.card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text('Terminate Employee?', style: TextStyle(color: tc.text)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: tc.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tc.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.devices_rounded, size: 22, color: tc.orange),
+            const SizedBox(width: 8),
             Text(
-              '$name will be terminated (soft delete). They will no longer be able to log in, '
-                  'but the record will remain for audit purposes.',
-              style: TextStyle(color: tc.text, fontSize: 13, height: 1.4),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: reasonCtrl,
-              maxLength: 200,
-              maxLines: 3,
-              style: TextStyle(color: tc.text),
-              decoration: InputDecoration(
-                labelText: 'Reason (optional)',
-                labelStyle: TextStyle(color: tc.muted),
-                border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              'Devices & Access',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w600,
+                color: tc.text,
               ),
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel', style: TextStyle(color: tc.muted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: tc.red,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-            onPressed: () async {
-              Navigator.pop(context);
-              final err = await _svc.terminateEmployee(
-                docId,
-                reason: reasonCtrl.text.trim(),
-              );
-              if (!mounted) return;
-              if (err != null) {
-                _snack('Error: $err', error: true);
-              } else {
-                _snack('Employee terminated.');
-                setState(() => _selectedProfileEmp = null);
-                widget.onRefreshNeeded();
-              }
-            },
-            child: const Text('Terminate'),
-          ),
+          ]),
+          const SizedBox(height: 16),
+          row(Icons.phone_iphone_rounded, 'REGISTERED DEVICE',
+              hasDevice ? deviceName : 'Not registered', hasDevice),
+          row(Icons.wifi_tethering_rounded, 'NFC / KEYFOB SERIAL',
+              hasNfc ? nfc : 'Not assigned', hasNfc),
+          row(
+              Icons.access_time_rounded,
+              'LAST ACTIVITY',
+              hasLast
+                  ? '${_fmtDate(lastLogin)} ${_fmtTime(lastLogin)}'
+                  : 'No activity yet',
+              hasLast),
         ],
       ),
     );
   }
 
-  void _toggleSelection(String empId) {
-    if (empId.isEmpty) return;
-    setState(() {
-      if (_selectedEmpIds.contains(empId)) {
-        _selectedEmpIds.remove(empId);
-      } else {
-        _selectedEmpIds.add(empId);
-      }
-      if (_selectedEmpIds.isEmpty) _bulkSelectMode = false;
-    });
-  }
-
+  // ═════════════════════════════════════════════════════════════════
+  // PDF download
+  // ═════════════════════════════════════════════════════════════════
   Future<void> _downloadPdf(Map<String, dynamic> emp) async {
-    final pdf = pw.Document();
-    final name = _nameOf(emp);
-    final role = _s(emp['role'], 'No Role');
-    final dept = _s(emp['department'], 'Unassigned');
-    final email = _s(emp['email'], 'No Email');
-    final phone = _s(emp['phone'], _s(emp['mobile'], 'No Phone'));
-    final id = _s(emp['employeeId'], _s(emp['id'], 'N/A'));
-    final gender =
-    _s(emp['gender'], 'male').toLowerCase() == 'female' ? 'Female' : 'Male';
-    final joining = _fmtDate(
-      emp['joiningDate'] ?? emp['createdAt'],
-      f: 'Not Specified',
-    );
-    final nfc = _s(emp['nfcTagId'], 'NOT ASSIGNED');
-    final status = _isActive(emp) ? 'ACTIVE' : 'INACTIVE';
-    final liveness = _isLivenessVerified(emp) ? 'PASSED' : 'NOT PASSED';
-    final photo = _hasProfilePhoto(emp) ? 'UPLOADED' : 'NO PHOTO';
-    final device = _s(emp['deviceName'], 'NOT SET');
-    final annual = _annualLeaveTotalOf(emp);
-    final sick = _sickLeaveTotalOf(emp);
+    try {
+      final name = _nameOf(emp);
+      final role = _s(emp['role'], '—');
+      final dept = _s(emp['department'], '—');
+      final email = _s(emp['email'], '—');
+      final phone = _s(emp['phone'], _s(emp['mobile'], '—'));
+      final id = _s(emp['employeeId'], _s(emp['id'], '—'));
+      final joining = _fmtDate(
+        emp['joiningDate'] ?? emp['createdAt'] ?? emp['created_at'],
+        f: 'Not Specified',
+      );
+      final gender = _s(emp['gender'], '—');
 
-    pdf.addPage(pw.Page(
-      pageFormat: PdfPageFormat.a4,
-      build: (_) => pw.Padding(
-        padding: const pw.EdgeInsets.all(24),
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.Header(
-              level: 0,
-              child: pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text(
-                    'EMPLOYEE PROFILE REPORT',
-                    style: pw.TextStyle(
-                      fontSize: 20,
-                      fontWeight: pw.FontWeight.bold,
-                    ),
-                  ),
-                  pw.Text(
-                    'Status: $status',
-                    style: const pw.TextStyle(
-                      fontSize: 12,
-                      color: PdfColors.orange,
-                    ),
-                  ),
-                ],
+      final doc = pw.Document();
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          build: (ctx) => [
+            pw.Header(level: 0, text: 'Employee Profile'),
+            pw.SizedBox(height: 12),
+            pw.Text(
+              name,
+              style: pw.TextStyle(
+                fontSize: 20,
+                fontWeight: pw.FontWeight.bold,
               ),
             ),
-            pw.SizedBox(height: 20),
-            pw.Text('Basic Information',
-                style: pw.TextStyle(
-                    fontSize: 14, fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 6),
+            pw.Text('$role  •  $dept'),
             pw.Divider(),
-            _pdfRow('Name', name),
-            _pdfRow('Gender', gender),
+            pw.SizedBox(height: 12),
             _pdfRow('Employee ID', id),
-            _pdfRow('Role', role),
-            _pdfRow('Department', dept),
             _pdfRow('Email', email),
             _pdfRow('Phone', phone),
+            _pdfRow('Gender', gender),
             _pdfRow('Joining Date', joining),
-            pw.SizedBox(height: 20),
-            pw.Text('Leave Credits',
-                style: pw.TextStyle(
-                    fontSize: 14, fontWeight: pw.FontWeight.bold)),
-            pw.Divider(),
-            _pdfRow('Annual Leave', '$annual days'),
-            _pdfRow('Sick Leave', '$sick days'),
-            pw.SizedBox(height: 20),
-            pw.Text('Security',
-                style: pw.TextStyle(
-                    fontSize: 14, fontWeight: pw.FontWeight.bold)),
-            pw.Divider(),
-            _pdfRow('Profile Photo', photo),
-            _pdfRow('Liveness Check', liveness),
-            _pdfRow('NFC/Keyfob', nfc),
-            _pdfRow('Device', device),
           ],
         ),
-      ),
-    ));
+      );
 
-    await Printing.layoutPdf(
-      onLayout: (_) async => pdf.save(),
-      name: 'Profile_${name.replaceAll(' ', '_')}.pdf',
-    );
+      final bytes = await doc.save();
+      final safeId = id.isEmpty ? 'profile' : id;
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: 'employee_$safeId.pdf',
+      );
+    } catch (e) {
+      _snack('Failed to generate PDF: $e', error: true);
+    }
   }
 
-  pw.Widget _pdfRow(String label, String value) => pw.Padding(
-    padding: const pw.EdgeInsets.symmetric(vertical: 2.5),
-    child: pw.Row(children: [
-      pw.Text('$label: ',
-          style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-      pw.Text(value),
-    ]),
-  );
-
-  void _confirmWipeAllLogs() {
-    final selections = <String, bool>{
-      'All Activity Logs': true,
-      'All Attendance Records': true,
-      'All Location Tracking Data': true,
-      'All Leave Applications': true,
-      'All PDF Exports': true,
-      'All Task Records': true,
-      'All Liveness Registrations': false,
-    };
-
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(builder: (context, setDialogState) {
-        final hasSel = selections.values.any((v) => v);
-        return AlertDialog(
-          backgroundColor: tc.card,
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: Row(children: [
-            Icon(Icons.warning_amber_rounded, color: tc.red, size: 24),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'SELECT DATA TO DELETE',
-                style: TextStyle(
-                  color: tc.red,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
-              ),
-            ),
-          ]),
-          content: SizedBox(
-            width: 420,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Choose which data to permanently delete:',
-                    style: TextStyle(
-                      color: tc.text,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: tc.red.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(8),
-                      border:
-                      Border.all(color: tc.red.withValues(alpha: 0.25)),
-                    ),
-                    child: Column(
-                      children: selections.keys.map((k) {
-                        return CheckboxListTile(
-                          value: selections[k],
-                          onChanged: (v) => setDialogState(
-                                  () => selections[k] = v ?? false),
-                          title: Text(
-                            k,
-                            style: TextStyle(
-                              color: tc.red,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          activeColor: tc.red,
-                          controlAffinity: ListTileControlAffinity.leading,
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: tc.red.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(children: [
-                      Icon(Icons.error_outline, color: tc.red, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'This action CANNOT be undone!',
-                          style: TextStyle(
-                            color: tc.red,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ),
-                    ]),
-                  ),
-                ],
-              ),
+  pw.Widget _pdfRow(String label, String value) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 4),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.SizedBox(
+            width: 120,
+            child: pw.Text(
+              label,
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('Cancel', style: TextStyle(color: tc.muted)),
-            ),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: hasSel ? tc.red : tc.muted,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-                padding:
-                const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              ),
-              onPressed: hasSel
-                  ? () async {
-                Navigator.pop(context);
-
-                showDialog(
-                  context: context,
-                  barrierDismissible: false,
-                  builder: (_) => AlertDialog(
-                    backgroundColor: tc.card,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    content: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      child: Row(children: [
-                        CircularProgressIndicator(color: tc.orange),
-                        const SizedBox(width: 20),
-                        Expanded(
-                          child: Text(
-                            'Deleting...\nPlease wait.',
-                            style: TextStyle(color: tc.text),
-                          ),
-                        ),
-                      ]),
-                    ),
-                  ),
-                );
-
-                final keys = selections.entries
-                    .where((e) => e.value)
-                    .map((e) => e.key)
-                    .toList();
-                final err = await AdminDatabase.wipeSelected(keys);
-
-                if (mounted) {
-                  Navigator.pop(context);
-                  if (err != null) {
-                    _snack('Wipe failed: $err', error: true);
-                  } else {
-                    _snack('Selected data cleared.');
-                    widget.onRefreshNeeded();
-                  }
-                }
-              }
-                  : null,
-              icon: const Icon(Icons.delete_forever_rounded, size: 18),
-              label: const Text(
-                'Delete Selected',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      }),
+          pw.Expanded(child: pw.Text(value)),
+        ],
+      ),
     );
   }
-
-  Widget _emptyState() => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(48),
-    decoration: BoxDecoration(
-      color: tc.card,
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: tc.border),
-    ),
-    child: Column(children: [
-      Icon(Icons.person_search_rounded, size: 40, color: tc.muted),
-      const SizedBox(height: 12),
-      Text(
-        'No records match search parameters.',
-        style: TextStyle(color: tc.muted, fontSize: 14),
-      ),
-      const SizedBox(height: 16),
-      ElevatedButton.icon(
-        onPressed: () => widget.onRefreshNeeded(),
-        icon: const Icon(Icons.refresh_rounded, size: 16),
-        label: const Text('Refresh'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: tc.orange,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8)),
-        ),
-      ),
-    ]),
-  );
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// PAINTING
+// Dashed border used by the "Quick Invite" card
 // ═════════════════════════════════════════════════════════════════════
 class _DashedBorderPainter extends CustomPainter {
   final Color color;
   final double radius;
-  final double dashWidth;
-  final double dashSpace;
+  final double dash;
+  final double gap;
 
   _DashedBorderPainter({
     required this.color,
     this.radius = 12,
-  })  : dashWidth = 6,
-        dashSpace = 4;
+    this.dash = 6,
+    this.gap = 4,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -6569,32 +5202,27 @@ class _DashedBorderPainter extends CustomPainter {
       ..color = color
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke;
-    final rrect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, 0, size.width, size.height),
-      Radius.circular(radius),
-    );
-    final path = Path()..addRRect(rrect);
-    final dash = _dashPath(path, dashWidth, dashSpace);
-    canvas.drawPath(dash, paint);
-  }
-
-  Path _dashPath(Path source, double dw, double ds) {
-    final dest = Path();
-    for (final m in source.computeMetrics()) {
-      double d = 0;
-      while (d < m.length) {
-        final n = d + dw;
-        dest.addPath(m.extractPath(d, n.clamp(0, m.length)), Offset.zero);
-        d = n + ds;
+    final path = Path()
+      ..addRRect(
+        RRect.fromRectAndRadius(
+          Offset.zero & size,
+          Radius.circular(radius),
+        ),
+      );
+    for (final metric in path.computeMetrics()) {
+      var d = 0.0;
+      while (d < metric.length) {
+        final next = (d + dash).clamp(0.0, metric.length);
+        canvas.drawPath(metric.extractPath(d, next), paint);
+        d = next + gap;
       }
     }
-    return dest;
   }
 
   @override
   bool shouldRepaint(covariant _DashedBorderPainter old) =>
       old.color != color ||
           old.radius != radius ||
-          old.dashWidth != dashWidth ||
-          old.dashSpace != dashSpace;
+          old.dash != dash ||
+          old.gap != gap;
 }

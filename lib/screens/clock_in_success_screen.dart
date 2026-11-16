@@ -1,15 +1,7 @@
 ﻿// lib/screens/clock_in_success_screen.dart
-// ═══════════════════════════════════════════════════════════════════
-// CLOCK IN SUCCESS SCREEN  v1.5
-//   - Demo mode: no Firestore write, DEMO badge
-//   - onContinue() navigation is called (not auto-pop)
-//   - ✅ v1.3: Adaptive Light/Dark mode support
-//   - ✅ v1.4: FIXED back button — arrow and "Back" text now aligned
-//   - ✅ v1.5: Removed faceMatchPercent (liveness has no match score).
-//             Receipt now stores `livenessChecked` boolean instead of
-//             a fake percentage. Title and badge no longer claim
-//             identity verification — liveness only.
-// ═══════════════════════════════════════════════════════════════════
+// v1.6: 🚨 ROOT NAVIGATOR FIX — onContinue now always uses rootNavigator
+//       so the LoginScreen below is properly removed on navigation.
+// v1.5: Removed faceMatchPercent (liveness has no match score).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -23,9 +15,6 @@ import '../models/employee.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../services/demo_mode_service.dart';
 
-// ═══════════════════════════════════════════════════════════════════
-// 🎨 ADAPTIVE THEME COLORS
-// ═══════════════════════════════════════════════════════════════════
 class _ThemeColors {
   final bool isDark;
   const _ThemeColors(this.isDark);
@@ -52,7 +41,6 @@ class _ThemeColors {
 class ClockInSuccessScreen extends StatefulWidget {
   final Employee? employee;
   final DateTime? arrivalTime;
-  // ✅ v1.5: faceMatchPercent removed — liveness has no match score.
   final String? verificationMethod;
   final String? subtitle;
   final String type;
@@ -127,7 +115,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
 
   bool get _isDemo => DemoModeService.instance.isEnabled;
 
-  /// True only when the mobile pipeline explicitly ran a liveness check.
   bool get _isLivenessCheck =>
       (widget.verificationMethod ?? '').toLowerCase() == 'liveness_check';
 
@@ -200,7 +187,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         await prefs.setString(_kReceiptSecretKey, secret);
       }
 
-      // ✅ v1.5 — Demo-time persistence (single copy; was duplicated 4×).
       if (_isDemo) {
         final now = DateTime.now();
         final todayStr = '${now.year}-'
@@ -224,7 +210,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
         'employeeId': widget.employee?.id ?? '',
         'type': widget.type,
         'method': widget.verificationMethod ?? '',
-        // ✅ v1.5 — honest flag instead of a fake match score.
         'livenessChecked': _isLivenessCheck,
         'location': widget.locationName ?? '',
         'arrivalMs': widget.arrivalTime?.millisecondsSinceEpoch ?? 0,
@@ -253,7 +238,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
             'employeeEmail': widget.employee!.email,
             'type': widget.type,
             'method': widget.verificationMethod,
-            // ✅ v1.5 — honest flag instead of fake percentage.
             'livenessChecked': _isLivenessCheck,
             'locationName': widget.locationName,
             'arrivalTime': widget.arrivalTime,
@@ -307,16 +291,35 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
     }
   }
 
+  // ═════════════════════════════════════════════════════════════════
+  // 🚨 v1.6 — ROOT NAVIGATOR FIX
+  // ═════════════════════════════════════════════════════════════════
+  // The `onContinue` callback from FingerprintScreen uses
+  // `Navigator.of(context, rootNavigator: true)` — but if that callback
+  // throws, we MUST not leave the user stuck on this success screen.
+  // Fallback also uses the ROOT navigator so we don't accidentally pop
+  // an inner route.
   void _handleContinue() {
     if (_isHandlingContinue || _didRedirect) return;
     _isHandlingContinue = true;
     _didRedirect = true;
     if (!mounted) return;
+
     unawaited(_logConfirm());
-    if (widget.onContinue != null) {
-      widget.onContinue!();
-    } else {
-      Navigator.of(context).maybePop();
+
+    try {
+      if (widget.onContinue != null) {
+        widget.onContinue!();
+      } else {
+        Navigator.of(context, rootNavigator: true).maybePop();
+      }
+    } catch (e, st) {
+      debugPrint('❌ [ClockInSuccess] onContinue failed: $e\n$st');
+      try {
+        if (mounted) {
+          Navigator.of(context, rootNavigator: true).maybePop();
+        }
+      } catch (_) {}
     }
   }
 
@@ -618,7 +621,6 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
   Widget _buildSuccessCard() {
     final isClockIn = widget.type.toUpperCase() == 'IN';
     final accent = isClockIn ? _neonGreen : const Color(0xFFC4FF0A);
-    // ✅ v1.5 — no longer claims identity verification; liveness only.
     final title = isClockIn ? 'Clocked In!' : 'Clocked Out!';
     final subtitle = widget.subtitle ??
         (isClockIn
@@ -702,14 +704,12 @@ class _ClockInSuccessScreenState extends State<ClockInSuccessScreen>
                   Icon(
                     _isDemo
                         ? Icons.science_rounded
-                    // ✅ v1.5 — neutral icon; no "verified identity" claim.
                         : Icons.check_circle_outline_rounded,
                     color: Colors.white.withValues(alpha: 0.7),
                     size: 9,
                   ),
                   const SizedBox(width: 3),
                   Text(
-                    // ✅ v1.5 — honest label: liveness only.
                     _isDemo ? 'DEMO' : 'LIVENESS OK',
                     style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.7),
