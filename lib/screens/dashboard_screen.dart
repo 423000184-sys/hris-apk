@@ -2340,10 +2340,10 @@ class DashboardScreenState extends State<DashboardScreen>
               child: Stack(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    padding: const EdgeInsets.fromLTRB(22, 16, 22, 0),
                     child: SingleChildScrollView(
                       physics: const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.only(bottom: 160),
+                      padding: const EdgeInsets.only(bottom: 176),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -2368,16 +2368,16 @@ class DashboardScreenState extends State<DashboardScreen>
                             const SizedBox(height: 8),
                           ],
                           _buildHeader(tc),
-                          const SizedBox(height: 20),
+                          const SizedBox(height: 22),
                           _buildStatusBanner(),
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 20),
                           _buildToggle(tc),
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 28),
                           _buildSectionTitle('Location Status',
                               tc: tc, trailing: _buildGpsTag(tc)),
                           const SizedBox(height: 12),
                           _buildLocationCard(tc),
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 28),
                           _buildSectionTitle('Shortcuts', tc: tc),
                           const SizedBox(height: 12),
                           _buildShortcutsGrid(tc),
@@ -2616,8 +2616,8 @@ class DashboardScreenState extends State<DashboardScreen>
           onTap: goToProfile,
           behavior: HitTestBehavior.opaque,
           child: Container(
-            width: 45,
-            height: 45,
+            width: 52,
+            height: 52,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(color: tc.darkBorder, width: 1.15),
@@ -2633,10 +2633,10 @@ class DashboardScreenState extends State<DashboardScreen>
               Text(
                 'HI, ${name.toUpperCase()} ${lastName.toUpperCase()}',
                 style: TextStyle(
-                    fontSize: 10,
+                    fontSize: 10.5,
                     color: tc.textGray,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.5),
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.7),
                 overflow: TextOverflow.ellipsis,
                 maxLines: 1,
               ),
@@ -2645,9 +2645,9 @@ class DashboardScreenState extends State<DashboardScreen>
                 children: [
                   Text(_isDemo ? 'Demo Dashboard' : 'Employee Dashboard',
                       style: TextStyle(
-                          fontSize: 14,
+                          fontSize: 16,
                           color: tc.textBlack,
-                          fontWeight: FontWeight.w500)),
+                          fontWeight: FontWeight.w700)),
                   if (_isDemo) ...[
                     const SizedBox(width: 8),
                     Container(
@@ -2859,16 +2859,20 @@ class DashboardScreenState extends State<DashboardScreen>
 
     return Container(
       width: double.infinity,
-      height: 220, // ✅ from 200 — extra room
+      height: 232, // roomier hero banner
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFFFA500), width: 1.15),
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: const Color(0xFFFFA500), width: 1.2),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              offset: const Offset(0, 25),
-              blurRadius: 50,
-              spreadRadius: -12),
+              color: Colors.black.withValues(alpha: 0.28),
+              offset: const Offset(0, 16),
+              blurRadius: 34,
+              spreadRadius: -10),
+          BoxShadow(
+              color: _T.orange.withValues(alpha: 0.08),
+              offset: const Offset(0, 5),
+              blurRadius: 18),
         ],
       ),
       clipBehavior: Clip.antiAlias,
@@ -2900,7 +2904,7 @@ class DashboardScreenState extends State<DashboardScreen>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(25, 28, 25, 20),
+            padding: const EdgeInsets.fromLTRB(26, 28, 26, 22),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2914,7 +2918,7 @@ class DashboardScreenState extends State<DashboardScreen>
                     overflow: TextOverflow.ellipsis,
                     text: TextSpan(
                       style: const TextStyle(
-                        fontSize: 30, // ✅ from 34
+                        fontSize: 32,
                         fontWeight: FontWeight.w500,
                         color: Colors.white,
                         height: 1.15,
@@ -2962,9 +2966,9 @@ class DashboardScreenState extends State<DashboardScreen>
     final canAction = _canClock && _isOnline && !_deviceCompromised;
 
     return Container(
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.all(7),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(_T.r18),
+        borderRadius: BorderRadius.circular(20),
         color: tc.toggleActiveBg,
         border: Border.all(color: _T.orange, width: 1.15),
       ),
@@ -3014,10 +3018,10 @@ class DashboardScreenState extends State<DashboardScreen>
     return Opacity(
       opacity: locked ? 0.55 : 1.0,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(vertical: 13),
         decoration: BoxDecoration(
           gradient: active ? _T.brandGradient : null,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(15),
           border:
               active ? Border.all(color: _T.orangeBorder, width: 1) : null,
         ),
@@ -3027,7 +3031,7 @@ class DashboardScreenState extends State<DashboardScreen>
               label,
               style: TextStyle(
                 fontSize: 13,
-                fontWeight: FontWeight.w500,
+                fontWeight: FontWeight.w700,
                 color: active ? Colors.white : tc.textGray,
               ),
             ),
@@ -3035,7 +3039,7 @@ class DashboardScreenState extends State<DashboardScreen>
             Text(
               locked ? 'Locked' : time,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 12,
                 color: locked
                     ? _T.red
                     : (active
@@ -3062,8 +3066,8 @@ class DashboardScreenState extends State<DashboardScreen>
       children: [
         Text(title,
             style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
                 color: tc.textBlack)),
         if (trailing != null) trailing,
         if (viewAll)
@@ -3218,11 +3222,18 @@ class DashboardScreenState extends State<DashboardScreen>
     }
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: tc.cardFill,
-        borderRadius: BorderRadius.circular(_T.r20),
-        border: Border.all(color: borderColor, width: 1.15),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: borderColor.withValues(alpha: 0.75), width: 1.1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: tc.isDark ? 0.18 : 0.045),
+            blurRadius: 18,
+            offset: const Offset(0, 7),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -3330,8 +3341,8 @@ class DashboardScreenState extends State<DashboardScreen>
                 child: Column(
                   children: [
                     Container(
-                      width: 48,
-                      height: 48,
+                      width: 50,
+                      height: 50,
                       decoration: BoxDecoration(
                         gradient: _T.brandGradient,
                         shape: BoxShape.circle,
@@ -3342,9 +3353,9 @@ class DashboardScreenState extends State<DashboardScreen>
                     const SizedBox(height: 10),
                     Text(item.$2,
                         style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: item.$3)),
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                            color: tc.textBlack)),
                   ],
                 ),
               ),
@@ -3364,11 +3375,18 @@ class DashboardScreenState extends State<DashboardScreen>
     final isLocked = !_canOpenPayslip;
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: tc.cardFill,
-        borderRadius: BorderRadius.circular(_T.r20),
-        border: Border.all(color: _T.orange, width: 1.15),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: _T.orange.withValues(alpha: 0.8), width: 1.1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: tc.isDark ? 0.18 : 0.045),
+            blurRadius: 18,
+            offset: const Offset(0, 7),
+          ),
+        ],
       ),
       child: Column(
         children: [

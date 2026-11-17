@@ -227,6 +227,8 @@ class _ReportsScreenState extends State<ReportsScreen>
   Timer? _inactivityTimer;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sessionSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
+  StreamSubscription<void>? _attendanceSub;
+  Timer? _liveDebounce;
   bool _sessionValidated = false;
   bool _loggedOut = false;
   bool? _cachedSessionValid;
@@ -337,6 +339,7 @@ class _ReportsScreenState extends State<ReportsScreen>
 
     _startSecurityMonitoring();
     _startEmployeeListener();
+    _startAttendanceListener();
 
     _checkNetworkOnEntry().then((_) {
       if (mounted) {
@@ -529,6 +532,25 @@ class _ReportsScreenState extends State<ReportsScreen>
     }, onError: (e) => debugPrint('Employee listener error: $e'));
   }
 
+  void _startAttendanceListener() {
+    if (_isDemo) return;
+    final emp = widget.initialEmployee;
+    if (emp == null) return;
+    _attendanceSub?.cancel();
+    _attendanceSub = PayrollCalculator.watchAttendance({
+      'id': emp.id,
+      'employeeId': emp.employeeId,
+    }).listen(
+      (_) {
+        _liveDebounce?.cancel();
+        _liveDebounce = Timer(const Duration(seconds: 2), () {
+          if (mounted && !_loggedOut) _loadData();
+        });
+      },
+      onError: (e) => debugPrint('Attendance listener error: $e'),
+    );
+  }
+
   Future<void> _forceLogout(String reason) async {
     if (_isDemo) return;
     if (_loggedOut || !mounted) return;
@@ -643,6 +665,8 @@ class _ReportsScreenState extends State<ReportsScreen>
     _inactivityTimer?.cancel();
     _sessionSub?.cancel();
     _employeeSub?.cancel();
+    _attendanceSub?.cancel();
+    _liveDebounce?.cancel();
     super.dispose();
   }
 
@@ -1042,7 +1066,79 @@ class _ReportsScreenState extends State<ReportsScreen>
     }
   }
 
+  Future<bool> _verifyPinViaFirestore(Set<String> ids, String pin) async {
+    final cleanPin = pin.trim();
+    if (cleanPin.isEmpty) return false;
+
+    final fs = FirebaseFirestore.instance;
+    const serverOnly = GetOptions(source: Source.server);
+
+    for (final id in ids) {
+      Map<String, dynamic>? data;
+      try {
+        final doc = await fs
+            .collection('employees')
+            .doc(id)
+            .get(serverOnly)
+            .timeout(const Duration(seconds: 8));
+        if (doc.exists) {
+          data = doc.data();
+        } else {
+          final q = await fs
+              .collection('employees')
+              .where('employeeId', isEqualTo: id)
+              .limit(1)
+              .get(serverOnly)
+              .timeout(const Duration(seconds: 8));
+          if (q.docs.isNotEmpty) data = q.docs.first.data();
+        }
+      } catch (e) {
+        debugPrint('⚠️ PIN server fetch error (id=$id): $e');
+      }
+      if (data == null) continue;
+
+      final salt = (data['pinSalt'] ?? data['pin_salt'])?.toString() ?? '';
+      final hash = (data['pinHash'] ?? data['pin_hash'])?.toString();
+
+      if (hash != null && hash.isNotEmpty) {
+        var ok = false;
+
+        // 1) Parehong method ng login
+        try {
+          ok = await SecurityHardeningService.instance
+              .verifyPinAsync(cleanPin, salt, hash);
+        } catch (_) {}
+
+        // 2) Parehong fallback ng login (Method 4)
+        if (!ok) {
+          try {
+            ok = sha256.convert(utf8.encode('$salt:$cleanPin')).toString() ==
+                hash;
+          } catch (_) {}
+        }
+        if (!ok) {
+          try {
+            ok = sha256.convert(utf8.encode(cleanPin)).toString() == hash;
+          } catch (_) {}
+        }
+
+        debugPrint('🧪 [PIN] hash check (id=$id) => $ok');
+        return ok; // pinHash ang source of truth
+      }
+
+      // Walang pinHash: legacy plaintext PIN
+      final legacy = data['pin']?.toString();
+      if (legacy != null && legacy.isNotEmpty) {
+        final ok = legacy == cleanPin;
+        debugPrint('🧪 [PIN] legacy check (id=$id) => $ok');
+        return ok;
+      }
+    }
+    return false;
+  }
+
   /// Asks the employee for their PIN and verifies it before export.
+  /// Uses the same Firestore PIN record as login.
   /// Returns the verified PIN, or null if cancelled or locked out.
   Future<String?> _promptForPin() async {
     if (_isDemo) return _kDemoPin;
@@ -1061,16 +1157,13 @@ class _ReportsScreenState extends State<ReportsScreen>
       context: context,
       barrierDismissible: false,
       builder: (_) => _PinDialog(
-        verify: (value) async {
-          try {
-            // Assumed signature: verifyPin(employeeId, pin) -> Future<bool>
-            return await SecurityService.instance
-                .verifyPin(empId, value)
-                .timeout(const Duration(seconds: 5));
-          } catch (e) {
-            debugPrint('⚠️ PIN verify error: $e');
-            return false;
-          }
+        verify: (value) {
+          final ids = <String>{
+            empId,
+            if (emp != null && emp.id.isNotEmpty) emp.id,
+            if (emp != null && emp.employeeId.isNotEmpty) emp.employeeId,
+          };
+          return _verifyPinViaFirestore(ids, value);
         },
         onLockout: () => _logSecurityEvent(
           type: 'reports_pin_lockout',
@@ -1098,7 +1191,7 @@ class _ReportsScreenState extends State<ReportsScreen>
         periodStart: _periodStart,
         periodEnd: _periodEnd,
         regularPay: _breakdown.regularPay,
-        basicPay: _breakdown.basicSalary,
+        basicPay: _breakdown.earnedBasic + _breakdown.absentAmount.abs(),
         basicHours: _breakdown.basicHours,
         absentAmount: _breakdown.absentAmount,
         absentHours: _breakdown.absentHours,

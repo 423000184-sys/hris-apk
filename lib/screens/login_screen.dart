@@ -4622,7 +4622,9 @@
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(4, (i) {
                 final filled = i < _pinInput.length;
-                return Container(
+                return AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOut,
                   margin: const EdgeInsets.symmetric(horizontal: 8),
                   width: 44,
                   height: 52,
@@ -4652,22 +4654,96 @@
               }),
             ),
           ),
+          // Visible verification feedback while the employee PIN is checked.
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            child: _isLoading
+                ? Container(
+                    key: const ValueKey('pin-verifying'),
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(top: 16),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 13),
+                    decoration: BoxDecoration(
+                      color: _orange.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: _orange.withValues(alpha: 0.35)),
+                    ),
+                    child: Column(
+                      children: [
+                        const SizedBox(
+                          width: 25,
+                          height: 25,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.8,
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(_orange),
+                          ),
+                        ),
+                        const SizedBox(height: 9),
+                        Text(
+                          'Verifying employee PIN…',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: tc.textDark,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          'Please wait while we check your credentials.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: tc.textMuted,
+                            fontSize: 11,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: const LinearProgressIndicator(
+                            minHeight: 3,
+                            backgroundColor: Color(0x22F97316),
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(_orange),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox.shrink(key: ValueKey('pin-idle')),
+          ),
           if (_errorMessage != null) ...[
             const SizedBox(height: 14),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: _errorBg,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _error.withValues(alpha: 0.22)),
               ),
-              child: Text(_errorMessage!,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.error_outline_rounded,
+                      color: _error, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(_errorMessage!,
                   textAlign: TextAlign.center,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: _error,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600)),
+                      style: const TextStyle(
+                          color: _error,
+                          fontSize: 12,
+                          height: 1.35,
+                          fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
             ),
           ],
           const SizedBox(height: 18),

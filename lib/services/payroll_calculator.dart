@@ -49,6 +49,7 @@ class PayrollSettings {
   final double restDayRegularMultiplier;
   final double restDayOtMultiplier;
   final double nightDiffMultiplier;
+  final bool prorateContributions;
   final List<TaxBracket> taxBrackets;
 
   static const List<TaxBracket> defaultTaxBrackets = <TaxBracket>[
@@ -76,6 +77,7 @@ class PayrollSettings {
     this.restDayRegularMultiplier = 1.30,
     this.restDayOtMultiplier = 1.69,
     this.nightDiffMultiplier = 0.10,
+    this.prorateContributions = true,
     this.taxBrackets = defaultTaxBrackets,
   });
 
@@ -119,8 +121,11 @@ class PayrollSettings {
           gd('restDayRegularMultiplier', d.restDayRegularMultiplier),
       restDayOtMultiplier:
           gd('restDayOtMultiplier', d.restDayOtMultiplier),
-      nightDiffMultiplier:
+            nightDiffMultiplier:
           gd('nightDiffMultiplier', d.nightDiffMultiplier),
+      prorateContributions: m['prorateContributions'] is bool
+          ? m['prorateContributions'] as bool
+          : d.prorateContributions,
       taxBrackets: brackets,
     );
   }
@@ -141,6 +146,7 @@ class PayrollSettings {
         'restDayRegularMultiplier': restDayRegularMultiplier,
         'restDayOtMultiplier': restDayOtMultiplier,
         'nightDiffMultiplier': nightDiffMultiplier,
+        'prorateContributions': prorateContributions,
         'taxBrackets': taxBrackets.map((b) => b.toMap()).toList(),
       };
 
@@ -389,6 +395,7 @@ class WorkHoursTotals {
   final int restDayRegularMinutes;
   final int restDayOtMinutes;
   final int nightDiffMinutes;
+  final int undertimeMinutes;
   final int daysWithLogs;
   final int daysWithLunchApplied;
 
@@ -400,6 +407,7 @@ class WorkHoursTotals {
     this.restDayRegularMinutes = 0,
     this.restDayOtMinutes = 0,
     this.nightDiffMinutes = 0,
+    this.undertimeMinutes = 0,
     this.daysWithLogs = 0,
     this.daysWithLunchApplied = 0,
   });
@@ -584,6 +592,29 @@ class PayrollCalculator {
     return merged.values.toList();
   }
 
+  static Stream<void> watchAttendance(Map<String, dynamic> employee) {
+    final ids = _safeEmployeeIds(employee).take(10).toList();
+    if (ids.isEmpty) return const Stream<void>.empty();
+    return FirebaseFirestore.instance
+        .collection('attendance_logs')
+        .where('employee_id', whereIn: ids)
+        .snapshots()
+        .skip(1)
+        .map((_) {});
+  }
+
+  /// 🔴 Realtime para sa lahat ng employees (logs ngayong araw lang).
+  static Stream<void> watchTodayAttendance() {
+    final n = DateTime.now();
+    final start = DateTime(n.year, n.month, n.day);
+    return FirebaseFirestore.instance
+        .collection('attendance_logs')
+        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .snapshots()
+        .skip(1)
+        .map((_) {});
+  }
+
   static double calcSss(double monthlySalary, PayrollSettings s) {
     if (monthlySalary <= 0) return 0.0;
     final raw =
@@ -746,6 +777,7 @@ class PayrollCalculator {
     int rawTotal = 0, lunchTotal = 0, netTotal = 0;
     int regularOtTotal = 0, restDayRegularTotal = 0, restDayOtTotal = 0;
     int ndTotal = 0;
+    int undertimeTotal = 0;
     int daysWithLogs = 0, daysWithLunchApplied = 0;
 
     byDay.forEach((key, logs) {
@@ -784,6 +816,10 @@ class PayrollCalculator {
         restDayOtTotal += net - reg;
       } else if (net > config.standardMinutesPerDay) {
         regularOtTotal += (net - config.standardMinutesPerDay);
+      } else {
+        // 🕒 Early out: kulang sa standard minutes (lampas grace lang)
+        final short = config.standardMinutesPerDay - net;
+        if (short > config.graceMinutes) undertimeTotal += short;
       }
 
       final ndMins = _calculateNdMinutes(firstIn, lastOut);
@@ -804,6 +840,7 @@ class PayrollCalculator {
       restDayRegularMinutes: restDayRegularTotal,
       restDayOtMinutes: restDayOtTotal,
       nightDiffMinutes: ndTotal,
+      undertimeMinutes: undertimeTotal,
       daysWithLogs: daysWithLogs,
       daysWithLunchApplied: daysWithLunchApplied,
     );
@@ -951,17 +988,28 @@ class PayrollCalculator {
     final ndAmount =
         _r2(ndHours * hourlyRate * settings.nightDiffMultiplier);
 
-    final gross = _r2(earnedBasic +
-        earnedAllowance +
-        otAmount +
-        rdAmount +
-        ndAmount +
-        holidayAmount +
-        otherIncomeAllowance);
+    // 🕒 Early-out deduction, depende sa sahod ng employee (basic + allowance)
+    final undertimeHours = workHours.undertimeMinutes / 60.0;
+    final allowanceHourly = (totalAllowances / workingDays) / 8.0;
+    final undertimeAmount =
+        _r2(undertimeHours * (hourlyRate + allowanceHourly));
 
-    final attendanceRatio = workingDays > 0
-        ? (present / workingDays).clamp(0.0, 1.0).toDouble()
-        : 0.0;
+    final gross = math.max(
+        0.0,
+        _r2(earnedBasic +
+            earnedAllowance +
+            otAmount +
+            rdAmount +
+            ndAmount +
+            holidayAmount +
+            otherIncomeAllowance -
+            undertimeAmount));
+
+        final attendanceRatio = !settings.prorateContributions
+        ? 1.0
+        : (workingDays > 0
+            ? (present / workingDays).clamp(0.0, 1.0).toDouble()
+            : 0.0);
     final sss = earnedBasic > 0
         ? _r2(calcSss(basic, settings) * attendanceRatio)
         : 0.0;
@@ -995,8 +1043,8 @@ class PayrollCalculator {
       absentHours: absent * 8.0,
       lateAmount: 0.0,
       lateHours: 0.0,
-      undertimeAmount: 0.0,
-      undertimeHours: 0.0,
+      undertimeAmount: undertimeAmount,
+      undertimeHours: undertimeHours,
       dayOffOtAmount: rdAmount,
       dayOffOtHours: rdRegHours + rdOtHours,
       overtimeAmount: otAmount,

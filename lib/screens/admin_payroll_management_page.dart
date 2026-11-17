@@ -67,6 +67,8 @@ class _AdminPayrollManagementPageState
   final _SecurityGuard _guard = _SecurityGuard();
   bool _isAdminVerified = false;
   DateTime? _lastNotifyAt;
+  StreamSubscription<void>? _attSub;
+  Timer? _liveDebounce;
 
   static const Duration _notifyCooldown = Duration(minutes: 5);
 
@@ -355,13 +357,37 @@ class _AdminPayrollManagementPageState
       return;
     }
     _isAdminVerified = true;
+    _startRealtime();
     await _load();
   }
 
-  Future<void> _load() async {
+  void _startRealtime() {
+    if (_isDemo) return;
+    _attSub?.cancel();
+    _attSub = PayrollCalculator.watchAttendance(_currentEmployeeData).listen(
+      (_) {
+        _liveDebounce?.cancel();
+        _liveDebounce = Timer(const Duration(seconds: 2), () {
+          if (mounted && !_loading) _load(silent: true);
+        });
+      },
+      onError: (e) {
+        if (kDebugMode) debugPrint('⚠️ [PayrollMgmt] realtime error: $e');
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _liveDebounce?.cancel();
+    _attSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
     if (_isDemo) return;
     if (!_isAdminVerified) return;
-    setState(() => _loading = true);
+    if (!silent) setState(() => _loading = true);
 
     try {
       // 0. Re-fetch employee to ensure full data (basicSalary, etc)
@@ -444,7 +470,7 @@ class _AdminPayrollManagementPageState
       if (kDebugMode) debugPrint('❌ [PayrollMgmt] load error: $e');
       if (!mounted) return;
       setState(() => _loading = false);
-      _toast(_safeError(e), error: true);
+      if (!silent) _toast(_safeError(e), error: true);
     }
   }
 
@@ -896,7 +922,7 @@ class _AdminPayrollManagementPageState
               ),
               pw.SizedBox(height: 10),
               _pdfRow('Basic Pay', _pdfHrs(_b.basicHours),
-                  _pdfPeso(_b.earnedBasic)),
+                  _pdfPeso(_b.earnedBasic + _b.absentAmount.abs())),
               _pdfRow('Absent', _pdfHrs(_b.absentHours),
                   '-${_pdfPeso(_b.absentAmount)}'),
               _pdfRow('Late', _pdfHrs(_b.lateHours),
@@ -1851,6 +1877,12 @@ class _AdminPayrollManagementPageState
               'Additional pay for night hours',
               PayrollCalculator.peso(_b.nightDiffAmount),
               false),
+        if (_b.undertimeAmount > 0)
+          _item(
+              'Undertime (Early Out)',
+              '${_b.undertimeHours.toStringAsFixed(2)} hr(s) × hourly rate',
+              '-${PayrollCalculator.peso(_b.undertimeAmount)}',
+              true),
         Divider(color: tc.border, height: 20),
         _item('Total Gross', 'Sum of earnings',
             PayrollCalculator.peso(_autoGrossPay), false,

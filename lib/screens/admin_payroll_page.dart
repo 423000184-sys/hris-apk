@@ -54,6 +54,9 @@
 
     final _SecurityGuard _guard = _SecurityGuard();
     bool _isAdminVerified = false;
+    StreamSubscription<void>? _attSub;
+    Timer? _liveDebounce;
+    bool _liveBusy = false;
 
     DateTime get _periodStart {
       final n = DateTime.now();
@@ -79,6 +82,8 @@
 
     @override
     void dispose() {
+      _liveDebounce?.cancel();
+      _attSub?.cancel();
       _searchCtrl.dispose();
       super.dispose();
     }
@@ -123,14 +128,37 @@
         _toast('Walang permission. Admin-only page.', error: true);
         return;
       }
-      _isAdminVerified = true;
+       _isAdminVerified = true;
       await _loadAll();
+      _startRealtime();
     }
 
-    Future<void> _loadAll() async {
+    void _startRealtime() {
+      if (_isDemo) return;
+      _attSub?.cancel();
+      _attSub = PayrollCalculator.watchTodayAttendance().listen(
+        (_) {
+          _liveDebounce?.cancel();
+          _liveDebounce = Timer(const Duration(seconds: 3), () async {
+            if (!mounted || _loadingAttendance || _liveBusy) return;
+            _liveBusy = true;
+            try {
+              await _loadAll(silent: true);
+            } finally {
+              _liveBusy = false;
+            }
+          });
+        },
+        onError: (e) {
+          if (kDebugMode) debugPrint('⚠️ payroll realtime: $e');
+        },
+      );
+    }
+
+    Future<void> _loadAll({bool silent = false}) async {
       if (_isDemo) return;
       if (!_isAdminVerified) return;
-      setState(() => _loadingAttendance = true);
+      if (!silent) setState(() => _loadingAttendance = true);
 
       try {
         final settings = await PayrollCalculator.fetchSettings();
@@ -185,7 +213,7 @@
         if (kDebugMode) debugPrint('❌ payroll loadAll: $e');
         if (!mounted) return;
         setState(() => _loadingAttendance = false);
-        _toast(_safeError(e), error: true);
+        if (!silent) _toast(_safeError(e), error: true);
       }
     }
 

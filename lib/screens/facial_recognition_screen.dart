@@ -155,11 +155,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   static const double _matchThreshold = 0.60;
   static const int _minEmbeddingsToUse = 3;
   static const int _maxEmbeddingsKept = 6;
-  static const int _embedIntervalMs = 350;
+  static const int _embedIntervalMs = 200;
+  static const int _collectTimeoutMs = 6000;
+  DateTime? _collectStartTime;
 
   final List<Float32List> _liveEmbeddings = [];
   DateTime _lastEmbedAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _embedderReady = false;
+  String? _embedderInitError;
   String _identityResult = 'not_checked'; // matched | enrolled | not_checked
   double? _matchScore;
 
@@ -337,13 +340,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   }
 
   // ── On-device face match helpers ─────────────────────────────
-  Future<void> _initEmbedder() async {
-    if (!_matchSupported) return;
+   Future<void> _initEmbedder() async {
+    if (!_matchSupported || _embedderReady) return;
     try {
       await FaceEmbedder.instance.init();
       _embedderReady = true;
-    } catch (e) {
-      _secureLog('⚠️ Embedder init failed: $e');
+      _embedderInitError = null;
+      _secureLog('✅ Embedder ready');
+    } catch (e, st) {
+      _embedderInitError = e.toString();
+      _secureLog('❌ Embedder init failed: $e\n$st');
     }
   }
 
@@ -359,27 +365,43 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   /// Captures a throttled embedding from a quality-checked, eyes-open frame.
   void _maybeCaptureEmbedding(CameraImage image, Face face) {
-    if (!_matchSupported || !_embedderReady) return;
+    if (!_matchSupported || !_embedderReady) {
+      _secureLog('⚠️ Embed skipped: supported=$_matchSupported ready=$_embedderReady');
+      return;
+    }
     final now = DateTime.now();
     if (now.difference(_lastEmbedAt).inMilliseconds < _embedIntervalMs) return;
 
     final l = face.landmarks[FaceLandmarkType.leftEye]?.position;
     final r = face.landmarks[FaceLandmarkType.rightEye]?.position;
-    if (l == null || r == null) return;
+    if (l == null || r == null) {
+      _secureLog('⚠️ Embed skipped: eye landmarks null');
+      return;
+    }
     _lastEmbedAt = now;
 
     const down = 2;
     final rgb = FaceAligner.cameraToRgb(image, down: down);
-    if (rgb == null) return;
+    if (rgb == null) {
+      _secureLog('⚠️ Embed failed: cameraToRgb returned null');
+      return;
+    }
     final upright = FaceAligner.rotate(rgb, _rotationDegrees());
     final aligned = FaceAligner.align(
         upright, l.x / down, l.y / down, r.x / down, r.y / down);
-    if (aligned == null) return;
+    if (aligned == null) {
+      _secureLog('⚠️ Embed failed: align returned null');
+      return;
+    }
     final emb = FaceEmbedder.instance.embed(aligned);
-    if (emb == null) return;
+    if (emb == null) {
+      _secureLog('⚠️ Embed failed: embed returned null');
+      return;
+    }
 
     _liveEmbeddings.add(emb);
     if (_liveEmbeddings.length > _maxEmbeddingsKept) _liveEmbeddings.removeAt(0);
+    _secureLog('✅ Embedding captured (${_liveEmbeddings.length})');
   }
 
   double _cosine(Float32List a, Float32List b) {
@@ -1405,6 +1427,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _livenessStep = _LivenessStep.waitingForFace;
       _livenessStartTime = DateTime.now();
       _liveEmbeddings.clear();
+      _collectStartTime = null;
       _matchScore = null;
       _identityResult = 'not_checked';
 
@@ -1478,15 +1501,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _livenessStep = _LivenessStep.waitingForFace;
     _livenessStartTime = DateTime.now();
     _liveEmbeddings.clear();
+    _collectStartTime = null;
     _matchScore = null;
     _identityResult = 'not_checked';
 
     setState(() {
+
       _faceState = _FaceState.scanning;
       _errorMessage = null;
       _faceWarning = _FaceWarning.none;
     });
 
+    if (!_embedderReady) await _initEmbedder();
     if (!_camReady) await _initCamera();
     if (!mounted) return;
 
@@ -1766,19 +1792,47 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       if (mounted) setState(() {});
 
       if (faces.isEmpty) {
+        if (_livenessStep == _LivenessStep.collecting &&
+            _collectStartTime != null &&
+            DateTime.now().difference(_collectStartTime!).inMilliseconds >
+                _collectTimeoutMs) {
+          await _finishCollecting();
+          _isProcessing = false;
+          return;
+        }
         _resetWarning();
         _isProcessing = false;
         return;
       }
 
-      final face = faces.first;
+    final face = faces.first;
       await _handleVerifyFrame(image, face);
     } catch (_) {}
     _isProcessing = false;
   }
 
+  Future<void> _finishCollecting() async {
+    try {
+      if (_camCtrl?.value.isStreamingImages == true) {
+        await _camCtrl!.stopImageStream();
+      }
+    } catch (_) {}
+    _isScanning = false;
+    _scanLineCtrl.stop();
+    await _onSuccess(); // _verifyIdentity ang magre-report kung kulang pa rin
+  }
+
   Future<void> _handleVerifyFrame(CameraImage image, Face face) async {
+    if (_livenessStep == _LivenessStep.collecting &&
+        _collectStartTime != null &&
+        DateTime.now().difference(_collectStartTime!).inMilliseconds >
+            _collectTimeoutMs) {
+      await _finishCollecting();
+      return;
+    }
+
     final quality = _assessVerifyQuality(face, image);
+
     if (quality != _FaceWarning.none) {
       _eyesWereClosed = false;
       _closedFrames = 0;
@@ -1800,9 +1854,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     // Capture embeddings from eyes-open, quality-checked frames only.
     if (avgOpen > _blinkOpenThreshold) _maybeCaptureEmbedding(image, face);
 
-    if (_livenessStep == _LivenessStep.waitingForFace) {
+     if (_livenessStep == _LivenessStep.waitingForFace) {
       _livenessStep = _LivenessStep.blink;
       if (mounted) setState(() => _faceWarning = _FaceWarning.none);
+    }
+
+    if (_livenessStep == _LivenessStep.collecting) {
+      if (_liveEmbeddings.length >= _minEmbeddingsToUse) {
+        await _finishCollecting();
+      }
+      return;
     }
 
     if (_livenessStep == _LivenessStep.blink && !_blinkDone) {
@@ -1838,12 +1899,21 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     } else if (_livenessStep == _LivenessStep.smile && !_smileDone) {
       if (smile > _smileThreshold) {
         _smileDone = true;
-        await _camCtrl!.stopImageStream();
-        _isScanning = false;
-        _scanLineCtrl.stop();
 
-        await _onSuccess();
-        _isProcessing = false;
+        // Demo / non-Android / walang embedder: walang kailangang kolektahin.
+        if (_isDemo || !_matchSupported || !_embedderReady) {
+          await _camCtrl!.stopImageStream();
+          _isScanning = false;
+          _scanLineCtrl.stop();
+          await _onSuccess();
+          _isProcessing = false;
+          return;
+        }
+
+        // Ituloy ang stream at mag-ipon muna ng embeddings.
+        _livenessStep = _LivenessStep.collecting;
+        _collectStartTime = DateTime.now();
+        if (mounted) setState(() {});
         return;
       }
     }
@@ -3685,7 +3755,7 @@ enum _FaceWarning {
   tooBright
 }
 
-enum _LivenessStep { waitingForFace, blink, smile }
+enum _LivenessStep { waitingForFace, blink, smile, collecting }
 
 // ═══════════════════════════════════════════════════════════════
 // PAINTERS

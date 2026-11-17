@@ -44,19 +44,7 @@ android {
 
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.3'
-}
-configurations.all {
-    resolutionStrategy {
-        // Huwag nang i-force ang org.tensorflow
-        force 'com.google.ai.edge.litert:litert:1.4.0'
-        force 'com.google.ai.edge.litert:litert-api:1.4.0'
-    }
-
-    // Alisin ang mga lumang TFLite modules
-    exclude group: "org.tensorflow", module: "tensorflow-lite"
-    exclude group: "org.tensorflow", module: "tensorflow-lite-api"
-    exclude group: "org.tensorflow", module: "tensorflow-lite-gpu"
-    exclude group: "org.tensorflow", module: "tensorflow-lite-select-tf-ops"
+    implementation 'org.tensorflow:tensorflow-lite:2.12.0'
 }
 
 flutter {
