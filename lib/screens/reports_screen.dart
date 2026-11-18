@@ -229,6 +229,10 @@ class _ReportsScreenState extends State<ReportsScreen>
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _employeeSub;
   StreamSubscription<void>? _attendanceSub;
   Timer? _liveDebounce;
+  Timer? _payrollDebounce;
+  String? _lastPayrollSig;
+  String _lastEditedBy = '';
+  DateTime? _lastEditedAt;
   bool _sessionValidated = false;
   bool _loggedOut = false;
   bool? _cachedSessionValid;
@@ -504,9 +508,28 @@ class _ReportsScreenState extends State<ReportsScreen>
     });
   }
 
-  void _startEmployeeListener() {
+  String _payrollSignature(Map<String, dynamic> data) {
+    final edited = data['payrollLastEditedAt'];
+    final editedMs = edited is Timestamp ? edited.millisecondsSinceEpoch : 0;
+    return [
+      editedMs,
+      data['basicSalary'],
+      data['basicAllowance'] ?? data['allowances'],
+      data['housingAllowance'],
+      data['transportAllowance'],
+      data['specialAllowance'],
+      data['workingDaysPerMonth'],
+      data['dailyRate'],
+      data['salarySource'],
+    ].join('|');
+  }
+
+  void _startEmployeeListener({String? docIdOverride}) {
     if (_isDemo) return;
-    final docId = widget.initialEmployee?.id;
+    final docId = (docIdOverride != null && docIdOverride.isNotEmpty)
+        ? docIdOverride
+        : widget.initialEmployee?.id;
+    debugPrint('👂 [Reports] listener start, docId=$docId');
     if (docId == null || docId.isEmpty) return;
 
     _employeeSub?.cancel();
@@ -528,6 +551,27 @@ class _ReportsScreenState extends State<ReportsScreen>
               : '🔒 Payslip is now locked by Admin.',
           error: !isUnlocked,
         );
+      }
+
+      final sig = _payrollSignature(data);
+      debugPrint('👂 [Reports] snapshot sig=$sig last=$_lastPayrollSig '
+          'pending=${snap.metadata.hasPendingWrites}');
+      if (snap.metadata.hasPendingWrites) return;
+      if (_lastPayrollSig == null) {
+        _lastPayrollSig = sig;
+        return;
+      }
+      if (sig != _lastPayrollSig) {
+        _lastPayrollSig = sig;
+        _payrollDebounce?.cancel();
+        final by = (data['payrollLastEditedByName'] ?? '').toString().trim();
+        _payrollDebounce = Timer(const Duration(milliseconds: 600), () {
+          if (!mounted || _loggedOut) return;
+          _loadData();
+          _showSnack(by.isNotEmpty
+              ? '💰 Your payroll was updated by $by.'
+              : '💰 Your payroll was updated by HR.');
+        });
       }
     }, onError: (e) => debugPrint('Employee listener error: $e'));
   }
@@ -667,6 +711,7 @@ class _ReportsScreenState extends State<ReportsScreen>
     _employeeSub?.cancel();
     _attendanceSub?.cancel();
     _liveDebounce?.cancel();
+    _payrollDebounce?.cancel();
     super.dispose();
   }
 
@@ -746,7 +791,7 @@ class _ReportsScreenState extends State<ReportsScreen>
           .doc(rawId)
           .get()
           .timeout(const Duration(seconds: 8));
-      if (doc.exists) return doc.data();
+      if (doc.exists) return {...?doc.data(), 'id': doc.id};
     } catch (e) {
       debugPrint('⚠️ [raw-1] failed: $e');
     }
@@ -758,7 +803,9 @@ class _ReportsScreenState extends State<ReportsScreen>
           .limit(1)
           .get()
           .timeout(const Duration(seconds: 8));
-      if (snap.docs.isNotEmpty) return snap.docs.first.data();
+      if (snap.docs.isNotEmpty) {
+        return {...snap.docs.first.data(), 'id': snap.docs.first.id};
+      }
     } catch (e) {
       debugPrint('⚠️ [raw-2] failed: $e');
     }
@@ -895,6 +942,10 @@ class _ReportsScreenState extends State<ReportsScreen>
         }
       }
 
+      if (_employeeSub == null && data != null) {
+        _startEmployeeListener(docIdOverride: data['id']?.toString());
+      }
+
       PayrollBreakdown b = PayrollBreakdown.empty;
       if (data != null) {
         final empData = {
@@ -965,6 +1016,10 @@ class _ReportsScreenState extends State<ReportsScreen>
         _salarySource = salarySource;
         _role = roleFromData;
         _isPayslipUnlocked = isUnlocked;
+        _lastEditedBy =
+            (data?['payrollLastEditedByName'] as String?)?.trim() ?? '';
+        final editedTs = data?['payrollLastEditedAt'];
+        _lastEditedAt = editedTs is Timestamp ? editedTs.toDate() : null;
 
         _displayName = displayName.isNotEmpty ? displayName : '—';
         _displayEmpId = displayId.isNotEmpty ? displayId : '—';
@@ -1632,6 +1687,8 @@ class _ReportsScreenState extends State<ReportsScreen>
                             const SizedBox(height: 14),
                           ],
                           _buildPayslipCard(tc, thisMonth),
+                          const SizedBox(height: 14),
+                          _buildPayrollSummary(tc),
                           if (!_isDownloadWindowOpen && !_isDemo) ...[
                             const SizedBox(height: 14),
                             _buildDownloadLockedBanner(tc),
@@ -1652,7 +1709,73 @@ class _ReportsScreenState extends State<ReportsScreen>
       ),
     );
   }
+    Widget _buildPayrollSummary(_ThemeColors tc) {
+    Widget row(String label, String value, {bool bold = false}) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(label,
+                  style: TextStyle(
+                      color: tc.textGrayDark,
+                      fontSize: 12.5,
+                      fontWeight: bold ? FontWeight.w700 : FontWeight.w500)),
+            ),
+            Text(value,
+                style: TextStyle(
+                    color: tc.textPrimary,
+                    fontSize: bold ? 15 : 13,
+                    fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+          ],
+        ),
+      );
+    }
 
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: tc.cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: tc.cardBorder),
+      ),
+      child: Column(
+        children: [
+          row('Basic Salary', PayrollCalculator.peso(_basicSalary)),
+          row('Allowances', PayrollCalculator.peso(_allowances)),
+          row('Daily Rate', PayrollCalculator.peso(_dailyRate)),
+          row('Gross Pay', PayrollCalculator.peso(_breakdown.grossPay)),
+          row('Total Deductions',
+              '-${PayrollCalculator.peso(_breakdown.totalDeductions)}'),
+          Divider(color: tc.cardBorder, height: 16),
+          row('NET PAY', PayrollCalculator.peso(_breakdown.netPay),
+              bold: true),
+          if (_lastEditedAt != null) ...[
+            Divider(color: tc.cardBorder, height: 16),
+            Row(
+              children: [
+                const Icon(Icons.edit_note_rounded,
+                    size: 16, color: _Mock.orange),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Last edited by '
+                    '${_lastEditedBy.isNotEmpty ? _lastEditedBy : 'HR'} • '
+                    '${DateFormat('MMM d, yyyy h:mm a').format(_lastEditedAt!)}',
+                    style: TextStyle(
+                        color: tc.textGrayDark,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
   Widget _buildDemoBadge() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),

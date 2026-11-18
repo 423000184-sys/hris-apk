@@ -1279,13 +1279,13 @@ class _ProfileScreenState extends State<ProfileScreen>
                     clipBehavior: Clip.none,
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
                     child: Transform.translate(
-                      offset: const Offset(0, -88),
+                      offset: const Offset(0, -60),
                       child: Column(
                         children: [
                           _buildProfileCard(tc),
                           const SizedBox(height: 4),
 
-                          // ✅ DEMO badge
+
                           if (_isDemo) ...[
                             const SizedBox(height: 8),
                             _buildDemoBadge(),
@@ -1560,9 +1560,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   Widget _buildHeader(LanguageService langService, _ThemeColors tc) {
     return Container(
       width: double.infinity,
-      height: 206,
+      height: 150,
       clipBehavior: Clip.antiAlias,
-      padding: const EdgeInsets.fromLTRB(24, 48, 24, 1),
+      padding: const EdgeInsets.fromLTRB(24, 40, 24, 1),
       decoration: const BoxDecoration(
         gradient: AppColors.gradientOrange,
         borderRadius: BorderRadius.only(

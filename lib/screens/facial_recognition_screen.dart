@@ -158,6 +158,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   static const int _embedIntervalMs = 200;
   static const int _collectTimeoutMs = 6000;
   DateTime? _collectStartTime;
+  static const Duration _maxBackdate = Duration(minutes: 10);
 
   final List<Float32List> _liveEmbeddings = [];
   DateTime _lastEmbedAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -190,6 +191,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   StreamSubscription<bool>? _connectivitySub;
 
   static const String _kPreAuthEmpKey = 'fp_preauth_employee_id';
+  static const String _kMismatchKey = 'fp_mismatch_count_';
+  static const String _kLockUntilKey = 'fp_lock_until_ms_';
+  static const int _maxMismatch = 5;
+  static const Duration _lockDuration = Duration(minutes: 5);
 
   int _rotationCompensation = 0;
 
@@ -431,7 +436,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final stored = await FaceTemplateStore.instance.load(id);
 
     if (stored.isEmpty) {
-      // First use on this device: enroll the faces captured during liveness.
+      if (_isChallenge) {
+        _onIdentityFailed(
+            'No registered face on this device.\nPlease clock in normally first.',
+            'no_template_during_challenge');
+        return false;
+      }
       await FaceTemplateStore.instance.save(id, List.of(_liveEmbeddings));
       _identityResult = 'enrolled';
       unawaited(_logSecurityEvent(
@@ -457,7 +467,47 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return false;
     }
     _identityResult = 'matched';
+    unawaited(_clearMismatches());
     return true;
+  }
+
+  
+
+  Future<Duration?> _remainingLock() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final until = prefs.getInt('$_kLockUntilKey${widget.employee.id}') ?? 0;
+      final left = until - DateTime.now().millisecondsSinceEpoch;
+      return left > 0 ? Duration(milliseconds: left) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _registerMismatch() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = widget.employee.id;
+      final n = (prefs.getInt('$_kMismatchKey$id') ?? 0) + 1;
+      if (n >= _maxMismatch) {
+        await prefs.setInt('$_kLockUntilKey$id',
+            DateTime.now().add(_lockDuration).millisecondsSinceEpoch);
+        await prefs.setInt('$_kMismatchKey$id', 0);
+        unawaited(_logSecurityEvent(
+            type: 'face_match_lockout',
+            severity: 'critical',
+            details: '$n consecutive face mismatches — locked ${_lockDuration.inMinutes}m'));
+      } else {
+        await prefs.setInt('$_kMismatchKey$id', n);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _clearMismatches() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('$_kMismatchKey${widget.employee.id}');
+    } catch (_) {}
   }
 
   void _onIdentityFailed(String msg, String reason, {double? score}) {
@@ -469,6 +519,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _errorMessage = msg;
     });
     _shakeCtrl.forward(from: 0);
+    if (reason == 'face_mismatch') unawaited(_registerMismatch());
 
     unawaited(_logSecurityEvent(
       type: 'face_match_failed',
@@ -580,7 +631,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   DateTime get _effectiveAttendanceTime {
     final now = DateTime.now();
-    if (_firstAttemptTime != null && _isSameDay(_firstAttemptTime!, now)) {
+    if (_firstAttemptTime != null &&
+        _isSameDay(_firstAttemptTime!, now) &&
+        now.difference(_firstAttemptTime!) <= _maxBackdate) {
       return _firstAttemptTime!;
     }
     return now;
@@ -1279,8 +1332,19 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       setState(() => _obscureContent = obscure);
     }
 
-    if (obscure) {
-      if (_isScanning) _stopAllCameraOperations();
+        if (obscure) {
+      if (_isScanning) {
+        _stopAllCameraOperations().then((_) {
+          if (!mounted || _faceState != _FaceState.scanning) return;
+          setState(() {
+            _faceState = _FaceState.idle;
+            _faceWarning = _FaceWarning.none;
+            _errorMessage = null;
+          });
+          _pulseCtrl.repeat(reverse: true);
+          _ringCtrl.repeat();
+        });
+      }
     } else if (state == AppLifecycleState.resumed) {
       _updateRotationCompensation();
     }
@@ -1408,6 +1472,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   Future<void> _startScan() async {
     if (!mounted || _isScanning) return;
 
+    if (_firstAttemptTime != null &&
+        DateTime.now().difference(_firstAttemptTime!) > _maxBackdate) {
+      _firstAttemptTime = null; // stale na, simulan ulit
+    }
     _firstAttemptTime ??= DateTime.now();
 
     if (_isDemo) {
@@ -1491,6 +1559,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return;
     }
 
+    final lock = await _remainingLock();
+    if (lock != null) {
+      _onFailure('Too many failed face checks.\n'
+          'Try again in ${lock.inMinutes + 1} min or contact Admin.');
+      return;
+    }
+    if (!mounted) return;
+
     _isScanning = true;
     _blinkDone = false;
     _smileDone = false;
@@ -1511,19 +1587,33 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _errorMessage = null;
       _faceWarning = _FaceWarning.none;
     });
-
+   
     if (!_embedderReady) await _initEmbedder();
     if (!_camReady) await _initCamera();
-    if (!mounted) return;
+    // na-cancel habang naghihintay (hal. na-pause ang app sa permission dialog)
+    if (!mounted || !_isScanning) return;
 
-    if (!_camReady || kIsWeb) {
-      _scanLineCtrl.repeat(reverse: true);
-      await _runMockScan();
+    if (!kIsWeb && !_camReady) {
+      _isScanning = false;
+      _scanLineCtrl.stop();
+      if (_faceState == _FaceState.scanning) {
+        setState(() => _faceState = _FaceState.idle); // lalabas ang _camError
+      }
       return;
     }
 
     _scanLineCtrl.repeat(reverse: true);
-    await _camCtrl!.startImageStream(_onCameraImage);
+    if (kIsWeb) {
+      await _runMockScan();
+      return;
+    }
+
+    try {
+      await _camCtrl!.startImageStream(_onCameraImage);
+    } catch (e) {
+      _secureLog('❌ startImageStream failed: $e');
+      _onFailure('Camera error. Please try again.');
+    }
   }
 
   Future<void> _demoAutoSucceed() async {
@@ -1774,8 +1864,24 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   Future<void> _onCameraImage(CameraImage image) async {
     if (!_isScanning || _isProcessing || !mounted) return;
-    _isProcessing = true;
+        _isProcessing = true;
     try {
+      // Global liveness timeout: sakop din ang walang mukha / quality warning.
+      if (!_smileDone &&
+          _livenessStartTime != null &&
+          DateTime.now().difference(_livenessStartTime!).inMilliseconds >
+              _livenessTimeoutMs) {
+        try {
+          if (_camCtrl?.value.isStreamingImages == true) {
+            await _camCtrl!.stopImageStream();
+          }
+        } catch (_) {}
+        _isScanning = false;
+        _scanLineCtrl.stop();
+        _isProcessing = false;
+        _onFailure('Liveness check timed out. Try again.');
+        return;
+      }
       final inputImage = _buildInputImage(image);
       if (inputImage == null) {
         _isProcessing = false;
@@ -2381,9 +2487,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             details: 'Failed to save attendance locally: $e');
       }
 
-      final needsDirectWrite = offlineResult != null &&
-          !offlineResult.queued &&
-          NetworkGuard.instance.isOnline;
+      final needsDirectWrite =
+          (offlineResult == null || !offlineResult.queued) &&
+              NetworkGuard.instance.isOnline;
       if (!needsDirectWrite) {
         await _emitPendingCount();
         return;
@@ -2424,7 +2530,17 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         await _executeWithLoadBalancer(() => FirebaseFirestore.instance
             .collection('attendance_logs')
             .add(attendancePayload));
-      } catch (_) {}
+      } catch (e) {
+        try {
+          await OfflineAttendanceService.instance.enqueue(
+              collection: 'attendance_logs', data: attendancePayload);
+        } catch (_) {
+          await _logSecurityEvent(
+              type: 'attendance_write_failed',
+              severity: 'critical',
+              details: 'attendance_logs write + enqueue failed: $e');
+        }
+      }
 
       final activityPayload = <String, dynamic>{
         'type': isClockIn ? 'clock_in' : 'clock_out',
@@ -2522,7 +2638,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
 
     final canProceed = await _checkRoleAndGeofence();
-    if (!canProceed) return;
+    if (!canProceed) {
+      if (mounted) {
+        _successCtrl.reset();
+        _pulseCtrl.repeat(reverse: true);
+        _ringCtrl.repeat();
+      }
+      return;
+    }
 
     final employeeId = _employeeIdForAttendance;
     final alreadyClockedIn =
