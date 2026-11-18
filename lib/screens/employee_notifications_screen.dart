@@ -79,9 +79,9 @@ class _EmployeeNotificationsScreenState
   bool _isInitialLoading = true;
   StreamSubscription<bool>? _networkSub;
 
-  // 🆕 Selection state
   final Set<String> _selectedIds = <String>{};
   bool get _isSelectionMode => _selectedIds.isNotEmpty;
+  final Set<String> _expandedIds = <String>{};
 
   static const Duration _demoSkeletonDuration = Duration(milliseconds: 900);
 
@@ -960,6 +960,7 @@ class _EmployeeNotificationsScreenState
     final style = _styleFor(n.type);
     final isSelected = _selectedIds.contains(n.id);
     final inSelectionMode = _isSelectionMode;
+    final isExpanded = _expandedIds.contains(n.id);
 
     final bgColor = isSelected
         ? const Color(0xFFFF8A00).withValues(alpha: 0.14)
@@ -971,9 +972,12 @@ class _EmployeeNotificationsScreenState
       onTap: () {
         if (inSelectionMode) {
           _toggleSelection(n.id);
-        } else {
-          if (!n.read) _markOneRead(n.id);
+          return;
         }
+        setState(() {
+          if (!_expandedIds.remove(n.id)) _expandedIds.add(n.id);
+        });
+        if (!n.read) _markOneRead(n.id);
       },
       onLongPress: () {
         if (!inSelectionMode) {
@@ -1044,13 +1048,43 @@ class _EmployeeNotificationsScreenState
                     ],
                   ),
                   const SizedBox(height: 4),
-                  Text(
-                    n.message,
-                    style: TextStyle(
-                        fontSize: 12, color: muted, height: 1.4),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 180),
+                    alignment: Alignment.topCenter,
+                    child: Text(
+                      n.message,
+                      style: TextStyle(
+                          fontSize: 12, color: muted, height: 1.4),
+                      maxLines: isExpanded ? null : 3,
+                      overflow: isExpanded
+                          ? TextOverflow.visible
+                          : TextOverflow.ellipsis,
+                    ),
                   ),
+                  // ✏️ Last edited by HR (para sa Payroll Updated lang)
+                  if (n.type == 'payroll' &&
+                      n.title.contains('Payroll Updated') &&
+                      n.timestamp != null) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        const Icon(Icons.edit_note_rounded,
+                            size: 16, color: Color(0xFFFF8A00)),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Last edited by '
+                            '${n.senderName.isNotEmpty ? n.senderName : 'HR'} • '
+                            '${DateFormat('MMM d, yyyy h:mm a').format(n.timestamp!)}',
+                            style: TextStyle(
+                                color: muted,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 6),
                   Row(
                     children: [
@@ -1092,6 +1126,9 @@ class _EmployeeNotificationsScreenState
       case 'payroll':
         return const _NStyle(
             Icons.receipt_long_rounded, Color(0xFF16A34A));
+case 'attendance':
+        return const _NStyle(
+            Icons.edit_calendar_rounded, Color(0xFFFF8A00));
       case 'reminder':
         return const _NStyle(
             Icons.alarm_rounded, Color(0xFFF59E0B));
@@ -1114,7 +1151,7 @@ class _EmployeeNotificationsScreenState
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     if (diff.inDays < 7) return '${diff.inDays}d ago';
-    return DateFormat('MMM d, hh:mm h a').format(d);
+    return DateFormat('MMM d, h:mm a').format(d);
   }
 }
 

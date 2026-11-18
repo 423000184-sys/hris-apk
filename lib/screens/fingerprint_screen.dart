@@ -1432,6 +1432,21 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   }
 
   double _degToRad(double deg) => deg * 3.1415926535 / 180;
+  Map<String, dynamic> _toPlain(Map<String, dynamic> m) {
+    final out = <String, dynamic>{};
+    m.forEach((k, v) {
+      if (v is FieldValue) {
+        out[k] = DateTime.now();
+      } else if (v is Timestamp) {
+        out[k] = v.toDate();
+      } else if (v is GeoPoint) {
+        return; // nasa latitude/longitude na
+      } else {
+        out[k] = v;
+      }
+    });
+    return out;
+  }
 
   Future<bool> _hasNetwork() async {
     try {
@@ -1905,7 +1920,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         try {
           await OfflineAttendanceService.instance.enqueue(
             collection: 'activity_logs',
-            data: logPayload,
+            data: _toPlain(logPayload),
           );
         } catch (_) {}
       } else {
@@ -1918,7 +1933,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           try {
             await OfflineAttendanceService.instance.enqueue(
               collection: 'activity_logs',
-              data: logPayload,
+              data: _toPlain(logPayload),
             );
           } catch (_) {}
         }
@@ -2021,10 +2036,23 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       }
     }
 
-    await _writeAttendanceLog();
+    final saved = await _writeAttendanceLog();
 
     if (!mounted) return;
     setState(() => _isCheckingGeofence = false);
+
+    if (!saved) {
+      setState(() {
+        _fpState = _FpState.error;
+        _errorMessage = 'Hindi ma-save ang attendance.\n'
+            'Please try again or contact Admin.';
+      });
+      _shakeCtrl.forward(from: 0);
+      _successCtrl.reset();
+      _pulseCtrl.repeat(reverse: true);
+      _ringCtrl.repeat();
+      return;
+    }
 
     _goToClockInSuccess();
   }
@@ -2203,7 +2231,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       // 📴 Kapag OFFLINE, local cache lang ang paniniwalaan.
       if (!NetworkGuard.instance.isOnline) {
-        return lastClockIn == todayStr;
+        if (lastClockIn == todayStr) return true;
+        return await _hasLocalIn(employeeId);
       }
 
       // 🌐 Kapag ONLINE, ang Firestore Database ang boss.
@@ -2223,6 +2252,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         }
         return true;
       } else {
+        if (await _hasLocalIn(employeeId)) return true;
+
         // 🗑️ Binura mo sa DB. I-clear ang local cache para makapasok ka.
         if (lastClockIn == todayStr) {
           await prefs.remove('last_clock_in_date_$employeeId');
@@ -2235,7 +2266,18 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       final prefs = await SharedPreferences.getInstance();
       final lastClockIn = prefs.getString('last_clock_in_date_$employeeId');
       final todayStr = DateTime.now().toIso8601String().substring(0, 10);
-      return lastClockIn == todayStr;
+      if (lastClockIn == todayStr) return true;
+      return await _hasLocalIn(employeeId);
+    }
+  }
+
+  Future<bool> _hasLocalIn(String employeeId) async {
+    try {
+      final rows =
+          await OfflineAttendanceService.instance.getTodayForEmployee(employeeId);
+      return rows.any((r) => (r['type'] as String?) == 'IN');
+    } catch (_) {
+      return false;
     }
   }
 
@@ -2302,15 +2344,15 @@ class _FingerprintScreenState extends State<FingerprintScreen>
     }
   }
 
-  Future<void> _writeAttendanceLog() async {
+  Future<bool> _writeAttendanceLog() async {
     if (_isDemo) {
       _secureLog('🎭 [DemoMode] Skipping attendance log write');
-      return;
+      return true;
     }
 
     try {
       final employeeId = _employeeIdForAttendance;
-      if (employeeId.isEmpty) return;
+      if (employeeId.isEmpty) return false;
 
       final alreadyClockedIn =
       await ClockStatusService.instance.isCurrentlyClockedIn(employeeId);
@@ -2331,13 +2373,6 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           '${effectiveTime.second.toString().padLeft(2, '0')}';
 
       final delayMinutes = now.difference(effectiveTime).inMinutes;
-
-      if (attendanceType == 'IN') {
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('last_clock_in_date_$employeeId', todayStr);
-        } catch (_) {}
-      }
 
       final employeeName = widget.employee.fullName;
       final employeeEmail = widget.employee.email;
@@ -2364,6 +2399,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         employeeName: employeeName,
       );
 
+      bool localSaved = false;
       try {
         final offlineResult =
         await OfflineAttendanceService.instance.logAttendance(
@@ -2380,8 +2416,16 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           remarks: remarks,
           zoneType: zoneType,
         );
+        localSaved = true;
         _secureLog(
             '💾 [FP] Local save: queued=${offlineResult.queued} id=${offlineResult.localId}');
+
+        if (attendanceType == 'IN') {
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('last_clock_in_date_$employeeId', todayStr);
+          } catch (_) {}
+        }
       } catch (e) {
         _secureLog(
             '❌ [FP] OfflineAttendanceService.logAttendance failed: $e');
@@ -2391,6 +2435,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           details: 'Failed to save attendance locally: $e',
         );
       }
+
+      if (!localSaved) return false;
 
       final online = _networkState == _NetworkState.online;
 
@@ -2441,11 +2487,16 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         ...locationPayload,
       };
 
+      // Iisang doc ID para hindi madoble kapag na-sync na
+      final activityDocId =
+          'act_${employeeId}_${attendanceType}_${effectiveTime.millisecondsSinceEpoch}';
+
       if (!online) {
         try {
           await OfflineAttendanceService.instance.enqueue(
             collection: 'activity_logs',
-            data: activityPayload,
+            data: _toPlain(activityPayload),
+            docId: activityDocId,
           );
           _secureLog('📥 [FP] activity_logs queued offline');
         } catch (e) {
@@ -2455,14 +2506,19 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         try {
           await FirebaseFirestore.instance
               .collection('activity_logs')
-              .add(activityPayload);
+              .doc(activityDocId)
+              .set(activityPayload)
+              .timeout(const Duration(seconds: 8));
+        } on TimeoutException {
+          _secureLog('⏳ [FP] activity_logs timeout — SDK will sync it');
         } catch (e) {
           _secureLog(
               '⚠️ [FP] activity_logs direct write failed: $e — enqueueing');
           try {
             await OfflineAttendanceService.instance.enqueue(
               collection: 'activity_logs',
-              data: activityPayload,
+              data: _toPlain(activityPayload),
+              docId: activityDocId,
             );
           } catch (_) {}
         }
@@ -2495,7 +2551,7 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         if (!online) {
           await OfflineAttendanceService.instance.enqueue(
             collection: 'admin_notifications',
-            data: notifPayload,
+            data: _toPlain(notifPayload),
           );
           _secureLog('📥 [FP] admin_notifications queued offline');
         } else {
@@ -2526,8 +2582,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
       }
 
       await _emitPendingCount();
+      return true;
     } catch (e) {
       _secureLog('❌ _writeAttendanceLog: $e');
+      return false;
     }
   }
 

@@ -10,11 +10,9 @@ import 'package:flutter/gestures.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:onesignal_flutter/onesignal_flutter.dart';
-
-// 🆕 CONDITIONAL IMPORT PARA SA PWA INSTALLER
+import 'services/notification_preference_service.dart';
 import 'services/pwa_service_stub.dart'
 if (dart.library.js_interop) 'services/pwa_service_web.dart';
-
 import 'screens/splash_screen.dart';
 import 'screens/admin_login_screen.dart';
 import 'screens/employee_notifications_screen.dart';
@@ -178,6 +176,14 @@ Future<void> _logGlobalError(Object error, StackTrace stack) async {
       } catch (_) {}
     }
   } catch (_) {}
+}
+class _ReminderLifecycle extends WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      NotificationPreferenceService.instance.ensureReminderScheduled();
+    }
+  }
 }
 
 void main() async {
@@ -406,18 +412,30 @@ void main() async {
 
       try {
         await LocalNotificationService.instance.init();
-        await Future.delayed(const Duration(seconds: 1));
-        final granted =
-        await LocalNotificationService.instance.requestPermissions();
-        if (granted) {
-          await LocalNotificationService.instance.scheduleDailyWorkReminder(
-            hour: 7,
-            minute: 30,
-            title: '⏰ Go to Work!',
-            body: 'Time to go to work! Clock in before 8:00 AM.',
-          );
+
+      try {
+        await LocalNotificationService.instance.init();
+
+        final prefs = await SharedPreferences.getInstance();
+        if (!(prefs.getBool('notif_perm_asked') ?? false)) {
+          final ok = await LocalNotificationService.instance.requestPermissions();
+          if (ok) await prefs.setBool('notif_perm_asked', true);
         }
-      } catch (e) {}
+
+        await NotificationPreferenceService.instance
+            .ensureReminderScheduled();
+        await LocalNotificationService.instance.runDiagnostics();
+      } catch (e, st) {
+        debugPrint('⚠️ [Notif] startup setup failed: $e\n$st');
+      }
+
+        // Nagse-schedule pa rin kahit hindi pa granted ang exact alarm
+        await NotificationPreferenceService.instance
+            .ensureReminderScheduled();
+        await LocalNotificationService.instance.runDiagnostics();
+      } catch (e, st) {
+        debugPrint('⚠️ [Notif] startup setup failed: $e\n$st');
+      }
     }
 
     try {
@@ -436,7 +454,9 @@ void main() async {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _startupBindingCheck();
     });
-
+      if (!kIsWeb) {
+      WidgetsBinding.instance.addObserver(_ReminderLifecycle());
+    }
     runApp(
       MultiProvider(
         providers: [

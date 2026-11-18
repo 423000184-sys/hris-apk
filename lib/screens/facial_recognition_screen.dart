@@ -2345,6 +2345,15 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (widget.employee.wfhAccess) return 'wfh';
     return 'inside';
   }
+    Future<bool> _hasLocalIn(String employeeId) async {
+    try {
+      final rows = await OfflineAttendanceService.instance
+          .getTodayForEmployee(employeeId);
+      return rows.any((r) => (r['type'] as String?) == 'IN');
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<bool> _hasClockedInToday(String employeeId) async {
     try {
@@ -2355,7 +2364,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
       // 📴 Kapag OFFLINE, local cache lang ang paniniwalaan.
       if (!NetworkGuard.instance.isOnline) {
-        return lastClockIn == todayStr;
+        if (lastClockIn == todayStr) return true;
+        return await _hasLocalIn(employeeId);
       }
 
       // 🌐 Kapag ONLINE, ang Firestore Database ang boss.
@@ -2374,10 +2384,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         }
         return true;
       } else {
-        // 🗑️ Binura mo sa DB. I-clear ang local cache.
-        if (lastClockIn == todayStr) {
-          await prefs.remove('last_clock_in_date_$employeeId');
-        }
+        final pending =
+            await OfflineAttendanceService.instance.getPendingCount();
+        if (pending > 0 && await _hasLocalIn(employeeId)) return true;
+
+        // Linisin ang stale na local markers (na-delete sa server).
+        await prefs.remove('last_clock_in_date_$employeeId');
         return false;
       }
     } catch (e) {
@@ -2385,7 +2397,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final prefs = await SharedPreferences.getInstance();
       final lastClockIn = prefs.getString('last_clock_in_date_$employeeId');
       final todayStr = DateTime.now().toIso8601String().substring(0, 10);
-      return lastClockIn == todayStr;
+      if (lastClockIn == todayStr) return true;
+      return await _hasLocalIn(employeeId);
     }
   }
 
@@ -2418,14 +2431,22 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     } catch (_) {}
   }
 
-  Future<void> _writeAttendanceLog() async {
-    if (_isDemo) return;
+  // ⚠️ I-set sa `true` KUNG ang OfflineAttendanceService.logAttendance()
+  // mismo ang gumagawa ng activity_logs, scheduleForToday at notifications.
+  // Kapag hindi sigurado, iwanang `false`.
+  static const bool _logAttendanceHandlesSideEffects = false;
+  static const Duration _writeTimeout = Duration(seconds: 8);
+
+  /// Returns true kung SIGURADONG may mapupuntahan ang record
+  /// (nasa Firestore na, o nasa local queue na magsi-sync mamaya).
+  Future<bool> _writeAttendanceLog() async {
+    if (_isDemo) return true;
     try {
       final employeeId = _employeeIdForAttendance;
-      if (employeeId.isEmpty) return;
+      if (employeeId.isEmpty) return false;
 
       final alreadyClockedIn =
-      await ClockStatusService.instance.isCurrentlyClockedIn(employeeId);
+          await ClockStatusService.instance.isCurrentlyClockedIn(employeeId);
       final attendanceType = alreadyClockedIn ? 'OUT' : 'IN';
       final isClockIn = attendanceType == 'IN';
 
@@ -2437,13 +2458,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           '${effectiveTime.second.toString().padLeft(2, '0')}';
       final delayMinutes = now.difference(effectiveTime).inMinutes;
 
-      if (attendanceType == 'IN') {
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('last_clock_in_date_$employeeId', todayStr);
-        } catch (_) {}
-      }
-
       final employeeName = widget.employee.fullName;
       final employeeEmail = widget.employee.email;
       final deviceName = _deviceModel;
@@ -2453,8 +2467,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           ? '|field_selfie_pending|proof:$_fieldProofId'
           : '';
       final baseRemarks = (_geofenceVerifiedOffline
-          ? 'liveness:passed|pending_geofence_verification'
-          : 'liveness:passed') +
+              ? 'liveness:passed|pending_geofence_verification'
+              : 'liveness:passed') +
           '|identity:$_identityResult' +
           proofTag;
       final remarks = delayMinutes >= 1
@@ -2466,6 +2480,92 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           employeeId: employeeId,
           employeeName: employeeName);
 
+      // ── PLAIN payloads (para sa local queue: walang FieldValue/Timestamp/GeoPoint)
+      final plainAttendance = <String, dynamic>{
+        'employee_id': employeeId,
+        'employee_name': employeeName,
+        'employee_email': employeeEmail,
+        'type': attendanceType,
+        'date': todayStr,
+        'time': timeStr,
+        'timestamp': effectiveTime,
+        'first_attempt_at': effectiveTime,
+        'success_at': now,
+        'attempt_delay_minutes': delayMinutes,
+        'device': deviceName,
+        'device_binding': _deviceBinding,
+        'zone_type': zoneType,
+        'liveness_passed': true,
+        'identity_check': _identityResult,
+        if (_matchScore != null) 'face_match_score': _matchScore,
+        'session_nonce': _sessionNonce,
+        'device_compromised': _deviceCompromised,
+        'remarks': remarks,
+        'created_offline': !NetworkGuard.instance.isOnline,
+        if (_geofenceVerifiedOffline) 'pending_geofence_verification': true,
+        if (_lastLatitude != null) 'latitude': _lastLatitude,
+        if (_lastLongitude != null) 'longitude': _lastLongitude,
+      };
+
+      final plainActivity = <String, dynamic>{
+        'type': isClockIn ? 'clock_in' : 'clock_out',
+        'action':
+            isClockIn ? 'Clocked In (Face Match)' : 'Clocked Out (Face Match)',
+        'employeeId': widget.employee.id,
+        'employee_id': employeeId,
+        'employee_name': employeeName,
+        'email': employeeEmail,
+        'liveness_passed': true,
+        'identity_check': _identityResult,
+        if (_matchScore != null) 'face_match_score': _matchScore,
+        'zone_type': zoneType,
+        'time': timeStr,
+        'date': todayStr,
+        'first_attempt_at': effectiveTime,
+        'success_at': now,
+        'attempt_delay_minutes': delayMinutes,
+        'device': deviceName,
+        'device_binding': _deviceBinding,
+        'device_compromised': _deviceCompromised,
+        'platform': kIsWeb ? 'web' : 'mobile',
+        'session_nonce': _sessionNonce,
+        'timestamp': effectiveTime,
+        'created_offline': !NetworkGuard.instance.isOnline,
+        if (_geofenceVerifiedOffline) 'pending_geofence_verification': true,
+        if (_lastLatitude != null) 'latitude': _lastLatitude,
+        if (_lastLongitude != null) 'longitude': _lastLongitude,
+      };
+
+      // ── FIRESTORE payloads (online direct write lang)
+      final locationPayload = <String, dynamic>{
+        if (_lastLatitude != null) 'latitude': _lastLatitude,
+        if (_lastLongitude != null) 'longitude': _lastLongitude,
+        if (_lastLatitude != null && _lastLongitude != null)
+          'coordinates': GeoPoint(_lastLatitude!, _lastLongitude!),
+      };
+
+      final attendancePayload = <String, dynamic>{
+        ...plainAttendance,
+        'timestamp': FieldValue.serverTimestamp(),
+        'first_attempt_at': Timestamp.fromDate(effectiveTime),
+        'success_at': Timestamp.fromDate(now),
+        ...locationPayload,
+      };
+
+      final activityPayload = <String, dynamic>{
+        ...plainActivity,
+        'timestamp': FieldValue.serverTimestamp(),
+        'first_attempt_at': Timestamp.fromDate(effectiveTime),
+        'success_at': Timestamp.fromDate(now),
+        ...locationPayload,
+      };
+
+      final attDocId =
+          'att_${employeeId}_${attendanceType}_${effectiveTime.millisecondsSinceEpoch}';
+      final actDocId =
+          'act_${employeeId}_${attendanceType}_${effectiveTime.millisecondsSinceEpoch}';
+
+      // ── 1) LOCAL SAVE muna (offline-first)
       AttendanceResult? offlineResult;
       try {
         offlineResult = await OfflineAttendanceService.instance.logAttendance(
@@ -2487,135 +2587,118 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             details: 'Failed to save attendance locally: $e');
       }
 
-        final needsDirectWrite =
-          offlineResult == null && NetworkGuard.instance.isOnline;
-      if (!needsDirectWrite) {
-        await _emitPendingCount();
-        return;
-      }
+      bool saved = offlineResult != null;
 
-      final locationPayload = <String, dynamic>{
-        if (_lastLatitude != null) 'latitude': _lastLatitude,
-        if (_lastLongitude != null) 'longitude': _lastLongitude,
-        if (_lastLatitude != null && _lastLongitude != null)
-          'coordinates': GeoPoint(_lastLatitude!, _lastLongitude!),
-      };
-
-      final attendancePayload = <String, dynamic>{
-        'employee_id': employeeId,
-        'employee_name': employeeName,
-        'employee_email': employeeEmail,
-        'type': attendanceType,
-        'date': todayStr,
-        'time': timeStr,
-        'timestamp': FieldValue.serverTimestamp(),
-        'first_attempt_at': Timestamp.fromDate(effectiveTime),
-        'success_at': Timestamp.fromDate(now),
-        'attempt_delay_minutes': delayMinutes,
-        'device': deviceName,
-        'device_binding': _deviceBinding,
-        'zone_type': zoneType,
-        'liveness_passed': true,
-        'identity_check': _identityResult,
-        if (_matchScore != null) 'face_match_score': _matchScore,
-        'session_nonce': _sessionNonce,
-        'device_compromised': _deviceCompromised,
-        'remarks': remarks,
-        if (_geofenceVerifiedOffline) 'pending_geofence_verification': true,
-        ...locationPayload,
-      };
-
-      try {
-        await _executeWithLoadBalancer(() => FirebaseFirestore.instance
-            .collection('attendance_logs')
-            .add(attendancePayload));
-      } catch (e) {
-        try {
-          await OfflineAttendanceService.instance.enqueue(
-              collection: 'attendance_logs', data: attendancePayload);
-        } catch (_) {
-          await _logSecurityEvent(
-              type: 'attendance_write_failed',
-              severity: 'critical',
-              details: 'attendance_logs write + enqueue failed: $e');
+      // ── 2) FALLBACK kung pumalya ang local save
+      if (!saved) {
+        if (NetworkGuard.instance.isOnline) {
+          try {
+            await _executeWithLoadBalancer(() => FirebaseFirestore.instance
+                .collection('attendance_logs')
+                .doc(attDocId)
+                .set(attendancePayload)
+                .timeout(_writeTimeout));
+            saved = true;
+          } catch (e) {
+            _secureLog('⚠️ direct attendance write failed: $e');
+          }
+        }
+        if (!saved) {
+          try {
+            await OfflineAttendanceService.instance.enqueue(
+                collection: 'attendance_logs',
+                data: plainAttendance,
+                docId: attDocId);
+            saved = true;
+          } catch (e) {
+            await _logSecurityEvent(
+                type: 'attendance_write_failed',
+                severity: 'critical',
+                details: 'local save + direct write + enqueue ALL failed: $e');
+          }
         }
       }
 
-      final activityPayload = <String, dynamic>{
-        'type': isClockIn ? 'clock_in' : 'clock_out',
-        'action': isClockIn
-            ? 'Clocked In (Face Match)'
-            : 'Clocked Out (Face Match)',
-        'employeeId': widget.employee.id,
-        'employee_id': employeeId,
-        'employee_name': employeeName,
-        'email': employeeEmail,
-        'liveness_passed': true,
-        'identity_check': _identityResult,
-        if (_matchScore != null) 'face_match_score': _matchScore,
-        'zone_type': zoneType,
-        'time': timeStr,
-        'date': todayStr,
-        'first_attempt_at': Timestamp.fromDate(effectiveTime),
-        'success_at': Timestamp.fromDate(now),
-        'attempt_delay_minutes': delayMinutes,
-        'device': deviceName,
-        'device_binding': _deviceBinding,
-        'device_compromised': _deviceCompromised,
-        'platform': kIsWeb ? 'web' : 'mobile',
-        'session_nonce': _sessionNonce,
-        'timestamp': FieldValue.serverTimestamp(),
-        if (_geofenceVerifiedOffline) 'pending_geofence_verification': true,
-        ...locationPayload,
-      };
+      // Walang nasave kahit saan → ipaalam sa user, huwag mag-"Verified".
+      if (!saved) return false;
 
-      try {
-        await _executeWithLoadBalancer(() => FirebaseFirestore.instance
-            .collection('activity_logs')
-            .add(activityPayload));
-      } catch (_) {
-        try {
-          await OfflineAttendanceService.instance.enqueue(
-              collection: 'activity_logs', data: activityPayload);
-        } catch (_) {}
-      }
-
+      // Mark local cache PAGKATAPOS masigurong nasave
       if (isClockIn) {
         try {
-          unawaited(PresenceChallengeService.instance.scheduleForToday(
-            employeeId: employeeId,
-            clockInAt: effectiveTime,
-            employeeName: employeeName,
-          ));
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('last_clock_in_date_$employeeId', todayStr);
         } catch (_) {}
       }
 
-      try {
-        final percent =
-        _matchScore != null ? _matchScore! * 100 : null;
-        if (isClockIn) {
-          AdminNotificationService.instance.notifyClockIn(
-            employeeId: employeeId,
-            employeeName: employeeName,
-            timeStr: timeStr,
-            faceMatchPercent: percent,
-            wfh: widget.employee.wfhAccess,
-            inRange: true,
-            zoneType: zoneType,
-          );
-        } else {
-          AdminNotificationService.instance.notifyClockOut(
-            employeeId: employeeId,
-            employeeName: employeeName,
-            timeStr: timeStr,
-            faceMatchPercent: percent,
-            wfh: widget.employee.wfhAccess,
-            inRange: true,
-            zoneType: zoneType,
-          );
+      // ── 3) SIDE EFFECTS — tumatakbo PALAGI (online man o offline)
+      if (!_logAttendanceHandlesSideEffects) {
+        bool activityDone = false;
+        if (NetworkGuard.instance.isOnline) {
+          try {
+            await _executeWithLoadBalancer(() => FirebaseFirestore.instance
+                .collection('activity_logs')
+                .doc(actDocId)
+                .set(activityPayload)
+                .timeout(_writeTimeout));
+            activityDone = true;
+          } catch (_) {}
         }
-      } catch (_) {}
-    } catch (_) {}
+        if (!activityDone) {
+          try {
+            await OfflineAttendanceService.instance.enqueue(
+                collection: 'activity_logs',
+                data: plainActivity,
+                docId: actDocId);
+          } catch (_) {}
+        }
+
+        if (isClockIn) {
+          try {
+            unawaited(PresenceChallengeService.instance.scheduleForToday(
+              employeeId: employeeId,
+              clockInAt: effectiveTime,
+              employeeName: employeeName,
+            ));
+          } catch (_) {}
+        }
+
+        if (NetworkGuard.instance.isOnline) {
+          try {
+            final percent = _matchScore != null ? _matchScore! * 100 : null;
+            if (isClockIn) {
+              AdminNotificationService.instance.notifyClockIn(
+                employeeId: employeeId,
+                employeeName: employeeName,
+                timeStr: timeStr,
+                faceMatchPercent: percent,
+                wfh: widget.employee.wfhAccess,
+                inRange: true,
+                zoneType: zoneType,
+              );
+            } else {
+              AdminNotificationService.instance.notifyClockOut(
+                employeeId: employeeId,
+                employeeName: employeeName,
+                timeStr: timeStr,
+                faceMatchPercent: percent,
+                wfh: widget.employee.wfhAccess,
+                inRange: true,
+                zoneType: zoneType,
+              );
+            }
+          } catch (_) {}
+        }
+      }
+
+      await _emitPendingCount();
+      return true;
+    } catch (e) {
+      await _logSecurityEvent(
+          type: 'attendance_write_failed',
+          severity: 'critical',
+          details: 'Unexpected error in _writeAttendanceLog: $e');
+      return false;
+    }
   }
 
   Future<void> _onSuccess() async {
@@ -2668,7 +2751,21 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       }
     }
 
-    await _writeAttendanceLog();
+    final saved = await _writeAttendanceLog();
+    if (!saved) {
+      if (mounted) {
+        setState(() {
+          _faceState = _FaceState.error;
+          _errorMessage = 'Hindi na-save ang attendance.\n'
+              'Subukan ulit o i-contact ang Admin.';
+        });
+        _shakeCtrl.forward(from: 0);
+        _successCtrl.reset();
+        _pulseCtrl.repeat(reverse: true);
+        _ringCtrl.repeat();
+      }
+      return;
+    }
     await Future.delayed(const Duration(milliseconds: 2000));
     if (!mounted) return;
 

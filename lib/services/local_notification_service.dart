@@ -1,4 +1,8 @@
 // lib/services/local_notification_service.dart
+// v2.0: ✅ Asia/Manila fallback kapag pumalya ang timezone detection
+//       ✅ EXACT alarm muna (exactAllowWhileIdle), fallback sa inexact
+//       ✅ Hindi na hinaharang ng exact alarm permission ang `granted`
+//       ✅ Iisang default title/body, tugma sa NotificationPreferenceService
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
@@ -30,6 +34,11 @@ class LocalNotificationService {
   // ── Scheduled IDs ──
   static const int _dailyReminderId = 8001;
 
+  // 🎯 Default text — dapat tugma sa NotificationPreferenceService
+  static const String _defaultTitle = '⏰ Time to Go to Work!';
+  static const String _defaultBody =
+      'Clock in before 8:00 AM. Be safe on the way! 🚶‍♂️';
+
   // ✅ Callback kapag na-tap ang notification
   void Function(String? payload)? onNotificationTap;
 
@@ -46,7 +55,10 @@ class LocalNotificationService {
       tz.setLocalLocation(tz.getLocation(tzName));
       debugPrint('🌍 LocalNotificationService: timezone=$tzName');
     } catch (e) {
-      debugPrint('⚠️ Timezone error: $e');
+      // 🔑 Kung hindi ma-detect, UTC ang default at lilipat ng 8 oras
+      // ang alarm. Kaya Manila ang fallback.
+      debugPrint('⚠️ Timezone error: $e — fallback Asia/Manila');
+      tz.setLocalLocation(tz.getLocation('Asia/Manila'));
     }
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -132,12 +144,18 @@ class LocalNotificationService {
       if (androidPlugin != null) {
         final notifGranted =
         await androidPlugin.requestNotificationsPermission();
-        final exactGranted =
-        await androidPlugin.requestExactAlarmsPermission();
 
-        granted = (notifGranted ?? true) && (exactGranted ?? true);
-        debugPrint(
-            '🔔 Android — notifications=$notifGranted, exact=$exactGranted');
+        // 🔑 Best-effort lang. Sa Android 12+, nagbubukas lang ito ng
+        // Settings at agad nagre-return, kaya hindi dapat harang sa
+        // pag-schedule.
+        try {
+          await androidPlugin.requestExactAlarmsPermission();
+        } catch (e) {
+          debugPrint('⚠️ Exact alarm request: $e');
+        }
+
+        granted = notifGranted ?? true;
+        debugPrint('🔔 Android — notifications=$notifGranted');
       }
 
       // Battery optimization bypass
@@ -202,13 +220,13 @@ class LocalNotificationService {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SCHEDULE — DAILY WORK REMINDER (e.g. 7:30 AM araw-araw)
+  // SCHEDULE — DAILY WORK REMINDER (7:30 AM araw-araw, EXACT mode)
   // ═══════════════════════════════════════════════════════════════
   Future<void> scheduleDailyWorkReminder({
     int hour = 7,
     int minute = 30,
-    String title = '⏰ Go to Work!',
-    String body = 'Time to go to work! Clock in before 8:00 AM.',
+    String title = _defaultTitle,
+    String body = _defaultBody,
   }) async {
     if (!_initialized) await init();
 
@@ -228,11 +246,10 @@ class LocalNotificationService {
       _reminderChannelName,
       channelDescription: _reminderChannelDesc,
       importance: Importance.max,
-      priority: Priority.high,
+      priority: Priority.max,
       playSound: true,
       enableVibration: true,
       category: AndroidNotificationCategory.reminder,
-      fullScreenIntent: false,
       icon: '@mipmap/ic_launcher',
     );
 
@@ -249,20 +266,35 @@ class LocalNotificationService {
       macOS: iosDetails,
     );
 
-    await _plugin.zonedSchedule(
-      _dailyReminderId,
-      title,
-      body,
-      scheduled,
-      details,
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-      UILocalNotificationDateInterpretation.absoluteTime,
-      matchDateTimeComponents: DateTimeComponents.time,
-      payload: 'work_reminder',
-    );
+    Future<void> doSchedule(AndroidScheduleMode mode) {
+      return _plugin.zonedSchedule(
+        _dailyReminderId,
+        title,
+        body,
+        scheduled,
+        details,
+        androidScheduleMode: mode,
+        uiLocalNotificationDateInterpretation:
+        UILocalNotificationDateInterpretation.absoluteTime,
+        matchDateTimeComponents: DateTimeComponents.time,
+        payload: 'work_reminder',
+      );
+    }
 
-    debugPrint('✅ Daily work reminder scheduled for $scheduled');
+    try {
+      await doSchedule(AndroidScheduleMode.exactAllowWhileIdle);
+      debugPrint('✅ EXACT reminder scheduled for $scheduled');
+    } catch (e) {
+      // Kapag denied ang exact alarm, may notification pa rin
+      // pero puwedeng ma-delay.
+      debugPrint('⚠️ Exact denied: $e — falling back to inexact');
+      try {
+        await doSchedule(AndroidScheduleMode.inexactAllowWhileIdle);
+        debugPrint('✅ INEXACT reminder scheduled for $scheduled');
+      } catch (e2) {
+        debugPrint('❌ Scheduling completely failed: $e2');
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -271,8 +303,8 @@ class LocalNotificationService {
   Future<void> scheduleDailyWorkReminderIfEnabled({
     int hour = 7,
     int minute = 30,
-    String title = '⏰ Go to Work!',
-    String body = 'Time to go to work! Clock in before 8:00 AM.',
+    String title = _defaultTitle,
+    String body = _defaultBody,
   }) async {
     if (!_initialized) await init();
 
@@ -307,12 +339,15 @@ class LocalNotificationService {
     debugPrint('🚫 Daily work reminder cancelled');
   }
 
+  /// ⚠️ Binubura ang LAHAT (pati overtime reminders). Gamitin lang
+  /// kapag logout / wipe. Para sa toggle, gamitin ang
+  /// cancelDailyWorkReminder().
   Future<void> clearAll() async {
     await _plugin.cancelAll();
     debugPrint('🚫 All notifications cleared');
   }
 
-  /// ✅ Alias para sa consistency sa NotificationPreferenceService
+  /// ✅ Alias para sa clearAll()
   Future<void> cancelAll() async {
     await clearAll();
   }

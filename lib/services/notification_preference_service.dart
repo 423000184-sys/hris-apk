@@ -1,7 +1,4 @@
 // lib/services/notification_preference_service.dart
-// v1.1: ✅ Verify permissions bago mag-schedule
-//       ✅ Consistent title/body sa NotificationService
-//       ✅ Diagnostics log pagkatapos mag-toggle
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'local_notification_service.dart';
@@ -9,11 +6,11 @@ import 'local_notification_service.dart';
 class NotificationPreferenceService {
   NotificationPreferenceService._();
   static final NotificationPreferenceService instance =
-  NotificationPreferenceService._();
+      NotificationPreferenceService._();
 
   static const String _keyPushEnabled = 'push_notifications_enabled';
 
-  // 🎯 Consistent defaults — same as LocalNotificationService
+  // 🎯 Iisang source ng oras at text ng work reminder
   static const int _reminderHour = 7;
   static const int _reminderMinute = 30;
   static const String _reminderTitle = '⏰ Time to Go to Work!';
@@ -44,7 +41,6 @@ class NotificationPreferenceService {
         await _disableAndCancel();
       }
 
-      // 🔍 Diagnostics — log para makita ang status
       try {
         await LocalNotificationService.instance.runDiagnostics();
       } catch (e) {
@@ -55,45 +51,55 @@ class NotificationPreferenceService {
     }
   }
 
+  /// Tawagin sa main() pagkatapos ng LocalNotificationService.init(),
+  /// at sa didChangeAppLifecycleState(resumed).
+  /// Self-heal: ibabalik ang alarm kung nawala, at ina-upgrade sa exact
+  /// kapag na-allow na ang permission.
+  Future<void> ensureReminderScheduled() async {
+    try {
+      if (!await isPushEnabled()) return;
+      await _schedule();
+    } catch (e) {
+      debugPrint('⚠️ [NotifPref] ensure schedule error: $e');
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════
-  // ✅ ENABLE: Request permissions muna, tapos schedule
+  // ✅ ENABLE: Humingi ng permissions, tapos mag-schedule
   // ═══════════════════════════════════════════════════════════════
   Future<void> _enableAndSchedule() async {
     try {
-      // 🔑 STEP 1: Request permissions (notifications + exact alarm)
-      //    Kailangan ito para sure na consistent ang notification.
+      // Sa Android 12+, nagbubukas lang ng Settings ang exact alarm request
+      // at agad nagre-return. Kaya hindi ito dapat harang sa pag-schedule.
       final granted =
-      await LocalNotificationService.instance.requestPermissions();
+          await LocalNotificationService.instance.requestPermissions();
       debugPrint('🔑 [NotifPref] Permissions granted: $granted');
 
-      if (!granted) {
-        debugPrint('⚠️ [NotifPref] Notification permission denied — '
-            'cannot schedule reminder');
-        return;
-      }
-
-      // 🔑 STEP 2: Schedule daily reminder with EXACT mode
-      await LocalNotificationService.instance.scheduleDailyWorkReminder(
-        hour: _reminderHour,
-        minute: _reminderMinute,
-        title: _reminderTitle,
-        body: _reminderBody,
-      );
-      debugPrint('✅ [NotifPref] Daily reminder scheduled '
-          'at $_reminderHour:'
-          '${_reminderMinute.toString().padLeft(2, '0')}');
+      await _schedule();
     } catch (e) {
       debugPrint('⚠️ [NotifPref] schedule error: $e');
     }
   }
 
+  Future<void> _schedule() async {
+    await LocalNotificationService.instance.scheduleDailyWorkReminder(
+      hour: _reminderHour,
+      minute: _reminderMinute,
+      title: _reminderTitle,
+      body: _reminderBody,
+    );
+    debugPrint('✅ [NotifPref] Daily reminder scheduled at $_reminderHour:'
+        '${_reminderMinute.toString().padLeft(2, '0')}');
+  }
+
   // ═══════════════════════════════════════════════════════════════
-  // ❌ DISABLE: Cancel all scheduled notifications
+  // ❌ DISABLE: Work reminder lang ang cina-cancel (id 8001)
+  //    Hindi cancelAll() para hindi mabura ang overtime reminders
   // ═══════════════════════════════════════════════════════════════
   Future<void> _disableAndCancel() async {
     try {
-      await LocalNotificationService.instance.cancelAll();
-      debugPrint('🚫 [NotifPref] All notifications CANCELLED');
+      await LocalNotificationService.instance.cancelDailyWorkReminder();
+      debugPrint('🚫 [NotifPref] Work reminder CANCELLED');
     } catch (e) {
       debugPrint('⚠️ [NotifPref] cancel error: $e');
     }

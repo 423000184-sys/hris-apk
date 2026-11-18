@@ -145,6 +145,12 @@ class OfflineAttendanceService {
           ConnectivityService.instance.onStatusChange.listen((online) async {
             if (online) {
               debugPrint('📶 [AutoSync] Back online — triggering sync');
+              await _database.update(
+                  _tableAttendance, {'retryCount': 0},
+                  where: 'synced = 0');
+              await _database.update(
+                  _tableGeneric, {'retryCount': 0},
+                  where: 'synced = 0');
               await syncPending();
             }
           });
@@ -223,7 +229,11 @@ class OfflineAttendanceService {
 
     debugPrint('💾 [Offline] Saved locally: $type (zone=$zoneType, id=$localId)');
 
-    final synced = await _trySyncSingle(localId);
+    bool online = true;
+    try {
+      online = ConnectivityService.instance.isOnline;
+    } catch (_) {}
+    final synced = online ? await _trySyncSingle(localId) : false;
 
     if (synced) {
       debugPrint('✅ [Offline] Synced immediately');
@@ -267,7 +277,7 @@ class OfflineAttendanceService {
       {
         'localId': localId,
         'collection': collection,
-        'docId': docId,
+        'docId': docId ?? localId,
         'payload': jsonEncode(sanitized),
         'synced': 0,
         'retryCount': 0,
@@ -278,10 +288,18 @@ class OfflineAttendanceService {
 
     debugPrint('💾 [Generic] Enqueued: $collection/$localId');
 
-    // Try immediate
-    final ok = await _trySyncGeneric(localId);
-    if (ok) {
-      debugPrint('✅ [Generic] Synced immediately: $collection');
+    bool online = true;
+    try {
+      online = ConnectivityService.instance.isOnline;
+    } catch (_) {}
+
+    if (online) {
+      final ok = await _trySyncGeneric(localId);
+      if (ok) {
+        debugPrint('✅ [Generic] Synced immediately: $collection');
+      } else {
+        await _emitPendingCount();
+      }
     } else {
       await _emitPendingCount();
     }
@@ -334,7 +352,8 @@ class OfflineAttendanceService {
       }
       if (v.containsKey('__geopoint')) {
         final coords = v['__geopoint'] as List;
-        return GeoPoint(coords[0] as double, coords[1] as double);
+        return GeoPoint(
+            (coords[0] as num).toDouble(), (coords[1] as num).toDouble());
       }
       return v.map((k, val) => MapEntry(k.toString(), _restoreFromStorage(val)));
     }

@@ -1025,11 +1025,58 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
         debugPrint('Audit log failed: $e');
       }
 
+      await _notifyEmployeeOfOverride(
+        log: log,
+        original: original,
+        newDt: newDt,
+        reason: reason,
+      );
+
       _showSnack('Attendance time updated.');
       widget.onRefreshNeeded();
     } catch (e) {
       debugPrint('Edit time failed: $e');
       _showSnack('Failed to update time. Please try again.', error: true);
+    }
+  }
+
+  Future<void> _notifyEmployeeOfOverride({
+    required Map<String, dynamic> log,
+    required DateTime original,
+    required DateTime newDt,
+    required String reason,
+  }) async {
+    try {
+      final empId = _sanitizeKey(
+        log['employee_id'] ?? log['employeeId'] ?? log['employeeID'],
+      );
+      if (empId.isEmpty) {
+        debugPrint('Override notification skipped: no employee id');
+        return;
+      }
+
+      final type = (log['type'] ?? '').toString().toUpperCase();
+      final label =
+          (type == 'OUT' || type == 'CLOCK_OUT') ? 'Clock Out' : 'Clock In';
+      final dateLabel = DateFormat('MMM d, yyyy').format(original);
+      final fromLabel = DateFormat('hh:mm a').format(original);
+      final toLabel = DateFormat('hh:mm a').format(newDt);
+
+      await FirebaseFirestore.instance
+          .collection('employee_notifications')
+          .add({
+        'employeeId': empId,
+        'employee_id': empId,
+        'type': 'attendance',
+        'title': 'Attendance Updated',
+        'message': 'Your $label on $dateLabel was changed from '
+            '$fromLabel to $toLabel. Reason: $reason',
+        'senderName': _actorName,
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+      }).timeout(const Duration(seconds: 10));
+    } catch (e) {
+      debugPrint('Override notification failed: $e');
     }
   }
 

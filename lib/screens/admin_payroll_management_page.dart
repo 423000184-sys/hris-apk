@@ -667,16 +667,95 @@ class _AdminPayrollManagementPageState
       },
     );
 
+    final editorName = payload['payrollLastEditedByName'] as String;
+    final summary = _buildPayrollChangeSummary(before, newValues, editorName);
+
+    // In-app notification (lalabas sa Notifications screen ng employee)
+    await _writePayrollNotification(
+      title: '💰 Payroll Updated',
+      message: summary,
+      senderName: editorName,
+    );
+
+    // Push notification (parehong description)
     try {
       await OneSignalSender.instance.sendToEmployee(
         employeeId: docId,
         title: '💰 Payroll Updated',
-        message:
-            'Your payroll details for $_periodLabel have been adjusted by HR. Please review your payslip.',
+        message: summary,
         type: 'payroll',
       );
     } catch (e) {
       debugPrint('⚠️ [PayrollOverride] push failed: $e');
+    }
+  }
+
+  static const Map<String, String> _payrollFieldLabels = {
+    'basicSalary': 'Basic Salary',
+    'basicAllowance': 'Basic Allowance',
+    'housingAllowance': 'Housing Allowance',
+    'transportAllowance': 'Transport Allowance',
+    'specialAllowance': 'Special Allowance',
+    'workingDaysPerMonth': 'Working Days',
+    'dailyRate': 'Daily Rate',
+  };
+
+  String get _adminDisplayName {
+    final u = FirebaseAuth.instance.currentUser;
+    final name = u?.displayName?.trim();
+    if (name != null && name.isNotEmpty) return name;
+    return u?.email ?? 'HR';
+  }
+
+  /// Builds a human-readable description of what the override changed.
+  String _buildPayrollChangeSummary(
+    Map<String, dynamic> before,
+    Map<String, dynamic> after,
+    String editorName,
+  ) {
+    final fmt = NumberFormat('#,##0.00');
+    final changes = <String>[];
+
+    _payrollFieldLabels.forEach((key, label) {
+      final b = PayrollCalculator.toDbl(before[key]);
+      final a = PayrollCalculator.toDbl(after[key]);
+      if ((a - b).abs() < 0.005) return;
+
+      if (key == 'workingDaysPerMonth') {
+        changes.add('$label: ${b.toInt()} → ${a.toInt()} days');
+      } else {
+        changes.add('$label: ₱${fmt.format(b)} → ₱${fmt.format(a)}');
+      }
+    });
+
+    if (changes.isEmpty) {
+      return 'Your payroll for $_periodLabel was reviewed by $editorName. '
+          'No amounts were changed.';
+    }
+    return 'Your payroll for $_periodLabel was updated by $editorName. '
+        'Changes: ${changes.join('; ')}.';
+  }
+
+  /// Saves the in-app notification shown in EmployeeNotificationsScreen.
+  Future<void> _writePayrollNotification({
+    required String title,
+    required String message,
+    required String senderName,
+  }) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('employee_notifications')
+          .add({
+        'employeeId': _employeeId,
+        'type': 'payroll',
+        'title': title,
+        'message': message,
+        'senderName': senderName,
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+      }).timeout(const Duration(seconds: 10));
+    } catch (e) {
+      debugPrint('⚠️ [PayrollNotif] in-app notification failed: $e');
     }
   }
 
@@ -745,12 +824,20 @@ class _AdminPayrollManagementPageState
       setState(() => _isPayslipUnlocked = true);
       _toast('✅ Payslip unlocked for $_name.', success: true);
 
+      final by = _adminDisplayName;
+      final msg = 'Your payslip for $_periodLabel was unlocked by $by. '
+          'You can now download it from the Reports screen.';
+
+      await _writePayrollNotification(
+        title: '🔓 Payslip Unlocked',
+        message: msg,
+        senderName: by,
+      );
       try {
         await OneSignalSender.instance.sendToEmployee(
           employeeId: docId,
           title: '🔓 Payslip Unlocked',
-          message:
-              'Your payslip for $_periodLabel is now available for download.',
+          message: msg,
           type: 'payroll',
         );
       } catch (e) {
@@ -806,12 +893,20 @@ class _AdminPayrollManagementPageState
       setState(() => _isPayslipUnlocked = false);
       _toast('🔒 Payslip locked for $_name.', success: true);
 
+      final by = _adminDisplayName;
+      final msg = 'Your payslip for $_periodLabel was locked by $by. '
+          'Downloading is disabled until it is unlocked again.';
+
+      await _writePayrollNotification(
+        title: '🔒 Payslip Locked',
+        message: msg,
+        senderName: by,
+      );
       try {
         await OneSignalSender.instance.sendToEmployee(
           employeeId: docId,
           title: '🔒 Payslip Locked',
-          message:
-              'Your payslip for $_periodLabel has been locked by Admin.',
+          message: msg,
           type: 'payroll',
         );
       } catch (e) {
