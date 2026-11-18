@@ -862,6 +862,176 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
   // ═══════════════════════════════════════════════════════════════════════
   // EDIT TIME (Hidden from UI, kept in code)
   // ═══════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════
+  // EDIT TIME (HR override — recorded in attendance history)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Asks the HR user for a mandatory reason (min [kMinOverrideReasonLength]
+  /// chars). Returns null if cancelled.
+  Future<String?> _askOverrideReason() async {
+    final ctrl = TextEditingController();
+    String? errorText;
+
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          backgroundColor: tc.card,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Text('Reason for Edit', style: TextStyle(color: tc.text)),
+          content: TextField(
+            controller: ctrl,
+            maxLength: 200,
+            maxLines: 3,
+            autofocus: true,
+            style: TextStyle(color: tc.text),
+            decoration: InputDecoration(
+              labelText: 'Reason (visible to employee)',
+              labelStyle: TextStyle(color: tc.muted),
+              errorText: errorText,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel', style: TextStyle(color: tc.muted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: tc.orange,
+                foregroundColor: tc.isDark ? tc.onOrange : Colors.white,
+              ),
+              onPressed: () {
+                final r = AdminEmployeeService.sanitize(ctrl.text, maxLen: 200);
+                if (r.length < kMinOverrideReasonLength) {
+                  setDlg(() => errorText =
+                      'At least $kMinOverrideReasonLength characters required.');
+                  return;
+                }
+                Navigator.pop(ctx, r);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return result;
+  }
+
+  /// Edits the time of a single attendance log and stamps WHO / WHAT / WHEN /
+  /// WHY on the document so the employee's Attendance History can display it.
+  Future<void> _editLogTime(Map<String, dynamic> log) async {
+    if (_isDemo) return _demoBlock();
+
+    final logId = (log['id'] ?? '').toString();
+    if (logId.isEmpty) {
+      _showSnack('Missing log ID.', error: true);
+      return;
+    }
+
+    // Never record an anonymous override.
+    if (!_actorHasRealName()) {
+      _showSnack(
+        'Your HR profile name could not be resolved. Edit blocked so the '
+        'change can be attributed to you.',
+        error: true,
+      );
+      return;
+    }
+
+    final original = _toDateTime(log['timestamp']);
+    if (original == null) {
+      _showSnack('This log has no valid timestamp.', error: true);
+      return;
+    }
+
+    // 1) Password gate
+    if (!await _verifyHrOverridePassword()) return;
+    if (!mounted) return;
+
+    // 2) New time
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(original),
+    );
+    if (picked == null || !mounted) return;
+
+    final newDt = DateTime(
+      original.year,
+      original.month,
+      original.day,
+      picked.hour,
+      picked.minute,
+    );
+    if (newDt.year == original.year &&
+        newDt.month == original.month &&
+        newDt.day == original.day &&
+        newDt.hour == original.hour &&
+        newDt.minute == original.minute) {
+      _showSnack('Time is unchanged.');
+      return;
+    }
+
+    // 3) Reason
+    final reason = await _askOverrideReason();
+    if (reason == null || !mounted) return;
+
+    // 4) Write — keep the FIRST original timestamp if edited multiple times
+    final alreadyOverridden = log['isOverridden'] == true;
+    final Timestamp originalTs = alreadyOverridden &&
+            log['originalTimestamp'] is Timestamp
+        ? log['originalTimestamp'] as Timestamp
+        : Timestamp.fromDate(original);
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('attendance_logs')
+          .doc(logId)
+          .set({
+        'timestamp': Timestamp.fromDate(newDt),
+        'time': DateFormat('HH:mm:ss').format(newDt),
+        'isOverridden': true,
+        'originalTimestamp': originalTs,
+        'overriddenByName': _actorName,
+        'overriddenByRole': _actorRole,
+        'overriddenByEmail': _actorEmail,
+        'overriddenByUid': _actorUid,
+        'overrideReason': reason,
+        'overrideAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).timeout(const Duration(seconds: 10));
+
+      try {
+        await FirebaseFirestore.instance.collection('admin_audit_log').add({
+          'action': 'attendance_time_edited',
+          'targetType': 'attendance_log',
+          'targetId': logId,
+          'actorUid': _actorUid,
+          'actorEmail': _actorEmail,
+          'actorName': _actorName,
+          'actorRole': _actorRole,
+          'details': {
+            'employeeName': _resolveName(log),
+            'type': (log['type'] ?? '').toString(),
+            'from': DateFormat('yyyy-MM-dd HH:mm').format(original),
+            'to': DateFormat('yyyy-MM-dd HH:mm').format(newDt),
+            'reason': reason,
+          },
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        debugPrint('Audit log failed: $e');
+      }
+
+      _showSnack('Attendance time updated.');
+      widget.onRefreshNeeded();
+    } catch (e) {
+      debugPrint('Edit time failed: $e');
+      _showSnack('Failed to update time. Please try again.', error: true);
+    }
+  }
 
   Widget _editFieldRow({required IconData icon, required String label}) {
     return Container(
@@ -2215,11 +2385,13 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
             side: BorderSide(color: tc.border),
           ),
           tooltip: 'Actions',
-          onSelected: (value) {
+                    onSelected: (value) {
             switch (value) {
-            // ⚠️ TINANGGAL NA ANG 'map' at 'edit' cases dito
               case 'verify':
                 _openVerification(log);
+                break;
+              case 'edit':
+                _editLogTime(log);
                 break;
               case 'approve':
                 _approveLog(log);
@@ -2229,8 +2401,18 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
                 break;
             }
           },
-          itemBuilder: (_) => [
-            // ⚠️ TINANGGAL NA ANG "View on Map" at "Edit Time" dito
+                    itemBuilder: (_) => [
+            PopupMenuItem<String>(
+              value: 'edit',
+              child: Row(children: [
+                Icon(Icons.edit_calendar_outlined,
+                    size: 16, color: _isDemo ? tc.muted : tc.orange),
+                const SizedBox(width: 10),
+                Text('Edit Time',
+                    style: TextStyle(
+                        color: _isDemo ? tc.muted : tc.text, fontSize: 13)),
+              ]),
+            ),
             PopupMenuItem<String>(
               value: 'verify',
               child: Row(children: [

@@ -1,9 +1,4 @@
 // lib/screens/attendance_history_screen.dart
-// ✅ v3.5: HR overrides now render as a full audit trail:
-//          WHO (name + role) • WHAT (field, old→new) • WHEN • WHY.
-//          Supports multiple overrides per day (IN and OUT).
-// ✅ v3.6: Overrides fetched on web too; attribution + reason strictly
-//          honest (no fake "Admin/HR" / "No reason provided" fallbacks).
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -87,11 +82,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
   List<Map<String, dynamic>> _combined = [];
   final Map<String, String> _locInByDate = {};
   final Map<String, String> _locOutByDate = {};
-
-  // ── OVERRIDE DATA MAP (per day, list of overrides) ──
-  // Each entry: { fieldType, by, byRole, byEmail, reason,
-  //               originalTime, newTime, at, isManualEntry, attributed }
   final Map<String, List<Map<String, dynamic>>> _overrideInfoByDate = {};
+
+  final Map<String, Map<String, Timestamp>> _overrideTsByDate = {};
 
   bool _loading = true;
   bool _syncing = false;
@@ -242,10 +235,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
         return;
       }
       _loadData();
-      if (!kIsWeb) {
-        _sync();
-        _startRemoteAttendanceListener();
-      }
+      if (!kIsWeb) _sync();
+      _startRemoteAttendanceListener(); // mobile + web
     });
   }
 
@@ -551,49 +542,56 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     super.dispose();
   }
 
-  void _startRemoteAttendanceListener() {
-    if (_isDemo) {
+  // lib/screens/attendance_history_screen.dart
+void _startRemoteAttendanceListener() {
+  if (_isDemo) {
+    return;
+  }
+  _resolveEmployeeId().then((empId) {
+    if (empId == null || empId.isEmpty || !mounted || _loggedOut) {
       return;
     }
-    _resolveEmployeeId().then((empId) {
-      if (empId == null || empId.isEmpty || !mounted || _loggedOut) {
-        return;
-      }
-      _remoteAttendanceSub?.cancel();
-      _remoteAttendanceSub = FirebaseFirestore.instance
-          .collection('attendance_logs')
-          .where('employee_id', isEqualTo: empId)
-          .snapshots()
-          .listen(
-            (snap) {
-          if (!mounted || _loggedOut) {
+    _remoteAttendanceSub?.cancel();
+    bool firstSnapshot = true; // initial load is already handled in initState
+    _remoteAttendanceSub = FirebaseFirestore.instance
+        .collection('attendance_logs')
+        .where('employee_id', isEqualTo: empId)
+        .snapshots()
+        .listen(
+      (snap) {
+        if (!mounted || _loggedOut) {
+          return;
+        }
+        final verified = _verifiedEmployeeId;
+        if (verified == null || verified.isEmpty) {
+          return;
+        }
+        for (final doc in snap.docs) {
+          final eid = (doc.data()['employee_id'] ?? '').toString().trim();
+          if (eid.isNotEmpty &&
+              eid != verified &&
+              eid != _employee?.id &&
+              eid != _employee?.employeeId) {
+            _logSecurityEvent(
+              type: 'history_listener_mismatch',
+              severity: 'critical',
+              details: 'Listener received doc from another employee: $eid',
+            );
+            _forceLogout('Data mismatch detected');
             return;
           }
-          final verified = _verifiedEmployeeId;
-          if (verified == null || verified.isEmpty) {
-            return;
-          }
-          for (final doc in snap.docs) {
-            final eid = (doc.data()['employee_id'] ?? '').toString().trim();
-            if (eid.isNotEmpty &&
-                eid != verified &&
-                eid != _employee?.id &&
-                eid != _employee?.employeeId) {
-              _logSecurityEvent(
-                type: 'history_listener_mismatch',
-                severity: 'critical',
-                details: 'Listener received doc from another employee: $eid',
-              );
-              _forceLogout('Data mismatch detected');
-              return;
-            }
-          }
-          _loadData();
-        },
-        onError: (e) => debugPrint('❌ Remote listener error: $e'),
-      );
-    });
-  }
+        }
+        if (firstSnapshot) {
+          firstSnapshot = false;
+          return;
+        }
+        // HR edited / added a log → re-render immediately.
+        _loadData(silent: true);
+      },
+      onError: (e) => debugPrint('❌ Remote listener error: $e'),
+    );
+  });
+}
 
   Future<String?> _resolveEmployeeId() async {
     if (_verifiedEmployeeId != null && _verifiedEmployeeId!.isNotEmpty) {
@@ -641,7 +639,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
     return true;
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadData({bool silent = false}) async {
     if (!mounted || _loggedOut) {
       return;
     }
@@ -753,7 +751,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
       return;
     }
 
-    if (!_checkRefreshRateLimit()) {
+        if (!silent && !_checkRefreshRateLimit()) {
       return;
     }
     final valid = await _validateSession();
@@ -764,7 +762,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
       return;
     }
     setState(() {
-      _loading = true;
+      _loading = !silent;
       _error = null;
     });
     try {
@@ -864,14 +862,19 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
             break;
           }
         }
+                // HR-edited times (from attendance_logs) win over activity_logs.
+        final ov = _overrideTsByDate[loginDateStr];
+        final loginTsFinal = ov?['IN'] ?? login['timestamp'];
+        final logoutTsFinal = ov?['OUT'] ?? matchedLogout?['timestamp'];
+
         combined.add({
           'date': loginDateStr,
           'employee_id': eid,
           'employee_name': (login['employee_name'] ?? '').toString(),
           'device': (login['device'] ?? '').toString(),
-          'login_ts': login['timestamp'],
-          'logout_ts': matchedLogout?['timestamp'],
-          'has_out': matchedLogout != null,
+          'login_ts': loginTsFinal,
+          'logout_ts': logoutTsFinal,
+          'has_out': logoutTsFinal != null,
         });
       }
       if (!mounted || _loggedOut) {
@@ -1127,7 +1130,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
         '${dt.second.toString().padLeft(2, '0')}';
   }
 
-  Future<List<Attendance>> _fetchRemoteAttendance(String empId) async {
+    Future<List<Attendance>> _fetchRemoteAttendance(String empId) async {
+    _overrideTsByDate.clear();
     try {
       final snap = await FirebaseFirestore.instance
           .collection('attendance_logs')
@@ -1174,7 +1178,16 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen>
           // ✅ EDIT A — honest attribution: empty byName never becomes
           // "Admin/HR"; 'attributed' flag tells the renderer whether to
           // show a real name or "Not recorded".
-          if (log['isOverridden'] == true) {
+            if (log['isOverridden'] == true) {
+            final effTs = log['timestamp'];
+            if (effTs is Timestamp) {
+              final k = (type == 'IN' || type == 'CLOCK_IN')
+                  ? 'IN'
+                  : ((type == 'OUT' || type == 'CLOCK_OUT') ? 'OUT' : '');
+              if (k.isNotEmpty) {
+                _overrideTsByDate.putIfAbsent(date, () => {})[k] = effTs;
+              }
+            }
             final originalTs = log['originalTimestamp'];
             final byName = (log['overriddenByName'] ?? '').toString().trim();
             overrides.add({
