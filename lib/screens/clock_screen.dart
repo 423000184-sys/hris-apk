@@ -1059,8 +1059,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       final prefs = await SharedPreferences.getInstance();
       final lastClockIn = prefs.getString('last_clock_in_date_$empId');
 
-      if (lastClockIn == _todayStr) return true;
-      if (!_isOnline) return false;
+      if (!_isOnline) return lastClockIn == _todayStr;
 
       final q = await FirebaseFirestore.instance
           .collection('attendance_logs')
@@ -1071,9 +1070,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
           .get()
           .timeout(const Duration(seconds: 5));
 
-      if (q.docs.isNotEmpty) {
-        await prefs.setString('last_clock_in_date_$empId', _todayStr);
-        return true;
+      if (q.docs.isNotEmpty) {      
+      if (lastClockIn == _todayStr) {
+      await prefs.remove('last_clock_in_date_$empId');
+      }
+      return false;
+      await prefs.setString('last_clock_in_date_$empId', _todayStr);
+      return true;
       }
       return false;
     } catch (e) {
@@ -1081,7 +1084,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       return false;
     }
   }
-
+  
   String _computeZoneType() {
     if (_isDemo) return 'inside';
 

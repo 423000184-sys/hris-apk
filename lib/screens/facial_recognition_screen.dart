@@ -2487,9 +2487,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             details: 'Failed to save attendance locally: $e');
       }
 
-      final needsDirectWrite =
-          (offlineResult == null || !offlineResult.queued) &&
-              NetworkGuard.instance.isOnline;
+        final needsDirectWrite =
+          offlineResult == null && NetworkGuard.instance.isOnline;
       if (!needsDirectWrite) {
         await _emitPendingCount();
         return;

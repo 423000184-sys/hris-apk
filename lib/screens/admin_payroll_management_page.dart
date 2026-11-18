@@ -618,6 +618,9 @@ class _AdminPayrollManagementPageState
       'salarySource': 'manual_override',
       'payrollLastEditedAt': FieldValue.serverTimestamp(),
       'payrollLastEditedBy': admin.uid,
+      'payrollLastEditedByName': (admin.displayName?.trim().isNotEmpty ?? false)
+          ? admin.displayName!.trim()
+          : (admin.email ?? 'HR'),
       'updatedAt': FieldValue.serverTimestamp(),
     };
 
