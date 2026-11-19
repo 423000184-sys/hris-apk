@@ -8,10 +8,22 @@ class ClockStatusService {
   ClockStatusService._();
   static final ClockStatusService instance = ClockStatusService._();
 
+  static const Set<String> _ins = {
+    'IN', 'CLOCK_IN', 'CLOCKIN', 'TIME_IN', 'TIMEIN', 'CHECK_IN', 'CHECKIN',
+  };
+  static const Set<String> _outs = {
+    'OUT', 'CLOCK_OUT', 'CLOCKOUT', 'TIME_OUT', 'TIMEOUT', 'CHECK_OUT',
+    'CHECKOUT',
+  };
+
   String _normType(dynamic raw) {
-    final t = (raw ?? '').toString().toUpperCase();
-    if (t == 'IN' || t == 'CLOCK_IN') return 'IN';
-    if (t == 'OUT' || t == 'CLOCK_OUT') return 'OUT';
+    final t = (raw ?? '')
+        .toString()
+        .toUpperCase()
+        .trim()
+        .replaceAll(RegExp(r'[\s\-]+'), '_');
+    if (_ins.contains(t)) return 'IN';
+    if (_outs.contains(t)) return 'OUT';
     return '';
   }
 
@@ -37,16 +49,25 @@ class ClockStatusService {
     }
 
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('attendance_logs')
-          .where('employee_id', isEqualTo: employeeId)
-          .where('date', isEqualTo: today)
-          .get(const GetOptions(source: Source.server))
-          .timeout(const Duration(seconds: 8));
+      final col = FirebaseFirestore.instance.collection('attendance_logs');
+      final docs = <String, Map<String, dynamic>>{};
+      for (final field in const ['employee_id', 'employeeId']) {
+        try {
+          final s = await col
+              .where(field, isEqualTo: employeeId)
+              .where('date', isEqualTo: today)
+              .get(const GetOptions(source: Source.server))
+              .timeout(const Duration(seconds: 8));
+          for (final d in s.docs) {
+            docs[d.id] = d.data();
+          }
+        } catch (e) {
+          debugPrint('⚠️ ClockStatus query($field) failed: $e');
+        }
+      }
 
-      for (final d in snap.docs) {
-        final data = d.data();
-        final type = _normType(data['type']);
+      for (final data in docs.values) {
+        final type = _normType(data['type'] ?? data['action']);
         if (type.isEmpty) continue;
 
         DateTime? t;

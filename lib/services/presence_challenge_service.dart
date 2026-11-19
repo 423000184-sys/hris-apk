@@ -508,7 +508,18 @@ class PresenceChallengeService {
     // 🎯 Restore persisted out-of-range
     _outOfRangeSince = await _readPersistedOutOfRange();
     if (_outOfRangeSince != null) {
-      _log('♻️ Restored out-of-range since: $_outOfRangeSince');
+      final s = _outOfRangeSince!;
+      final n = DateTime.now();
+      final sameDay = s.year == n.year && s.month == n.month && s.day == n.day;
+      // Kapag luma o galing kahapon, simulan ulit: hindi nabantayan habang
+      // sarado ang app.
+      if (!sameDay || n.difference(s) > const Duration(minutes: 5)) {
+        _log('🗑️ Discarding stale out-of-range timer: $s');
+        _outOfRangeSince = null;
+        await _persistOutOfRange(null);
+      } else {
+        _log('♻️ Restored out-of-range since: $_outOfRangeSince');
+      }
     }
 
     // 🎯 Load cached missed count
@@ -736,7 +747,7 @@ class PresenceChallengeService {
         continue;
       }
 
-      final isOutside = await _isEmployeeCurrentlyOutside(employeeId);
+      final isOutside = (await _isEmployeeCurrentlyOutside(employeeId)) == true;
 
       if (isOutside) {
         _log('📍 Outside — cancelling (not missed)');
@@ -787,15 +798,28 @@ class PresenceChallengeService {
     }
   }
 
-  Future<bool> _isEmployeeCurrentlyOutside(String employeeId) async {
+  /// true = talagang outside, false = inside/exempt, null = hindi tiyak
+  /// (error, GPS off, walang zone, mock, atbp.)
+  Future<bool?> _isEmployeeCurrentlyOutside(String employeeId) async {
     try {
       final geo = await GeofenceService.instance
           .checkGeofenceForEmployee(employeeId: employeeId)
           .timeout(const Duration(seconds: 15));
-      return !(geo.isAllowed || geo.isExempted);
+      if (geo.isMockLocation && !geo.isExempted) return null;
+      switch (geo.status) {
+        case GeofenceStatus.outside:
+          return true;
+        case GeofenceStatus.inside:
+        case GeofenceStatus.insideWithTolerance:
+        case GeofenceStatus.exempted:
+          return false;
+        default:
+          _log('⏭️ Unreliable geofence status: ${geo.status}');
+          return null;
+      }
     } catch (e) {
-      _log('⚠️ _isEmployeeCurrentlyOutside error: $e — assume inside');
-      return false;
+      _log('⚠️ _isEmployeeCurrentlyOutside error: $e — unknown');
+      return null;
     }
   }
 
@@ -856,7 +880,13 @@ class PresenceChallengeService {
         return;
       }
 
-      final isOutside = await _isEmployeeCurrentlyOutside(employeeId);
+      final outsideResult = await _isEmployeeCurrentlyOutside(employeeId);
+      if (outsideResult == null) {
+        // Hindi tiyak ang location: huwag magsimula, huwag magpatuloy ng timer
+        _log('⏭️ [OutOfRange] Unknown location state — skipping');
+        return;
+      }
+      final isOutside = outsideResult;
 
       if (isOutside) {
         if (_outOfRangeSince == null) {
@@ -898,6 +928,23 @@ class PresenceChallengeService {
     required String reason,
   }) async {
     if (_autoClockoutTriggeredToday) return;
+
+    // ✅ Sundin ang admin toggle
+    try {
+      final doc = await _db
+          .collection('settings')
+          .doc('geofence_config')
+          .get()
+          .timeout(const Duration(seconds: 5));
+      if (doc.data()?['autoClockOut'] != true) {
+        _log('🔕 autoClockOut OFF sa admin — hindi mag-a-auto clock-out');
+        return;
+      }
+    } catch (e) {
+      _log('⚠️ Settings read failed — skipping auto clock-out: $e');
+      return;
+    }
+
     _autoClockoutTriggeredAt = DateTime.now();
     _autoClockoutTriggeredToday = true;
 

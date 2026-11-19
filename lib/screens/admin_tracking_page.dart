@@ -1,15 +1,4 @@
 // lib/screens/admin_tracking_page.dart
-// v3.4: 🔴 REAL-TIME DELETE DETECTION
-//       • Snackbar warning when selected location is deleted by another admin.
-//       • Snackbar when ALL locations get deleted.
-//       • Local delete tracking suppresses redundant warnings.
-//       • Stream errors surface immediately via snackbar.
-// v3.3: Removed GLOBAL DEFAULT RADIUS slider from Active Locations panel.
-//       Global radius is still loaded from Firestore as a fallback default.
-// v3.2: WEB SAFETY HARDENING — disposed guards, deferred map moves, throttled cache.
-// v3.1: AUTO EVERYTHING from ADDRESS (geocode → detect → radius).
-// v3.0: Building auto-detection via OSM Overpass API.
-// v2.3: Demo Mode Support.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -590,6 +579,45 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
   }
 
+  /// Babala kapag ito na ang huling ACTIVE na location.
+  Future<bool> _confirmLastActiveZone(String id, String verb) async {
+    final others = _zones
+        .where((z) =>
+            (z['id'] ?? '').toString() != id && z['active'] != false)
+        .length;
+    if (others > 0) return true;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: tc.card,
+        title: Text('Last active location!',
+            style: TextStyle(color: tc.red)),
+        content: Text(
+          'This is the LAST active location. If you $verb it, regular '
+          'employees will NOT be able to clock in (clock-out stays allowed '
+          'but marked pending).\n\nContinue?',
+          style: TextStyle(color: tc.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: TextStyle(color: tc.muted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: tc.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Yes, $verb it'),
+          ),
+        ],
+      ),
+    );
+    return ok == true && _safe;
+  }
+
   Future<void> _confirmDeleteLocation(Map<String, dynamic> loc) async {
     if (!_safe) return;
     if (_isDemo) return _demoBlock();
@@ -646,6 +674,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     if (!_safe) return;
     if (ok != true) return;
 
+    if (!await _confirmLastActiveZone(id, 'delete')) return;
     _inFlight.add('del_$id');
     // ✅ NEW: Mark as local delete to suppress redundant warning
     _locallyDeletedIds.add(id);
@@ -699,6 +728,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     }
 
     final current = loc['active'] != false;
+    if (current && !await _confirmLastActiveZone(id, 'disable')) return;
     _inFlight.add('tog_$id');
     try {
       final admin = await _currentAdmin();

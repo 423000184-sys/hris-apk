@@ -18,7 +18,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/employee.dart';
-import '../widgets/bootstrap_grid.dart';
 import '../widgets/skeleton_screens.dart';
 import '../data/local/dao/connectivity_service.dart';
 import '../services/security_hardening_service.dart';
@@ -178,10 +177,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   DateTime? _firstAttemptTime;
 
   bool _isCheckingGeofence = false;
-  final bool _isInsideZone = false;
+  bool _isInsideZone = false;          // ← tinanggal ang final
   bool _isWfh = false;
   bool _isDriver = false;
-  final bool _geofenceExempted = false;
+  bool _geofenceExempted = false;      // ← tinanggal ang final
   String _deviceModel = 'Unknown Device';
 
   late AnimationController _pulseCtrl;
@@ -881,6 +880,10 @@ class _FingerprintScreenState extends State<FingerprintScreen>
         dept.contains('driver') ||
         dept.contains('rider');
     _isWfh = emp.wfhAccess;
+
+    // ✅ EXEMPTED kung WFH o Driver — kailangan ito para
+    // ma-bypass ang geofence check sa clock-in flow.
+    _geofenceExempted = _isWfh || _isDriver;
   }
 
   Future<void> _loadDeviceModel() async {
@@ -2060,6 +2063,17 @@ class _FingerprintScreenState extends State<FingerprintScreen>
   Future<bool> _checkGeofence() async {
     if (_isDemo) return true;
 
+    // ✅ FIX #1: BYPASS agad kung WFH o Driver (local exempt)
+    // Hindi na kailangan umasa sa geofence_service para dito.
+    if (_geofenceExempted) {
+      _secureLog('✅ [FP] Local bypass: WFH or Driver — skipping geofence');
+      _lastZoneStatus = 'exempted_local';
+      _lastLocationName = 'Exempted (WFH/Driver)';
+      _lastDistanceMeters = null;
+      _lastRadiusUsed = null;
+      return true;
+    }
+
     try {
       GeofenceResult? geoResult;
 
@@ -2073,6 +2087,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       if (geoResult != null) {
         _lastGeoResult = geoResult;
+        // ✅ FIX: Sync the inside-zone flag locally
+        _isInsideZone = geoResult.isInside || geoResult.isAllowed;
         _lastDistanceMeters = geoResult.distanceMeters;
         _lastAccuracyMeters = geoResult.accuracyMeters;
         _lastRadiusUsed = geoResult.radiusUsed;
@@ -2098,6 +2114,56 @@ class _FingerprintScreenState extends State<FingerprintScreen>
 
       final isAllowed = geoResult?.isAllowed ?? false;
       final isExempted = geoResult?.isExempted ?? false;
+      final geo = geoResult;
+
+      // 🚫 Fake GPS
+      if (geo != null && geo.isMockLocation && !geo.isExempted) {
+        await _logSecurityEvent(
+          type: 'mock_location_blocked',
+          severity: 'critical',
+          details: 'Mock location during device-auth clock-in',
+        );
+        if (mounted) {
+          setState(() {
+            _fpState = _FpState.error;
+            _errorMessage =
+                '🚫 Fake GPS detected.\nPlease disable mock location apps.';
+          });
+          _shakeCtrl.forward(from: 0);
+        }
+        return false;
+      }
+
+      // 📍 Walang active na zone
+      if (geo != null && geo.isNoZones) {
+        bool allow = false;
+        try {
+          allow = await ClockStatusService.instance
+              .isCurrentlyClockedIn(_employeeIdForAttendance);
+        } catch (_) {}
+        await _logSecurityEvent(
+          type: 'geofence_no_zones',
+          severity: 'high',
+          details: 'No active zones — '
+              '${allow ? "clock-out allowed (pending)" : "clock-in blocked"}',
+        );
+        if (allow) {
+          _geofenceVerifiedOffline = true;
+          _lastLocationName = 'Pending verification';
+          _lastZoneStatus = 'no_zones_pending';
+          return true;
+        }
+        if (mounted) {
+          setState(() {
+            _fpState = _FpState.error;
+            _errorMessage = '📍 Walang active na work zone.\n'
+                'Hindi ka makaka-clock in ngayon.\n'
+                'Please contact Admin.';
+          });
+          _shakeCtrl.forward(from: 0);
+        }
+        return false;
+      }
 
       if (geoResult != null && geoResult.needsProof) {
         final id = await _requestFieldSelfie(geoResult);
@@ -2111,6 +2177,26 @@ class _FingerprintScreenState extends State<FingerprintScreen>
             _fpState = _FpState.error;
             _errorMessage = geoResult!.message.replaceAll('\n', ' ');
             _isCheckingGeofence = false;
+          });
+          _shakeCtrl.forward(from: 0);
+        }
+        return false;
+      }
+
+      // ✅ FIX #2: Handle GeofenceStatus.error (poor GPS, service disabled)
+      // Dati ito'y napupunta sa "Outside work zone" kaya nakakalito.
+      if (geoResult != null && geoResult.isError) {
+        await _logSecurityEvent(
+          type: 'geofence_service_error',
+          severity: 'medium',
+          details: 'Status=${geoResult.status} • '
+              'acc=${geoResult.accuracyMeters?.toStringAsFixed(1) ?? "?"}m',
+        );
+        if (mounted) {
+          setState(() {
+            _fpState = _FpState.error;
+            // Ipakita ang TOTOONG dahilan (e.g., "Mahina ang GPS signal")
+            _errorMessage = geoResult!.message.replaceAll('\n', ' ');
           });
           _shakeCtrl.forward(from: 0);
         }
@@ -2141,18 +2227,19 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           setState(() {
             _fpState = _FpState.error;
             _errorMessage = '📍 Unable to verify location.\n\n'
-                'Your assigned work zone may have been removed\n'
-                'or is temporarily unavailable.\n\n'
-                'Please contact Admin.';
+                'Check your GPS and internet, then try again.\n'
+                'If it keeps happening, contact Admin.';
           });
           _shakeCtrl.forward(from: 0);
         }
         return false;
       }
 
+      // Totoong "outside work zone" ang nangyari
       final dist = geoResult.distanceMeters;
       final radius = geoResult.radiusUsed;
       final nearest = geoResult.matchedLocationName ?? 'Unknown';
+      final acc = geoResult.accuracyMeters;
 
       if (mounted) {
         setState(() {
@@ -2160,7 +2247,8 @@ class _FingerprintScreenState extends State<FingerprintScreen>
           _errorMessage = '📍 Outside work zone\n'
               'Nearest: $nearest\n'
               'Distance: ${dist?.toStringAsFixed(0) ?? "?"}m '
-              '(allowed: ${radius?.toStringAsFixed(0) ?? "?"}m)';
+              '(allowed: ${radius?.toStringAsFixed(0) ?? "?"}m)\n'
+              'GPS: ±${acc?.toStringAsFixed(0) ?? "?"}m';
         });
         _shakeCtrl.forward(from: 0);
       }

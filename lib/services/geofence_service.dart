@@ -4,6 +4,8 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
+import 'client_location_service.dart';
+
 
 // Logs only in debug builds (hindi lalabas ang location sa release logcat)
 void _log(String message) {
@@ -53,6 +55,9 @@ class GeofenceResult {
 
   /// Field worker is outside every assigned zone and must submit a selfie.
   bool get needsProof => status == GeofenceStatus.fieldNeedsProof;
+
+  /// Walang kahit isang active na location sa system.
+  bool get isNoZones => status == GeofenceStatus.noZones;
 }
 
 enum GeofenceStatus {
@@ -66,6 +71,7 @@ enum GeofenceStatus {
   exempted,
   insideWithTolerance,
   fieldNeedsProof,
+  noZones,
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -142,6 +148,7 @@ class GeofenceService {
   bool _zonesLoaded = false;
   bool _isUsingEmergency = false;
   DateTime? _zonesLoadedAt;
+  List<_LocationZone> _clientZones = [];
 
   final _statusController = StreamController<GeofenceResult>.broadcast();
   Stream<GeofenceResult> get statusStream => _statusController.stream;
@@ -324,14 +331,37 @@ class GeofenceService {
   // ══════════════════════════════════════════════════════════════════
   // ZONE SELECTION
   // ══════════════════════════════════════════════════════════════════
+  Future<void> _loadClientZones({bool forceRefresh = false}) async {
+    try {
+      final list = await ClientLocationService.instance
+          .getActiveLocations(forceRefresh: forceRefresh);
+      _clientZones = list
+          .map((c) => _LocationZone(
+                id: c.id,
+                name: c.name,
+                address: c.address ?? '',
+                lat: c.lat,
+                lng: c.lng,
+                radius: c.radiusMeters.clamp(20.0, 5000.0),
+                type: 'client',
+              ))
+          .toList();
+      _log('📍 [Geofence] client_locations loaded: ${_clientZones.length}');
+    } catch (e) {
+      _log('⚠️ [Geofence] client_locations load failed: $e');
+    }
+  }
+
   List<_LocationZone> _zonesFor(List<String>? siteIds) {
     final office = _cachedZones.where((z) => z.type != 'client');
     if (siteIds == null) return office.toList();
     final ids = siteIds.toSet();
-    return [
-      ...office,
-      ..._cachedZones.where((z) => z.type == 'client' && ids.contains(z.id)),
-    ];
+    final seen = <String>{};
+    final clients = [
+      ..._cachedZones.where((z) => z.type == 'client'),
+      ..._clientZones,
+    ].where((z) => ids.contains(z.id) && seen.add(z.id));
+    return [...office, ...clients];
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -345,7 +375,10 @@ class GeofenceService {
 
     startZonesListener();
     if (forceRefresh) invalidateCache();
-    await _ensureZonesLoaded();
+     await _ensureZonesLoaded();
+    if (siteIds != null) {
+      await _loadClientZones(forceRefresh: forceRefresh);
+    }
 
     _log('📏 [Geofence] Zones: ${_cachedZones.length} | '
         'Emergency: $_isUsingEmergency');
@@ -370,14 +403,36 @@ class GeofenceService {
     String exemptionReason = '';
 
     try {
-      final empDoc = await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(empId)
-          .get()
-          .timeout(const Duration(seconds: 4));
+      Map<String, dynamic>? d;
 
-      if (empDoc.exists) {
-        final d = empDoc.data() ?? {};
+      // Primary lookup: by doc ID
+      try {
+        final empDoc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(empId)
+            .get()
+            .timeout(const Duration(seconds: 4));
+        if (empDoc.exists) {
+          d = empDoc.data();
+        }
+      } catch (_) {}
+
+      // Fallback lookup: by employeeId field (if doc ID didn't match)
+      if (d == null) {
+        try {
+          final q = await FirebaseFirestore.instance
+              .collection('employees')
+              .where('employeeId', isEqualTo: empId)
+              .limit(1)
+              .get()
+              .timeout(const Duration(seconds: 4));
+          if (q.docs.isNotEmpty) {
+            d = q.docs.first.data();
+          }
+        } catch (_) {}
+      }
+
+      if (d != null) {
         final wfh = d['wfhAccess'] == true;
         final role = (d['role'] ?? '').toString().toLowerCase().trim();
         final position = (d['position'] ?? '').toString().toLowerCase().trim();
@@ -417,7 +472,10 @@ class GeofenceService {
       List<String> siteIds, bool forceRefresh) async {
     final r = await checkGeofence(forceRefresh: forceRefresh, siteIds: siteIds);
 
-    if (r.isAllowed || r.isMockLocation || r.status != GeofenceStatus.outside) {
+    if (r.isAllowed ||
+        r.isMockLocation ||
+        (r.status != GeofenceStatus.outside &&
+            r.status != GeofenceStatus.noZones)) {
       return r;
     }
 
@@ -630,8 +688,10 @@ class GeofenceService {
     if (zs.isEmpty) {
       return _emit(GeofenceResult(
         isAllowed: false,
-        status: GeofenceStatus.outside,
-        message: 'Walang naka-set na location.',
+        status: GeofenceStatus.noZones,
+        position: position,
+        accuracyMeters: position.accuracy,
+        message: 'Walang active na work zone.\nContact Admin.',
         isMockLocation: isMock,
       ));
     }
@@ -703,6 +763,20 @@ class GeofenceService {
         '${(exactZone != null || tolZone != null) ? "ALLOWED" : "BLOCKED"}');
 
     if (exactZone != null) {
+      if (isMock) {
+        return _emit(GeofenceResult(
+          isAllowed: false,
+          status: GeofenceStatus.error,
+          distanceMeters: exactDist,
+          accuracyMeters: rawAccuracy,
+          radiusUsed: exactZone.radius,
+          matchedLocationName: exactZone.name,
+          position: position,
+          isMockLocation: true,
+          message: '🚨 Fake GPS detected.\n'
+              'Patayin ang mock location apps at subukan ulit.',
+        ));
+      }
       return _emit(GeofenceResult(
         isAllowed: true,
         status: GeofenceStatus.inside,
@@ -711,7 +785,7 @@ class GeofenceService {
         radiusUsed: exactZone.radius,
         matchedLocationName: exactZone.name,
         position: position,
-        isMockLocation: isMock,
+        isMockLocation: false,
         message: '✅ Nasa loob ka ng "${exactZone.name}".\n'
             'Distance: ${exactDist.toStringAsFixed(0)} m',
       ));

@@ -1,7 +1,7 @@
-// ===================================================================
-// FILE 2 (NEW): lib/services/field_proof_service.dart
-// ===================================================================
+// lib/services/field_proof_service.dart
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:geolocator/geolocator.dart';
@@ -49,7 +49,7 @@ class FieldProofService {
     if (pos.accuracy > _maxAccuracyM) {
       throw FieldProofException(
           'GPS too weak (±${pos.accuracy.toStringAsFixed(0)}m). '
-              'Move to an open area and retake.');
+          'Move to an open area and retake.');
     }
 
     final bytes = await shot.readAsBytes();
@@ -75,9 +75,55 @@ class FieldProofService {
     try {
       // Firestore queues this offline; don't hang the UI waiting for it.
       await ref.set(payload).timeout(const Duration(seconds: 10));
-    } catch (e) {
-      debugPrint('⚠️ field_proofs write pending/queued: $e');
+    } on TimeoutException {
+      debugPrint('⏳ field_proofs queued (no server ack yet)');
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        throw FieldProofException(
+            'Hindi maipadala ang proof (walang permiso). Contact Admin.');
+      }
+      debugPrint('⚠️ field_proofs write failed: ${e.code}');
     }
     return ref.id;
+  }
+
+  /// Auto-captured photo for a normal clock-in (no HR review needed).
+  /// Never throws: a failed photo must not break the clock-in itself.
+  Future<bool> saveClockInPhoto({
+    required String proofId,
+    required String employeeId,
+    required String employeeDocId,
+    required String attendanceType, // IN | OUT
+    required Uint8List bytes,
+    double? lat,
+    double? lng,
+    double? accuracy,
+    double? faceMatchScore,
+  }) async {
+    try {
+      final ref =
+          FirebaseFirestore.instance.collection('field_proofs').doc(proofId);
+      await ref.set(<String, dynamic>{
+        'employeeId': employeeId,
+        'employeeDocId': employeeDocId,
+        'attendanceType': attendanceType,
+        'status': 'auto', // auto | pending | approved | rejected
+        'source': 'clock_in_photo',
+        'photo': 'data:image/jpeg;base64,${base64Encode(bytes)}',
+        if (lat != null) 'lat': lat,
+        if (lng != null) 'lng': lng,
+        if (accuracy != null) 'accuracyMeters': accuracy,
+        if (faceMatchScore != null) 'faceMatchScore': faceMatchScore,
+        'capturedAtDevice': DateTime.now().toIso8601String(),
+        'capturedAt': FieldValue.serverTimestamp(),
+      }).timeout(const Duration(seconds: 10));
+      return true;
+    } on TimeoutException {
+      debugPrint('⏳ clock-in photo queued (no server ack yet)');
+      return true; // Firestore keeps it queued
+    } catch (e) {
+      debugPrint('⚠️ clock-in photo write failed: $e');
+      return false;
+    }
   }
 }

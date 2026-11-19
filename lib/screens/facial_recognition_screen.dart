@@ -105,6 +105,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   double? _lastLongitude;
 
   String? _fieldProofId;
+  Uint8List? _pendingPhotoBytes; // clock-in photo (normal flow)
+  double? _lastAccuracy;
+  static const int _maxClockInPhotoBytes = 600 * 1024;
+  // true = hindi makaka-clock in kapag pumalya ang photo
+  static const bool _requireClockInPhoto = false;
 
   int _pendingCount = 0;
   StreamSubscription<int>? _pendingSub;
@@ -130,15 +135,40 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   int _closedFrames = 0;
   int _openFramesAfterClose = 0;
 
-  static const int _minClosedFrames = 2;
-  static const int _minOpenFrames = 2;
+  // _blinkDone = may na-pass na at least 1 challenge
+  // _smileDone = LAHAT ng challenges ay tapos na
+  List<_Challenge> _plan = const [];
+  int _planIndex = 0;
+  int _turnFrames = 0;
+
+  static const double _turnYawThreshold = 20.0;
+  static const int _minTurnFrames = 2;
+  static const double _frontalYaw = 15.0; // embeddings: frontal frames lang
+  static const double _maxYawDuringTurn = 50.0;
+  // ⚠️ I-test sa device: kung baligtad ang left/right, gawing -1.0.
+  static const double _yawSign = 1.0;
+  // ⚠️ Min similarity ng ANY dalawang embeddings sa iisang session.
+  static const double _sessionConsistencyMin = 0.45;
+
+  bool get _challengesDone => _plan.isNotEmpty && _planIndex >= _plan.length;
+  _Challenge? get _currentChallenge =>
+      (_plan.isEmpty || _challengesDone) ? null : _plan[_planIndex];  
+  List<_Challenge> _buildPlan() {
+    if (kIsWeb) return [_Challenge.blink, _Challenge.smile]; // web: blink→smile lang
+    final rand = math.Random.secure();
+    final turn = rand.nextBool() ? _Challenge.turnLeft : _Challenge.turnRight;
+    return [turn, _Challenge.blink, _Challenge.smile]..shuffle(rand);
+  }
+
+  static const int _minClosedFrames = 1;
+  static const int _minOpenFrames = 1;
   static const double _blinkClosedThreshold = 0.40;
   static const double _blinkOpenThreshold = 0.55;
   static const double _smileThreshold = 0.40;
   static const int _maxClosedFramesBeforeStuck = 45;
 
   DateTime? _livenessStartTime;
-  static const int _livenessTimeoutMs = 25000;
+  static const int _livenessTimeoutMs = 35000;
 
   static const double _cameraBoxSize = 300.0;
 
@@ -154,7 +184,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   // own staff: log _matchScore for genuine vs. impostor attempts, then adjust.
   static const double _matchThreshold = 0.60;
   static const int _minEmbeddingsToUse = 3;
-  static const int _maxEmbeddingsKept = 6;
+  static const int _maxEmbeddingsKept = 12;
   static const int _embedIntervalMs = 200;
   static const int _collectTimeoutMs = 6000;
   DateTime? _collectStartTime;
@@ -229,6 +259,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   static const _demoAccentDark = Color(0xFFF54900);
 
   bool get _isOffline => _networkState == _NetState.offline;
+
+  String get _modeLabel =>
+      _matchSupported ? 'Face Verification' : 'Liveness Check';
 
   @override
   void initState() {
@@ -415,7 +448,20 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     for (int i = 0; i < a.length; i++) {
       d += a[i] * b[i];
     }
-    return d; // both vectors are L2-normalised
+      return d; // both vectors are L2-normalised
+  }
+
+  /// Pigilan ang palitan ng tao sa gitna ng session.
+  bool _isSameSession() {
+    for (int i = 0; i < _liveEmbeddings.length; i++) {
+      for (int j = i + 1; j < _liveEmbeddings.length; j++) {
+        if (_cosine(_liveEmbeddings[i], _liveEmbeddings[j]) <
+            _sessionConsistencyMin) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   /// Returns true if the live face matches the enrolled template
@@ -429,6 +475,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (!_embedderReady || _liveEmbeddings.length < _minEmbeddingsToUse) {
       _onIdentityFailed('Could not read your face clearly.\nPlease try again.',
           'insufficient_samples');
+      return false;
+    }
+
+  if (!_isSameSession()) {
+      _onIdentityFailed('Face changed during the check.\nPlease try again.',
+          'session_face_changed');
       return false;
     }
 
@@ -519,7 +571,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _errorMessage = msg;
     });
     _shakeCtrl.forward(from: 0);
-    if (reason == 'face_mismatch') unawaited(_registerMismatch());
+    if (reason == 'face_mismatch' || reason == 'session_face_changed') {
+      unawaited(_registerMismatch());
+    }
+
 
     unawaited(_logSecurityEvent(
       type: 'face_match_failed',
@@ -1440,8 +1495,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
               (c) => c.lensDirection == CameraLensDirection.front,
           orElse: () => cameras.first);
       final ctrl = CameraController(
-        front,
-        ResolutionPreset.high,
+       front,
+        ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup:
         kIsWeb ? ImageFormatGroup.jpeg : ImageFormatGroup.nv21,
@@ -1494,6 +1549,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _facePresent = false;
       _livenessStep = _LivenessStep.waitingForFace;
       _livenessStartTime = DateTime.now();
+      _plan = _buildPlan();
+      _planIndex = 0;
+      _turnFrames = 0;
       _liveEmbeddings.clear();
       _collectStartTime = null;
       _matchScore = null;
@@ -1574,12 +1632,17 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _closedFrames = 0;
     _openFramesAfterClose = 0;
     _facePresent = false;
-    _livenessStep = _LivenessStep.waitingForFace;
+       _livenessStep = _LivenessStep.waitingForFace;
     _livenessStartTime = DateTime.now();
+    _plan = _buildPlan();
+    _planIndex = 0;
+    _turnFrames = 0;
     _liveEmbeddings.clear();
     _collectStartTime = null;
     _matchScore = null;
     _identityResult = 'not_checked';
+    _fieldProofId = null; // huwag gamitin ang lumang proof sa retry
+    _pendingPhotoBytes = null;
 
     setState(() {
 
@@ -1698,9 +1761,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         if (ear < _webEyeClosedThreshold) {
           _eyesWereClosed = true;
         } else if (ear > _webEyeOpenThreshold && _eyesWereClosed) {
-          if (mounted) setState(() => _blinkDone = true);
+          if (mounted) {
+            setState(() {
+              _blinkDone = true;
+              _planIndex = 1; // web plan: [blink, smile]
+            });
+          }
           _eyesWereClosed = false;
-          _livenessStep = _LivenessStep.smile;
+          _livenessStep = _LivenessStep.challenge;
         }
         continue;
       }
@@ -1719,9 +1787,27 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
+    Future<void> _captureClockInPhoto() async {
+    _pendingPhotoBytes = null;
+    if (_isDemo || _isChallenge || kIsWeb) return;
+    final ctrl = _camCtrl;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
+    try {
+      if (ctrl.value.isStreamingImages) await ctrl.stopImageStream();
+      final shot = await ctrl.takePicture().timeout(const Duration(seconds: 5));
+      final bytes = await shot.readAsBytes();
+      if (bytes.length > _maxClockInPhotoBytes) {
+        _secureLog('⚠️ Clock-in photo too large: ${bytes.length}');
+        return;
+      }
+      _pendingPhotoBytes = bytes;
+    } catch (e) {
+      _secureLog('⚠️ Clock-in photo capture failed: $e');
+    }
+  }
+
   Future<void> _recordLivenessPass() async {
     if (_isDemo) return;
-
     final docId = widget.employee.id;
     if (docId.isEmpty) {
       debugPrint('❌ [Liveness] employee.id is empty — nothing written');
@@ -1735,7 +1821,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         'livenessVerified': true,
         'livenessVerifiedAt': FieldValue.serverTimestamp(),
         'livenessCheckCount': FieldValue.increment(1),
-        'livenessSource': 'mobile_blink_smile',
+        'livenessSource': 'mobile_random_challenge',
       }, SetOptions(merge: true))
           .timeout(const Duration(seconds: 8));
       debugPrint('✅ [Liveness] written to employees/$docId');
@@ -1894,8 +1980,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         return;
       }
 
-      _facePresent = faces.isNotEmpty;
-      if (mounted) setState(() {});
+     final present = faces.isNotEmpty;
+      if (present != _facePresent) {
+        _facePresent = present;
+        if (mounted) setState(() {});
+      }
 
       if (faces.isEmpty) {
         if (_livenessStep == _LivenessStep.collecting &&
@@ -1937,15 +2026,20 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return;
     }
 
-    final quality = _assessVerifyQuality(face, image);
+    final current = _currentChallenge;
+    final isTurn =
+        current == _Challenge.turnLeft || current == _Challenge.turnRight;
+    final quality = _assessVerifyQuality(face, image, allowYaw: isTurn);
 
     if (quality != _FaceWarning.none) {
       _eyesWereClosed = false;
       _closedFrames = 0;
       _openFramesAfterClose = 0;
-      if (mounted) setState(() => _faceWarning = quality);
+      _turnFrames = 0;
+      if (mounted && _faceWarning != quality) {
+        setState(() => _faceWarning = quality);
+      }
       _warningCtrl.repeat(reverse: true);
-      _isProcessing = false;
       return;
     }
 
@@ -1956,12 +2050,18 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     final rightOpen = face.rightEyeOpenProbability ?? 1.0;
     final avgOpen = (leftOpen + rightOpen) / 2;
     final smile = face.smilingProbability ?? 0.0;
+    final yaw = (face.headEulerAngleY ?? 0.0) * _yawSign;
 
-    // Capture embeddings from eyes-open, quality-checked frames only.
-    if (avgOpen > _blinkOpenThreshold) _maybeCaptureEmbedding(image, face);
+    // Embeddings: eyes-open + frontal lang, at hindi habang blink challenge
+    // (para hindi mag-drop ng frames at mawala ang blink).
+    if (avgOpen > _blinkOpenThreshold &&
+        yaw.abs() < _frontalYaw &&
+        current != _Challenge.blink) {
+      _maybeCaptureEmbedding(image, face);
+    }
 
-     if (_livenessStep == _LivenessStep.waitingForFace) {
-      _livenessStep = _LivenessStep.blink;
+    if (_livenessStep == _LivenessStep.waitingForFace) {
+      _livenessStep = _LivenessStep.challenge;
       if (mounted) setState(() => _faceWarning = _FaceWarning.none);
     }
 
@@ -1972,38 +2072,15 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return;
     }
 
-    if (_livenessStep == _LivenessStep.blink && !_blinkDone) {
-      if (avgOpen < _blinkClosedThreshold) {
-        _closedFrames++;
-        _openFramesAfterClose = 0;
-        _eyesWereClosed = true;
-        if (_closedFrames > _maxClosedFramesBeforeStuck) {
-          _eyesWereClosed = false;
-          _closedFrames = 0;
-          if (mounted) setState(() => _faceWarning = _FaceWarning.eyesClosed);
-          _warningCtrl.repeat(reverse: true);
-          _isProcessing = false;
-          return;
-        }
-      } else if (avgOpen > _blinkOpenThreshold) {
-        if (_eyesWereClosed && _closedFrames >= _minClosedFrames) {
-          _openFramesAfterClose++;
-          if (_openFramesAfterClose >= _minOpenFrames) {
-            _blinkDone = true;
-            _eyesWereClosed = false;
-            _closedFrames = 0;
-            _openFramesAfterClose = 0;
-            _livenessStep = _LivenessStep.smile;
-          }
-        }
-      } else {
-        if (_eyesWereClosed && _closedFrames < _minClosedFrames) {
-          _eyesWereClosed = false;
-          _closedFrames = 0;
-        }
-      }
-    } else if (_livenessStep == _LivenessStep.smile && !_smileDone) {
-      if (smile > _smileThreshold) {
+    if (current != null && _passChallenge(current, avgOpen, smile, yaw)) {
+      _planIndex++;
+      _blinkDone = true;
+      _eyesWereClosed = false;
+      _closedFrames = 0;
+      _openFramesAfterClose = 0;
+      _turnFrames = 0;
+
+      if (_challengesDone) {
         _smileDone = true;
 
         // Demo / non-Android / walang embedder: walang kailangang kolektahin.
@@ -2012,16 +2089,15 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           _isScanning = false;
           _scanLineCtrl.stop();
           await _onSuccess();
-          _isProcessing = false;
           return;
         }
 
         // Ituloy ang stream at mag-ipon muna ng embeddings.
         _livenessStep = _LivenessStep.collecting;
         _collectStartTime = DateTime.now();
-        if (mounted) setState(() {});
-        return;
       }
+      if (mounted) setState(() {});
+      return;
     }
 
     if (_livenessStartTime != null && !_smileDone) {
@@ -2031,20 +2107,61 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         _isScanning = false;
         _scanLineCtrl.stop();
         if (mounted) _onFailure('Liveness check timed out. Try again.');
-        _isProcessing = false;
         return;
       }
     }
 
-    if (mounted) setState(() => _faceWarning = _FaceWarning.none);
+    if (_faceWarning != _FaceWarning.none && mounted) {
+      setState(() => _faceWarning = _FaceWarning.none);
+    }
   }
 
-  _FaceWarning _assessVerifyQuality(Face face, CameraImage image) {
+  bool _passChallenge(
+      _Challenge c, double avgOpen, double smile, double yaw) {
+    switch (c) {
+      case _Challenge.blink:
+        if (avgOpen < _blinkClosedThreshold) {
+          _closedFrames++;
+          _openFramesAfterClose = 0;
+          _eyesWereClosed = true;
+          if (_closedFrames > _maxClosedFramesBeforeStuck) {
+            _eyesWereClosed = false;
+            _closedFrames = 0;
+            if (mounted) setState(() => _faceWarning = _FaceWarning.eyesClosed);
+            _warningCtrl.repeat(reverse: true);
+          }
+        } else if (avgOpen > _blinkOpenThreshold) {
+          if (_eyesWereClosed && _closedFrames >= _minClosedFrames) {
+            _openFramesAfterClose++;
+            return _openFramesAfterClose >= _minOpenFrames;
+          }
+        } else if (_eyesWereClosed && _closedFrames < _minClosedFrames) {
+          _eyesWereClosed = false;
+          _closedFrames = 0;
+        }
+        return false;
+      case _Challenge.smile:
+        return smile > _smileThreshold;
+      case _Challenge.turnLeft:
+        return _heldTurn(yaw <= -_turnYawThreshold);
+      case _Challenge.turnRight:
+        return _heldTurn(yaw >= _turnYawThreshold);
+    }
+  }
+
+  bool _heldTurn(bool inPose) {
+    _turnFrames = inPose ? _turnFrames + 1 : 0;
+    return _turnFrames >= _minTurnFrames;
+  }
+
+   _FaceWarning _assessVerifyQuality(Face face, CameraImage image,
+      {bool allowYaw = false}) {
     final yaw = face.headEulerAngleY ?? 0.0;
     final roll = face.headEulerAngleZ ?? 0.0;
     final pitch = face.headEulerAngleX ?? 0.0;
 
-    if (yaw.abs() > _verifyMaxYaw ||
+    final maxYaw = allowYaw ? _maxYawDuringTurn : _verifyMaxYaw;
+    if (yaw.abs() > maxYaw ||
         roll.abs() > _verifyMaxRoll ||
         pitch.abs() > _verifyMaxPitch) {
       return _FaceWarning.headAngle;
@@ -2063,7 +2180,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       face.landmarks[FaceLandmarkType.leftEye] != null,
       face.landmarks[FaceLandmarkType.rightEye] != null,
     ].where((x) => x).length;
-    if (lmCount < 2) return _FaceWarning.occluded;
+    if (!allowYaw && lmCount < 2) return _FaceWarning.occluded;
+
 
     if (!kIsWeb && image.planes.isNotEmpty) {
       if (_estimateSharpness(image) < _verifyMinSharpness) {
@@ -2132,12 +2250,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _closedFrames = 0;
     _openFramesAfterClose = 0;
     _warningCtrl.stop();
-    _warningCtrl.reset();
-    if (mounted) setState(() => _faceWarning = _FaceWarning.none);
+   _warningCtrl.reset();
+    if (mounted && _faceWarning != _FaceWarning.none) {
+      setState(() => _faceWarning = _FaceWarning.none);
+    }
   }
 
-  void _onLivenessFailed() {
-    if (_isDemo || !mounted) return;
+  void _onLivenessFailed() {    if (_isDemo || !mounted) return;
     _isScanning = false;
     _scanLineCtrl.stop();
 
@@ -2238,17 +2357,72 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             .timeout(const Duration(seconds: 20));
       } catch (_) {}
 
-      if (geoResult != null) {
+           if (geoResult != null) {
         try {
           if (geoResult.position != null) {
             _lastLatitude = geoResult.position!.latitude;
             _lastLongitude = geoResult.position!.longitude;
           }
+          _lastAccuracy = geoResult.accuracyMeters;
         } catch (_) {}
       }
 
       final isAllowed = geoResult?.isAllowed ?? false;
       final isExempted = geoResult?.isExempted ?? false;
+      final geo = geoResult;
+
+      // 🚫 Fake GPS
+      if (geo != null && geo.isMockLocation && !geo.isExempted) {
+        await _logSecurityEvent(
+          type: 'mock_location_blocked',
+          severity: 'critical',
+          details: 'Mock location during face check',
+        );
+        if (mounted) {
+          setState(() {
+            _faceState = _FaceState.error;
+            _errorMessage =
+                '🚫 Fake GPS detected.\nPlease disable mock location apps.';
+            _isCheckingGeofence = false;
+          });
+          _shakeCtrl.forward(from: 0);
+        }
+        return false;
+      }
+
+      // 📍 Walang active na zone: clock-out / challenge = pasado (pending),
+      // clock-in = blocked
+      if (geo != null && geo.isNoZones) {
+        bool allow = _isChallenge;
+        if (!allow) {
+          try {
+            allow = await ClockStatusService.instance
+                .isCurrentlyClockedIn(_employeeIdForAttendance);
+          } catch (_) {}
+        }
+        await _logSecurityEvent(
+          type: 'geofence_no_zones',
+          severity: 'high',
+          details: 'No active zones — '
+              '${allow ? "allowed (pending verification)" : "clock-in blocked"}',
+        );
+        if (allow) {
+          _geofenceVerifiedOffline = true;
+          if (mounted) setState(() => _isCheckingGeofence = false);
+          return true;
+        }
+        if (mounted) {
+          setState(() {
+            _faceState = _FaceState.error;
+            _errorMessage = '📍 No active working zone.\n'
+                'You Cannot clock in today.\n'
+                'Please contact Admin.';
+            _isCheckingGeofence = false;
+          });
+          _shakeCtrl.forward(from: 0);
+        }
+        return false;
+      }
 
       if (isAllowed || isExempted) {
         _geofenceVerifiedOffline = false;
@@ -2290,9 +2464,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           setState(() {
             _faceState = _FaceState.error;
             _errorMessage = '📍 Unable to verify location.\n\n'
-                'Your assigned work zone may have been removed\n'
-                'or is temporarily unavailable.\n\n'
-                'Please contact Admin.';
+                'Check your GPS and internet, then try again.\n'
+                'If it keeps happening, contact Admin.';
             _isCheckingGeofence = false;
           });
           _shakeCtrl.forward(from: 0);
@@ -2463,9 +2636,14 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final deviceName = _deviceModel;
       final zoneType = _computeZoneType();
 
+      // Normal clock-in photo: gawa ng ID ngayon para maisama sa remarks
+      final String? photoProofId =
+          (_pendingPhotoBytes != null && _fieldProofId == null)
+              ? FirebaseFirestore.instance.collection('field_proofs').doc().id
+              : null;
       final proofTag = _fieldProofId != null
           ? '|field_selfie_pending|proof:$_fieldProofId'
-          : '';
+          : (photoProofId != null ? '|clock_in_photo|proof:$photoProofId' : '');
       final baseRemarks = (_geofenceVerifiedOffline
               ? 'liveness:passed|pending_geofence_verification'
               : 'liveness:passed') +
@@ -2503,6 +2681,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         'remarks': remarks,
         'created_offline': !NetworkGuard.instance.isOnline,
         if (_geofenceVerifiedOffline) 'pending_geofence_verification': true,
+        // Field selfie proof: nananatiling pending hanggang i-approve ng HR
+        if (_fieldProofId != null) 'reviewStatus': 'pending',
+        if (_fieldProofId != null) 'fieldProofId': _fieldProofId,
         if (_lastLatitude != null) 'latitude': _lastLatitude,
         if (_lastLongitude != null) 'longitude': _lastLongitude,
       };
@@ -2566,25 +2747,27 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           'act_${employeeId}_${attendanceType}_${effectiveTime.millisecondsSinceEpoch}';
 
       // ── 1) LOCAL SAVE muna (offline-first)
-      AttendanceResult? offlineResult;
-      try {
-        offlineResult = await OfflineAttendanceService.instance.logAttendance(
-          employeeId: employeeId,
-          employeeName: employeeName,
-          employeeEmail: employeeEmail,
-          type: attendanceType,
-          timestamp: effectiveTime,
-          device: deviceName,
-          remarks: remarks,
-          zoneType: zoneType,
-          latitude: _lastLatitude,
-          longitude: _lastLongitude,
-        );
-      } catch (e) {
-        await _logSecurityEvent(
-            type: 'attendance_local_save_failed',
-            severity: 'critical',
-            details: 'Failed to save attendance locally: $e');
+     AttendanceResult? offlineResult;
+      if (_fieldProofId == null) {
+        try {
+          offlineResult = await OfflineAttendanceService.instance.logAttendance(
+            employeeId: employeeId,
+            employeeName: employeeName,
+            employeeEmail: employeeEmail,
+            type: attendanceType,
+            timestamp: effectiveTime,
+            device: deviceName,
+            remarks: remarks,
+            zoneType: zoneType,
+            latitude: _lastLatitude,
+            longitude: _lastLongitude,
+          );
+        } catch (e) {
+          await _logSecurityEvent(
+              type: 'attendance_local_save_failed',
+              severity: 'critical',
+              details: 'Failed to save attendance locally: $e');
+        }
       }
 
       bool saved = offlineResult != null;
@@ -2621,6 +2804,22 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
       // Walang nasave kahit saan → ipaalam sa user, huwag mag-"Verified".
       if (!saved) return false;
+
+      // Isulat ang clock-in photo (hindi nito hinaharang ang clock-in kapag pumalya)
+      if (photoProofId != null && _pendingPhotoBytes != null) {
+          unawaited(FieldProofService.instance.saveClockInPhoto(
+          proofId: photoProofId,
+          employeeId: employeeId,
+          employeeDocId: widget.employee.id,
+          attendanceType: attendanceType,
+          bytes: _pendingPhotoBytes!,
+          lat: _lastLatitude,
+          lng: _lastLongitude,
+          accuracy: _lastAccuracy,
+          faceMatchScore: _matchScore,
+        ));
+        _pendingPhotoBytes = null;
+      }
 
       // Mark local cache PAGKATAPOS masigurong nasave
       if (isClockIn) {
@@ -2703,8 +2902,27 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   Future<void> _onSuccess() async {
     if (!mounted) return;
-    final identityOk = await _verifyIdentity(); // NEW: gate before success UI
+       final identityOk = await _verifyIdentity(); // NEW: gate before success UI
     if (!identityOk || !mounted) return;
+
+    await _captureClockInPhoto(); // kuha habang buhay pa ang camera
+    if (_requireClockInPhoto &&
+        !_isDemo &&
+        !_isChallenge &&
+        !kIsWeb &&
+        _pendingPhotoBytes == null) {
+      _onFailure('Could not capture clock-in photo.\nPlease try again.');
+      return;
+    }
+    if (!mounted) return;
+
+    // Geofence MUNA (normal clock-in/out lang). Ang challenge ay may sariling
+    // check sa _finishChallenge.
+    if (!_isChallenge) {
+      final canProceed = await _checkRoleAndGeofence();
+      if (!canProceed || !mounted) return;
+    }
+
     setState(() {
       _faceState = _FaceState.success;
       _errorMessage = null;
@@ -2716,16 +2934,6 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     if (_isChallenge) {
       await _finishChallenge();
-      return;
-    }
-
-    final canProceed = await _checkRoleAndGeofence();
-    if (!canProceed) {
-      if (mounted) {
-        _successCtrl.reset();
-        _pulseCtrl.repeat(reverse: true);
-        _ringCtrl.repeat();
-      }
       return;
     }
 
@@ -2876,7 +3084,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         builder: (_) => ClockInSuccessScreen(
           employee: widget.employee,
           arrivalTime: _effectiveAttendanceTime,
-          verificationMethod: 'face_match',
+           verificationMethod: _matchSupported ? 'face_match' : 'liveness_only',
           onContinue: () {
             try {
               _secureLog(
@@ -3210,7 +3418,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   ? 'Demo Check'
                   : (_isChallenge
                   ? 'Random Check'
-                  : 'Face Verification & Clock In'),
+                   : '$_modeLabel & Clock In'),
               style: const TextStyle(
                   fontSize: 23,
                   fontWeight: FontWeight.w700,
@@ -3226,7 +3434,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                   ? 'Real camera + face match — always pass'
                   : (_isChallenge
                   ? 'Face verification required'
-                  : 'Face verification'),
+                  : _modeLabel),
               style: const TextStyle(
                   fontSize: 20, color: Colors.white, height: 0.9),
             ),
@@ -3344,7 +3552,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                 ? 'Demo Mode'
                 : (_isChallenge
                 ? 'Presence Check'
-                : 'Step 3: Face Verification'),
+                  : 'Step 3: $_modeLabel'),
             textAlign: TextAlign.center,
             style: TextStyle(
                 color: _isDemo ? _demoAccent : tc.stepLabelColor,
@@ -3554,7 +3762,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('FACE VERIFIED',
+           Text(_matchSupported ? 'FACE VERIFIED' : 'LIVENESS PASSED',
               style: TextStyle(
                   color: color,
                   fontSize: 12,
@@ -3798,9 +4006,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     if (_faceState == _FaceState.success) return 1.0;
     if (!_facePresent) return 0.1;
     if (_faceWarning != _FaceWarning.none) return 0.25;
-    if (_blinkDone && _smileDone) return 0.95;
-    if (_blinkDone) return 0.7;
-    return 0.5;
+    if (_smileDone) return 0.95;
+    if (_plan.isEmpty) return 0.3;
+    return 0.3 + 0.6 * (_planIndex / _plan.length);
   }
 
   Color get _scanProgressColor {
@@ -3810,11 +4018,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     return _white.withValues(alpha: 0.5);
   }
 
-  String get _scanProgressLabel {
-    if (_smileDone && _blinkDone) return 'Verifying...';
+   String get _scanProgressLabel {
+    if (_smileDone) return 'Verifying...';
     if (_faceWarning != _FaceWarning.none) return 'Fix issue';
-    if (_blinkDone && !_smileDone) return 'Step 2: Smile 😊';
-    if (_facePresent) return 'Step 1: Blink your eyes 👁️';
+    final c = _currentChallenge;
+    if (_facePresent && c != null) {
+      return 'Step ${_planIndex + 1} of ${_plan.length}: ${c.label}';
+    }
     return 'Looking for face';
   }
 
@@ -3887,11 +4097,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
   }
 
-  String get _livenessHint {
-    if (_blinkDone && !_smileDone) return 'Now smile 😊';
-    if (_blinkDone && _smileDone) return 'Verifying...';
-    return 'Blink your eyes 👁️';
-  }
+  String get _livenessHint =>
+      _smileDone ? 'Verifying...' : (_currentChallenge?.label ?? 'Hold still');
+
 
   String get _stateTitle {
     if (_isCheckingGeofence) return 'Verifying\nLocation...';
@@ -3942,8 +4150,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
         if (_smileDone && _blinkDone) return 'Matching against your profile...';
         if (_facePresent) {
           if (_faceWarning != _FaceWarning.none) return _warningHintText;
-          if (!_blinkDone) return 'Step 1 of 2: Blink your eyes 👁️';
-          if (!_smileDone) return 'Step 2 of 2: Smile for the camera 😊';
+          final c = _currentChallenge;
+           if (c != null) {
+            return 'Step ${_planIndex + 1} of ${_plan.length}: ${c.label}';
+          }
         }
         return 'Center your face in the frame';
       case _FaceState.success:
@@ -3974,7 +4184,18 @@ enum _FaceWarning {
   tooBright
 }
 
-enum _LivenessStep { waitingForFace, blink, smile, collecting }
+enum _LivenessStep { waitingForFace, challenge, collecting }
+
+enum _Challenge { blink, smile, turnLeft, turnRight }
+
+extension _ChallengeText on _Challenge {
+  String get label => switch (this) {
+        _Challenge.blink => 'Blink your eyes 👁️',
+        _Challenge.smile => 'Smile 😊',
+        _Challenge.turnLeft => 'Turn your head left ⬅️',
+        _Challenge.turnRight => 'Turn your head right ➡️',
+      };
+}
 
 // ═══════════════════════════════════════════════════════════════
 // PAINTERS

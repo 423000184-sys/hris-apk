@@ -1,6 +1,10 @@
 // lib/screens/admin_attendance_verification_page.dart
+// v2.7: ✅ Field selfie proof review (field_proofs) — approve/reject together
+//       with the attendance log, audit trail + employee notification.
 // v2.6: 🛠️ Fixed missing GPS data by querying `activity_logs` as fallback.
 //       Now searches multiple collections to find the coordinates.
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -44,6 +48,12 @@ class _AdminAttendanceVerificationPageState
   DateTime? _clockInTime;
   DateTime? _clockOutTime;
 
+  // ── Field proof (selfie) state ──
+  String? _proofId;
+  Map<String, dynamic>? _proofData;
+  Uint8List? _proofBytes;
+  ll.LatLng? _proofCoords;
+
   // Debug Console
   List<String> _debugMessages = [];
 
@@ -81,6 +91,11 @@ class _AdminAttendanceVerificationPageState
       FirebaseAuth.instance.currentUser?.email?.toLowerCase().trim() ?? 'unknown';
   String get _actorUid => FirebaseAuth.instance.currentUser?.uid ?? 'unknown';
 
+  bool get _hasProof => _proofId != null && _proofData != null;
+  String get _proofStatus =>
+      (_proofData?['status'] ?? 'pending').toString().toLowerCase();
+  bool get _isClockInPhoto => _proofData?['source'] == 'clock_in_photo';
+
   @override
   void initState() {
     super.initState();
@@ -91,6 +106,107 @@ class _AdminAttendanceVerificationPageState
   void dispose() {
     _disposed = true;
     super.dispose();
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // FIELD PROOF HELPERS
+  // ══════════════════════════════════════════════════════════════
+  /// Finds the field_proofs doc id from `fieldProofId` or from the
+  /// `proof:<id>` tag written into `remarks` by the face screen.
+  String? _extractProofId(Map<String, dynamic> log) {
+    final direct = (log['fieldProofId'] ?? '').toString().trim();
+    if (direct.isNotEmpty) return direct;
+    final remarks = (log['remarks'] ?? '').toString();
+    final m = RegExp(r'proof:([A-Za-z0-9_\-]+)').firstMatch(remarks);
+    return m?.group(1);
+  }
+
+    /// Fallback: kung walang `proof:<id>` sa log, hanapin ang field_proofs
+  /// ng parehong empleyado, parehong araw at parehong IN/OUT.
+  Future<String?> _findProofByEmployeeAndDay(Map<String, dynamic> log) async {
+    try {
+      final empId =
+          (log['employee_id'] ?? log['employeeId'] ?? '').toString().trim();
+      if (empId.isEmpty) return null;
+      final logTs =
+          _toDateTime(log['timestamp'] ?? log['date'] ?? log['createdAt']);
+      if (logTs == null) return null;
+      final type = (log['type'] ?? '').toString().toUpperCase();
+
+      final snap = await FirebaseFirestore.instance
+          .collection('field_proofs')
+          .where('employeeId', isEqualTo: empId)
+          .limit(50)
+          .get()
+          .timeout(const Duration(seconds: 10));
+
+      String? bestId;
+      Duration? bestDiff;
+      for (final d in snap.docs) {
+        final data = d.data();
+        final at = _toDateTime(data['capturedAt']);
+        if (at == null) continue;
+        if (at.year != logTs.year ||
+            at.month != logTs.month ||
+            at.day != logTs.day) {
+          continue;
+        }
+        final t = (data['attendanceType'] ?? '').toString().toUpperCase();
+        if (type.isNotEmpty && t.isNotEmpty && t != type) continue;
+        final diff = at.difference(logTs).abs();
+        if (bestDiff == null || diff < bestDiff) {
+          bestDiff = diff;
+          bestId = d.id;
+        }
+      }
+      _debugMessages.add(bestId != null
+          ? 'Proof matched by employee/day: $bestId'
+          : 'No proof found for $empId on this day.');
+      return bestId;
+    } catch (e) {
+      _debugMessages.add('Proof lookup error: $e');
+      return null;
+    }
+  }
+
+  Future<void> _loadFieldProof(Map<String, dynamic> log) async {
+    String? id = _extractProofId(log);
+    if (id == null || id.isEmpty) {
+      id = await _findProofByEmployeeAndDay(log);
+    }
+    if (id == null || id.isEmpty) {
+      _debugMessages.add('No field proof linked to this log.');
+      return;
+    }
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('field_proofs')
+          .doc(id)
+          .get()
+          .timeout(const Duration(seconds: 10));
+      if (!doc.exists || doc.data() == null) {
+        _debugMessages.add('Field proof $id not found.');
+        return;
+      }
+      final d = doc.data()!;
+      _proofId = id;
+      _proofData = d;
+
+      final lat = (d['lat'] as num?)?.toDouble();
+      final lng = (d['lng'] as num?)?.toDouble();
+      if (lat != null && lng != null) _proofCoords = ll.LatLng(lat, lng);
+
+      final photo = (d['photo'] ?? '').toString();
+      if (photo.startsWith('data:image')) {
+        try {
+          final bytes = base64Decode(photo.split(',').last);
+          if (bytes.length <= 2 * 1024 * 1024) _proofBytes = bytes;
+        } catch (_) {}
+      }
+      _debugMessages.add('Field proof loaded: $id (${d['status']})');
+    } catch (e) {
+      _debugMessages.add('Field proof error: $e');
+    }
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -329,6 +445,9 @@ class _AdminAttendanceVerificationPageState
       _debugMessages.add('Found GPS in current log!');
     }
 
+    // ── Field selfie proof (if this log was submitted from the field) ──
+    await _loadFieldProof(log);
+
     try {
       Map<String, dynamic>? found;
       if (empId.isNotEmpty) {
@@ -546,16 +665,94 @@ class _AdminAttendanceVerificationPageState
   // ══════════════════════════════════════════════════════════════
   // ACTIONS (Approve & Flag)
   // ══════════════════════════════════════════════════════════════
+  Future<void> _writeAudit(String action, Map<String, dynamic> details) async {
+    try {
+      await FirebaseFirestore.instance.collection('admin_audit_log').add({
+        'action': action,
+        'targetType': 'attendance_log',
+        'targetId': widget.logId,
+        'actorUid': _actorUid,
+        'actorEmail': _actorEmail,
+        'details': details,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _notifyEmployee(String title, String message) async {
+    try {
+      final empId = (widget.logData['employee_id'] ??
+              widget.logData['employeeId'] ??
+              _proofData?['employeeId'] ??
+              '')
+          .toString()
+          .trim();
+      if (empId.isEmpty) return;
+      await FirebaseFirestore.instance.collection('employee_notifications').add({
+        'employeeId': empId,
+        'employee_id': empId,
+        'type': 'attendance',
+        'title': title,
+        'message': message,
+        'senderName': _actorEmail,
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+      }).timeout(const Duration(seconds: 10));
+    } catch (_) {}
+  }
+
   Future<void> _approveLog() async {
     if (_isDemo) return _demoBlock();
+
+        if (_hasProof && _proofStatus != 'pending' && _proofStatus != 'auto') {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: tc.card,
+          title: Text('Proof already $_proofStatus', style: TextStyle(color: tc.text)),
+          content: Text('This field proof was already reviewed. Approve again?', style: TextStyle(color: tc.text, fontSize: 13)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel', style: TextStyle(color: tc.muted))),
+            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: tc.orange), onPressed: () => Navigator.pop(context, true), child: const Text('Approve')),
+          ],
+        ),
+      );
+      if (go != true) return;
+    }
+
     _safeSetState(() => _processingAction = true);
     try {
-      await FirebaseFirestore.instance.collection('attendance_logs').doc(widget.logId).set({
+      final fs = FirebaseFirestore.instance;
+      final batch = fs.batch();
+
+      batch.set(fs.collection('attendance_logs').doc(widget.logId), {
         'reviewStatus': 'approved',
         'reviewedBy': _actorEmail,
         'reviewedByUid': _actorUid,
         'reviewedAt': FieldValue.serverTimestamp(),
+        if (_hasProof) 'fieldProofId': _proofId,
       }, SetOptions(merge: true));
+
+      if (_hasProof) {
+        batch.set(fs.collection('field_proofs').doc(_proofId), {
+          'status': 'approved',
+          'reviewedBy': _actorEmail,
+          'reviewedByUid': _actorUid,
+          'reviewedAt': FieldValue.serverTimestamp(),
+          'attendanceLogId': widget.logId,
+        }, SetOptions(merge: true));
+      }
+
+      await batch.commit().timeout(const Duration(seconds: 15));
+
+      await _writeAudit(
+        _hasProof ? 'field_proof_approved' : 'attendance_approved',
+        {'fieldProofId': _proofId, 'proofStatusBefore': _proofStatus},
+      );
+        if (_hasProof && !_isClockInPhoto) {
+        await _notifyEmployee('Field Attendance Approved',
+            'Your field selfie attendance was approved by HR.');
+      }
 
       if (!_safe) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance approved.'), backgroundColor: Colors.green));
@@ -576,10 +773,15 @@ class _AdminAttendanceVerificationPageState
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: tc.card,
-        title: Text('Flag for Review', style: TextStyle(color: tc.text)),
+        title: Text(_hasProof ? 'Reject Field Proof' : 'Flag for Review', style: TextStyle(color: tc.text)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_hasProof)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text('The selfie proof will be rejected and this attendance flagged. The employee will be notified.', style: TextStyle(color: tc.textMuted, fontSize: 12)),
+              ),
             TextField(
               controller: reasonCtrl,
               maxLines: 3,
@@ -593,7 +795,7 @@ class _AdminAttendanceVerificationPageState
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: tc.red),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Flag'),
+            child: Text(_hasProof ? 'Reject' : 'Flag'),
           ),
         ],
       ),
@@ -601,18 +803,54 @@ class _AdminAttendanceVerificationPageState
 
     if (confirmed != true) return;
 
+    final reason = reasonCtrl.text.trim();
+    if (_hasProof && reason.length < 5) {
+      if (!_safe) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: const Text('Please provide a reason (min. 5 characters).'), backgroundColor: tc.red));
+      return;
+    }
+
     _safeSetState(() => _processingAction = true);
     try {
-      await FirebaseFirestore.instance.collection('attendance_logs').doc(widget.logId).set({
+      final fs = FirebaseFirestore.instance;
+      final batch = fs.batch();
+
+      batch.set(fs.collection('attendance_logs').doc(widget.logId), {
         'reviewStatus': 'flagged',
-        'reviewReason': reasonCtrl.text.trim(),
+        'reviewReason': reason,
         'reviewedBy': _actorEmail,
         'reviewedByUid': _actorUid,
         'reviewedAt': FieldValue.serverTimestamp(),
+        if (_hasProof) 'fieldProofId': _proofId,
       }, SetOptions(merge: true));
 
+      if (_hasProof) {
+        batch.set(fs.collection('field_proofs').doc(_proofId), {
+          'status': 'rejected',
+          'reviewReason': reason,
+          'reviewedBy': _actorEmail,
+          'reviewedByUid': _actorUid,
+          'reviewedAt': FieldValue.serverTimestamp(),
+          'attendanceLogId': widget.logId,
+        }, SetOptions(merge: true));
+      }
+
+      await batch.commit().timeout(const Duration(seconds: 15));
+
+      await _writeAudit(
+        _hasProof ? 'field_proof_rejected' : 'attendance_flagged',
+        {'fieldProofId': _proofId, 'reason': reason},
+      );
+      if (_hasProof && !_isClockInPhoto) {
+        await _notifyEmployee('Field Attendance Rejected',
+            'Your field selfie attendance was rejected by HR. Reason: $reason');
+      }
+
       if (!_safe) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance flagged for review.'), backgroundColor: Colors.orange));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_hasProof ? 'Field proof rejected.' : 'Attendance flagged for review.'),
+        backgroundColor: Colors.orange,
+      ));
       widget.onBack?.call();
     } catch (e) {
       if (!_safe) return;
@@ -634,7 +872,9 @@ class _AdminAttendanceVerificationPageState
     final photoUrl = _getPhotoUrl();
     final client = _getClientInfo();
     final deviceInfo = _getDeviceInfo();
-    final verificationNote = _s(widget.logData['verificationNote'], 'Off-site Client Meeting Proof');
+    final verificationNote = _hasProof
+        ? (_isClockInPhoto ? 'Clock-in Photo' : 'Field Selfie Proof')
+        : _s(widget.logData['verificationNote'], 'Off-site Client Meeting Proof');
     final employeeId = _formatEmployeeId();
     final ts = _toDateTime(widget.logData['timestamp'] ?? widget.logData['date'] ?? widget.logData['createdAt'] ?? widget.logData['clockInTime']);
     final dateStr = _fmtFullDate(ts);
@@ -780,7 +1020,7 @@ class _AdminAttendanceVerificationPageState
         children: [
           Text('Attendance Verification', style: TextStyle(fontSize: r.responsive<double>(xs: 22, sm: 24, md: 26, lg: 28), fontWeight: FontWeight.w700, color: tc.text, letterSpacing: -0.5)),
           const SizedBox(height: 4),
-          Text('Off-site Client Meeting Proof', style: TextStyle(fontSize: 13, color: tc.muted)),
+          Text(_hasProof ? 'Field Selfie Proof' : 'Off-site Client Meeting Proof', style: TextStyle(fontSize: 13, color: tc.muted)),
         ],
       );
 
@@ -789,16 +1029,16 @@ class _AdminAttendanceVerificationPageState
         label: _isDemo ? 'Approve (Demo)' : 'Approve',
         color: _isDemo ? tc.border : tc.orange,
         fg: _isDemo ? tc.muted : Colors.white,
-        onTap: _isDemo ? _demoBlock : _approveLog,
+        onTap: _isDemo ? _demoBlock : (_processingAction ? () {} : _approveLog),
       );
 
       final flagBtn = _headerButton(
         icon: _isDemo ? Icons.lock_outline_rounded : Icons.flag_outlined,
-        label: _isDemo ? 'Flag (Demo)' : 'Flag',
+        label: _isDemo ? 'Flag (Demo)' : (_hasProof ? 'Reject' : 'Flag'),
         color: _isDemo ? tc.border : tc.red.withValues(alpha: 0.85),
         fg: _isDemo ? tc.muted : Colors.white,
         outlined: true,
-        onTap: _isDemo ? _demoBlock : _flagLog,
+        onTap: _isDemo ? _demoBlock : (_processingAction ? () {} : _flagLog),
       );
 
       final actions = Wrap(
@@ -1053,6 +1293,26 @@ class _AdminAttendanceVerificationPageState
             ],
           ),
           const SizedBox(height: 20),
+                    if (_hasProof) ...[
+            _buildFieldProofCard(tc),
+            const SizedBox(height: 20),
+          ] else if (_debugMessages.any((m) => m.toLowerCase().contains('proof'))) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: tc.pillWarnBg,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                _debugMessages
+                    .where((m) => m.toLowerCase().contains('proof'))
+                    .join('\n'),
+                style: TextStyle(fontSize: 11, color: tc.pillWarnTx),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
           _buildMapPreview(tc, dateStr: dateStr),
           const SizedBox(height: 20),
           LayoutBuilder(builder: (_, c) {
@@ -1063,6 +1323,126 @@ class _AdminAttendanceVerificationPageState
             if (narrow) return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [clientBox, const SizedBox(height: 12), deviceBox]);
             return Row(children: [Expanded(child: clientBox), const SizedBox(width: 12), Expanded(child: deviceBox)]);
           }),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // FIELD PROOF CARD
+  // ══════════════════════════════════════════════════════════════
+  Widget _buildFieldProofCard(AdminColors tc) {
+    final d = _proofData!;
+    final status = _proofStatus;
+
+    Color bg, fg;
+    String label;
+    if (status == 'approved') {
+      bg = tc.pillGreenBg; fg = tc.pillGreenTx; label = 'APPROVED';
+    } else if (status == 'rejected') {
+      bg = tc.pillErrBg; fg = tc.pillErrTx; label = 'REJECTED';
+    } else if (status == 'auto') {
+      bg = tc.pillGreenBg; fg = tc.pillGreenTx; label = 'AUTO-CAPTURED';
+    } else {
+      bg = tc.pillWarnBg; fg = tc.pillWarnTx; label = 'PENDING HR REVIEW';
+    }
+
+    final capturedAt = _toDateTime(d['capturedAt']);
+    final accuracy = (d['accuracyMeters'] as num?)?.toDouble();
+    final nearest = _s(d['nearestSiteName'], 'None');
+    final type = _s(d['attendanceType'], '—').toUpperCase();
+    final coordsText = _proofCoords != null
+        ? '${_proofCoords!.latitude.toStringAsFixed(6)}, ${_proofCoords!.longitude.toStringAsFixed(6)}'
+        : 'Not recorded';
+
+    final photo = Container(
+      width: 140,
+      height: 180,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: tc.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tc.border),
+      ),
+      child: _proofBytes != null
+          ? InkWell(
+              onTap: () => showDialog<void>(
+                context: context,
+                builder: (_) => Dialog(
+                  backgroundColor: Colors.black,
+                  child: InteractiveViewer(child: Image.memory(_proofBytes!, fit: BoxFit.contain)),
+                ),
+              ),
+              child: Image.memory(_proofBytes!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Icon(Icons.broken_image_outlined, color: tc.muted)),
+            )
+          : Center(child: Icon(Icons.no_photography_outlined, color: tc.muted, size: 32)),
+    );
+
+    final info = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6), border: Border.all(color: fg.withValues(alpha: 0.3))),
+          child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: fg, letterSpacing: 0.5)),
+        ),
+        const SizedBox(height: 10),
+        _proofRow(tc, Icons.swap_vert_rounded, 'Type', type),
+        _proofRow(tc, Icons.schedule_rounded, 'Server time', _fmtFullDate(capturedAt)),
+        _proofRow(tc, Icons.place_outlined, 'Coordinates', coordsText),
+        _proofRow(tc, Icons.gps_fixed_rounded, 'GPS accuracy', accuracy != null ? '±${accuracy.toStringAsFixed(0)} m' : 'Not recorded'),
+        _proofRow(tc, Icons.business_outlined, 'Nearest site', nearest),
+        if (status == 'rejected' && _s(d['reviewReason'], '').isNotEmpty)
+          _proofRow(tc, Icons.info_outline_rounded, 'Reason', _s(d['reviewReason'])),
+        if (_s(d['reviewedBy'], '').isNotEmpty)
+          _proofRow(tc, Icons.person_outline_rounded, 'Reviewed by', _s(d['reviewedBy'])),
+      ],
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: tc.orange.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tc.orange.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.camera_front_rounded, size: 16, color: tc.orange),
+            const SizedBox(width: 8),
+                    Text(_isClockInPhoto ? 'CLOCK-IN PHOTO' : 'FIELD SELFIE PROOF', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: tc.orangeText, letterSpacing: 0.6)),
+          ]),
+          const SizedBox(height: 4),
+          Text(
+            _isClockInPhoto
+                ? 'Photo captured automatically after face verification at clock-in.'
+                : 'Submitted because the employee was outside every assigned client site. Attendance stays pending until HR approves.',
+            style: TextStyle(fontSize: 11, color: tc.textMuted, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(builder: (_, c) {
+            if (c.maxWidth < 420) {
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [photo, const SizedBox(height: 12), info]);
+            }
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [photo, const SizedBox(width: 16), Expanded(child: info)]);
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _proofRow(AdminColors tc, IconData icon, String k, String v) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 13, color: tc.muted),
+          const SizedBox(width: 6),
+          SizedBox(width: 84, child: Text(k, style: TextStyle(fontSize: 11, color: tc.muted, fontWeight: FontWeight.w600))),
+          Expanded(child: Text(v, style: TextStyle(fontSize: 12, color: tc.text, fontWeight: FontWeight.w600))),
         ],
       ),
     );
@@ -1138,6 +1518,7 @@ class _AdminAttendanceVerificationPageState
     final points = <ll.LatLng>[];
     if (_clockInCoords != null) points.add(_clockInCoords!);
     if (_clockOutCoords != null) points.add(_clockOutCoords!);
+    if (_proofCoords != null) points.add(_proofCoords!);
 
     final hasGps = points.isNotEmpty;
 
@@ -1191,6 +1572,15 @@ class _AdminAttendanceVerificationPageState
                               child: Container(
                                 decoration: BoxDecoration(color: Colors.red, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
                                 child: const Icon(Icons.logout_rounded, color: Colors.white, size: 20),
+                              ),
+                            ),
+                          if (_proofCoords != null)
+                            Marker(
+                              point: _proofCoords!,
+                              width: 40, height: 40,
+                              child: Container(
+                                decoration: BoxDecoration(color: Colors.deepOrange, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
+                                child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 18),
                               ),
                             ),
                         ],
@@ -1334,6 +1724,21 @@ class _AdminAttendanceVerificationPageState
                                 child: Text(
                                   'OUT: ${_clockOutTime != null ? DateFormat('hh:mm a').format(_clockOutTime!) : 'Time N/A'}',
                                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: tc.text),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (_proofCoords != null) ...[
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              const Icon(Icons.camera_alt_rounded, size: 12, color: Colors.deepOrange),
+                              const SizedBox(width: 6),
+                              const Expanded(
+                                child: Text(
+                                  'Selfie proof location',
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
                                 ),
                               ),
                             ],

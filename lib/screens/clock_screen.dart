@@ -146,6 +146,11 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   late bool _isInRange;
   late bool _wfhAccess;
   bool _checkingGeofence = false;
+  bool _noZones = false;
+  bool _pendingGeoVerify = false;
+  StreamSubscription<QuerySnapshot>? _locationsSub;
+  Timer? _locRefreshDebounce;
+  bool _locationsFirstSnap = true;
   int _activeNavIndex = 0;
 
   DateTime? _clockInTime;
@@ -238,8 +243,22 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
   bool get _canClock {
     if (_isDemo) return true;
 
-    return (_isInRange || _wfhAccess) &&
+    return (_isInRange || _wfhAccess || _isDriver) &&
         _networkState == _NetworkState.online;
+  }
+
+  /// Clock-out ay pwede kahit walang active zone (mamarkahang pending).
+  bool get _canClockOut =>
+      _canClock ||
+      (_noZones && _clockInTime != null && _isOnline);
+
+  bool get _isDriver {
+    final role = (_employee?.position ?? '').toLowerCase();
+    final dept = (_employee?.department ?? '').toLowerCase();
+    return role.contains('driver') ||
+        role.contains('rider') ||
+        dept.contains('driver') ||
+        dept.contains('rider');
   }
 
   bool get _isWfhMode => _wfhAccess && !_isInRange;
@@ -319,6 +338,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     _startAttendanceStream();
     _startEmployeeListener();
+    _startLocationsListener();
     _startSessionRevocationListener();
     _loadDeviceModel();
     _loadCachedTimes();
@@ -430,6 +450,25 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       debugPrint('$st');
     }
     debugPrint('═══════════════════════════════════════════');
+  }
+
+  void _startLocationsListener() {
+    if (_isDemo) return;
+    _locationsSub?.cancel();
+    _locationsFirstSnap = true;
+    _locationsSub = FirebaseFirestore.instance
+        .collection('locations')
+        .snapshots()
+        .listen((_) {
+      if (_locationsFirstSnap) {
+        _locationsFirstSnap = false;
+        return;
+      }
+      _locRefreshDebounce?.cancel();
+      _locRefreshDebounce = Timer(const Duration(seconds: 2), () {
+        if (mounted && !_loggedOut) _refreshGeofence(silent: true);
+      });
+    }, onError: (e) => debugPrint('⚠️ locations listener: $e'));
   }
 
   void _startPresenceIfNeeded() {
@@ -837,6 +876,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
           _reloadEmployeeOnce().catchError(
                 (e) => debugPrint('⚠️ Resume employee reload failed: $e'),
           );
+          _refreshGeofence(silent: true);
         }
       });
     }
@@ -1007,6 +1047,8 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     _attendanceSubCamelEmpId?.cancel();
     _employeeSub?.cancel();
     _sessionSub?.cancel();
+    _locationsSub?.cancel();
+    _locRefreshDebounce?.cancel();
     _connectivitySub?.cancel();
     _overlayDelayTimer?.cancel();
     _sessionWatchdog?.cancel();
@@ -1050,6 +1092,16 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     return defaultTargetPlatform.name;
   }
 
+  Future<bool> _hasLocalIn(String empId) async {
+    try {
+      final rows =
+          await OfflineAttendanceService.instance.getTodayForEmployee(empId);
+      return rows.any((r) => (r['type'] as String?) == 'IN');
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> _hasClockedInToday() async {
     if (_isDemo) return false;
     final empId = _employeeId;
@@ -1059,8 +1111,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       final prefs = await SharedPreferences.getInstance();
       final lastClockIn = prefs.getString('last_clock_in_date_$empId');
 
-      if (!_isOnline) return lastClockIn == _todayStr;
+      // 📴 Offline: local cache lang
+      if (!_isOnline) {
+        if (lastClockIn == _todayStr) return true;
+        return await _hasLocalIn(empId);
+      }
 
+      // 🌐 Online: Firestore ang boss
       final q = await FirebaseFirestore.instance
           .collection('attendance_logs')
           .where('employee_id', isEqualTo: empId)
@@ -1070,18 +1127,27 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
           .get()
           .timeout(const Duration(seconds: 5));
 
-      if (q.docs.isNotEmpty) {      
-      if (lastClockIn == _todayStr) {
-      await prefs.remove('last_clock_in_date_$empId');
+      if (q.docs.isNotEmpty) {
+        if (lastClockIn != _todayStr) {
+          await prefs.setString('last_clock_in_date_$empId', _todayStr);
+        }
+        return true;
       }
-      return false;
-      await prefs.setString('last_clock_in_date_$empId', _todayStr);
-      return true;
+
+      if (await _hasLocalIn(empId)) return true; // pending pa sa queue
+
+      // Na-delete sa server: linisin ang stale marker
+      if (lastClockIn == _todayStr) {
+        await prefs.remove('last_clock_in_date_$empId');
       }
       return false;
     } catch (e) {
       debugPrint('⚠️ _hasClockedInToday error: $e');
-      return false;
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getString('last_clock_in_date_$empId') == _todayStr) {
+        return true;
+      }
+      return await _hasLocalIn(empId);
     }
   }
   
@@ -1234,12 +1300,14 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       debugPrint('   status   = ${result.status}');
       debugPrint('   matched  = ${result.matchedLocationName}');
 
-      final changed = inside != _isInRange;
+      final noZones = result.isNoZones;
+      final changed = inside != _isInRange || noZones != _noZones;
       final mockChanged = mockDetected != _mockLocationDetected;
 
       if (changed || mockChanged) {
         setState(() {
           _isInRange = inside;
+          _noZones = noZones;
           _mockLocationDetected = mockDetected;
         });
       }
@@ -1255,12 +1323,15 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         );
       }
 
-      if (changed && !silent) {
+      // Laging ipaalam kapag lumala ang status, kahit silent ang refresh
+      if (changed && (!silent || !inside)) {
         _showSnack(
           inside
               ? '✅ You are now inside the authorized zone.'
-              : '📍 You are outside the authorized zone. '
-                  'If you are remote, ask the admin to enable WFH.',
+              : (noZones
+                  ? '📍 Walang active na work zone. Contact Admin.'
+                  : '📍 You are outside the authorized zone. '
+                      'If you are remote, ask the admin to enable WFH.'),
         );
       }
     } catch (e) {
@@ -1771,7 +1842,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     final proofTag =
         _fieldProofId != null ? '|field_selfie_pending|proof:$_fieldProofId' : '';
     final baseRemarks = zoneType;
-    final remarks = '$baseRemarks$proofTag';
+    final pendingTag =
+        _pendingGeoVerify ? '|pending_geofence_verification' : '';
+    final remarks = '$baseRemarks$proofTag$pendingTag';
 
     final result = await OfflineAttendanceService.instance.logAttendance(
       employeeId: empId,
@@ -2181,7 +2254,10 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       return false;
     }
 
-    if (!_isInRange && !_wfhAccess) {
+    _pendingGeoVerify = false;
+
+    // Laging fresh check (hindi na nakadepende sa stale _isInRange)
+    if (!_wfhAccess) {
       try {
         final fresh = await _checkGeofenceWithFallback();
 
@@ -2197,6 +2273,35 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
         final stillInside = fresh.isInside ||
             fresh.status == GeofenceStatus.insideWithTolerance;
+
+        if (fresh.isMockLocation && !fresh.isExempted) {
+          _logSecurityEvent(
+            type: 'clock_action_mock_location',
+            severity: 'critical',
+            details: 'Mock location during $action (fresh check)',
+          );
+          _showSnack('🚫 Fake GPS detected. Please disable mock location apps.');
+          return false;
+        }
+
+        if (fresh.isNoZones) {
+          final isOut = action.toLowerCase().contains('out');
+          if (isOut && _clockInTime != null) {
+            // Para hindi ma-stuck ang naka-clock in: payagan, i-mark pending
+            _pendingGeoVerify = true;
+            setState(() {
+              _isInRange = false;
+              _noZones = true;
+            });
+            return true;
+          }
+          setState(() {
+            _isInRange = false;
+            _noZones = true;
+          });
+          _showSnack('📍 Walang active na work zone. Contact Admin.');
+          return false;
+        }
 
         if (fresh.needsProof) {
           final id = await _requestFieldSelfie(fresh, action);
@@ -2935,6 +3040,15 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
       accent = _orange;
       statusText = 'In Range.';
       subtitle = 'Our system verified your location. You are ready to go.';
+    } else if (_isDriver && !_isInRange) {
+      accent = const Color(0xFF3B82F6);
+      statusText = 'Field Duty.';
+      subtitle = 'Driver/Rider mode — clock in/out allowed. '
+          'Selfie proof may be required.';
+    } else if (_noZones) {
+      accent = const Color(0xFFF59E0B);
+      statusText = 'No Work Zone.';
+      subtitle = 'No active work zone is set. Please contact Admin.';
     } else {
       accent = _orange;
       statusText = 'Out of Range.';
@@ -3086,7 +3200,9 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                   label: 'Clock In',
                   time: _saving && !clocked
                       ? 'Saving...'
-                      : (canClock ? _clockInDisplay : 'Locked'),
+                      : ((canClock || _clockInTime != null)
+                          ? _clockInDisplay
+                          : 'Locked'),
                   active: true,
                   locked: !canClock,
                 ),
@@ -3094,16 +3210,18 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
             ),
             Expanded(
               child: GestureDetector(
-                onTap: (_saving || !canClock || _clockActionInProgress)
+                onTap: (_saving || !_canClockOut || _clockActionInProgress)
                     ? null
                     : _handleClockOut,
                 behavior: HitTestBehavior.opaque,
                 child: _toggleTab(
                   tc: tc,
                   label: 'Clock Out',
-                  time: canClock ? _clockOutDisplay : 'Locked',
+                  time: (_canClockOut || _clockOutTime != null)
+                      ? _clockOutDisplay
+                      : 'Locked',
                   active: false,
-                  locked: !canClock,
+                  locked: !_canClockOut,
                 ),
               ),
             ),
@@ -3158,7 +3276,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
               time,
               style: TextStyle(
                 fontSize: 11,
-                color: locked
+                color: (locked && time == 'Locked')
                     ? _red
                     : (active
                         ? Colors.white.withValues(alpha: 0.9)
@@ -3196,7 +3314,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
 
     final labelColor = isInRangeOrWfh ? tc.textPrimary : tc.textOnDark;
     final hasClockedOut = _clockOutTime != null;
-    final canClock = _canClock;
+    final canClock = _canClockOut;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),

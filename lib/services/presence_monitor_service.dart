@@ -84,6 +84,8 @@ class PresenceMonitorService {
   String? _lastAutoClockOutTrigger;
   DateTime? _autoClockOutAt;
   DateTime? _lastHeartbeatAt;
+  DateTime? _exitCandidateSince; // ✅ unang "outside" reading (kailangan ng kumpirmasyon)
+  static const Duration _exitConfirmDuration = Duration(minutes: 3);
 
   // ═══════════════════════════════════════════════════════════════
   // 🆕 AUTO OVERTIME STATE (GLOBAL)
@@ -240,6 +242,7 @@ class PresenceMonitorService {
     _lastAutoClockOutTrigger = null;
     _autoClockOutAt = null;
     _lastHeartbeatAt = null;
+    _exitCandidateSince = null;
     // Auto OT state
     _overtimeAutoDetectEnabled = false;
     _overtimeHardCapTime = '23:00';
@@ -575,11 +578,38 @@ class PresenceMonitorService {
       debugPrint('🛰️ [Live] Check #$_checkCount '
           '${forceFromSettings ? "(FORCED)" : ""} starting...');
 
+      // ✅ Gamitin ang per-employee check para makilala ang WFH / driver
       final geo = await GeofenceService.instance
-          .checkGeofence()
-          .timeout(const Duration(seconds: 15));
+          .checkGeofenceForEmployee(
+            employeeId: _employeeDocId ?? _employeeId!,
+          )
+          .timeout(const Duration(seconds: 30));
 
-      final zone = geo.isInside ? 'inside' : 'outside';
+      // ✅ Hindi na lahat ng hindi "inside" ay "outside"
+      final String zone;
+      switch (geo.status) {
+        case GeofenceStatus.inside:
+        case GeofenceStatus.insideWithTolerance:
+          zone = 'inside';
+          break;
+        case GeofenceStatus.outside:
+          zone = 'outside';
+          break;
+        case GeofenceStatus.exempted:
+        case GeofenceStatus.fieldNeedsProof:
+          zone = 'exempt'; // WFH / driver: walang geofence-exit clock-out
+          break;
+        default:
+          // error, serviceDisabled, permission, noZones, loading
+          debugPrint('⏭️ [Live] Check skipped — unreliable status: '
+              '${geo.status}');
+          return;
+      }
+
+      if (geo.isMockLocation && !geo.isExempted) {
+        debugPrint('⏭️ [Live] Check skipped — mock location');
+        return;
+      }
       final distance = geo.distanceMeters ?? 0;
       final accuracy = geo.accuracyMeters;
       final now = DateTime.now();
@@ -691,24 +721,33 @@ class PresenceMonitorService {
       debugPrint('⏰ [AutoClockOut] Checking triggers '
           '${otActive ? "(OT ACTIVE)" : ""}...');
 
-      // Trigger 1: Geofence exit — SKIP IF AUTO-OT ACTIVE
-      if (!otActive &&
-          changed &&
-          previousZone == 'inside' &&
-          zone == 'outside') {
-        debugPrint('⏰ [AutoClockOut] TRIGGER: geofence_exit');
-        await _performAutoClockOut(
-          trigger: 'geofence_exit',
-          locationData: {
-            'distanceMeters': distance,
-            'accuracyMeters': accuracy,
-          },
-        );
-      } else if (otActive &&
-          changed &&
-          previousZone == 'inside' &&
-          zone == 'outside') {
-        debugPrint('⏭️ [AutoClockOut] geofence_exit SKIPPED — auto-OT');
+      // Trigger 1: Geofence exit — ✅ kailangan ng kumpirmasyon (3 min)
+      if (zone != 'outside') {
+        _exitCandidateSince = null; // bumalik sa loob o exempt
+      } else {
+        if (changed && previousZone == 'inside') {
+          _exitCandidateSince = now;
+          debugPrint('⏳ [AutoClockOut] Possible exit — waiting for '
+              'confirmation');
+        }
+
+        final candidate = _exitCandidateSince;
+        if (candidate != null) {
+          if (otActive) {
+            debugPrint('⏭️ [AutoClockOut] geofence_exit SKIPPED — auto-OT');
+            _exitCandidateSince = null;
+          } else if (now.difference(candidate) >= _exitConfirmDuration) {
+            _exitCandidateSince = null;
+            debugPrint('⏰ [AutoClockOut] TRIGGER: geofence_exit (confirmed)');
+            await _performAutoClockOut(
+              trigger: 'geofence_exit',
+              locationData: {
+                'distanceMeters': distance,
+                'accuracyMeters': accuracy,
+              },
+            );
+          }
+        }
       }
 
       // Trigger 2: Shift end (5:00 PM + still clocked in)

@@ -224,6 +224,11 @@ class DashboardScreenState extends State<DashboardScreen>
   String _role = '';
   String _department = '';
   double? _distanceMeters;
+  bool _noZones = false;
+  String? _matchedLocationName;
+  StreamSubscription<QuerySnapshot>? _locationsSub;
+  Timer? _locRefreshDebounce;
+  bool _locationsFirstSnap = true;
   bool _mockLocationDetected = false;
 
   _NetworkState _networkState = _NetworkState.online;
@@ -738,6 +743,7 @@ class DashboardScreenState extends State<DashboardScreen>
           _handleForcedLogout('Session invalid on resume');
         } else if (mounted && !_loggedOut) {
           _loadTodayAttendance().catchError((e) {});
+          _refreshLocation();
         }
       });
     }
@@ -838,6 +844,7 @@ class DashboardScreenState extends State<DashboardScreen>
 
     _startAttendanceStream();
     _startEmployeeListener();
+    _startLocationsListener();
     await _refreshLocation();
     if (!mounted) return;
 
@@ -936,6 +943,25 @@ class DashboardScreenState extends State<DashboardScreen>
     );
   }
 
+  void _startLocationsListener() {
+    if (_isDemo) return;
+    _locationsSub?.cancel();
+    _locationsFirstSnap = true;
+    _locationsSub = FirebaseFirestore.instance
+        .collection('locations')
+        .snapshots()
+        .listen((_) {
+      if (_locationsFirstSnap) {
+        _locationsFirstSnap = false; // skip initial snapshot
+        return;
+      }
+      _locRefreshDebounce?.cancel();
+      _locRefreshDebounce = Timer(const Duration(seconds: 2), () {
+        if (mounted && !_loggedOut) _refreshLocation();
+      });
+    }, onError: (_) {});
+  }
+
   Future<void> _refreshLocation() async {
     if (_isDemo) {
       if (mounted) {
@@ -990,6 +1016,7 @@ class DashboardScreenState extends State<DashboardScreen>
         setState(() {
           _checkingLocation = false;
           _isInRange = false;
+          _noZones = false;
         });
         return;
       }
@@ -1005,13 +1032,18 @@ class DashboardScreenState extends State<DashboardScreen>
       setState(() {
         _isInRange = nonNullResult.isInside ||
             nonNullResult.status == GeofenceStatus.insideWithTolerance;
+        _noZones = nonNullResult.isNoZones;
+        _matchedLocationName = nonNullResult.matchedLocationName;
         _distanceMeters = nonNullResult.distanceMeters;
         _checkingLocation = false;
         _mockLocationDetected = mockDetected;
       });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _checkingLocation = false);
+      setState(() {
+        _checkingLocation = false;
+        _isInRange = false;
+      });
     }
   }
 
@@ -1320,6 +1352,8 @@ class DashboardScreenState extends State<DashboardScreen>
     _attendanceSubCamel?.cancel();
     _attendanceSubDocId?.cancel();
     _employeeSub?.cancel();
+    _locationsSub?.cancel();
+    _locRefreshDebounce?.cancel();
     _connectivitySub?.cancel();
     _overlayDelayTimer?.cancel();
     _heartbeatTimer?.cancel();
@@ -2850,6 +2884,10 @@ class DashboardScreenState extends State<DashboardScreen>
       statusText = 'clocked out.';
       subtitle = 'You are inside the authorized zone.';
       accentColor = _T.orange;
+    } else if (_noZones) {
+      statusText = 'unable to clock in.';
+      subtitle = 'No active work zone is set. Please contact Admin.';
+      accentColor = const Color(0xFFF59E0B);
     } else {
       statusText = 'out of range.';
       subtitle =
@@ -2964,6 +3002,9 @@ class DashboardScreenState extends State<DashboardScreen>
   Widget _buildToggle(_ThemeColors tc) {
     final clocked = _isClockedIn;
     final canAction = _canClock && _isOnline && !_deviceCompromised;
+    // Clock-out ay pwede kahit walang active zone (pending verification)
+    final canOut =
+        (_canClock || _noZones) && _isOnline && !_deviceCompromised;
 
     return Container(
       padding: const EdgeInsets.all(7),
@@ -2989,14 +3030,14 @@ class DashboardScreenState extends State<DashboardScreen>
           ),
           Expanded(
             child: GestureDetector(
-              onTap: (!clocked || !canAction) ? null : _handleClockAction,
+              onTap: (!clocked || !canOut) ? null : _handleClockAction,
               behavior: HitTestBehavior.opaque,
               child: _toggleTab(
                 tc: tc,
                 label: 'Clock Out',
                 time: _clockOutTime,
                 active: false,
-                locked: !canAction,
+                locked: !canOut,
               ),
             ),
           ),
@@ -3037,15 +3078,17 @@ class DashboardScreenState extends State<DashboardScreen>
             ),
             const SizedBox(height: 2),
             Text(
-              locked ? 'Locked' : time,
+              (locked && time == '--:--') ? 'Locked' : time,
               style: TextStyle(
                 fontSize: 12,
-                color: locked
+                color: (locked && time == '--:--')
                     ? _T.red
                     : (active
                         ? Colors.white.withValues(alpha: 0.9)
                         : tc.textMuted),
-                fontWeight: locked ? FontWeight.w700 : FontWeight.w500,
+                fontWeight: (locked && time == '--:--')
+                    ? FontWeight.w700
+                    : FontWeight.w500,
               ),
             ),
           ],
@@ -3205,9 +3248,19 @@ class DashboardScreenState extends State<DashboardScreen>
       gradientStart = _T.orange;
       gradientEnd = _T.orange;
       leadingIcon = Icons.location_on_rounded;
-      title = 'HQ Main Office';
+      title = _matchedLocationName ?? 'Authorized Zone';
       subtitle = 'Inside Authorized Zone';
       subtitleColor = _T.orange;
+    } else if (_noZones) {
+      const amber = Color(0xFFF59E0B);
+      dotColor = amber;
+      borderColor = amber;
+      gradientStart = amber;
+      gradientEnd = const Color(0xFFD97706);
+      leadingIcon = Icons.wrong_location_rounded;
+      title = 'No Active Work Zone';
+      subtitle = 'Contact Admin to set a clock-in location';
+      subtitleColor = amber;
     } else {
       dotColor = _T.red;
       borderColor = _T.red;
@@ -3614,7 +3667,9 @@ class DashboardScreenState extends State<DashboardScreen>
 
     return RepaintBoundary(
       child: GestureDetector(
-        onTap: _handleClockAction,
+        onTap: ((_canClock || _noZones) && _isOnline && !_deviceCompromised)
+            ? _handleClockAction
+            : null,
         behavior: HitTestBehavior.opaque,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),

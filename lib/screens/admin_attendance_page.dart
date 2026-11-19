@@ -1473,7 +1473,7 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     _showSnack('Filters applied.');
   }
 
-  void _openVerification(Map<String, dynamic> log) {
+    void _openVerification(Map<String, dynamic> log) {
     final enrichedLog = Map<String, dynamic>.from(log);
 
     final device = _resolveRegisteredDevice(log);
@@ -1500,6 +1500,16 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
     }
   }
 
+  /// Hinahanap ang field_proofs doc id mula sa `fieldProofId` o sa
+  /// `proof:<id>` tag sa `remarks`.
+  String? _proofIdFromLog(Map<String, dynamic> log) {
+    final direct = (log['fieldProofId'] ?? '').toString().trim();
+    if (direct.isNotEmpty) return direct;
+    final remarks = (log['remarks'] ?? '').toString();
+    final m = RegExp(r'proof:([A-Za-z0-9_\-]+)').firstMatch(remarks);
+    return m?.group(1);
+  }
+
   Future<void> _approveLog(Map<String, dynamic> log) async {
     if (_isDemo) return _demoBlock();
     final logId = (log['id'] ?? '').toString();
@@ -1508,20 +1518,35 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       return;
     }
     try {
-      await FirebaseFirestore.instance
-          .collection('attendance_logs')
-          .doc(logId)
-          .set({
+            final fs = FirebaseFirestore.instance;
+      final proofId = _proofIdFromLog(log);
+      final batch = fs.batch();
+
+      batch.set(fs.collection('attendance_logs').doc(logId), {
         'reviewStatus': 'approved',
         'reviewedBy': _actorEmail,
         'reviewedByUid': _actorUid,
         'reviewedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true))
-          .timeout(const Duration(seconds: 10));
+        if (proofId != null) 'fieldProofId': proofId,
+      }, SetOptions(merge: true));
+
+      if (proofId != null) {
+        batch.set(fs.collection('field_proofs').doc(proofId), {
+          'status': 'approved',
+          'reviewedBy': _actorEmail,
+          'reviewedByUid': _actorUid,
+          'reviewedAt': FieldValue.serverTimestamp(),
+          'attendanceLogId': logId,
+        }, SetOptions(merge: true));
+      }
+
+      await batch.commit().timeout(const Duration(seconds: 15));
 
       try {
         await FirebaseFirestore.instance.collection('admin_audit_log').add({
-          'action': 'attendance_approved',
+          'action': proofId != null
+              ? 'field_proof_approved'
+              : 'attendance_approved',
           'targetType': 'attendance_log',
           'targetId': logId,
           'actorUid': _actorUid,
@@ -1606,22 +1631,38 @@ class _AdminAttendancePageState extends State<AdminAttendancePage> {
       return;
     }
 
-    try {
-      await FirebaseFirestore.instance
-          .collection('attendance_logs')
-          .doc(logId)
-          .set({
+        try {
+      final fs = FirebaseFirestore.instance;
+      final proofId = _proofIdFromLog(log);
+      final batch = fs.batch();
+
+      batch.set(fs.collection('attendance_logs').doc(logId), {
         'reviewStatus': 'flagged',
         'reviewReason': reason,
         'reviewedBy': _actorEmail,
         'reviewedByUid': _actorUid,
         'reviewedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true))
-          .timeout(const Duration(seconds: 10));
+        if (proofId != null) 'fieldProofId': proofId,
+      }, SetOptions(merge: true));
+
+      if (proofId != null) {
+        batch.set(fs.collection('field_proofs').doc(proofId), {
+          'status': 'rejected',
+          'reviewReason': reason,
+          'reviewedBy': _actorEmail,
+          'reviewedByUid': _actorUid,
+          'reviewedAt': FieldValue.serverTimestamp(),
+          'attendanceLogId': logId,
+        }, SetOptions(merge: true));
+      }
+
+      await batch.commit().timeout(const Duration(seconds: 15));
 
       try {
         await FirebaseFirestore.instance.collection('admin_audit_log').add({
-          'action': 'attendance_flagged',
+          'action': proofId != null
+              ? 'field_proof_rejected'
+              : 'attendance_flagged',
           'targetType': 'attendance_log',
           'targetId': logId,
           'actorUid': _actorUid,
