@@ -21,7 +21,6 @@ import '../widgets/bootstrap_grid.dart';
 import '../services/payroll_calculator.dart';
 import '../services/employee_notification_service.dart';
 import '../services/attendance_hours_service.dart';
-import '../services/admin_auth_service.dart';
 import '../services/demo_mode_service.dart';
 import '../services/onesignal_sender.dart';
 
@@ -2015,7 +2014,7 @@ class _AdminPayrollManagementPageState
       children: [
         _item('13th Month Pay', '1/12 of basic salary',
             PayrollCalculator.peso(_b.thirteenthMonth), false),
-        _item('SIL Credits', '5 days × daily rate (convertible)',
+        _item('SIL Credits', '5 days ÷ 12 months × daily rate (accrued)',
             PayrollCalculator.peso(_b.silCredits), false),
         _item('Service Incentive', 'Based on tenure & attendance', '—',
             false),

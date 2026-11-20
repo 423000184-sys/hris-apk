@@ -1,6 +1,7 @@
 // lib/services/face_embedder_native.dart
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 class FaceEmbedder {
@@ -14,8 +15,18 @@ class FaceEmbedder {
   Future<void> init() async {
     if (_interp != null) return;
     final opts = InterpreterOptions()..threads = 2;
-    _interp = await Interpreter.fromAsset(modelAsset, options: opts);
-    _dim = _interp!.getOutputTensor(0).shape.last;
+    final it = await Interpreter.fromAsset(modelAsset, options: opts);
+    final inT = it.getInputTensor(0);
+    final outShape = it.getOutputTensor(0).shape;
+    if (kDebugMode) {
+      debugPrint('🧠 MobileFaceNet input=${inT.shape} type=${inT.type} output=$outShape');
+    }
+    if (inT.shape.join(',') != '1,112,112,3') {
+      it.close();
+      throw StateError('Unexpected model input shape: ${inT.shape}');
+    }
+    _interp = it;
+    _dim = outShape.last;
   }
 
   Float32List? embed(Float32List aligned) {

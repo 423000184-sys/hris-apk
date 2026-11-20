@@ -13,4 +13,5 @@ class FaceAligner {
   static RgbImage? cameraToRgb(CameraImage img, {int down = 2}) => null;
   static RgbImage rotate(RgbImage s, int deg) => s;
   static Float32List? align(RgbImage src, double ax, double ay, double bx, double by) => null;
+  static Uint8List debugBmp(Float32List a) => Uint8List(0);
 }

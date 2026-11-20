@@ -13,6 +13,7 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'admin_theme.dart';
 import '../services/demo_mode_service.dart';
+import '../utils/map_launcher.dart';
 import '../widgets/bootstrap_grid.dart';
 
 class AdminAttendanceVerificationPage extends StatefulWidget {
@@ -55,7 +56,7 @@ class _AdminAttendanceVerificationPageState
   ll.LatLng? _proofCoords;
 
   // Debug Console
-  List<String> _debugMessages = [];
+  final List<String> _debugMessages = [];
 
   bool _loading = true;
   bool _processingAction = false;
@@ -105,6 +106,7 @@ class _AdminAttendanceVerificationPageState
   @override
   void dispose() {
     _disposed = true;
+    _mapController.dispose();
     super.dispose();
   }
 
@@ -456,11 +458,11 @@ class _AdminAttendanceVerificationPageState
       }
       if (found == null && empAuthUid.isNotEmpty) {
         final s = await FirebaseFirestore.instance.collection('employees').where('authUid', isEqualTo: empAuthUid).limit(1).get();
-        if (s.docs.isNotEmpty) found = {...s.docs.first.data()!, 'id': s.docs.first.id};
+        if (s.docs.isNotEmpty) found = {...s.docs.first.data(), 'id': s.docs.first.id};
       }
       if (found == null && empName.isNotEmpty) {
         final s = await FirebaseFirestore.instance.collection('employees').where('name', isEqualTo: empName).limit(1).get();
-        if (s.docs.isNotEmpty) found = {...s.docs.first.data()!, 'id': s.docs.first.id};
+        if (s.docs.isNotEmpty) found = {...s.docs.first.data(), 'id': s.docs.first.id};
       }
       _employeeData = found;
       if (found != null) _debugMessages.add('Employee profile found. ID: ${found['id']}');
@@ -1552,7 +1554,7 @@ class _AdminAttendanceVerificationPageState
                       interactionOptions: const InteractionOptions(flags: InteractiveFlag.all & ~InteractiveFlag.rotate),
                     ),
                     children: [
-                      TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.hris.biometrics'),
+                    TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.example.hris_biometrics'),
 
                       MarkerLayer(
                         markers: [
@@ -1651,6 +1653,39 @@ class _AdminAttendanceVerificationPageState
                             boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2))],
                           ),
                           child: Icon(Icons.my_location, size: 14, color: tc.text),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Tooltip(
+                        message: 'Open in OsmAnd',
+                        child: InkWell(
+                          onTap: () async {
+                            if (!_safe) return;
+                            final ok = await openInMapApp(
+                              displayCenter.latitude,
+                              displayCenter.longitude,
+                            );
+                            if (!ok && _safe) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: const Text('Could not open map app.'),
+                                  backgroundColor: tc.red,
+                                ),
+                              );
+                            }
+                          },
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: tc.card,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: tc.border),
+                              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2))],
+                            ),
+                            child: Icon(Icons.open_in_new_rounded,
+                                size: 14, color: tc.text),
+                          ),
                         ),
                       ),
                     ],

@@ -3,7 +3,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:geolocator/geolocator.dart';
@@ -335,16 +334,19 @@ extends State<AdminAddClientLocationPage> {
       return;
     }
 
-    final url = Uri.parse('https://www.google.com/maps?q=$latVal,$lngVal');
+    final url = Uri.parse(
+      'https://www.openstreetmap.org/?mlat=$latVal&mlon=$lngVal'
+      '#map=18/$latVal/$lngVal',
+    );
     try {
       if (await canLaunchUrl(url)) {
         await launchUrl(url, mode: LaunchMode.externalApplication);
       } else {
-        _showSnack('⚠️ Could not open Google Maps.', isError: true);
+        _showSnack('⚠️ Could not open OpenStreetMap.', isError: true);
       }
     } catch (e) {
       debugPrint('⚠️ [Maps] open failed: $e');
-      _showSnack('⚠️ Could not open Google Maps.', isError: true);
+      _showSnack('⚠️ Could not open OpenStreetMap.', isError: true);
     }
   }
 
@@ -1322,29 +1324,6 @@ extends State<AdminAddClientLocationPage> {
                            ),
                   );
 
-                  final mapBtn = OutlinedButton.icon(
-                    onPressed: _isDemo ? _demoBlock : _pickOnMap,
-                    icon: Icon(Icons.map_rounded,
-                               size: 16, color: _isDemo ? tc.muted : tc.orange),
-                               label: Text(
-                                 'Pick on Map',
-                                 style: TextStyle(
-                                   color: _isDemo ? tc.muted : tc.orange,
-                                   fontWeight: FontWeight.w700,
-                                   fontSize: 12,
-                                 ),
-                               ),
-                               style: OutlinedButton.styleFrom(
-                                 side: BorderSide(
-                                   color: _isDemo ? tc.border : tc.orange, width: 1.5),
-                                   padding: const EdgeInsets.symmetric(
-                                     horizontal: 12, vertical: 12),
-                                     shape: RoundedRectangleBorder(
-                                       borderRadius: BorderRadius.circular(8),
-                                     ),
-                               ),
-                  );
-
                   final pasteBtn = OutlinedButton.icon(
                     onPressed: _pasteCoordsFromClipboard,
                     icon: Icon(Icons.content_paste_rounded,
@@ -1372,8 +1351,6 @@ extends State<AdminAddClientLocationPage> {
                       children: [
                         SizedBox(width: double.infinity, child: gpsBtn),
                         const SizedBox(height: 8),
-                        SizedBox(width: double.infinity, child: mapBtn),
-                        const SizedBox(height: 8),
                         SizedBox(width: double.infinity, child: pasteBtn),
                       ],
                     );
@@ -1381,8 +1358,6 @@ extends State<AdminAddClientLocationPage> {
                   return Row(
                     children: [
                       Expanded(child: gpsBtn),
-                      const SizedBox(width: 8),
-                      Expanded(child: mapBtn),
                       const SizedBox(width: 8),
                       Expanded(child: pasteBtn),
                     ],
@@ -2100,7 +2075,9 @@ class _EditClientDialogState extends State<_EditClientDialog> {
       return;
     }
 
-    final url = Uri.parse('https://www.google.com/maps?q=$lat,$lng');
+    final url = Uri.parse(
+      'https://www.openstreetmap.org/?mlat=$lat&mlon=$lng#map=18/$lat/$lng',
+    );
     try {
       if (await canLaunchUrl(url)) {
         await launchUrl(url, mode: LaunchMode.externalApplication);
@@ -2565,34 +2542,6 @@ class _EditClientDialogState extends State<_EditClientDialog> {
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: OutlinedButton.icon(
-                                      onPressed: _isDemo ? _demoBlock : _pickOnMap,
-                                      icon: Icon(Icons.map_rounded,
-                                                 size: 16,
-                                                 color: _isDemo ? tc.muted : tc.orange),
-                                                 label: Text(
-                                                   'Pick on Map',
-                                                   style: TextStyle(
-                                                     color: _isDemo ? tc.muted : tc.orange,
-                                                     fontWeight: FontWeight.w700,
-                                                     fontSize: 12,
-                                                   ),
-                                                 ),
-                                                 style: OutlinedButton.styleFrom(
-                                                   side: BorderSide(
-                                                     color: _isDemo ? tc.border : tc.orange,
-                                                     width: 1.5),
-                                                     padding: const EdgeInsets.symmetric(
-                                                       horizontal: 12, vertical: 12),
-                                                       shape: RoundedRectangleBorder(
-                                                         borderRadius:
-                                                         BorderRadius.circular(8),
-                                                       ),
-                                                 ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: OutlinedButton.icon(
                                       onPressed: _pasteCoordsFromClipboard,
                                       icon: Icon(
                                         Icons.content_paste_rounded,
@@ -2652,34 +2601,6 @@ class _EditClientDialogState extends State<_EditClientDialog> {
                                                    borderRadius: BorderRadius.circular(8),
                                                  ),
                                            ),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: OutlinedButton.icon(
-                                    onPressed: _isDemo ? _demoBlock : _pickOnMap,
-                                    icon: Icon(Icons.map_rounded,
-                                               size: 16,
-                                               color: _isDemo ? tc.muted : tc.orange),
-                                               label: Text(
-                                                 'Pick on Map',
-                                                 style: TextStyle(
-                                                   color: _isDemo ? tc.muted : tc.orange,
-                                                   fontWeight: FontWeight.w700,
-                                                   fontSize: 12,
-                                                 ),
-                                               ),
-                                               style: OutlinedButton.styleFrom(
-                                                 side: BorderSide(
-                                                   color: _isDemo ? tc.border : tc.orange,
-                                                   width: 1.5),
-                                                   padding: const EdgeInsets.symmetric(
-                                                     horizontal: 12, vertical: 12),
-                                                     shape: RoundedRectangleBorder(
-                                                       borderRadius: BorderRadius.circular(8),
-                                                     ),
-                                               ),
                                   ),
                                 ),
                                 const SizedBox(height: 8),

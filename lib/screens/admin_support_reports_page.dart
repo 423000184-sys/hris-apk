@@ -207,6 +207,49 @@ class _AdminSupportReportsPageState extends State<AdminSupportReportsPage> {
     _toast('Reply sent.');
   }
 
+  Future<void> _doDelete(Map<String, dynamic> r) async {
+    final reportId = r['id']?.toString() ?? '';
+    if (reportId.isEmpty) return _toast('No report ID.', error: true);
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: tc.card,
+        title: Text('Delete report?', style: TextStyle(color: tc.text)),
+        content: Text(
+          'This will permanently delete the report from '
+          '${r['employeeName'] ?? 'employee'}. This cannot be undone.',
+          style: TextStyle(color: tc.muted),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: TextStyle(color: tc.muted)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: tc.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection(AdminSupportService.collection)
+          .doc(reportId)
+          .delete();
+      _toast('Report deleted.');
+    } catch (e) {
+      _toast('Failed to delete: $e', error: true);
+    }
+  }
+
   Future<void> _markResolved(String reportId, String reply) async {
     if (reportId.isEmpty) return;
     final uid = await _adminUid();
@@ -391,6 +434,16 @@ class _AdminSupportReportsPageState extends State<AdminSupportReportsPage> {
                         onTap: () {
                           Navigator.pop(ctx);
                           _doReply(r);
+                        },
+                      ),
+                      _actionChip(
+                        dTc,
+                        icon: Icons.delete_outline_rounded,
+                        label: 'Delete',
+                        color: dTc.red,
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _doDelete(r);
                         },
                       ),
                     ],
@@ -817,6 +870,12 @@ class _AdminSupportReportsPageState extends State<AdminSupportReportsPage> {
                     onPressed: () => _doReply(r),
                   ),
                 ],
+                IconButton(
+                  tooltip: 'Delete',
+                  icon: Icon(Icons.delete_outline_rounded,
+                      size: 18, color: tc.red),
+                  onPressed: () => _doDelete(r),
+                ),
                 Icon(Icons.chevron_right_rounded, color: tc.muted),
               ],
             ),

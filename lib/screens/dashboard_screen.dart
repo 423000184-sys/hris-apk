@@ -29,15 +29,12 @@ import 'package:printing/printing.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/employee.dart';
-import '../services/database_service.dart';
 import '../services/geofence_service.dart';
 import '../services/payroll_calculator.dart';
-import '../services/attendance_hours_service.dart';
 import '../services/security_service.dart';
 import '../services/security_hardening_service.dart';
 import '../services/demo_mode_service.dart';
 import '../data/local/dao/connectivity_service.dart';
-import '../widgets/skeleton_loader.dart';
 import '../widgets/skeleton_screens.dart';
 import 'login_screen.dart';
 import 'reports_screen.dart';
@@ -2899,6 +2896,7 @@ class DashboardScreenState extends State<DashboardScreen>
       width: double.infinity,
       height: 232, // roomier hero banner
       decoration: BoxDecoration(
+        color: const Color(0xFF09090B),
         borderRadius: BorderRadius.circular(26),
         border: Border.all(color: const Color(0xFFFFA500), width: 1.2),
         boxShadow: [

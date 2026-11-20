@@ -4,6 +4,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:io' show HttpClient;
+import 'package:image/image.dart' as img;
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
@@ -26,6 +28,7 @@ import '../services/face_liveness.dart';
 import '../services/face_aligner.dart';
 import '../services/face_embedder.dart';
 import '../services/face_template_store.dart';
+import '../services/face_matcher.dart';
 import '../services/security_hardening_service.dart';
 import '../services/presence_challenge_service.dart';
 import '../services/demo_mode_service.dart';
@@ -179,10 +182,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   static const double _webSmileThreshold = 0.40;
   static const int _webDetectIntervalMs = 150;
 
-  // ── On-device face match ─────────────────────────────────────
-  // ⚠️ Starting value for MobileFaceNet cosine similarity. Calibrate on your
-  // own staff: log _matchScore for genuine vs. impostor attempts, then adjust.
   static const double _matchThreshold = 0.60;
+  static const double _adminPhotoMinCosine = 0.60;
+  static const bool _requireAdminPhotoOnEveryScan = true;
+  Uint8List? _liveStillBytes; // still photo ng live face para sa admin-photo check
+  double? _adminPhotoScore;
+  static const bool _allowLivenessOnlyFallback = false;
   static const int _minEmbeddingsToUse = 3;
   static const int _maxEmbeddingsKept = 12;
   static const int _embedIntervalMs = 200;
@@ -191,6 +196,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
   static const Duration _maxBackdate = Duration(minutes: 10);
 
   final List<Float32List> _liveEmbeddings = [];
+  Uint8List? _debugBmp; // DEBUG lang
   DateTime _lastEmbedAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _embedderReady = false;
   String? _embedderInitError;
@@ -431,6 +437,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _secureLog('⚠️ Embed failed: align returned null');
       return;
     }
+    if (kDebugMode) {
+      final bmp = FaceAligner.debugBmp(aligned);
+      if (mounted) setState(() => _debugBmp = bmp);
+    }
     final emb = FaceEmbedder.instance.embed(aligned);
     if (emb == null) {
       _secureLog('⚠️ Embed failed: embed returned null');
@@ -464,13 +474,163 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     return true;
   }
 
+  /// Inaayos ang EXIF rotation para tama ang crop ng face detector.
+  Uint8List _bakeOrientation(Uint8List bytes) {
+    try {
+      final d = img.decodeImage(bytes);
+      if (d == null) return bytes;
+      final baked = img.bakeOrientation(d);
+      return Uint8List.fromList(img.encodeJpg(baked, quality: 90));
+    } catch (_) {
+      return bytes;
+    }
+  }
+
+  /// Hinahanap ang tunay na Document ID ng employee. Kung walang doc na
+  /// kapareho ng employee.id, hahanapin sa field na 'employeeId'.
+  Future<String> _resolveEmployeeDocId() async {
+    final id = widget.employee.id;
+    final col = FirebaseFirestore.instance.collection('employees');
+    try {
+      final code = widget.employee.employeeId.isNotEmpty
+          ? widget.employee.employeeId
+          : id;
+
+      // Subukan ang iba't ibang case ng ID (Firestore ay case-sensitive)
+      final variants = <String>{
+        id,
+        id.toLowerCase(),
+        id.toUpperCase(),
+        code,
+        code.toLowerCase(),
+        code.toUpperCase(),
+      }..removeWhere((v) => v.isEmpty);
+
+      for (final v in variants) {
+        final snap = await col
+            .doc(v)
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 8));
+        if (snap.exists) return v;
+      }
+
+      // Hanapin sa field na 'employeeId' (lahat ng variant)
+      for (final v in variants) {
+        final q = await col
+            .where('employeeId', isEqualTo: v)
+            .limit(1)
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 8));
+        if (q.docs.isNotEmpty) return q.docs.first.id;
+      }
+    } catch (e) {
+      _secureLog('⚠️ resolve doc id failed: $e');
+    }
+    return id;
+  }
+
+  /// Kinukuha ang photo na inupload ni Admin (employees/{id}.photoUrl).
+  /// Returns null kung WALANG photo. Nagtha-throw kung hindi ma-fetch.
+  Future<Uint8List?> _loadAdminPhotoBytes() async {
+    final realId = await _resolveEmployeeDocId();
+    final snap = await FirebaseFirestore.instance
+        .collection('employees')
+        .doc(realId)
+        .get(const GetOptions(source: Source.server))
+        .timeout(const Duration(seconds: 8));
+    final url = (snap.data()?['photoUrl'] ?? '').toString().trim();
+    if (url.isEmpty || url == '—') return null;
+
+    if (url.startsWith('data:image')) {
+      final comma = url.indexOf(',');
+      if (comma < 0) return null;
+      return base64Decode(
+          url.substring(comma + 1).replaceAll(RegExp(r'\s'), ''));
+    }
+
+    final client = HttpClient();
+    try {
+      final req =
+          await client.getUrl(Uri.parse(url)).timeout(const Duration(seconds: 8));
+      final res = await req.close().timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+      final chunks = <int>[];
+      await for (final c in res) {
+        chunks.addAll(c);
+      }
+      return Uint8List.fromList(chunks);
+    } finally {
+      client.close();
+    }
+  }
+
+  double _cosineList(List<double> a, List<double> b) {
+    if (a.isEmpty || a.length != b.length) return -1;
+    double d = 0;
+    for (int i = 0; i < a.length; i++) {
+      d += a[i] * b[i];
+    }
+    return d;
+  }
+
+  /// Returns null kung PASADO. Kung hindi, reason code:
+  /// photo_fetch_failed | no_admin_photo | live_still_missing |
+  /// admin_photo_unreadable | live_still_unreadable | admin_photo_mismatch
+  Future<String?> _compareWithAdminPhoto() async {
+    Uint8List? adminBytes;
+    try {
+      adminBytes = await _loadAdminPhotoBytes();
+    } catch (e) {
+      _secureLog('⚠️ Admin photo fetch failed: $e');
+      return 'photo_fetch_failed';
+    }
+    if (adminBytes == null || adminBytes.isEmpty) return 'no_admin_photo';
+
+    final live = _liveStillBytes;
+    if (live == null || live.isEmpty) return 'live_still_missing';
+
+    final ref = await FaceMatcher.generateEmbedding(_bakeOrientation(adminBytes));
+    if (ref.isEmpty) return 'admin_photo_unreadable';
+
+    final liveEmb = await FaceMatcher.generateEmbedding(_bakeOrientation(live));
+    if (liveEmb.isEmpty) return 'live_still_unreadable';
+
+    final cos = _cosineList(ref, liveEmb);
+    _adminPhotoScore = cos;
+    _secureLog('🧪 ADMIN PHOTO COSINE: ${cos.toStringAsFixed(3)} '
+        '(min=$_adminPhotoMinCosine)');
+    return cos >= _adminPhotoMinCosine ? null : 'admin_photo_mismatch';
+  }
+
+  String _adminPhotoMessage(String code) {
+    switch (code) {
+      case 'no_admin_photo':
+        return 'No reference photo from Admin.\nContact Admin to upload your photo.';
+      case 'photo_fetch_failed':
+        return 'Could not load your reference photo.\nCheck your internet and try again.';
+      case 'admin_photo_unreadable':
+        return 'Your reference photo has no clear face.\nContact Admin to upload a new photo.';
+      case 'live_still_missing':
+      case 'live_still_unreadable':
+        return 'Could not capture your face clearly.\nPlease try again.';
+      default:
+        return 'Face does not match your registered photo.';
+    }
+  }
+
   /// Returns true if the live face matches the enrolled template
   /// (or was just enrolled). Templates never leave the device.
   Future<bool> _verifyIdentity() async {
     if (_isDemo) return true;
     if (!_matchSupported) {
-      _identityResult = 'not_checked';
-      return true; // web/iOS: liveness only
+      if (_allowLivenessOnlyFallback) {
+        _identityResult = 'not_checked';
+        return true; // web/iOS: liveness only
+      }
+      _onIdentityFailed(
+          'Face matching is not supported on this device.\nPlease use the Android app.',
+          'platform_unsupported');
+      return false;
     }
     if (!_embedderReady || _liveEmbeddings.length < _minEmbeddingsToUse) {
       _onIdentityFailed('Could not read your face clearly.\nPlease try again.',
@@ -485,13 +645,82 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     }
 
     final id = widget.employee.id;
-    final stored = await FaceTemplateStore.instance.load(id);
+    final loaded = await FaceTemplateStore.instance.loadChecked(id);
+    if (loaded.unreadable) {
+      _onIdentityFailed(
+          'Your saved face data cannot be read.\nContact Admin to reset your face.',
+          'template_unreadable');
+      return false;
+    }
+    final stored = loaded.items;
 
     if (stored.isEmpty) {
       if (_isChallenge) {
         _onIdentityFailed(
             'No registered face on this device.\nPlease clock in normally first.',
             'no_template_during_challenge');
+        return false;
+      }
+      // Mag-e-enroll LANG kung: nabasa ang server, hindi pa enrolled,
+      // at pinayagan ng Admin (faceEnrollAllowed == true).
+      bool alreadyEnrolled = true; // kapag hindi ma-check, i-block (mas ligtas)
+      bool enrollAllowed = false;
+      final docId = await _resolveEmployeeDocId();
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(docId)
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 8));
+        final data = snap.data();
+        alreadyEnrolled = data?['faceEnrolled'] == true;
+        enrollAllowed = data?['faceEnrollAllowed'] == true;
+        _secureLog('🔎 enroll check id=$id exists=${snap.exists} '
+            'faceEnrolled=${data?['faceEnrolled']} '
+            'faceEnrollAllowed=${data?['faceEnrollAllowed']} '
+            '(${data?['faceEnrollAllowed'].runtimeType})');
+      } catch (_) {}
+
+      if (alreadyEnrolled) {
+        _onIdentityFailed(
+            'Face not registered on this device.\nContact Admin to reset your face.',
+            'enrolled_elsewhere');
+        return false;
+      }
+
+      if (!enrollAllowed) {
+        _onIdentityFailed(
+            'Face registration is not approved yet.\nContact Admin to allow registration.\n(ID: $id)',
+            'enrollment_not_approved');
+        return false;
+      }
+
+      // MANDATORY: dapat tumugma ang live face sa photo na inupload ni Admin
+      // bago ma-enroll. Walang photo / hindi mabasa = bawal mag-enroll.
+      final enrollPhotoErr = await _compareWithAdminPhoto();
+      if (enrollPhotoErr != null) {
+        _onIdentityFailed(_adminPhotoMessage(enrollPhotoErr),
+            'enroll_$enrollPhotoErr',
+            score: _adminPhotoScore);
+        return false;
+      }
+
+      // Server flag MUNA. Kapag hindi pumasok, huwag mag-save ng template,
+      // para hindi magamit ang parehong pahintulot sa ibang phone.
+      try {
+        await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(docId)
+            .set({
+          'faceEnrolled': true,
+          'faceEnrolledAt': FieldValue.serverTimestamp(),
+          'faceEnrollAllowed': false,
+        }, SetOptions(merge: true)).timeout(const Duration(seconds: 8));
+      } catch (e) {
+        _secureLog('⚠️ enroll flag write failed: $e');
+        _onIdentityFailed(
+            'Could not complete registration.\nCheck your internet and try again.',
+            'enrollment_server_write_failed');
         return false;
       }
       await FaceTemplateStore.instance.save(id, List.of(_liveEmbeddings));
@@ -503,15 +732,24 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       return true;
     }
 
-    // Best similarity per live sample vs. all templates; take the median.
-    final scores = _liveEmbeddings
-        .map((live) => stored.map((s) => _cosine(live, s)).reduce(math.max))
-        .toList()
-      ..sort();
-    final median = scores[scores.length ~/ 2];
-    _matchScore = median;
 
-    if (median < _matchThreshold) {
+    final scores = _liveEmbeddings.map((live) { 
+      final sims = stored.map((s) => _cosine(live, s)).toList()
+        ..sort((a, b) => b.compareTo(a));
+      final k = math.min(3, sims.length);
+      return sims.take(k).reduce((a, b) => a + b) / k;
+    }).toList()
+      ..sort();
+
+    final median = scores[scores.length ~/ 2];
+    // Dapat kahit 60% ng samples ay pasado, hindi lang ang median.
+    final passRatio =
+        scores.where((s) => s >= _matchThreshold).length / scores.length;
+    _matchScore = median;
+    _secureLog('🧪 FACE SCORES: $scores | median=$median | '
+        'passRatio=$passRatio | threshold=$_matchThreshold');
+
+    if (median < _matchThreshold || passRatio < 0.6) {
       _onIdentityFailed(
           'Face does not match the registered employee.',
           'face_mismatch',
@@ -571,7 +809,10 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       _errorMessage = msg;
     });
     _shakeCtrl.forward(from: 0);
-    if (reason == 'face_mismatch' || reason == 'session_face_changed') {
+    if (reason == 'face_mismatch' ||
+        reason == 'session_face_changed' ||
+        reason == 'admin_photo_mismatch' ||
+        reason == 'enroll_admin_photo_mismatch') {
       unawaited(_registerMismatch());
     }
 
@@ -1326,6 +1567,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       try {
         await OfflineAttendanceService.instance.enqueue(
           collection: 'security_events',
+          docId: 'evt_${DateTime.now().millisecondsSinceEpoch}'
+              '_${widget.employee.id}_${type}_${_sessionNonce.substring(0, 4)}',
           data: {
             'type': type,
             'severity': severity,
@@ -1349,7 +1592,15 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final hashDevice = _deviceBinding != null
           ? sha256.convert(utf8.encode(_deviceBinding!)).toString()
           : null;
-      await FirebaseFirestore.instance.collection('security_events').add({
+      final who = widget.employee.employeeId.isNotEmpty
+          ? widget.employee.employeeId
+          : widget.employee.id;
+      final evtId = 'evt_${DateTime.now().millisecondsSinceEpoch}'
+          '_${who}_${type}_${_sessionNonce.substring(0, 4)}';
+      await FirebaseFirestore.instance
+          .collection('security_events')
+          .doc(evtId)
+          .set({
         'type': type,
         'severity': severity,
         'details': details,
@@ -1643,6 +1894,8 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
     _identityResult = 'not_checked';
     _fieldProofId = null; // huwag gamitin ang lumang proof sa retry
     _pendingPhotoBytes = null;
+    _liveStillBytes = null;
+    _adminPhotoScore = null;
 
     setState(() {
 
@@ -1789,13 +2042,16 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     Future<void> _captureClockInPhoto() async {
     _pendingPhotoBytes = null;
-    if (_isDemo || _isChallenge || kIsWeb) return;
+    _liveStillBytes = null;
+    if (_isDemo || kIsWeb) return;
     final ctrl = _camCtrl;
     if (ctrl == null || !ctrl.value.isInitialized) return;
     try {
       if (ctrl.value.isStreamingImages) await ctrl.stopImageStream();
       final shot = await ctrl.takePicture().timeout(const Duration(seconds: 5));
       final bytes = await shot.readAsBytes();
+      _liveStillBytes = bytes; // para sa admin-photo comparison
+      if (_isChallenge) return; // challenge: walang clock-in photo
       if (bytes.length > _maxClockInPhotoBytes) {
         _secureLog('⚠️ Clock-in photo too large: ${bytes.length}');
         return;
@@ -1925,7 +2181,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
           for (int c = 0; c < uvWidth; c++) {
             final int uvIdx = r * uvRowStride + c * uvPixelStride;
             if (uvIdx >= uPlane.bytes.length ||
-                uvIdx >= vPlane.bytes.length) break;
+                uvIdx >= vPlane.bytes.length) {
+              break;
+            }
             if (pos + 1 >= nv21.length) break;
             nv21[pos++] = vPlane.bytes[uvIdx];
             nv21[pos++] = uPlane.bytes[uvIdx];
@@ -2002,7 +2260,9 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
     final face = faces.first;
       await _handleVerifyFrame(image, face);
-    } catch (_) {}
+    } catch (e, st) {
+      _secureLog('❌ _onCameraImage error: $e\n$st');
+    }
     _isProcessing = false;
   }
 
@@ -2644,11 +2904,12 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
       final proofTag = _fieldProofId != null
           ? '|field_selfie_pending|proof:$_fieldProofId'
           : (photoProofId != null ? '|clock_in_photo|proof:$photoProofId' : '');
-      final baseRemarks = (_geofenceVerifiedOffline
+      final scoreTag = _matchScore != null
+          ? '|score:${_matchScore!.toStringAsFixed(3)}'
+          : '';
+      final baseRemarks = '${_geofenceVerifiedOffline
               ? 'liveness:passed|pending_geofence_verification'
-              : 'liveness:passed') +
-          '|identity:$_identityResult' +
-          proofTag;
+              : 'liveness:passed'}|identity:$_identityResult$scoreTag$proofTag';
       final remarks = delayMinutes >= 1
           ? '$baseRemarks|first_attempt_delay:${delayMinutes}m'
           : baseRemarks;
@@ -2902,10 +3163,11 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
 
   Future<void> _onSuccess() async {
     if (!mounted) return;
-       final identityOk = await _verifyIdentity(); // NEW: gate before success UI
-    if (!identityOk || !mounted) return;
+       await _captureClockInPhoto(); // kuha habang buhay pa ang camera
+    if (!mounted) return;
 
-    await _captureClockInPhoto(); // kuha habang buhay pa ang camera
+    final identityOk = await _verifyIdentity(); // gate before success UI
+    if (!identityOk || !mounted) return;
     if (_requireClockInPhoto &&
         !_isDemo &&
         !_isChallenge &&
@@ -3283,6 +3545,13 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
                         ),
                         if (_pendingCount > 0 && !_isDemo)
                           _buildPendingBadge(),
+                        if (kDebugMode && _debugBmp != null)
+                          Positioned(
+                            left: 8,
+                            bottom: 8,
+                            child: Image.memory(_debugBmp!,
+                                width: 112, height: 112, gaplessPlayback: true),
+                          ),
                         if (_obscureContent) _buildPrivacyShield(),
                       ],
                     ),
@@ -3625,7 +3894,7 @@ class _FacialRecognitionScreenState extends State<FacialRecognitionScreen>
             duration: const Duration(milliseconds: 300),
             child: Text(
               _stateTitle.replaceAll('\n', ' '),
-              key: ValueKey('title_${_faceState}-$_isDemo'),
+              key: ValueKey('title_$_faceState-$_isDemo'),
               textAlign: TextAlign.center,
               style: const TextStyle(
                   color: _white, fontSize: 20, fontWeight: FontWeight.w700),
@@ -4190,10 +4459,10 @@ enum _Challenge { blink, smile, turnLeft, turnRight }
 
 extension _ChallengeText on _Challenge {
   String get label => switch (this) {
-        _Challenge.blink => 'Blink your eyes 👁️',
-        _Challenge.smile => 'Smile 😊',
-        _Challenge.turnLeft => 'Turn your head left ⬅️',
-        _Challenge.turnRight => 'Turn your head right ➡️',
+        _Challenge.blink => 'Blink your eyes',
+        _Challenge.smile => 'Smile',
+        _Challenge.turnLeft => 'Turn your head left',
+        _Challenge.turnRight => 'Turn your head right',
       };
 }
 

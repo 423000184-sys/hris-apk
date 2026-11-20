@@ -12,10 +12,16 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'admin_theme.dart';
 import '../utils/geo_utils.dart';
+import '../utils/map_launcher.dart';
 import '../services/geofence_service.dart';
 import '../services/employee_notification_service.dart';
 import '../services/demo_mode_service.dart';
 import '../widgets/bootstrap_grid.dart';
+
+/// Default map view, copied from:
+/// https://www.openstreetmap.org/#map=8/11.426/123.008
+const LatLng kDefaultMapCenter = LatLng(11.426, 123.008);
+const double kDefaultMapZoom = 8;
 
 class AdminTrackingPage extends StatefulWidget {
   final List<Map<String, dynamic>> locations;
@@ -49,6 +55,9 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   }
 
   final MapController _mapController = MapController();
+
+  /// True once the map has jumped to the first loaded zone.
+  bool _didInitialFit = false;
 
   // 🛡️ Web safety
   bool _disposed = false;
@@ -158,6 +167,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
     _locSub = null;
     _inFlight.clear();
     _locallyDeletedIds.clear(); // ✅ NEW
+    _mapController.dispose();
     super.dispose();
   }
 
@@ -264,6 +274,21 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
           _zones = list;
           _loadingZones = false;
         });
+
+        // First load: jump from the default view to the first valid zone.
+        if (!_didInitialFit && list.isNotEmpty) {
+          final lat = (list.first['lat'] as num?)?.toDouble();
+          final lng = (list.first['lng'] as num?)?.toDouble();
+          if (lat != null &&
+              lng != null &&
+              _isValidLat(lat) &&
+              _isValidLng(lng)) {
+            _didInitialFit = true;
+            _currentLat = lat;
+            _currentLng = lng;
+            _moveMapToPosition(lat, lng);
+          }
+        }
 
         // 🔴 REAL-TIME: previously selected location was deleted
         final selectedGone = prevSelectedId != null &&
@@ -541,7 +566,6 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       builder: (_) => _LocationDialog(
         defaultLat: _currentLat,
         defaultLng: _currentLng,
-        defaultRadius: _currentRadius,
       ),
     );
     if (!_safe) return;
@@ -931,7 +955,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
   }
 
   Widget _buildOpenStreetMapCard() {
-    LatLng centerPoint = LatLng(_currentLat, _currentLng);
+    final LatLng centerPoint = LatLng(_currentLat, _currentLng);
     final circles = <CircleMarker>[];
     final markers = <Marker>[];
 
@@ -940,7 +964,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       final lat = (z['lat'] as num?)?.toDouble();
       final lng = (z['lng'] as num?)?.toDouble();
       final radius =
-      ((z['radius'] as num?)?.toDouble() ?? 100).clamp(20.0, 5000.0);
+          ((z['radius'] as num?)?.toDouble() ?? 100).clamp(20.0, 5000.0);
       final active = z['active'] != false;
       final selected = i == _selectedLocationIndex;
 
@@ -948,7 +972,7 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       if (!_isValidLat(lat) || !_isValidLng(lng)) continue;
 
       final color =
-      !active ? Colors.grey : (selected ? tc.orange : tc.blue);
+          !active ? Colors.grey : (selected ? tc.orange : tc.blue);
 
       circles.add(CircleMarker(
         point: LatLng(lat, lng),
@@ -990,6 +1014,29 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
       ));
     }
 
+    Widget controlBtn({
+      required IconData icon,
+      required VoidCallback onTap,
+      double iconSize = 16,
+      String? tooltip,
+    }) {
+      final btn = InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: tc.card,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: tc.border),
+          ),
+          child: Icon(icon, size: iconSize, color: tc.text),
+        ),
+      );
+      return tooltip == null ? btn : Tooltip(message: tooltip, child: btn);
+    }
+
     return Container(
       height: 380,
       decoration: BoxDecoration(
@@ -1004,14 +1051,24 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
             FlutterMap(
               mapController: _mapController,
               options: MapOptions(
-                initialCenter: centerPoint,
-                initialZoom: 15.5,
+                initialCenter:
+                    _zones.isEmpty ? kDefaultMapCenter : centerPoint,
+                initialZoom: _zones.isEmpty ? kDefaultMapZoom : 15.5,
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+                ),
               ),
               children: [
                 TileLayer(
                   urlTemplate:
-                  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.hris.biometrics',
+                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.hris_biometrics',
+                  maxNativeZoom: 19,
+                  maxZoom: 19,
+                  retinaMode: RetinaMode.isHighDensity(context),
+                  errorTileCallback: (tile, error, stackTrace) {
+                    if (kDebugMode) debugPrint('Tile failed: $error');
+                  },
                 ),
                 CircleLayer(circles: circles),
                 MarkerLayer(markers: markers),
@@ -1023,67 +1080,52 @@ class _AdminTrackingPageState extends State<AdminTrackingPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      color: tc.card,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: tc.border),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        InkWell(
-                          onTap: () {
-                            if (!_safe) return;
-                            try {
-                              _mapController.move(
-                                  _mapController.camera.center,
-                                  _mapController.camera.zoom + 0.5);
-                            } catch (_) {}
-                          },
-                          child: SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: Icon(Icons.add,
-                                size: 16, color: tc.text),
-                          ),
-                        ),
-                        Container(
-                            height: 1, width: 32, color: tc.border),
-                        InkWell(
-                          onTap: () {
-                            if (!_safe) return;
-                            try {
-                              _mapController.move(
-                                  _mapController.camera.center,
-                                  _mapController.camera.zoom - 0.5);
-                            } catch (_) {}
-                          },
-                          child: SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: Icon(Icons.remove,
-                                size: 16, color: tc.text),
-                          ),
-                        ),
-                      ],
-                    ),
+                  controlBtn(
+                    icon: Icons.add,
+                    onTap: () {
+                      if (!_safe) return;
+                      try {
+                        _mapController.move(_mapController.camera.center,
+                            _mapController.camera.zoom + 0.5);
+                      } catch (_) {}
+                    },
                   ),
-                  const SizedBox(height: 8),
-                  InkWell(
+                  const SizedBox(height: 6),
+                  controlBtn(
+                    icon: Icons.remove,
+                    onTap: () {
+                      if (!_safe) return;
+                      try {
+                        _mapController.move(_mapController.camera.center,
+                            _mapController.camera.zoom - 0.5);
+                      } catch (_) {}
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  controlBtn(
+                    icon: Icons.my_location,
+                    iconSize: 14,
                     onTap: () =>
                         _moveMapToPosition(_currentLat, _currentLng),
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: tc.card,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: tc.border),
-                      ),
-                      child: Icon(Icons.my_location,
-                          size: 14, color: tc.text),
-                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  controlBtn(
+                    icon: Icons.open_in_new_rounded,
+                    iconSize: 14,
+                    tooltip: 'Open in OsmAnd',
+                    onTap: () async {
+                      if (!_safe) return;
+                      if (!_isValidLat(_currentLat) ||
+                          !_isValidLng(_currentLng)) {
+                        _snack('No valid location selected.', error: true);
+                        return;
+                      }
+                      final ok =
+                          await openInMapApp(_currentLat, _currentLng);
+                      if (!ok) {
+                        _snack('Could not open map app.', error: true);
+                      }
+                    },
                   ),
                 ],
               ),
@@ -1810,8 +1852,7 @@ class _LocationDialogState extends State<_LocationDialog> {
             ? initLng.toStringAsFixed(6)
             : '120.989170');
 
-    final r =
-        ((e['radius'] as num?)?.toDouble()) ?? widget.defaultRadius ?? 100;
+    final r = ((e['radius'] as num?)?.toDouble()) ?? 100.0;
     _radiusCtrl = TextEditingController(
         text: (_isValidRadius(r) ? r : 100).toStringAsFixed(0));
 
@@ -2378,7 +2419,7 @@ class _LocationDialogState extends State<_LocationDialog> {
                     TileLayer(
                       urlTemplate:
                       'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.hris.biometrics',
+                      userAgentPackageName: 'com.example.hris_biometrics',
                     ),
                     if (_detectedBuilding != null)
                       PolygonLayer(
@@ -2741,34 +2782,6 @@ class _LocationDialogState extends State<_LocationDialog> {
                     ),
                   ),
                 ],
-
-                const SizedBox(height: 12),
-
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: tc.orange.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                        color: tc.orange.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline,
-                          size: 14, color: tc.orange),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'WFH and Company Drivers are exempted from geofencing.',
-                          style: TextStyle(
-                              color: tc.text,
-                              fontSize: 11,
-                              height: 1.4),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
 
                 const SizedBox(height: 24),
 

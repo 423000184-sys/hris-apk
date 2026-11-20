@@ -122,6 +122,32 @@ class FaceAligner {
     return out;
   }
 
+  /// DEBUG lang: BMP ng aligned crop para makita ang alignment.
+  static Uint8List debugBmp(Float32List a) {
+    const n = size;
+    const rowBytes = n * 3; // 336, divisible by 4 → walang padding
+    final data = Uint8List(54 + rowBytes * n);
+    final bd = ByteData.view(data.buffer);
+    data[0] = 0x42;
+    data[1] = 0x4D;
+    bd.setUint32(2, data.length, Endian.little);
+    bd.setUint32(10, 54, Endian.little);
+    bd.setUint32(14, 40, Endian.little);
+    bd.setInt32(18, n, Endian.little);
+    bd.setInt32(22, -n, Endian.little); // top-down
+    bd.setUint16(26, 1, Endian.little);
+    bd.setUint16(28, 24, Endian.little);
+    bd.setUint32(34, rowBytes * n, Endian.little);
+    int o = 54;
+    for (int i = 0; i < n * n; i++) {
+      int c(int k) => (a[i * 3 + k] * 128 + 127.5).round().clamp(0, 255).toInt();
+      data[o++] = c(2); // B
+      data[o++] = c(1); // G
+      data[o++] = c(0); // R
+    }
+    return data;
+  }
+
   static void _bilinear(RgbImage s, double x, double y, Float32List out, int o) {
     if (x < 0 || y < 0 || x >= s.w - 1 || y >= s.h - 1) {
       out[o] = out[o + 1] = out[o + 2] = (0 - 127.5) / 128;

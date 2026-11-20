@@ -1742,13 +1742,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
     }
 
     if (addedOut) {
-      _showSnack(msg('recorded', 'OUT', outTime!, outOverride));
+      _showSnack(msg('recorded', 'OUT', outTime, outOverride));
     } else if (addedIn) {
-      _showSnack(msg('recorded', 'IN', inTime!, inOverride));
+      _showSnack(msg('recorded', 'IN', inTime, inOverride));
     } else if (changedOut) {
-      _showSnack(msg('changed', 'OUT', outTime!, outOverride));
+      _showSnack(msg('changed', 'OUT', outTime, outOverride));
     } else if (changedIn) {
-      _showSnack(msg('changed', 'IN', inTime!, inOverride));
+      _showSnack(msg('changed', 'IN', inTime, inOverride));
     } else {
       _showSnack('📝 Your attendance was updated.');
     }
@@ -3062,12 +3062,13 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
         onTap: _handleContinue,
         child: RepaintBoundary(
           child: Container(
-            height: 220, // ✅ from 200 — extra room
+            height: 232,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
+              color: const Color(0xFF09090B),
+              borderRadius: BorderRadius.circular(26),
               border: Border.all(
                 color: _isDemo ? _demoAccent : _orangeBorder,
-                width: 1.15,
+                width: 1.2,
               ),
               boxShadow: [
                 BoxShadow(
@@ -3111,7 +3112,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(25, 28, 25, 20),
+                  padding: const EdgeInsets.fromLTRB(26, 28, 26, 22),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -3125,7 +3126,7 @@ class _ClockScreenState extends State<ClockScreen> with WidgetsBindingObserver {
                           overflow: TextOverflow.ellipsis,
                           text: TextSpan(
                             style: const TextStyle(
-                              fontSize: 30, // ✅ from 34
+                              fontSize: 32,
                               fontWeight: FontWeight.w500,
                               color: Colors.white,
                               height: 1.15,

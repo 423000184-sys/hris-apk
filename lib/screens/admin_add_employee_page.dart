@@ -1852,12 +1852,10 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       }
 
       // Fallback kung sakaling hindi pa nagrereflect agad sa query
-      if (targetDocId == null) {
-        targetDocId = empId;
-      }
+      targetDocId ??= empId;
 
       // 🚨 FORCE SAVE PIN: Para siguradong mababasa ng Login Screen
-      if (targetDocId != null && plainPin.isNotEmpty) {
+      if (plainPin.isNotEmpty) {
         final lookupHash = sha256.convert(utf8.encode(plainPin)).toString();
         final random = math.Random.secure();
         final saltBytes = List<int>.generate(16, (_) => random.nextInt(256));
@@ -1894,22 +1892,48 @@ class _AdminAddEmployeePageState extends State<AdminAddEmployeePage> {
       }
 
       try {
-        final extra = <String, dynamic>{};
-        if (deviceName.isNotEmpty) extra['deviceName'] = deviceName;
-        if (bankName.isNotEmpty) extra['bankName'] = bankName;
-        if (accountNumber.isNotEmpty) extra['accountNumber'] = accountNumber;
+        // Direktang isinusulat ang LAHAT ng fields para siguradong
+        // mabasa ng Employee Directory / Edit page (bypass whitelist).
+        final extra = <String, dynamic>{
+          'firstName': firstName,
+          'lastName': lastName,
+          'name': '$firstName $lastName',
+          'employeeId': empId,
+          'email': email,
+          'emailLower': email.toLowerCase(),
+          'phone': phone,
+          'role': _selectedRole,
+          'department': dept,
+          'gender': _selectedGender,
+          'nfcTagId': nfc,
+          'deviceName': deviceName,
+          'basicSalary': basic,
+          'allowances': allowance,
+          'basicAllowance': allowance,
+          'dailyRate': basic / kWorkingDaysPerMonth,
+          'monthlyTotal': basic + allowance,
+          'workingDaysPerMonth': kWorkingDaysPerMonth,
+          'bankName': bankName,
+          'accountNumber': accountNumber,
+          'salaryConfigured': true,
+          'annualLeaveTotal': 18,
+          'sickLeaveTotal': 18,
+          // Payagan ang unang face enrollment sa phone ng employee
+          'faceEnrollAllowed': true,
+          'faceEnrolled': false,
+        };
         if (birthdayCtrl.text.trim().isNotEmpty) {
           final parsed = DateTime.tryParse(birthdayCtrl.text.trim());
           if (parsed != null) extra['birthday'] = Timestamp.fromDate(parsed);
         }
 
-        // I-save ang ibang fields via service (whitelisted)
-        if (extra.isNotEmpty && targetDocId != null) {
-          await _svc.updateEmployee(docId: targetDocId, patch: extra);
-        }
+        await AdminDatabase.fs
+            .collection('employees')
+            .doc(targetDocId)
+            .update(extra);
 
         // 🚨 DIRECT SAVE FOR PHOTO (Bypass whitelist)
-        if (base64Photo != null && targetDocId != null) {
+        if (base64Photo != null) {
           await AdminDatabase.fs.collection('employees').doc(targetDocId).update({
             'photoUrl': base64Photo,
           });

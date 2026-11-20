@@ -71,6 +71,9 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
   bool _isDraggingMap = false;
   bool _gettingCurrentLocation = false;
 
+  /// Lives in State so typed text survives map rebuilds.
+  final TextEditingController _searchCtrl = TextEditingController();
+
   static const double _fallbackLat = 14.5995;
   static const double _fallbackLng = 120.9842;
 
@@ -111,6 +114,7 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _searchCtrl.dispose();
     _mapController.dispose();
     super.dispose();
   }
@@ -848,7 +852,6 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
   }
 
   Widget _buildSearchBar(AdminColors tc) {
-    final searchCtrl = TextEditingController();
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
@@ -856,7 +859,7 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
         border: Border(bottom: BorderSide(color: tc.border)),
       ),
       child: TextField(
-        controller: searchCtrl,
+        controller: _searchCtrl,
         textInputAction: TextInputAction.search,
         onSubmitted: (v) => _searchAddress(v, tc),
         style: TextStyle(color: tc.text, fontSize: 14),
@@ -872,7 +875,7 @@ class _AdminPickLocationPageState extends State<AdminPickLocationPage> {
           suffixIcon: IconButton(
             icon: Icon(Icons.arrow_forward_rounded,
                 color: tc.orange, size: 20),
-            onPressed: () => _searchAddress(searchCtrl.text, tc),
+            onPressed: () => _searchAddress(_searchCtrl.text, tc),
             tooltip: 'Search',
           ),
           filled: true,

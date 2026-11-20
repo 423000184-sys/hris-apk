@@ -126,28 +126,22 @@ class GeofenceService {
     },
   ];
 
-  // Legacy values
   static const double _officeLat = 14.59805;
   static const double _officeLng = 120.98917;
   static const String _officeAddress =
       '629 J. Nepomuceno St., Quiapo, Manila 1001';
   static const double _defaultRadiusMeters = 100.0;
 
-  // ══════════════════════════════════════════════════════════════════
-  // GPS ACCURACY / TOLERANCE
-  // ══════════════════════════════════════════════════════════════════
   static const double _baseToleranceMeters = 30.0;
   static const double _maxAccuracyConsidered = 60.0;
   static const double _maxAcceptableAccuracy = 100.0;
 
-  // ══════════════════════════════════════════════════════════════════
-  // STATE
-  // ══════════════════════════════════════════════════════════════════
   StreamSubscription<QuerySnapshot>? _zonesSub;
   List<_LocationZone> _cachedZones = [];
   bool _zonesLoaded = false;
   bool _isUsingEmergency = false;
   DateTime? _zonesLoadedAt;
+  bool _fromServer = false;
   List<_LocationZone> _clientZones = [];
 
   final _statusController = StreamController<GeofenceResult>.broadcast();
@@ -206,6 +200,7 @@ class GeofenceService {
         _zonesLoaded = true;
         _isUsingEmergency = false;
         _zonesLoadedAt = DateTime.now();
+        _fromServer = !snap.metadata.isFromCache;
 
         _log('🔔 [Geofence] ZONES UPDATED FROM FIRESTORE: ${zones.length}');
         for (int i = 0; i < zones.length; i++) {
@@ -250,6 +245,8 @@ class GeofenceService {
 
   void invalidateCache() {
     _zonesLoadedAt = null;
+    _zonesLoaded = false;
+    _fromServer = false;
     _log('🔄 [Geofence] Cache invalidated');
   }
 
@@ -267,18 +264,21 @@ class GeofenceService {
     try {
       final snap = await FirebaseFirestore.instance
           .collection('locations')
-          .where('active', isEqualTo: true)
-          .get()
+          .get(const GetOptions(source: Source.server))
           .timeout(const Duration(seconds: 8));
 
-      final zones = _parseZones(snap.docs);
-      if (zones.isNotEmpty) {
-        _setFirestoreZones(zones);
-        _log('✅ [Geofence] LOADED ${zones.length} ZONE(S) (active query)');
-        return;
-      }
+      final activeDocs = snap.docs.where((doc) {
+        final active = doc.data()['active'];
+        return active == null || active == true;
+      }).toList();
+
+      final zones = _parseZones(activeDocs);
+      _setFirestoreZones(zones);
+      _fromServer = true;
+      _log('✅ [Geofence] LOADED ${zones.length} ZONE(S) (server fetch)');
+      return;
     } catch (e) {
-      _log('❌ [Geofence] Active query FAILED: $e');
+      _log('❌ [Geofence] Server fetch FAILED: $e');
     }
 
     try {
@@ -315,9 +315,9 @@ class GeofenceService {
   }
 
   Future<void> _ensureZonesLoaded() async {
-    if (_zonesLoaded && _zonesLoadedAt != null) {
+    if (_zonesLoaded && _zonesLoadedAt != null && _fromServer) {
       final age = DateTime.now().difference(_zonesLoadedAt!);
-      final cacheSecs = _isUsingEmergency ? 60 : 30;
+      final cacheSecs = _isUsingEmergency ? 15 : 10;
       if (age.inSeconds < cacheSecs) {
         _log('💾 [Geofence] Using cached (${_cachedZones.length} zones, '
             'emergency=$_isUsingEmergency, ${age.inSeconds}s old)');
@@ -374,8 +374,8 @@ class GeofenceService {
     _log('🌍 [Geofence] Starting check...');
 
     startZonesListener();
-    if (forceRefresh) invalidateCache();
-     await _ensureZonesLoaded();
+    invalidateCache(); // laging kunin ang pinakabagong zones sa bawat check
+    await _ensureZonesLoaded();
     if (siteIds != null) {
       await _loadClientZones(forceRefresh: forceRefresh);
     }

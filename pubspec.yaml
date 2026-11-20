@@ -27,7 +27,6 @@ dependencies:
   firebase_messaging: ^15.2.0
 
   # ─── Maps & Location ──────────────────────────────────────────────
-  google_maps_flutter: ^2.10.0
   geolocator: ^13.0.2
   geocoding: ^3.0.0
   permission_handler: ^11.3.1

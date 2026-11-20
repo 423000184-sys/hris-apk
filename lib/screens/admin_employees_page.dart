@@ -85,6 +85,49 @@ class AdminEmployeesPage extends StatefulWidget {
 class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   final _svc = AdminEmployeeService.instance;
   final _scrollController = ScrollController();
+
+  /// Collections na HINDI kailanman buburahin.
+  static const Set<String> _protectedCollections = {
+    'admins',
+    'system_config',
+  };
+
+  /// Collections na buburahin ng "Clear All". Idagdag dito ang iba mo pang
+  /// collection names (ang wala dito ay hindi mabubura).
+  static const List<String> _wipeCollections = [
+    '_time_ping',
+    '_time_sync',
+    'activity_logs',
+    'admin_audit_log',
+    'admin_login_logs',
+    'attendance_receipts',
+    'client_locations',
+    'device_audit',
+    'employee_presence',
+    'field_proofs',
+    'locations',
+    'password_change_requests',
+    'pdf_exports',
+    'presence_challenges',
+    'public_stats',
+    'security_events',
+    'sessions',
+    'settings',
+    'test_collection',
+    'employees',
+    'attendance_logs',
+    'liveness_logs',
+    'support_reports',
+    'notifications',
+    'leave_requests',
+    'activity logs'
+    'public_stats'
+    'security_events'
+    'sessions'
+    'settings'
+    'test_collection'
+    'activity logs'
+  ];
   AdminColors get tc => AdminTheme.getColors(context);
 
   String get _actorEmail =>
@@ -172,7 +215,7 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
 
   Map<String, dynamic>? _selectedProfileEmp;
   final Set<String> _selectedEmpIds = {};
-  bool _bulkSelectMode = false;
+  final bool _bulkSelectMode = false;
 
   @override
   void initState() {
@@ -1179,9 +1222,8 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         _popupItem(
             'profile', Icons.person_outline_rounded, 'View Profile', tc.text),
         _popupItem('edit', Icons.edit_outlined, 'Edit Details', tc.orange),
-        if (_isLivenessVerified(emp))
-          _popupItem('reset_liveness', Icons.face_retouching_off_rounded,
-              'Reset Liveness', const Color(0xFFF59E0B)),
+        _popupItem('reset_liveness', Icons.face_retouching_off_rounded,
+            'Reset Face / Liveness', const Color(0xFFF59E0B)),
         _popupItem(
             'delete', Icons.delete_outline_rounded, 'Terminate', tc.red),
       ],
@@ -3379,7 +3421,14 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   Widget _editRoleField() {
     final dept = _editDepartmentDropdown ?? _editDeptCtrl.text.trim();
     final deptPos = _positionsForDept(dept);
-    final options = deptPos.isNotEmpty ? deptPos : _allPositionOptions;
+    final options = <String>[
+      ...(deptPos.isNotEmpty ? deptPos : _allPositionOptions),
+    ];
+    // Isama ang kasalukuyang role (hal. "Employee", "Admin") kahit wala sa listahan
+    final savedRole = _editRoleCtrl.text.trim();
+    if (savedRole.isNotEmpty && !options.contains(savedRole)) {
+      options.add(savedRole);
+    }
     String? value;
     final current = _editPositionDropdown ?? _editRoleCtrl.text.trim();
     if (current.isNotEmpty && options.contains(current)) value = current;
@@ -4191,6 +4240,11 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
         // locally-encrypted template, and re-enable enrollment.
         'faceAdminResetAt': FieldValue.serverTimestamp(),
         'faceAdminResetBy': _actorEmail,
+
+        // Payagan ulit ang enrollment pagkatapos ng reset
+        'faceEnrolled': false,
+        'faceEnrolledAt': FieldValue.delete(),
+        'faceEnrollAllowed': true,
       });
 
       _snack(
@@ -4250,59 +4304,115 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     }
   }
 
+  /// Binubura ang lahat ng docs sa isang collection (batched, 400 per batch).
+  /// Ini-skip ang protected collections.
+  Future<int> _deleteCollection(String col) async {
+    if (_protectedCollections.contains(col)) return 0;
+    var total = 0;
+    while (true) {
+      final snap = await AdminDatabase.fs.collection(col).limit(400).get();
+      if (snap.docs.isEmpty) break;
+      final batch = AdminDatabase.fs.batch();
+      for (final doc in snap.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+      total += snap.docs.length;
+    }
+    return total;
+  }
+
   Future<void> _confirmWipeAllLogs() async {
+    final confirmCtrl = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: tc.card,
-        title: Text('Clear all logs?', style: TextStyle(color: tc.text)),
-        content: Text(
-          'This permanently removes attendance and liveness logs. '
-              'This cannot be undone.',
-          style: TextStyle(color: tc.text, fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(false),
-            child: Text('Cancel', style: TextStyle(color: tc.muted)),
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: tc.card,
+          title: Text('Clear ALL data?', style: TextStyle(color: tc.red)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'This permanently deletes ALL employees, logs, reports and '
+                'other data from the database. Only "admins" and '
+                '"system_config" are kept. This cannot be undone.',
+                style: TextStyle(color: tc.text, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 14),
+              Text('Type DELETE to confirm:',
+                  style: TextStyle(color: tc.muted, fontSize: 12)),
+              const SizedBox(height: 6),
+              TextField(
+                controller: confirmCtrl,
+                autofocus: true,
+                autocorrect: false,
+                enableSuggestions: false,
+                enableIMEPersonalizedLearning: false,
+                autofillHints: const <String>[],
+                keyboardType: TextInputType.visiblePassword,
+                textCapitalization: TextCapitalization.characters,
+                onChanged: (_) => setD(() {}),
+                style: TextStyle(color: tc.text),
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: tc.surface,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: tc.red,
-              foregroundColor: Colors.white,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(false),
+              child: Text('Cancel', style: TextStyle(color: tc.muted)),
             ),
-            child: const Text('Clear'),
-          ),
-        ],
+            ElevatedButton(
+              onPressed: confirmCtrl.text.trim() == 'DELETE'
+                  ? () => Navigator.of(dialogCtx).pop(true)
+                  : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: tc.red,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Clear Everything'),
+            ),
+          ],
+        ),
       ),
     );
+    confirmCtrl.dispose();
     if (ok != true) return;
     if (!mounted) return;
 
-    try {
-      var count = 0;
-      for (final col in [
-        'attendance_logs',
-        'liveness_logs',
-        'activity_logs',
-      ]) {
-        try {
-          final snap =
-          await AdminDatabase.fs.collection(col).limit(500).get();
-          for (final doc in snap.docs) {
-            await doc.reference.delete();
-            count++;
-          }
-        } catch (_) {
-          // Collection may not exist — ignore.
-        }
+    _snack('Clearing data... please wait.');
+
+    var count = 0;
+    final failed = <String>[];
+    for (final col in _wipeCollections) {
+      try {
+        count += await _deleteCollection(col);
+      } catch (e) {
+        debugPrint('Failed to clear $col: $e');
+        failed.add(col);
       }
-      _snack('Cleared $count log entries.');
-      widget.onRefreshNeeded();
-    } catch (e) {
-      _snack('Failed to clear logs: $e', error: true);
     }
+
+    if (!mounted) return;
+    if (failed.isEmpty) {
+      _snack('Cleared $count documents. Admins & system_config kept.');
+    } else {
+      _snack(
+        'Cleared $count docs. Failed: ${failed.join(', ')} '
+        '(check Firestore rules).',
+        error: true,
+      );
+    }
+    widget.onRefreshNeeded();
   }
 
   // ═════════════════════════════════════════════════════════════════
@@ -5192,9 +5302,8 @@ class _DashedBorderPainter extends CustomPainter {
   _DashedBorderPainter({
     required this.color,
     this.radius = 12,
-    this.dash = 6,
-    this.gap = 4,
-  });
+  })  : dash = 6,
+        gap = 4;
 
   @override
   void paint(Canvas canvas, Size size) {

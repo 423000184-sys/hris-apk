@@ -550,8 +550,9 @@ class PayrollCalculator {
               data['createdAt'];
               
           DateTime? ts;
-          if (raw is Timestamp) ts = raw.toDate();
-          else if (raw is String) ts = DateTime.tryParse(raw);
+          if (raw is Timestamp) {
+            ts = raw.toDate();
+          } else if (raw is String) ts = DateTime.tryParse(raw);
           
           if (ts == null) {
              final dStr = data['date']?.toString();
@@ -1025,14 +1026,20 @@ class PayrollCalculator {
     final tax =
         _r2(taxWithheldOverride ?? calcWithholdingTax(taxable, settings));
     final totalDeductions = _r2(sss + philhealth + pagibig + tax);
-    final absent = (expectedDays - present).clamp(0, expectedDays);
+    final hasNoAttendanceData = present == 0 && workHours.daysWithLogs == 0;
+    final absent = hasNoAttendanceData
+        ? 0
+        : (expectedDays - present).clamp(0, expectedDays);
 
     final rawNet = _r2(gross - totalDeductions);
     final netPay = math.max(0.0, rawNet);
     final shortfall = math.max(0.0, -rawNet);
 
     final thirteenth = _r2(earnedBasic / 12);
-    final sil = _r2(dailyRate * 5);
+    final silFullMonth = dailyRate * 5 / 12;
+    final sil = workingDays > 0
+        ? _r2(silFullMonth * (present / workingDays).clamp(0.0, 1.0))
+        : 0.0;
 
     return PayrollBreakdown(
       regularPay: gross,

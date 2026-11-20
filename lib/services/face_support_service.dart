@@ -56,6 +56,8 @@ class FaceSupportService {
     final title = '$issueTypeLabel — ${_labelForSubCategory(safeSubCategory)}';
 
     final now = DateTime.now();
+    final reportId =
+        'rpt_${now.millisecondsSinceEpoch}_${employeeId}_$safeSubCategory';
     final payload = <String, dynamic>{
       // 🔑 Root-level fields
       'status': 'pending', // 👈 Dapat laging pending pag bagong send
@@ -90,7 +92,10 @@ class FaceSupportService {
     // Fast path: try online directly.
     if (NetworkGuard.instance.isOnline) {
       try {
-        await FirebaseFirestore.instance.collection(_collection).add(payload);
+        await FirebaseFirestore.instance
+            .collection(_collection)
+            .doc(reportId)
+            .set(payload);
         _log('✅ Sent face issue ticket to admin (online)');
         return FaceSupportResult.sent();
       } catch (e) {
@@ -102,11 +107,13 @@ class FaceSupportService {
     try {
       await OfflineAttendanceService.instance.enqueue(
         collection: _collection,
+        docId: reportId,
         data: {
           ...payload,
           // OfflineAttendanceService works with concrete DateTime values,
-          // not Firestore FieldValue, so swap the sentinel here.
-          'timestamp': DateTime.now(),
+          // not Firestore FieldValue, so swap the sentinels here.
+          'timestamp': now,
+          'createdAt': now,
         },
       );
       _log('📥 Queued face issue ticket (offline)');

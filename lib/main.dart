@@ -39,6 +39,10 @@ import 'data/local/dao/connectivity_service.dart';
 
 const String kOneSignalAppId = '0c862ae2-7ee8-46db-8f9e-6740e82c065c';
 
+/// true = tahimik ang console (walang print/debugPrint ng app).
+/// Gawing false kapag nagde-debug ka.
+const bool kSilentLogs = true;
+
 // 🆕 Global navigator key
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -189,6 +193,11 @@ class _ReminderLifecycle extends WidgetsBindingObserver {
 void main() async {
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
+
+    // Patayin ang debugPrint
+    if (kSilentLogs) {
+      debugPrint = (String? message, {int? wrapWidth}) {};
+    }
 
     FlutterError.onError = (details) {
       FlutterError.presentError(details);
@@ -468,7 +477,13 @@ void main() async {
     );
   }, (error, stack) {
     _logGlobalError(error, stack);
-  });
+  },
+      zoneSpecification: ZoneSpecification(
+        // Patayin ang lahat ng print() sa loob ng app
+        print: (self, parent, zone, line) {
+          if (!kSilentLogs) parent.print(zone, line);
+        },
+      ));
 }
 
 class MyApp extends StatelessWidget {
